@@ -34,7 +34,6 @@
  * are dropped unless explicitly kept. It never writes to either surface.
  */
 
-import { readLogDay } from "./log-jsonl.ts";
 import {
   UNFILTERED_ARTIFACT_REFS,
   everyArtifactRefView,
@@ -47,6 +46,7 @@ import { loadNormalizedContinuityRecords } from "./continuity/read-model.ts";
 import type { NormalizedContinuityRecord } from "./continuity/read-model.ts";
 import { validateIsoDate } from "./paths.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
+import { logDayReader } from "./log-days.ts";
 
 /**
  * A selector-validation failure: a bad `--date` / `--at` / `--kind`, detected
@@ -225,7 +225,8 @@ export function resolveLogEventTraces(
     throw new EventTraceSelectorError(`event-trace: unknown event kind '${selector.kind}'`);
   }
 
-  const { entries } = readLogDay(vault, date);
+  // The day file, or the store's log events of that day once switched.
+  const { entries } = logDayReader(vault).day(date);
   const view = everyArtifactRefView(
     ownerScopeView(vault, selector.ownerScope ?? null),
     selector.view ?? UNFILTERED_ARTIFACT_REFS,

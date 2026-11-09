@@ -229,10 +229,10 @@ describe("a dropped clause takes its punctuation and leaves its lead-in", () => 
     });
     expect(paragraphOpening(text, "Memory contract")).toBe(
       "Memory contract: call brain_apply_evidence right after producing a durable artifact " +
-        "a preference in `Brain/preferences/` scopes to (result: applied | violated | " +
+        "an active preference scopes to (result: applied | violated | " +
         "outdated); brain_note for narrative milestones that fit neither; " +
         "brain_pinned_context for current-task facts that must survive context rotation. " +
-        "brain_context bootstraps a session when the host injects no active.md hook. " +
+        "brain_context bootstraps a session when the host injects no active-preferences hook. " +
         "Skip Brain calls for casual chat, exploration, and trivial edits - " +
         "a misrecorded signal is worse than a missed one.",
     );

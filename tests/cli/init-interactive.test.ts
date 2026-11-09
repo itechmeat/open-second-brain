@@ -71,6 +71,13 @@ function silentStreams() {
   };
 }
 
+/** A vault that already holds a legacy `Brain/` tree. */
+function legacyVault(): string {
+  const vault = join(home, "vault");
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  return vault;
+}
+
 function recordingRunner(): { runner: WizardRunner; calls: string[][] } {
   const calls: string[][] = [];
   const runner: WizardRunner = async (cmd) => {
@@ -82,7 +89,7 @@ function recordingRunner(): { runner: WizardRunner; calls: string[][] } {
 
 describe("init wizard", () => {
   test("happy path: confirm yes runs init + brain init + per-target installs", async () => {
-    const vaultPath = join(home, "vault");
+    const vaultPath = legacyVault();
     // ensure no candidate vault directory exists, so prompt 1 needs explicit path
     const answers = [
       vaultPath, // vault path
@@ -132,6 +139,19 @@ describe("init wizard", () => {
     }
   });
 
+  test("a fresh vault plans no brain init and scaffolds no Brain/ tree", async () => {
+    const vaultPath = join(home, "vault");
+    const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "yes"];
+    const { runner, calls } = recordingRunner();
+    const { stdout, stderr, stdoutBuf } = silentStreams();
+    const r = await runWizard({ reader: scriptedReader(answers), stdout, stderr, runner });
+    expect(r.exitCode).toBe(0);
+    expect(calls.map((c) => c[0])).toEqual(["init", "install"]);
+    const out = stdoutBuf.join("");
+    expect(out).not.toContain("o2b brain init");
+    expect(out).toContain("creates the brain store");
+  });
+
   test("'no' at confirmation runs nothing", async () => {
     const vaultPath = join(home, "vault");
     const answers = [
@@ -140,8 +160,7 @@ describe("init wizard", () => {
       "UTC",
       "en",
       "none", // no targets
-      "n", // no brain init
-      "no", // do not confirm
+      "no", // do not confirm (a fresh vault asks nothing about brain init)
     ];
     const { runner, calls } = recordingRunner();
     const { stdout, stderr } = silentStreams();
@@ -165,7 +184,6 @@ describe("init wizard", () => {
       "Europe/Belgrade", // valid retry
       "en",
       "none",
-      "n",
       "no",
     ];
     const { runner, calls } = recordingRunner();
@@ -183,7 +201,7 @@ describe("init wizard", () => {
   });
 
   test("brain init with starter adds --starter flag", async () => {
-    const vaultPath = join(home, "vault");
+    const vaultPath = legacyVault();
     const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "y", "y", "yes"];
     const { runner, calls } = recordingRunner();
     const { stdout, stderr } = silentStreams();
@@ -201,7 +219,7 @@ describe("init wizard", () => {
 
   test("runner failure surfaces non-zero exit code", async () => {
     const vaultPath = join(home, "vault");
-    const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "n", "yes"];
+    const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "yes"];
     const runner: WizardRunner = async () => ({ exitCode: 1, stdout: "", stderr: "init failed" });
     const { stdout, stderr } = silentStreams();
     const opts: WizardOpts = {
@@ -236,9 +254,7 @@ describe("init wizard", () => {
       "UTC\n",
       "en\n",
       "5\n", // gemini-cli in the detected list
-      "y\n", // brain init
-      "n\n", // no starter
-      "yes\n", // confirm
+      "yes\n", // confirm (a fresh vault: no brain init question)
     ];
     try {
       const r = await baseRunCli(["init", "--interactive"], {
@@ -254,6 +270,8 @@ describe("init wizard", () => {
       expect(readFileSync(join(setupHome, ".gemini", "settings.json"), "utf8")).toContain(
         "open-second-brain",
       );
+      // A fresh vault keeps its brain in the store: no legacy tree is scaffolded.
+      expect(existsSync(join(vaultPath, "Brain"))).toBe(false);
     } finally {
       rmSync(setupHome, { recursive: true, force: true });
     }

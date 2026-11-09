@@ -17,12 +17,11 @@
  * an unprovenanced claim.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { slugify, writeFrontmatterAtomic } from "../../vault.ts";
+import { slugify } from "../../vault.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { reportPagePath } from "../paths.ts";
 import {
@@ -30,7 +29,6 @@ import {
   RESEARCH_REPORT_SURFACE,
   assertResponseShape,
 } from "../response-shape.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { isSecretReferenceValue, resolveNamedSecret } from "../../secret-resolver.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import { CONTENT_CLASS, CONTENT_CLASS_FIELD } from "../provenance/content-class.ts";
@@ -57,6 +55,7 @@ import {
   createTavilyProvider,
 } from "./providers/tavily.ts";
 import type { ProviderSearchResult, ResearchProvider } from "./providers/provider.ts";
+import { assertLaneWrite, lanePageExists, writeLanePage } from "../../store/lane-pages.ts";
 
 export { BRAVE_API_KEY_ENV, BRAVE_PROVIDER_NAME, TAVILY_API_KEY_ENV, TAVILY_PROVIDER_NAME };
 export type { ProviderSearchResult, ResearchProvider };
@@ -224,7 +223,7 @@ export function writeResearchReport(
   opts: ResearchReportOptions,
 ): ResearchReportResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   validate(input);
 
   const date = isoDate(opts.now);
@@ -273,12 +272,13 @@ export function writeResearchReport(
     tags: ["brain", "brain/report"],
   };
 
-  mkdirSync(dirname(absPath), { recursive: true });
-  // Idempotent on date+title: a re-run rewrites the same report page in place.
-  // existsSync drives the `created` flag; an overwrite write then surfaces a
-  // real I/O error directly instead of a catch masking it as a re-run.
-  const created = !existsSync(absPath);
-  writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
+  // Idempotent on date+title: a re-run rewrites the same report page in
+  // place (a file on an unswitched machine, a lane entry on a store-only
+  // one). `lanePageExists` drives the `created` flag in both modes; the
+  // overwrite then surfaces a real write error directly instead of a catch
+  // masking it as a re-run.
+  const created = !lanePageExists(vault, absPath);
+  writeLanePage(vault, absPath, meta, body, { overwrite: true });
 
   return {
     reportPath: canonicalNotePath(relative(vault, absPath)),

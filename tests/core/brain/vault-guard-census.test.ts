@@ -53,8 +53,15 @@ const WRITE_CALL_RE = new RegExp(
     ")\\s*\\(",
 );
 
-/** A module is guarded when it names the assertion or its wrapper. */
-const GUARD_RE = /assertVaultIdentityForWrite|brainDirsForWrite/;
+/**
+ * A module is guarded when it names the assertion or one of its wrappers
+ * (`assertNoteVaultForWrite` is the vault adapter's note-tool guard;
+ * `assertLaneWrite` is the lane page store's, the assertion itself on an
+ * unswitched machine and nothing on a store-only one, where no vault file
+ * is written).
+ */
+const GUARD_RE =
+  /assertVaultIdentityForWrite|brainDirsForWrite|assertNoteVaultForWrite|assertLaneWrite/;
 
 /**
  * Every write-capable module that deliberately carries no guard, with the
@@ -82,15 +89,13 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "never writes. It names `openSync` only to open a source read-only " +
     "(O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so the read " +
     "is bounded, so there is no write to guard.",
-  "src/core/brain/intake/extract-intake.ts":
-    "its one direct removal is the stage arm's unlink of a canonical entity " +
-    "page the same intake call created through the guarded registry; the " +
-    "staged copy lands through the review queue's guarded writer, and every " +
-    "persistent write the module makes routes through those guarded writers.",
   "src/core/brain/init.ts":
     "bootstrap. This is the path that CREATES the tree and stamps the marker; " +
     "gating it on the marker it is about to write would refuse `o2b brain init` " +
     "on the very root it exists to serve.",
+  "src/core/brain/doctor/migration-check.ts":
+    'opens files read-only (`openSync(path, "r")`) to read the head of a page in a ' +
+    "reappeared legacy tree for its writer; it writes nothing.",
   "src/core/brain/gitignore-guard.ts":
     "bootstrap beside the identity stamp, and outside the guarded tree: it writes " +
     "the vault-root `.gitignore`, not anything under `Brain/`, so there is no " +
@@ -140,12 +145,11 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "the caller, its one production call site (the session import loop, " +
     "sessions/import.ts) asserts vault identity ahead of the write, and the helper only " +
     "splices the class line into the frontmatter block the shared parser already delimited.",
-  "src/core/brain/provenance/source-archive.ts":
-    "every path it writes or removes is derived inside this module from the " +
-    "entry's own sha-256 and validated before the join, so the store cannot be " +
-    "aimed anywhere but `Brain/.archives/`; its two vault-reaching callers (the " +
-    "ingest trusted branch and the confirmed delete-by-source) assert vault " +
-    "identity ahead of the first byte and ahead of the removal.",
+  "src/core/brain/schema-mutate-store.ts":
+    "the store-only half of the schema lane writes nothing under the vault: its one " +
+    "file is the device-local lock in the store's state directory, the pack becomes " +
+    "shared settings records through `storeWrite`, which checks the store identity, " +
+    "and the audit row goes to the store ledger through the shared `appendAuditRecord`.",
   "src/core/brain/secrets/crypto.ts":
     "takes a keyfile path, not a vault. The three public entry points in " +
     "`secrets/store.ts` that reach it are guarded ahead of their first byte.",

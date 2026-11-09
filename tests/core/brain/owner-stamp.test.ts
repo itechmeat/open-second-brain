@@ -49,7 +49,7 @@ import { BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
-import { changedPaths, digestVaultFiles, digestVaultTree } from "../../helpers/vault-digest.ts";
+import { changedPaths, treeEntries, digestVaultTree } from "../../helpers/vault-digest.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -308,7 +308,7 @@ test("gate off: two vaults written by the same script are byte-identical and own
   // `_brain.yaml` names the vault only through the config file outside
   // the tree, so the two trees are comparable file-for-file.
   expect(digestVaultTree(second)).toBe(digestVaultTree(first));
-  expect(changedPaths(digestVaultFiles(first), digestVaultFiles(second))).toEqual([]);
+  expect(changedPaths(treeEntries(first), treeEntries(second))).toEqual([]);
 
   const dir = brainDirs(first).preferences;
   for (const file of collectPreferences(dir).entries) {
@@ -325,7 +325,7 @@ test("gate off vs gate fail: the only files that differ are the preferences", ()
   // `retired/` is in the expected set on purpose: `moveToRetired` copies
   // every inherited field, so retiring an owner-private memory must not
   // publish it. Nothing else in the tree may move.
-  const differing = changedPaths(digestVaultFiles(off), digestVaultFiles(on)).filter(
+  const differing = changedPaths(treeEntries(off), treeEntries(on)).filter(
     (path) => path !== "Brain/_brain.yaml",
   );
   expect(
@@ -611,6 +611,10 @@ const OWNERSHIP_RESOLVERS = ["writePreference(", "writePreferenceTxn(", "resolve
 
 /** Modules in the syntactic population that write no preference bytes. */
 const NO_PREFERENCE_BYTES: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/store-migration/exporters.ts":
+    "the rollback exporter writes a preference page back from the fold of its store records, " +
+    "whose fields (`owner:` included) the writer that made each record already resolved; it " +
+    "replays decided state and decides no ownership of its own.",
   "src/core/brain/write-batch.ts":
     "builds a preference path only to ASSERT the target exists before an apply-evidence " +
     "operation; every byte it writes goes to a caller-named note path.",
@@ -625,6 +629,11 @@ const NO_PREFERENCE_BYTES: Readonly<Record<string, string>> = Object.freeze({
     "builds preference paths only to detect install conflicts; its preferences land through " +
     "`restorePreferences`, and its one direct write adds the install fingerprint to a page it " +
     "just staged under `OKF Review/`, never to a preference.",
+  "src/core/brain/preference-page-write.ts":
+    "the shared write path of the page writers (task 2.10), not a writer of its own: it " +
+    "writes the text or the field its caller hands it, and every caller either resolved " +
+    "ownership already (the memory importers go through `resolvedOwnerFor`) or edits fields " +
+    "of an EXISTING preference, whose `owner:` it never touches.",
   "src/core/brain/lessons-promotion.ts":
     "builds a preference path only to READ the lesson's source preference; its two atomic " +
     "writes land the lessons-approvals ledger in the derived store, outside Brain/ and outside " +

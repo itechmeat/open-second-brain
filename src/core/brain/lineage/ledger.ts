@@ -86,10 +86,14 @@ import {
   type ShardedRow,
 } from "../ledger-shards.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 import { acquireLockSync, type LockHandle, removeStaleLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vault-identity.ts";
 import type { SessionLineage } from "./types.ts";
 import { dualWrite } from "../../store/dual-write.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 /** Crutch link window: a continuation must start this close to the
@@ -309,10 +313,10 @@ export function sessionLineageGapsPath(
   vault: string,
   shardId: string = resolveAppendShardId(),
 ): string {
-  return ensureInsideVault(
-    join(vault, STATE_DIR_REL, shardedFileName(GAPS_BASE, shardId, LINEAGE_EXT)),
-    vault,
-  );
+  // Machine state: the vault on an unswitched machine, the device-local
+  // state once switched, so a store-only machine records its drops where
+  // its own reads find them and writes nothing under `Brain/`.
+  return machineStatePath(vault, STATE_DIR_REL, shardedFileName(GAPS_BASE, shardId, LINEAGE_EXT));
 }
 
 /** One shard of the ledger (or of its gap sidecar) as found on disk. */
@@ -338,21 +342,37 @@ export function listSessionLineageGapShards(vault: string): LineageShardFile[] {
 }
 
 function listLineageShards(vault: string, base: string): LineageShardFile[] {
-  let dir: string;
+  let dirs: string[];
   try {
-    dir = brainStateDirPath(vault);
+    // The gap sidecar is machine state (see `sessionLineageGapsPath`).
+    // Once switched it lives in the device-local state, and the shards
+    // recorded under the vault before the switch are read too until the
+    // legacy tree is removed: the migration does not move them, and a gap
+    // dropped from the read would pass a session's history as complete.
+    const legacy = brainStateDirPath(vault);
+    dirs =
+      base === GAPS_BASE
+        ? [...new Set([machineStatePath(vault, STATE_DIR_REL), legacy])]
+        : [legacy];
   } catch {
     return [];
   }
-  let files;
-  try {
-    files = listShardedFiles(dir, { base: literalBase(base), extensions: [LINEAGE_EXT] });
-  } catch {
-    return [];
+  const shards: LineageShardFile[] = [];
+  for (const dir of dirs) {
+    try {
+      for (const file of listShardedFiles(dir, {
+        base: literalBase(base),
+        extensions: [LINEAGE_EXT],
+      })) {
+        shards.push({ shardId: file.shardId, path: file.path });
+      }
+    } catch {
+      // A state directory that cannot be listed yields no shards.
+    }
   }
-  return files
-    .map((file) => ({ shardId: file.shardId, path: file.path }))
-    .toSorted((a, b) => (a.shardId < b.shardId ? -1 : a.shardId > b.shardId ? 1 : 0));
+  return shards.toSorted((a, b) =>
+    a.shardId < b.shardId ? -1 : a.shardId > b.shardId ? 1 : a.path < b.path ? -1 : 1,
+  );
 }
 
 export interface LedgerLine {
@@ -866,6 +886,27 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
  * belong to `verify.ts`, which reports them to the doctor.
  */
 export function readLineageLedger(vault: string): LineageLedgerState {
+  // A store-only machine (design D14 item 1) folds the `lineage` ledger
+  // rows: by `at`, with fold order (the order every machine agrees on)
+  // breaking ties. Never throws, like the legacy read.
+  if (isStoreOnly({ vault })) {
+    let rows: unknown[];
+    try {
+      rows = readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.lineage, () => [], { vault });
+    } catch {
+      rows = [];
+    }
+    const lines = rows
+      .filter(
+        (row): row is LedgerLine =>
+          row !== null &&
+          typeof row === "object" &&
+          typeof (row as LedgerLine).sid === "string" &&
+          typeof (row as LedgerLine).at === "string",
+      )
+      .toSorted((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    return buildState(lines);
+  }
   const rows: Array<ShardedRow<LedgerLine>> = [];
   for (const shard of scanLineageLedgerShards(vault)) {
     shard.lines.forEach((entry, index) =>
@@ -893,6 +934,28 @@ export function recordLineageObservation(
   vault: string,
   obs: LineageObservation,
 ): LineageRecordResult {
+  // A store-only machine (design D14 items 1 and 10) appends the
+  // observation as one `lineage` ledger row, with no per-line chain: the
+  // store's integrity is the record checksums and partition digests. The
+  // capture hook must never fail, so a store failure is returned as a
+  // named drop, recorded in the gap sidecar, which lives in the
+  // device-local state on this machine (nothing is written under `Brain/`).
+  if (isStoreOnly({ vault })) {
+    try {
+      // Lineage says which sessions ran where (working directories, repos,
+      // branches): it goes to `private` when this machine holds it.
+      storeWrite(
+        () => ledgerRowRecord(DUAL_WRITE_LEDGERS.lineage, toLine(obs), "private-when-held"),
+        { vault },
+      );
+    } catch {
+      // Recorded in the gap sidecar (device-local once switched), which
+      // `lineageGapSessionIds` reads, so the lifecycle crutch knows this
+      // session's history is incomplete.
+      return recordGap(vault, obs, LINEAGE_GAP_REASON.writeFailed);
+    }
+    return { status: LINEAGE_RECORD_STATUS.appended };
+  }
   // Vault-identity write guard (Unit J), AHEAD OF THE FIRST BYTE: the
   // `mkdirSync` below materializes `Brain/.state/` under whatever root
   // it is handed, so asserting after it would refuse a store this

@@ -35,6 +35,12 @@
 
 import { join } from "node:path";
 
+import {
+  memoryFromStore,
+  type MemoryPageKind,
+  storeMemoryPage,
+  storeRecordPages,
+} from "../memory-pages.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "../paths.ts";
 import { pageIdToPath, readMergedInto, reportMergeChain } from "../page-meta/page-id.ts";
@@ -66,7 +72,10 @@ const DEDUP_EXCLUSION_CONSEQUENCE =
 
 export const mergeChainDanglingCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault }, { issues, uncertain }) {
+  run({ vault, configPath }, { issues, uncertain }) {
+    // Every store read of this check follows the doctor's own config, as
+    // the record and log readers of the pass do.
+    const context = configPath !== undefined ? { configPath } : {};
     const dirs = brainDirs(vault);
     const swept: SweptPath = {
       site: MERGE_CHAIN_SITE,
@@ -75,10 +84,13 @@ export const mergeChainDanglingCheck: DoctorCheck = {
         "missing from this report",
       uncertain,
     };
-    const carriers = [
-      ...scanPointerCarriers(dirs.preferences, swept),
-      ...scanPointerCarriers(dirs.retired, swept),
-    ];
+    const fromStore = memoryFromStore(vault, configPath);
+    const carriers = fromStore
+      ? storePointerCarriers(vault, context)
+      : [
+          ...scanPointerCarriers(dirs.preferences, swept),
+          ...scanPointerCarriers(dirs.retired, swept),
+        ];
 
     // One finding per dangling POINTER, keyed by the page that carries it
     // and the target it names. Walking each carrier's full chain re-derives
@@ -87,10 +99,13 @@ export const mergeChainDanglingCheck: DoctorCheck = {
     const reported = new Set<string>();
     const findings: DoctorIssue[] = [];
     for (const id of carriers) {
-      const report = reportMergeChain(vault, id);
+      const report = reportMergeChain(vault, id, configPath);
       // DEPTH/CYCLE/MALFORMED are lint's unresolvable classes; a resolved
       // chain is a merge that finished. Only a dead terminal is ours.
       if (report.outcome !== "dangling") continue;
+      // `reportMergeChain` judges the terminal by its page file; once
+      // switched the canonical is a record of the fold, with no file.
+      if (fromStore && storeMemoryPage(vault, report.at, context) !== undefined) continue;
       // A dangling verdict on a one-id walk means the start page carries no
       // pointer at all - there is no pointer of ours to name.
       if (report.visited.length < 2) continue;
@@ -119,6 +134,25 @@ export const mergeChainDanglingCheck: DoctorCheck = {
     issues.push(...findings);
   },
 };
+
+/**
+ * The ids of the fold's preferences that carry a `merged_into:` pointer,
+ * by their page ids (store-only machine, task 2.10), active first as the
+ * folder scan orders them.
+ */
+function storePointerCarriers(
+  vault: string,
+  context: { readonly configPath?: string },
+): ReadonlyArray<string> {
+  const pages = storeRecordPages(vault, { ...context, kinds: POINTER_KINDS });
+  const ordered = [
+    ...pages.filter((p) => p.kind === "preference"),
+    ...pages.filter((p) => p.kind === "retired"),
+  ];
+  return ordered.filter((page) => readMergedInto(page.meta) !== null).map((page) => page.id);
+}
+
+const POINTER_KINDS: ReadonlySet<MemoryPageKind> = new Set(["preference", "retired"]);
 
 /**
  * The ids of the pages in `dir` that carry a `merged_into:` pointer.

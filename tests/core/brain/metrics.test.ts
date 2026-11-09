@@ -27,6 +27,10 @@ import {
   MetricSurfaceError,
   metricsDir,
 } from "../../../src/core/brain/metrics.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = "2026-06-05T10:00:00Z";
 
@@ -34,6 +38,8 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-metrics-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

@@ -1,9 +1,10 @@
 import { defaultConfigPath } from "../../../core/config.ts";
-import { bootstrapBrain } from "../../../core/brain/init.ts";
+import { bootstrapBrain, type BootstrapBrainResult } from "../../../core/brain/init.ts";
 import { computeBrainStatus } from "../../../core/brain/status.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
-import { parse, fail, ok, info, okJson, resolveBrainVault } from "../helpers.ts";
+import { parse, fail, ok, info, okJson } from "../helpers.ts";
+import { resolveOptionalVault } from "../../helpers.ts";
 
 export async function cmdBrainInit(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -16,7 +17,9 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  // With no vault the brain is the store (design D14 item 1): init then
+  // creates the store and nothing else.
+  const vault = resolveOptionalVault(flags["vault"] as string | undefined, config);
 
   const primaryAgentFlag = flags["primary-agent"];
   let primaryAgent: string | undefined;
@@ -56,6 +59,7 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
     jsonRequested: Boolean(flags["json"]),
   };
 
+  if (vault === null) return reportStoreOnlyInit(result, Boolean(flags["json"]));
   // Resolved once, ahead of both renderers: the human stream prints it
   // as a rail line and the machine stream carries it as a field, and a
   // second evaluation could disagree with the first.
@@ -100,6 +104,65 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
   // whether this run created anything, so the condition is the content.
   if (empty) emitNextStep("brain-empty", stream);
   return 0;
+}
+
+/** The report of an init with no vault: the store step only. */
+function reportStoreOnlyInit(result: BootstrapBrainResult, json: boolean): number {
+  const store = result.store;
+  // With no vault the bootstrap always reports the store it ensured.
+  if (store === undefined || store === null) {
+    throw new Error("brain init with no vault reported no brain store");
+  }
+  const switchWarning = freshSwitchWarning(result.freshSwitch);
+  if (json) {
+    okJson({
+      vault: null,
+      created: result.created,
+      overwritten: result.overwritten,
+      skipped: result.skipped,
+      guard: result.guard,
+      store,
+      ...(result.freshSwitch !== undefined ? { switch: result.freshSwitch } : {}),
+    });
+    return 0;
+  }
+  if (switchWarning !== null) process.stderr.write(`warning: ${switchWarning}\n`);
+  ok(
+    store.status === "created"
+      ? `brain initialized in a new store: ${store.root}`
+      : `brain initialized: the store at ${store.root} already exists`,
+  );
+  info(`  store id:   ${store.storeId}`);
+  info(`  partitions: ${store.partitions.join(", ")}`);
+  if (store.viewWriter !== null) info(`  ${store.viewWriter.message}`);
+  info(
+    "  no vault is configured: the brain works without one; note tools and .base views need one",
+  );
+  return 0;
+}
+
+/**
+ * Why this device's switch to the store was not recorded, or `null` when
+ * it was (or did not need to be): the operator learns the machine is not
+ * durably store-only, as `o2b store init` tells it.
+ */
+function freshSwitchWarning(freshSwitch: BootstrapBrainResult["freshSwitch"]): string | null {
+  switch (freshSwitch?.outcome) {
+    case "error":
+      return `this device's switch to the store was not recorded: ${freshSwitch.detail ?? ""}`;
+    case "no-device":
+      return (
+        "this machine has no device id, so its switch to the store was not recorded; " +
+        "set device_id in the machine config and run `o2b brain init` again"
+      );
+    case "no-store":
+      return (
+        "this machine holds no shared partition, so its switch to the store was not " +
+        "recorded; run `o2b brain init` again once it holds one"
+      );
+    default:
+      return null;
+  }
 }
 
 /**

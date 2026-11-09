@@ -16,7 +16,8 @@ export async function cmdBrainStatus(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const { config, vault } = brainVerbContext(flags);
+  // `null` with no vault configured: the snapshot covers the store (D14).
+  const { config, vault } = brainVerbContext(flags, { vault: "optional" });
 
   let snapshot;
   try {

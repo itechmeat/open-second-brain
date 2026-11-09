@@ -53,7 +53,7 @@ import {
   writeImagesDir,
 } from "../paths.ts";
 import { fileAgeMs, isoSecond, msToWholeDays } from "../time.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 
 /**
@@ -343,7 +343,9 @@ export function pruneWriteImages(
   // store and the record are written from inside the note seams, which
   // are guarded before their first byte, and this removes vault bytes
   // from an operator verb that passes through nothing else.
-  assertVaultIdentityForWrite(vault);
+  // Through the vault adapter (design D14 items 8, 13): a vault is
+  // required, and the vault identity guard holds.
+  assertNoteVaultForWrite(vault, "write-image pruning");
   const olderThanDays = opts.olderThanDays ?? WRITE_IMAGE_RETENTION_DAYS;
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(

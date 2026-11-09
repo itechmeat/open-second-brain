@@ -15,13 +15,11 @@
  * an operator starts curating a draft, regeneration cannot clobber it.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { listGitCommits } from "./store.ts";
 import type { GitCommitRecord } from "./store.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertLaneWrite, lanePageExists, writeLaneText } from "../../store/lane-pages.ts";
 
 const CONVENTIONAL_BREAKING_RE = /^[a-z]+(\([^)]*\))?!:/;
 const REVERT_RE = /^revert\b/i;
@@ -110,7 +108,7 @@ export interface MineCommitDecisionsResult {
 /** Mine one repo's ingested commits into ADR candidate notes. */
 export function mineCommitDecisions(vault: string, repoKey: string): MineCommitDecisionsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const commits = listGitCommits(vault, repoKey);
   const dir = join(vault, "Brain", "decisions", "candidates");
   let created = 0;
@@ -124,14 +122,13 @@ export function mineCommitDecisions(vault: string, repoKey: string): MineCommitD
       `adr-${commit.sha.slice(0, CANDIDATE_SHA_LEN)}-${slugFromSubject(commit.subject)}.md`,
     );
     notes.push(path);
-    if (existsSync(path)) {
+    if (lanePageExists(vault, path)) {
       // Operator-curated drafts are sacrosanct: identity by sha means
       // this is the same decision, already on its review journey.
       skippedExisting += 1;
       continue;
     }
-    mkdirSync(dir, { recursive: true });
-    atomicWriteFileSync(path, renderCandidate(repoKey, commit, signals));
+    writeLaneText(vault, path, renderCandidate(repoKey, commit, signals));
     created += 1;
   }
   return Object.freeze({

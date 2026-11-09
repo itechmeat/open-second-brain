@@ -44,6 +44,8 @@ const DATE = "2026-03-04";
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-write-record-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 

@@ -3,8 +3,11 @@
  * (context-injection-pipeline, lane B, task B2).
  *
  * Once-per-change state for the Stop hygiene digest: one overwrite-only
- * file, `<vault>/.open-second-brain/hygiene-digest.hash`, holding the
- * SHA-256 of the digest state the hook last emitted. Vault-global and
+ * file, `.open-second-brain/hygiene-digest.hash` under the machine state
+ * root (the vault on an unswitched machine, the device-local state once
+ * store-only: the hook resolves it with `machineStateRoot` past its gates
+ * and passes it in), holding the SHA-256 of the digest state the hook
+ * last emitted. Vault-global and
  * un-synced derived state - beside `hook-state/`, deliberately OUTSIDE
  * it, because per-session scope is the wrong lifetime for
  * "once per change": the findings set belongs to the vault and must
@@ -48,9 +51,12 @@ export const HYGIENE_DIGEST_HASH_FILENAME = "hygiene-digest.hash";
 /** A ledger file holds exactly one lowercase hex SHA-256 and nothing else. */
 const HASH_LINE_RE = /^[0-9a-f]{64}$/;
 
-/** Absolute path of the ledger file for one vault. */
-export function hygieneDigestHashPath(vault: string): string {
-  return join(vault, OSB_DIR_NAME, HYGIENE_DIGEST_HASH_FILENAME);
+/**
+ * Absolute path of the ledger file below a machine state root (the vault
+ * itself on an unswitched machine).
+ */
+export function hygieneDigestHashPath(stateRoot: string): string {
+  return join(stateRoot, OSB_DIR_NAME, HYGIENE_DIGEST_HASH_FILENAME);
 }
 
 /**
@@ -58,8 +64,8 @@ export function hygieneDigestHashPath(vault: string): string {
  * recorded: the file is absent, unreadable, not a regular file, or does
  * not hold a single lowercase hex SHA-256. Never throws.
  */
-export function readHygieneDigestHash(vault: string): string | null {
-  const read = readRegularFileNoFollow(hygieneDigestHashPath(vault));
+export function readHygieneDigestHash(stateRoot: string): string | null {
+  const read = readRegularFileNoFollow(hygieneDigestHashPath(stateRoot));
   if (read.status !== "ok") return null;
   const line = read.text.trim();
   return HASH_LINE_RE.test(line) ? line : null;
@@ -70,8 +76,8 @@ export function readHygieneDigestHash(vault: string): string | null {
  * corrupt ledger compares unequal: the caller emits and rewrites, which
  * is the lose-not-duplicate direction.
  */
-export function hygieneDigestHashMatches(vault: string, hash: string): boolean {
-  return readHygieneDigestHash(vault) === hash;
+export function hygieneDigestHashMatches(stateRoot: string, hash: string): boolean {
+  return readHygieneDigestHash(stateRoot) === hash;
 }
 
 /**
@@ -80,11 +86,11 @@ export function hygieneDigestHashMatches(vault: string, hash: string): boolean {
  * `false`) when `.open-second-brain` is itself a symbolic link - a vault
  * received from elsewhere could point it at any directory. Never throws.
  */
-export function writeHygieneDigestHash(vault: string, hash: string): boolean {
+export function writeHygieneDigestHash(stateRoot: string, hash: string): boolean {
   try {
-    if (derivedDirIsSymlinked(vault, OSB_DIR_NAME)) return false;
+    if (derivedDirIsSymlinked(stateRoot, OSB_DIR_NAME)) return false;
     if (!HASH_LINE_RE.test(hash)) return false;
-    const path = hygieneDigestHashPath(vault);
+    const path = hygieneDigestHashPath(stateRoot);
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteText(path, `${hash}\n`);
     return true;

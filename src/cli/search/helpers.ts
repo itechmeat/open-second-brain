@@ -11,9 +11,10 @@
  * `src/cli/brain/helpers.ts` already establishes for the Brain verbs.
  */
 
-import { defaultConfigPath, resolveVault } from "../../core/config.ts";
+import { defaultConfigPath } from "../../core/config.ts";
 import { resolveSearchConfig, type ResolvedSearchConfig } from "../../core/search/index.ts";
 import { CliError, type FlagsSchema } from "../argparse.ts";
+import { NoVaultConfiguredError, requireVaultFor, resolveOptionalVault } from "../helpers.ts";
 import type { AdvisoryStream } from "../advisory-rail.ts";
 
 /** Parsed flags shape every search verb receives from `parseFlags`. */
@@ -72,11 +73,21 @@ export function resolveConfigPath(flags: SearchVerbFlags): string {
   return flagString(flags, "config") ?? defaultConfigPath();
 }
 
+/**
+ * The search config of this invocation. With no vault configured (design
+ * D14) the config has `vault: null` and the index holds the brain store's
+ * records only, keyed by the store id; a verb that needs vault notes asks
+ * {@link requireSearchVault}. An explicit `--vault ""` is still an error.
+ */
 export function resolveConfig(flags: SearchVerbFlags): ResolvedSearchConfig {
-  const flagVault = flagString(flags, "vault");
   const configPath = resolveConfigPath(flags);
-  const vault = flagVault ?? resolveVault(configPath) ?? null;
-  if (!vault) {
+  // The shared rule (`resolveOptionalVault`: a trimmed flag, an explicit
+  // empty one refused), with the search verbs' error type.
+  let vault: string | null;
+  try {
+    vault = resolveOptionalVault(flagString(flags, "vault"), configPath);
+  } catch (err) {
+    if (!(err instanceof NoVaultConfiguredError)) throw err;
     throw new CliError(
       "no vault configured. Pass --vault <path> or run `o2b init --vault <path> ...` first.",
     );
@@ -94,6 +105,11 @@ export function resolveConfig(flags: SearchVerbFlags): ResolvedSearchConfig {
       : {}),
   };
   return resolveSearchConfig({ vault, configPath, overrides });
+}
+
+/** The vault of `config`, or the refusal naming `command` when there is none. */
+export function requireSearchVault(config: ResolvedSearchConfig, command: string): string {
+  return requireVaultFor(config.vault, `o2b ${command}`);
 }
 
 /**

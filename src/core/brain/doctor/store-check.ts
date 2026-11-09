@@ -55,7 +55,14 @@ import {
   type PartitionShard,
   type UnreadableShard,
 } from "../../store/state-digest.ts";
-import { inspectStore, type StoreInspection } from "../../store/store-open.ts";
+import {
+  HeldPartitionLostError,
+  inspectStore,
+  type StoreInspection,
+} from "../../store/store-open.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { removalBacklog } from "../../store/removal-backlog.ts";
+import { readStoreWriteStatus, storeWriteStatusPath } from "../../store/store-write.ts";
 import {
   dualWriteStatusPath,
   isPathInsideResolved,
@@ -70,14 +77,22 @@ import {
   looseModeIssues,
   reservedDeviceDirIssues,
 } from "./store-trust-check.ts";
-import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
+import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
+import { returnedRetiredIssues } from "./device-retire-check.ts";
 
+/** Removed content still awaits compaction in the shards. */
+export const STORE_REMOVED_AWAITING_COMPACTION_CODE = "store-removed-awaiting-compaction";
 /** Dual writes failed; the legacy writes were kept. */
 export const STORE_DUAL_WRITE_FAILURES_CODE = "store-dual-write-failures";
 /** Dual writes were skipped because this machine has no device id. */
 export const STORE_DUAL_WRITE_SKIPPED_CODE = "store-dual-write-skipped";
 /** The configured store root cannot be used. */
 export const STORE_ROOT_INVALID_CODE = "store-root-invalid";
+/**
+ * A partition this machine has held lost its identity file, so the store is
+ * not opened and every protection fails closed (design D14).
+ */
+export const STORE_PARTITION_LOST_CODE = "store-partition-lost";
 /** A fold differs between machines over the same cut. */
 export const STORE_DIGEST_DIVERGENT_CODE = "store-digest-divergent";
 /** A roster device has published no state digest for a week. */
@@ -94,6 +109,11 @@ export const STORE_SHARD_TAIL_HELD_CODE = "store-shard-tail-held";
 export const STORE_MISSING_CODE = "store-missing";
 /** Dual writes were skipped because no store existed. */
 export const STORE_DUAL_WRITE_NO_STORE_CODE = "store-dual-write-no-store";
+/**
+ * Fail-open store-only writes (hooks, telemetry) that did not land: the
+ * caller went on, so the store is missing those records (design D14 item 1).
+ */
+export const STORE_WRITE_FAIL_OPEN_CODE = "store-write-fail-open";
 /** Records carry a clock more than the drift bound ahead of now. */
 export const STORE_CLOCK_AHEAD_CODE = "store-clock-ahead";
 
@@ -147,6 +167,22 @@ function dualWriteFindings(out: DoctorFindings): void {
       path,
     );
   }
+}
+
+function failOpenWriteFindings(out: DoctorFindings): void {
+  const path = storeWriteStatusPath();
+  const status = readStoreWriteStatus(path);
+  if (status.failures === 0) return;
+  warn(
+    out,
+    STORE_WRITE_FAIL_OPEN_CODE,
+    `${status.failures} fail-open brain store write(s) on this machine did not land` +
+      (status.last_failure_at !== null ? `, the last at ${status.last_failure_at}` : "") +
+      (status.last_error !== null ? ` (${status.last_error})` : "") +
+      "; the hooks and telemetry that made them went on, so the store is missing those " +
+      "records. Fix the cause, then delete the counter file to reset it",
+    path,
+  );
 }
 
 /** Records more than the drift bound ahead of `nowMs`, per device: count and newest stamp. */
@@ -211,7 +247,7 @@ function digestMessage(finding: DigestFinding): string {
   return (
     `device ${finding.device} has written to the ${finding.partition} partition but ${last}; ` +
     "its state cannot be compared until it catches up. If the machine is gone for good, " +
-    "retire it with a human device-retire record"
+    `retire it with \`o2b store device retire ${finding.device}\``
   );
 }
 
@@ -238,7 +274,16 @@ function readHeldPartitions(
         : "";
     const unreadable: UnreadableShard[] = [];
     try {
-      shards.set(partition, readPartition(dir, { onUnreadable: (s) => unreadable.push(s) }));
+      // A shard read only in part is still in the read and its cut, so the
+      // digests compare; the gap itself is not this check's finding.
+      shards.set(
+        partition,
+        readPartition(dir, {
+          onUnreadable: (s) => {
+            if (s.incomplete !== true) unreadable.push(s);
+          },
+        }),
+      );
     } catch (err) {
       warn(
         out,
@@ -303,7 +348,11 @@ function heldTailFindings(
   }
 }
 
-function storeFindings(store: StoreInspection, ctx: DoctorCheckContext, out: DoctorFindings): void {
+function storeFindings(
+  store: StoreInspection,
+  ctx: StoreSideCheckContext,
+  out: DoctorFindings,
+): void {
   const nowMs = ctx.now.getTime();
   const { shards, complete } = readHeldPartitions(store, out);
   // Digests are compared only over partitions read in full: a cut with a
@@ -321,6 +370,10 @@ function storeFindings(store: StoreInspection, ctx: DoctorCheckContext, out: Doc
     );
   }
   heldTailFindings(store, shards, nowMs, out);
+  if (retirementsKnown) {
+    out.issues.push(...returnedRetiredIssues(digestShards, partitionDir(store.root, "shared")));
+  }
+  removalBacklogFinding(store, shards, out);
   out.issues.push(...crossPartitionIdIssues(store, shards));
   out.issues.push(...looseModeIssues(store));
   out.issues.push(...reservedDeviceDirIssues(store));
@@ -351,28 +404,62 @@ function storeFindings(store: StoreInspection, ctx: DoctorCheckContext, out: Doc
   }
 }
 
+/**
+ * Removed content the shards still hold (FORMAT.md, "Removal"): a
+ * tombstone takes a signal, a preference or a lane entry out of every
+ * read, but the earlier lines stay in the append-only shards, here and on
+ * every machine they sync to, until store compaction exists. Reported so
+ * a user who asked to forget knows the bytes are not gone yet.
+ */
+function removalBacklogFinding(
+  store: StoreInspection,
+  shards: ReadonlyMap<StorePartition, ReadonlyArray<PartitionShard>>,
+  out: DoctorFindings,
+): void {
+  const records = [...shards.values()].flatMap((own) => own.flatMap((s) => s.all));
+  const backlog = removalBacklog(records);
+  if (backlog.total === 0) return;
+  warn(
+    out,
+    STORE_REMOVED_AWAITING_COMPACTION_CODE,
+    `${backlog.total} record(s) of removed content still sit in the store's shards ` +
+      `(${backlog.signals} of forgotten signals, ${backlog.preferences} of removed preferences, ` +
+      `${backlog.laneEntries} of removed lane entries). No read shows them, but the append-only ` +
+      "shards keep the original lines, on this machine and on every machine they sync to, " +
+      "until store compaction exists",
+    store.root,
+  );
+}
+
 /** Whether this machine uses the store: the flag is on or a root is configured. */
 function storeInUse(
-  ctx: DoctorCheckContext,
+  ctx: StoreSideCheckContext,
   root: ResolvedStoreRoot | null,
   rootError: unknown,
 ): boolean {
   if (isDualWriteEnabled(ctx.configPath)) return true;
+  // A store-only machine (switched, or a fresh install at the default
+  // root with no dual write) depends on the store for everything.
+  const context = {
+    vault: ctx.vault,
+    ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
+  };
+  if (root !== null && isStoreOnly(context)) return true;
   if (root !== null) return root.origin !== "default";
   // The resolver refused the root: in use only when the user configured one.
   return rootError instanceof StoreRootInsideVaultError && rootError.origin !== "default";
 }
 
-export const storeCheck: DoctorCheck = {
+export const storeCheck: StoreSideDoctorCheck = {
   failSoft: true,
-  run(ctx: DoctorCheckContext, out: DoctorFindings): void {
+  run(ctx: StoreSideCheckContext, out: DoctorFindings): void {
     let root: ResolvedStoreRoot | null = null;
     let rootError: unknown = null;
     try {
       root = resolveConfiguredStoreRoot(ctx.configPath);
       // The vault this pass checks may not be the configured one; a root
       // inside it is just as wrong.
-      if (isPathInsideResolved(root.root, ctx.vault, process.platform)) {
+      if (ctx.vault !== null && isPathInsideResolved(root.root, ctx.vault, process.platform)) {
         rootError = new StoreRootInsideVaultError(root.root, ctx.vault, root.origin);
       }
     } catch (err) {
@@ -381,6 +468,7 @@ export const storeCheck: DoctorCheck = {
     if (!storeInUse(ctx, root, rootError)) return;
 
     dualWriteFindings(out);
+    failOpenWriteFindings(out);
     if (rootError !== null || root === null) {
       warn(
         out,
@@ -393,6 +481,15 @@ export const storeCheck: DoctorCheck = {
     try {
       store = inspectStore(root.root);
     } catch (err) {
+      if (err instanceof HeldPartitionLostError) {
+        out.issues.push({
+          severity: "error",
+          code: STORE_PARTITION_LOST_CODE,
+          path: root.root,
+          message: err.message,
+        } satisfies DoctorIssue);
+        return;
+      }
       warn(
         out,
         STORE_ROOT_INVALID_CODE,

@@ -135,7 +135,7 @@ export function spearman(a: ReadonlyArray<number>, b: ReadonlyArray<number>): nu
 // ----- Sampling & probe search ----------------------------------------------
 
 /** Distinct recorded queries from the demand log, most recent first. */
-function sampleRecordedQueries(vault: string, max: number): string[] {
+function sampleRecordedQueries(vault: string | null, max: number): string[] {
   const records = readQueryDemand(vault);
   const seen = new Set<string>();
   const out: string[] = [];

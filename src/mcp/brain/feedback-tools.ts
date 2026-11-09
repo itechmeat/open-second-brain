@@ -7,6 +7,7 @@
  */
 
 import { resolve } from "node:path";
+import { loadPermissionsDocumentFor } from "../../core/brain/permissions/document-source.ts";
 import { resolveAgentName, resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import {
   appendApplyEvidence,
@@ -82,11 +83,10 @@ import {
   WriteRefusedError,
 } from "../../core/brain/pending/pending-lanes.ts";
 import { nextCommandField, requireNextStep } from "../../core/brain/next-step.ts";
-import { loadPermissionsDocument } from "../../core/brain/permissions/document.ts";
 import { resolvePermission } from "../../core/brain/permissions/resolve.ts";
 import { substrateSubject } from "../../core/brain/write-disposition.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextVault, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { refuseAgentClaim } from "./agent-claim.ts";
 import { codeForError } from "../tool-error-codes.ts";
 import {
@@ -95,12 +95,8 @@ import {
   type ObservedUseEntry,
 } from "../../core/brain/observed-use.ts";
 import { coerceStr, coerceBool, coerceIsoDate, unknownOperationError } from "../coerce.ts";
-import {
-  enforceCountGuard,
-  readCountGuardArgs,
-  toolSafeguard,
-  vaultRelativeSafe,
-} from "./shared.ts";
+import { enforceCountGuard, readCountGuardArgs, toolSafeguard } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
@@ -141,10 +137,15 @@ function deriveSlug(topic: string): string {
   return slugify(topic);
 }
 
+/** How a result names a record written with no vault. */
+const STORE_RECORD_PREFIX = "store:";
+
 async function toolBrainFeedback(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the writes are store records (D14).
+  const vault = contextVault(ctx);
   // Single source of truth for the brain_feedback payload contract —
   // session-replay (sessions/import.ts) and the MCP live path now go
   // through the same validator so rule shape cannot drift between the
@@ -188,7 +189,9 @@ async function toolBrainFeedback(
   // and it answers for the credential-minted subject, never for a name
   // the request argued for.
   if (forceConfirmed) {
-    const { document } = loadPermissionsDocument(ctx.vault);
+    // The permissions document: the operator's shared setting, or the legacy
+    // file on an unswitched machine (document-source.ts).
+    const { document } = loadPermissionsDocumentFor(vault);
     if (document !== null) {
       const decision = resolvePermission(document, substrateSubject(subject), "write");
       if (decision.verdict !== "allow") {
@@ -248,7 +251,7 @@ async function toolBrainFeedback(
   // only when the call passes no explicit scope. Compute one effective
   // scope so the signal, its mirror, and any force-confirmed preference
   // all land on the same scope.
-  const defaultScope = loadFeedbackDefaultScopeSafe(ctx.vault);
+  const defaultScope = loadFeedbackDefaultScopeSafe(vault);
   const effectiveScope = resolveEffectiveScope(scope, defaultScope);
   const writeOpts = defaultScope !== undefined ? { defaultScope } : {};
 
@@ -278,7 +281,7 @@ async function toolBrainFeedback(
   };
   let sigResult;
   try {
-    sigResult = writeSignal(ctx.vault, signalInput, {
+    sigResult = writeSignal(vault, signalInput, {
       ...writeOpts,
       // The review disposition always answers for THIS tool's resolved
       // identity: the credential-minted subject when the transport minted
@@ -301,11 +304,15 @@ async function toolBrainFeedback(
       deduped: true,
       // A dedup wrote nothing, so it staged nothing.
       staged: false,
-      signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
-      signal_absolute_path: resolve(sigResult.path),
+      signal_path:
+        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
+      signal_absolute_path:
+        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
       signal_id: sigResult.id,
-      path: vaultRelativeSafe(ctx.vault, sigResult.path),
-      absolute_path: resolve(sigResult.path),
+      path:
+        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
+      absolute_path:
+        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
       id: sigResult.id,
       agent,
     };
@@ -313,14 +320,15 @@ async function toolBrainFeedback(
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
   // primary write; `mirror` is reported only when the key is configured.
   const sharedNamespace = resolveSharedNamespace(ctx.configPath);
+  // The mirror copies from a vault, so there is none without one.
   const mirror =
-    sharedNamespace === null
+    sharedNamespace === null || vault === null
       ? undefined
-      : mirrorSignal(sharedNamespace, ctx.vault, signalInput, writeOpts);
+      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts);
 
   try {
     timeStageSync(ROUTE_STAGE.logAppend, () =>
-      appendLogEvent(ctx.vault, {
+      appendLogEvent(vault, {
         timestamp: createdAt,
         eventType: BRAIN_LOG_EVENT_KIND.feedback,
         body: {
@@ -343,7 +351,7 @@ async function toolBrainFeedback(
   // Both advisories answer at the caller's reach: a preference or signal
   // the caller may not read is never scored, named or counted.
   const readable = readableAtContextReachOrUndefined(ctx);
-  const advisory: WriteConflictAdvisory | null = adviseIncomingFeedback(ctx.vault, {
+  const advisory: WriteConflictAdvisory | null = adviseIncomingFeedback(vault, {
     principle,
     ...(readable !== undefined ? { readable } : {}),
     ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
@@ -354,7 +362,7 @@ async function toolBrainFeedback(
   // Unroutable-capture routing hint (unit 4): the signal above resolved
   // no scope, so no scoped recall reaches it. Non-blocking like the
   // advisory, and absent entirely when this vault uses no scopes yet.
-  const routingHint: CaptureRoutingHint | null = adviseUnroutableCapture(ctx.vault, {
+  const routingHint: CaptureRoutingHint | null = adviseUnroutableCapture(vault, {
     ...(readable !== undefined ? { readable } : {}),
     ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
     agent,
@@ -369,7 +377,7 @@ async function toolBrainFeedback(
     // as the rule's origin under `evidenced_by`.
     prefResult = timeStageSync(ROUTE_STAGE.preferenceWrite, () =>
       writePreference(
-        ctx.vault,
+        vault,
         {
           slug,
           topic: topic.trim(),
@@ -413,7 +421,7 @@ async function toolBrainFeedback(
       // visible chronology reads cleaner).
       const preferenceId = prefResult.id;
       timeStageSync(ROUTE_STAGE.logAppend, () =>
-        appendLogEvent(ctx.vault, {
+        appendLogEvent(vault, {
           timestamp: isoSecond(new Date(now.getTime() + 1000)),
           eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
           body: {
@@ -429,6 +437,12 @@ async function toolBrainFeedback(
     }
   }
 
+  // With no vault the records have no file: both fields name the record
+  // (`store:<id>`), as the CLI does.
+  const named = (path: string, id: string): string =>
+    vault === null ? `${STORE_RECORD_PREFIX}${id}` : toolPath(ctx, path);
+  const absolute = (path: string, id: string): string =>
+    vault === null ? `${STORE_RECORD_PREFIX}${id}` : resolve(path);
   return {
     kind: prefResult ? "preference" : "signal",
     ...mirrorReportFields(mirror),
@@ -450,24 +464,24 @@ async function toolBrainFeedback(
           ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
         }
       : {}),
-    signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
-    signal_absolute_path: resolve(sigResult.path),
+    signal_path: named(sigResult.path, sigResult.id),
+    signal_absolute_path: absolute(sigResult.path, sigResult.id),
     signal_id: sigResult.id,
     ...(prefResult
       ? {
-          preference_path: vaultRelativeSafe(ctx.vault, prefResult.path),
-          preference_absolute_path: resolve(prefResult.path),
+          preference_path: named(prefResult.path, prefResult.id),
+          preference_absolute_path: absolute(prefResult.path, prefResult.id),
           preference_id: prefResult.id,
           // Back-compat: top-level `path`/`id` previously pointed at the
           // pref on the force-confirmed branch. Keep them aligned for
           // callers that look at the bare fields.
-          path: vaultRelativeSafe(ctx.vault, prefResult.path),
-          absolute_path: resolve(prefResult.path),
+          path: named(prefResult.path, prefResult.id),
+          absolute_path: absolute(prefResult.path, prefResult.id),
           id: prefResult.id,
         }
       : {
-          path: vaultRelativeSafe(ctx.vault, sigResult.path),
-          absolute_path: resolve(sigResult.path),
+          path: named(sigResult.path, sigResult.id),
+          absolute_path: absolute(sigResult.path, sigResult.id),
           id: sigResult.id,
         }),
     agent,
@@ -572,6 +586,10 @@ async function toolBrainDream(
   args: Record<string, unknown>,
   onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the inline pass runs over the store
+  // alone (D14); a step and the staged lifecycle read `ctx.vault`, which
+  // refuses with `vault_required` there.
+  const vault = contextVault(ctx);
   const action = args["action"] ?? "run";
   if (
     action !== "run" &&
@@ -594,7 +612,7 @@ async function toolBrainDream(
   const stepArg = coerceStr(args, "step", false);
   // One view for the whole call: every branch below reports preference
   // and signal ids, and the staged lifecycle reports them twice.
-  const dreamView = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const dreamView = gatedOwnerScopeView(vault, ctx.agentName);
   // The rollup step's link candidates leave out a page the caller may not
   // read at its reach, exactly as an absent page.
   const readable = readableAtContextReach(ctx);
@@ -785,7 +803,7 @@ async function toolBrainDream(
   // Only pay for a preview pass when a guard is actually requested; otherwise
   // the run is byte-identical to before.
   if (expect !== null || strict) {
-    const preview = dream(ctx.vault, {
+    const preview = dream(vault, {
       dryRun: true,
       safeguard,
       readable,
@@ -811,7 +829,7 @@ async function toolBrainDream(
   // happen at all, and a client that saw the same five stages twice
   // would read the second pass as a restart. Progress describes the run
   // the caller asked for.
-  const summary = dream(ctx.vault, {
+  const summary = dream(vault, {
     dryRun,
     safeguard,
     readable,
@@ -898,10 +916,8 @@ async function toolBrainDream(
           reuse: entry.reuse,
         })),
     },
-    snapshot_path: summary.snapshot_path
-      ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
-      : null,
-    log_path: summary.log_path ? vaultRelativeSafe(ctx.vault, summary.log_path) : null,
+    snapshot_path: summary.snapshot_path ? toolPath(ctx, summary.snapshot_path) : null,
+    log_path: summary.log_path ? toolPath(ctx, summary.log_path) : null,
   };
 }
 
@@ -911,6 +927,8 @@ async function toolBrainApplyEvidence(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the writes are store records (D14).
+  const vault = contextVault(ctx);
   const prefId = coerceStr(args, "pref_id", true)!;
   const artifact = coerceStr(args, "artifact", true)!;
   const resultRaw = coerceStr(args, "result", true)!;
@@ -966,14 +984,15 @@ async function toolBrainApplyEvidence(
   // before anything is written.
   const readable = readableAtContextReachOrUndefined(ctx);
   try {
-    const res = appendApplyEvidence(ctx.vault, input, {
+    const res = appendApplyEvidence(vault, input, {
       role: BRAIN_ROLES.applier,
       ...(readable !== undefined ? { readable } : {}),
     });
     return {
       logged_at: res.logged_at,
-      log_path: vaultRelativeSafe(ctx.vault, res.log_path),
-      absolute_log_path: resolve(res.log_path),
+      // With no vault the log is a store shard, named as the store names it.
+      log_path: vault === null ? res.log_path : toolPath(ctx, res.log_path),
+      absolute_log_path: vault === null ? res.log_path : resolve(res.log_path),
       agent,
     };
   } catch (exc) {
@@ -1052,6 +1071,8 @@ async function toolBrainNote(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // `null` on a server with no vault: the writes are store records (D14).
+  const vault = contextVault(ctx);
   const rawText = coerceStr(args, "text", true)!;
   const agentArg = coerceStr(args, "agent", false);
   // A token caller's log line is attributed to the token's agent; a
@@ -1061,7 +1082,7 @@ async function toolBrainNote(
   let res;
   try {
     res = appendBrainNote({
-      vault: ctx.vault,
+      vault: vault,
       text: rawText,
       ...(agentArg ? { agent: agentArg } : {}),
       ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
@@ -1149,7 +1170,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_feedback",
     kind: "write",
     description:
-      "Record one Brain taste signal in `Brain/inbox/sig-*.md`. With `force_confirmed: true`, create the preference directly (skips the dream trial window).",
+      "Record one Brain taste signal in the signal inbox. With `force_confirmed: true`, create the preference directly (skips the dream trial window).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1215,7 +1236,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_dream",
     kind: "write",
     description:
-      "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list and retriage. Typically scheduled via cron.",
+      "Deterministic learning pass over the signal inbox. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list and retriage. Typically scheduled via cron.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1267,7 +1288,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "object",
           description:
             `action=run: override a phase gate for THIS RUN ONLY, never written back to ` +
-            `Brain/_brain.yaml. Known gates: ${DREAM_GATE_NAMES.join(", ")}.`,
+            `the brain settings. Known gates: ${DREAM_GATE_NAMES.join(", ")}.`,
           properties: {
             heal_enrich: {
               type: "boolean",
@@ -1286,7 +1307,7 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_apply_evidence",
     kind: "write",
     description:
-      "Record whether an active preference was applied, violated, or marked outdated against a freshly-produced durable artifact. Appends one event to `Brain/log/<today>.md`. A single `outdated` event triggers retire on the next dream pass.",
+      "Record whether an active preference was applied, violated, or marked outdated against a freshly-produced durable artifact. Appends one event to today's brain log. A single `outdated` event triggers retire on the next dream pass.",
     inputSchema: {
       type: "object",
       properties: {

@@ -25,8 +25,9 @@
 import {
   buildAttestationRecord,
   listAttestationRecordFiles,
-  readAttestationRecordFile,
+  readAttestationEntry,
   writeAttestationRecord,
+  type AttestationEntry,
   type AttestationRecord,
 } from "../../../core/brain/attestation/record.ts";
 import {
@@ -267,7 +268,7 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
   // cannot be read is damage to name, never an empty answer: it gets
   // its own row with the reader's reason while the readable records
   // still list - one corrupted file hides nothing but itself.
-  let entries: ReadonlyArray<{ path: string; name: string }>;
+  let entries: ReadonlyArray<AttestationEntry>;
   try {
     entries = listAttestationRecordFiles(vault).toReversed();
   } catch (exc) {
@@ -280,7 +281,7 @@ async function cmdBrainAttestList(argv: string[]): Promise<number> {
   const unreadable: { path: string; reason: string }[] = [];
   for (const entry of entries) {
     try {
-      records.push({ path: entry.path, record: readAttestationRecordFile(entry.path) });
+      records.push({ path: entry.path, record: readAttestationEntry(entry) });
     } catch (exc) {
       unreadable.push({ path: entry.path, reason: (exc as Error).message ?? String(exc) });
     }
@@ -362,7 +363,7 @@ async function cmdBrainAttestVerify(argv: string[]): Promise<number> {
       info("no attestation on record: nothing to verify");
       return 0;
     }
-    record = readAttestationRecordFile(newest.path);
+    record = readAttestationEntry(newest);
   } catch (exc) {
     return failAttestation("verify", exc);
   }

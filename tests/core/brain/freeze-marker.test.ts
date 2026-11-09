@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import {
@@ -26,6 +26,8 @@ import {
   readFreezeMarker,
   resetFreezeMarkerCache,
 } from "../../../src/core/brain/freeze-marker.ts";
+import { makeStoreEnv } from "../store/fixtures/store-env.ts";
+import { switchDevice } from "./fixtures/memory-twins.ts";
 
 let vault: string;
 
@@ -137,6 +139,29 @@ describe("the per-process cache", () => {
     expect(readFreezeMarker(vault)).not.toBeNull();
     rmSync(frozenMarkerPath(vault));
     expect(readFreezeMarker(vault)).toBeNull();
+  });
+});
+
+describe("a switch in another process", () => {
+  test("moves the marker this process reads to the device-local state", () => {
+    const env = makeStoreEnv("o2b-freeze-marker-switch-");
+    try {
+      resetFreezeMarkerCache();
+      // Unswitched: the marker lives in the vault, and none is set.
+      expect(readFreezeMarker(env.vault)).toBeNull();
+      switchDevice(env);
+      const marker = frozenMarkerPath(env.vault);
+      expect(marker.startsWith(join(env.vault, "Brain"))).toBe(false);
+      mkdirSync(dirname(marker), { recursive: true });
+      atomicWriteFileSync(
+        marker,
+        JSON.stringify({ schema: FREEZE_MARKER_SCHEMA_VERSION, frozen_at: "2026-09-10T08:00:00Z" }),
+      );
+      expect(readFreezeMarker(env.vault)?.frozen_at).toBe("2026-09-10T08:00:00Z");
+    } finally {
+      env.cleanup();
+      resetFreezeMarkerCache();
+    }
   });
 });
 

@@ -5,7 +5,7 @@
  * deduping. They must therefore be part of the checkpoint content hash.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,8 @@ import { IdempotencyPayloadMismatchError } from "../../../src/core/brain/idempot
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-checkpoint-idem-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });

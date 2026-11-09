@@ -55,7 +55,10 @@ import { join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
 import { compareStamps, type StampMismatch } from "../integrity/stamp.ts";
-import { AUDIT_WEEK_SHARD_GRAMMAR } from "../reliability/audit.ts";
+import { AUDIT_STORE_LEDGER_NAME, AUDIT_WEEK_SHARD_GRAMMAR } from "../reliability/audit.ts";
+import { DUAL_WRITE_LEDGERS } from "../store/dual-write-records.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 import { listShardedFiles } from "./ledger-shards.ts";
 import { brainDirs } from "./paths.ts";
 import { readSchemaPackSource, renderSchemaBlock, type SchemaPack } from "./schema-pack.ts";
@@ -227,6 +230,9 @@ export function computeSchemaPackDigest(pack: SchemaPack): string {
  * as a clean one.
  */
 export function readRecordedSchemaPackDigest(vault: string): RecordedSchemaPackDigest {
+  // A store-only machine audits its applies to the store's audit ledger
+  // (design D14 item 1); the rows of this trail carry its directory name.
+  if (isStoreOnly({ vault })) return newestRecordedDigest(storeAuditRecords(vault));
   const dir = schemaMutationAuditDir(vault);
   if (!existsSync(dir)) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.noApplyRecorded);
 
@@ -239,7 +245,7 @@ export function readRecordedSchemaPackDigest(vault: string): RecordedSchemaPackD
     return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
   }
 
-  let newest: { record: Record<string, unknown>; at: number; path: string } | null = null;
+  const records: Array<{ record: unknown; path: string }> = [];
   for (const path of shards) {
     let text: string;
     try {
@@ -255,16 +261,41 @@ export function readRecordedSchemaPackDigest(vault: string): RecordedSchemaPackD
       } catch {
         return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
       }
-      if (!isRecord(parsed)) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
-      if (parsed["action"] !== SCHEMA_MUTATION_AUDIT_ACTION) continue;
-      const timestamp = parsed["timestamp"];
-      if (typeof timestamp !== "string") {
-        return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
-      }
-      const at = Date.parse(timestamp);
-      if (!Number.isFinite(at)) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
-      if (newest === null || at >= newest.at) newest = { record: parsed, at, path };
+      records.push({ record: parsed, path });
     }
+  }
+  return newestRecordedDigest(records);
+}
+
+/** The ledger a store-only machine names as its schema audit trail: the audit writer's store name (`reliability/audit.ts`). */
+const STORE_AUDIT_TRAIL = AUDIT_STORE_LEDGER_NAME;
+
+/** The schema-mutation audit records in the store, each named by the ledger. */
+function storeAuditRecords(vault: string): Array<{ record: unknown; path: string }> {
+  const rows = readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.reliabilityAudit, () => [], { vault });
+  return rows
+    .filter((row) => isRecord(row) && row["audit_dir"] === SCHEMA_MUTATION_AUDIT_DIR)
+    .map((row) => ({
+      record: (row as Record<string, unknown>)["record"],
+      path: STORE_AUDIT_TRAIL,
+    }));
+}
+
+/** The newest schema apply's digest among `records`, by each record's own timestamp. */
+function newestRecordedDigest(
+  records: ReadonlyArray<{ record: unknown; path: string }>,
+): RecordedSchemaPackDigest {
+  let newest: { record: Record<string, unknown>; at: number; path: string } | null = null;
+  for (const { record: parsed, path } of records) {
+    if (!isRecord(parsed)) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
+    if (parsed["action"] !== SCHEMA_MUTATION_AUDIT_ACTION) continue;
+    const timestamp = parsed["timestamp"];
+    if (typeof timestamp !== "string") {
+      return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
+    }
+    const at = Date.parse(timestamp);
+    if (!Number.isFinite(at)) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
+    if (newest === null || at >= newest.at) newest = { record: parsed, at, path };
   }
   if (newest === null) return notFound(SCHEMA_PACK_UNVERIFIED_REASON.noApplyRecorded);
 

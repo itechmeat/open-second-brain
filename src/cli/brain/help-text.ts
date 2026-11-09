@@ -46,7 +46,7 @@ Brain verbs (observing memory):
   feedback         Record a taste signal (--topic, --signal, --principle)
   dream            Deterministic dreaming pass; stage/validate/apply/retriage bundles
   apply-evidence   Log a real-work application of a preference
-  note             Append a one-line narrative milestone to Brain/log/today
+  note             Append a one-line narrative milestone to today's brain log
   lifecycle        Tombstone/supersede a memory, correct one record, resolve chain tips, curator slices
   expire           Set, change or clear a signal's or preference's expiration date
   note-lifecycle   Note FILES or FOLDERS: rename/move/archive/delete a file, move/rename a folder, rewriting inbound links
@@ -70,7 +70,11 @@ Brain verbs (observing memory):
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
-  set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
+  set-primary      Declare or clear primary_agent in the brain settings (--clear)
+  settings         Shared brain settings: get, set, unset, list (<block>.<field>)
+  migrate-store    Move the legacy brain into the brain store
+                   (--dry-run | --resume | --rollback | --remove-legacy [--force]
+                   | --force-release-gate)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply --yes])
   unprotect        Remove OSB-managed deny rules (preview; --apply writes, --yes consents) (--target {claudecode|codex})
   permissions      Show the trust policy document and query the decision ledger (show | ledger)
@@ -127,7 +131,7 @@ Brain verbs (observing memory):
   authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
   privacy-marker-restamp  Formalize informal privacy markers (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
-  scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
+  scan-inline         Capture @osb markers from folders listed under the notes.read_paths brain setting
   scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
   import-session      Replay signals from a registered agent session .jsonl (or directory)
   entity              Canonical entity registry: set, get, list, relate, archive, prune, lexicon, merge
@@ -302,8 +306,10 @@ export const VERB_HELP: Record<string, string> = {
     "Appends a single event to today's log. Missing preference exits 2.\n",
   note:
     "usage: o2b brain note <text> [--agent <name>] [--vault <path>] [--config <path>] [--json]\n" +
-    "Append one narrative-milestone line to Brain/log/<today>.md under the `note`\n" +
-    "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
+    "Append one narrative-milestone line to today's brain log under the `note`\n" +
+    "event kind: a log record in the brain store once this machine is switched,\n" +
+    "Brain/log/<today>.md before. Works with no vault on a store-only machine.\n" +
+    "CLI mirror of the MCP `brain_note` tool, same contract.\n" +
     "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
   lifecycle:
     "usage: o2b brain lifecycle <tombstone|supersede|temporal-replace|tip|curator|correct> [...] [--vault <path>] [--json]\n" +
@@ -911,18 +917,53 @@ export const VERB_HELP: Record<string, string> = {
     "List the Model Context Protocol servers configured across the vault: each\n" +
     "server's name, the config file that declares it, the packages it pulls, and\n" +
     "the env-var NAMES it requires. Environment values are never read. Read-only.\n",
+  settings:
+    "usage: o2b brain settings get <name> [--vault <path>] [--json]\n" +
+    "       o2b brain settings set <name> <value> [--vault <path>] [--agent <name>] [--json]\n" +
+    "       o2b brain settings unset <name> [--vault <path>] [--agent <name>] [--json]\n" +
+    "       o2b brain settings list [--vault <path>] [--json]\n" +
+    "Read and change the brain settings every machine shares, named <block>.<field>\n" +
+    "(for example notes.read_paths, decision_model.enabled, dream.candidate_threshold)\n" +
+    "or by a scalar key (primary_agent). <value> is JSON when it parses (5, true,\n" +
+    '["Projects/"]), else a plain string. The value is validated before it is written.\n' +
+    "A setting of one machine (snapshots, storage, embeddings, decision-model endpoints)\n" +
+    "is refused with the machine-config key to set instead. Once this machine is\n" +
+    "switched to the brain store a change is a shared settings record with human\n" +
+    "authority, which an agent cannot override; before that it edits the settings file.\n" +
+    "view.language (en, ru) sets the language of the human view's generated text; it is\n" +
+    "a store setting on every machine, so it needs the brain store.\n",
+  "migrate-store":
+    "usage: o2b brain migrate-store [--wait <seconds>] [--vault <path>] [--json]\n" +
+    "       o2b brain migrate-store --dry-run [--vault <path>] [--json]\n" +
+    "       o2b brain migrate-store --resume [--wait <seconds>] [--vault <path>] [--json]\n" +
+    "       o2b brain migrate-store --rollback [--vault <path>] [--json]\n" +
+    "       o2b brain migrate-store --remove-legacy [--force] [--vault <path>] [--json]\n" +
+    "       o2b brain migrate-store --force-release-gate [--json]\n" +
+    "Move this vault's legacy brain (Brain/ and the machine state beside it) into the\n" +
+    "brain store and switch this machine to it. --dry-run prints the plan and writes\n" +
+    "nothing. --resume continues an interrupted migration. On a later machine, --wait\n" +
+    "waits up to that many seconds for the first machine's store files to arrive by\n" +
+    "sync before refusing. --rollback takes this\n" +
+    "machine back to the legacy layout. --remove-legacy moves the legacy tree out of the\n" +
+    "vault once every device of the store has migrated or been retired; --force removes\n" +
+    "it anyway. --force-release-gate releases the migration gate a run that is gone left\n" +
+    "on this machine, unless its holder is still running. The forms exclude each other.\n" +
+    "Exit codes: 0 done (or a plan that maps every entry), 1 refused, failed, a plan with\n" +
+    "unmapped entries or a legacy tree kept in place, 2 usage error.\n",
   "set-primary":
-    "usage: o2b brain set-primary <name> [--vault <path>] [--json]\n" +
-    "       o2b brain set-primary --clear [--vault <path>] [--json]\n" +
+    "usage: o2b brain set-primary <name> [--vault <path>] [--agent <name>] [--json]\n" +
+    "       o2b brain set-primary --clear [--vault <path>] [--agent <name>] [--json]\n" +
     "Declare which agent owns the dream consolidation pass for this vault.\n" +
-    "Stored in Brain/_brain.yaml as `primary_agent:`. Dream runs from a\n" +
+    "Stored as the shared brain setting `primary_agent`. Dream runs from a\n" +
     "different agent emit a warning but still proceed (observability, not\n" +
-    "access control). Use --clear to remove the declaration.\n",
+    "access control). Use --clear to remove the declaration. Once this machine is\n" +
+    "switched to the brain store, --agent names who made the change in its record.\n",
   "scan-inline":
     "usage: o2b brain scan-inline [--vault <path>] [--path <subdir>...] [--exclude <subdir>...]\n" +
     "                              [--dry-run] [--strict] [--json] [--agent <name>]\n" +
     "Walk the vault for @osb markers (inline form and fenced 'osb' blocks),\n" +
-    "create signals in Brain/inbox/, and annotate the source files with\n" +
+    "create brain signals (store records once switched, Brain/inbox/ before),\n" +
+    "and annotate the source files with\n" +
     "@osb✓ [[sig-...]]. Brain/, .git, node_modules, and similar directories\n" +
     "are always skipped. Idempotent on re-run.\n",
   "scan-citations":

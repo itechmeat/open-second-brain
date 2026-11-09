@@ -28,7 +28,9 @@ import type { StorageForecastTier } from "../storage/forecast.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
 import { isCustomLaneTask } from "./custom-task-id.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
-import { dualWrite } from "../../store/dual-write.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { routeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
@@ -219,33 +221,45 @@ function journalPath(vault: string): string {
 }
 
 export function appendJournal(vault: string, entry: MaintenanceJournalEntry): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  const path = journalPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  // O_APPEND, one line per call: concurrent gate-refusal writers
-  // (which run BEFORE the lease is held) interleave instead of
-  // overwriting each other through a read-modify-rewrite race. The
-  // cap is enforced separately by `sweepJournal`, which runMaintenance
-  // calls while it holds the lease - the only safe rewrite point.
-  appendFileSync(path, JSON.stringify(entry) + "\n");
-  // Brain store dual write (task 1.11): off by default, never fails this append.
+  // One `maintenance-journal` ledger row on a store-only machine (design
+  // D14 item 1), this device's journal line plus the dual write otherwise.
   // Task ids, verdicts and gate readings; a failed task's `error` text can
   // carry a path, so a row naming a private or unjudgeable page goes to
   // `private` only.
-  dualWrite(
-    () =>
+  routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J).
+      assertVaultIdentityForWrite(vault);
+      const path = journalPath(vault);
+      mkdirSync(dirname(path), { recursive: true });
+      // O_APPEND, one line per call: concurrent gate-refusal writers
+      // (which run BEFORE the lease is held) interleave instead of
+      // overwriting each other through a read-modify-rewrite race. The
+      // cap is enforced separately by `sweepJournal`, which runMaintenance
+      // calls while it holds the lease - the only safe rewrite point.
+      appendFileSync(path, JSON.stringify(entry) + "\n");
+    },
+    store: () =>
       ledgerRowRecord(
         DUAL_WRITE_LEDGERS.maintenanceJournal,
         entry,
         rowNamesPrivatePage(vault, entry) ? "private" : "shared",
       ),
-    { vault },
-  );
+    context: { vault },
+    // The journal is diagnostic: a row that does not land (a private row
+    // on a machine without `private`, a store fault) is counted for
+    // doctor and never stops the maintenance lane. Privacy stays fail
+    // closed: the row is never written to shared instead.
+    failOpen: true,
+  });
 }
 
 /** Trim the journal to the newest `cap` lines. Lease-holder only. */
 export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CAP): void {
+  // A store-only machine rewrites nothing under the vault (design D14 item
+  // 1): its journal is append-only store rows, and the legacy file it may
+  // still hold is read-only until the tree leaves the vault.
+  if (isStoreOnly({ vault })) return;
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const path = journalPath(vault);
@@ -291,14 +305,30 @@ function parseEntry(line: string): MaintenanceJournalEntry | null {
  * Unparseable lines are skipped.
  */
 export function listJournal(vault: string, limit?: number): MaintenanceJournalEntry[] {
+  // A store-only machine reads the `maintenance-journal` ledger rows in
+  // fold order (design D14 item 1): every device's rows in its own append
+  // order, interleaved by clock, which is what the legacy shard merge
+  // gives.
+  const out = readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.maintenanceJournal, readLegacyJournal, {
+    vault,
+  })
+    .filter(
+      (row): row is MaintenanceJournalEntry =>
+        row !== null && typeof row === "object" && !Array.isArray(row),
+    )
+    .toReversed();
+  return limit !== undefined ? out.slice(0, Math.max(0, limit)) : out;
+}
+
+/** The legacy shards, interleaved by row time, oldest first. */
+function readLegacyJournal(vault: string): MaintenanceJournalEntry[] {
   const shards = readShardLinesByShard(dirname(journalPath(vault)), JOURNAL_GRAMMAR).map(
     (shard) => ({
       shardId: shard.shardId,
       rows: shard.rows.map(parseEntry).filter((entry) => entry !== null),
     }),
   );
-  const out = interleaveShardRows(shards, entryTime).toReversed();
-  return limit !== undefined ? out.slice(0, Math.max(0, limit)) : out;
+  return interleaveShardRows(shards, entryTime);
 }
 
 /**

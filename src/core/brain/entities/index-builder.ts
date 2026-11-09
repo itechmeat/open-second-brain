@@ -17,7 +17,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
 import { extractFrontmatterRelations } from "../../graph/frontmatter-relations.ts";
@@ -32,6 +32,12 @@ import {
   type EntityConflict,
   type EntityConflictKind,
 } from "./types.ts";
+import {
+  lanePagesInStore,
+  laneStoreStamp,
+  listLaneTree,
+  parseLanePage,
+} from "../../store/lane-pages.ts";
 
 export interface EntityIndex {
   /** Every parseable entity (any status), sorted by id. */
@@ -93,8 +99,9 @@ export function conflictClaimants(
 }
 
 /** Parse one entity file; `null` when it is not a valid entity. */
-export function parseEntityFile(path: string): BrainEntity | null {
-  const [meta, body] = parseFrontmatter(path);
+export function parseEntityFile(path: string, vault?: string): BrainEntity | null {
+  // With its vault, a store-only machine reads the page from its lane record.
+  const [meta, body] = vault !== undefined ? parseLanePage(vault, path) : parseFrontmatter(path);
   if (meta["kind"] !== BRAIN_ENTITY_KIND) return null;
   const id = typeof meta["entity_id"] === "string" ? meta["entity_id"] : "";
   const category = typeof meta["category"] === "string" ? meta["category"] : "";
@@ -131,8 +138,12 @@ export function parseEntityFile(path: string): BrainEntity | null {
 }
 
 /** Sorted absolute paths of every `.md` under `Brain/entities/`, one level of category dirs. */
-function walkEntityFiles(vault: string): string[] {
+function walkEntityFiles(vault: string, inStore: boolean): string[] {
   const root = brainDirs(vault).entities;
+  // A store-only machine keeps the same one-level layout as lane entries.
+  if (inStore) {
+    return listLaneTree(vault, root).filter((path) => relative(root, path).split(sep).length <= 2);
+  }
   if (!existsSync(root)) return [];
   const out: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true }).toSorted((a, b) =>
@@ -161,8 +172,15 @@ function walkEntityFiles(vault: string): string[] {
  * Returns the walked file list alongside the signature so a cache miss
  * reuses this walk instead of scanning the directory tree a second time.
  */
-function entityIndexSignature(vault: string): { files: string[]; signature: string } {
-  const files = walkEntityFiles(vault);
+function entityIndexSignature(
+  vault: string,
+  inStore: boolean,
+): { files: string[]; signature: string } {
+  const files = walkEntityFiles(vault, inStore);
+  // On a store-only machine the store's change stamp stands in for mtimes.
+  if (inStore) {
+    return { files, signature: `store\0${laneStoreStamp(vault)}\0${files.join("\n")}` };
+  }
   const parts: string[] = [];
   for (const path of files) {
     try {
@@ -195,10 +213,14 @@ const INDEX_CACHE_MAX = 16;
  * stale read - a deliberate, documented trade-off for the per-query win.
  */
 export function buildEntityIndex(vault: string): EntityIndex {
-  const { files, signature } = entityIndexSignature(vault);
+  // The mode is decided once per build: asking it per page re-ran the
+  // store-only predicate (and on an unswitched machine with a store, a
+  // store inspection) for every entity file.
+  const inStore = lanePagesInStore(vault);
+  const { files, signature } = entityIndexSignature(vault, inStore);
   const cached = INDEX_CACHE.get(vault);
   if (cached && cached.signature === signature) return cached.index;
-  const index = buildEntityIndexUncached(files);
+  const index = buildEntityIndexUncached(vault, files, inStore);
   if (INDEX_CACHE.size >= INDEX_CACHE_MAX && !INDEX_CACHE.has(vault)) {
     const oldest = INDEX_CACHE.keys().next().value;
     if (oldest !== undefined) INDEX_CACHE.delete(oldest);
@@ -212,10 +234,10 @@ export function __clearEntityIndexCache(): void {
   INDEX_CACHE.clear();
 }
 
-function buildEntityIndexUncached(files: string[]): EntityIndex {
+function buildEntityIndexUncached(vault: string, files: string[], inStore: boolean): EntityIndex {
   const entities: BrainEntity[] = [];
   for (const path of files) {
-    const entity = parseEntityFile(path);
+    const entity = parseEntityFile(path, inStore ? vault : undefined);
     if (entity !== null) entities.push(entity);
   }
   entities.sort((a, b) => a.id.localeCompare(b.id));

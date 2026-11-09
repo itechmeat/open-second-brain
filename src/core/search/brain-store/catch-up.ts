@@ -32,12 +32,17 @@ import { observeClock } from "../../store/clock-store.ts";
 import { compareHlc, parseHlc } from "../../store/hlc.ts";
 import { readBlobBody, readShard } from "../../store/reader.ts";
 import { blobPath, partitionDir } from "../../store/store-paths.ts";
-import type { StorePartition } from "../../store/constants.ts";
+import { SIGNAL_KIND, type StorePartition } from "../../store/constants.ts";
+import { SIGNAL_STATE_KIND } from "../../store/fold-signals.ts";
+import { LANE_ENTRY_KIND } from "../../store/lane-records.ts";
+import { TOMBSTONE_KINDS, voidedRecordIds } from "../../store/removal-backlog.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../schema.ts";
 import { Store } from "../store.ts";
 import {
   deleteWatermark,
+  getRecord,
   hasBrainRecordTables,
+  holdsRecordKind,
   pendingRecords,
   readWatermarks,
   recordIdsOfShard,
@@ -47,7 +52,7 @@ import {
 import { isWriterLockHeld } from "../store/writer-lock.ts";
 import { SearchError, type ResolvedSearchConfig } from "../types.ts";
 import { STORE_CATCH_UP_INTERVAL_ENV, STORE_CATCH_UP_INTERVAL_MS } from "./constants.ts";
-import { completePendingRecord, ingestRecord } from "./ingest.ts";
+import { completePendingRecord, ingestRecord, removeRecord } from "./ingest.ts";
 import type { IndexedStore } from "./location.ts";
 import { settleOrphans, type Orphans } from "./orphans.ts";
 import { prefixHash } from "./prefix-hash.ts";
@@ -196,7 +201,11 @@ function peekIndex(
 
 interface SyncTotals {
   shardsRead: number;
+  /** Tombstones (`signal-removed`, `preference-remove`, `lane-entry-remove`) ingested this pass. */
+  tombstones: number;
   added: number;
+  /** Records added this pass of a kind a tombstone can void (a signal, a preference, a lane entry). */
+  voidableAdded: number;
   removed: number;
   completed: number;
   /** Largest clock ingested from another device. */
@@ -244,9 +253,13 @@ function readOneShard(
     // A copy refused for sitting in the other partition does not hold the
     // record: it must not keep an orphaned row alive.
     if (outcome === "refused") continue;
+    if (TOMBSTONE_KINDS.has(r.record.kind)) totals.tombstones++;
     seen.add(r.record.id);
     orphans.delete(r.record.id);
-    if (outcome === "added") totals.added++;
+    if (outcome === "added") {
+      totals.added++;
+      if (isVoidableKind(r.record.kind)) totals.voidableAdded++;
+    }
     if (r.record.device !== device) {
       const hlc = parseHlc(r.record.hlc);
       const best = totals.remoteHlc === null ? null : parseHlc(totals.remoteHlc);
@@ -284,6 +297,48 @@ function readOneShard(
   return { watermark, fromStart: !resume };
 }
 
+/** Every preference record kind starts with it (`preference-set`, `preference-evidence`, ...). */
+const PREFERENCE_KIND_PREFIX = "preference-";
+
+/** A record kind a tombstone can void: a signal's, a preference's, a lane entry's. */
+function isVoidableKind(kind: string): boolean {
+  return (
+    kind === SIGNAL_KIND ||
+    kind === SIGNAL_STATE_KIND ||
+    kind === LANE_ENTRY_KIND ||
+    kind.startsWith(PREFERENCE_KIND_PREFIX)
+  );
+}
+
+/**
+ * Take out of `index` every record a tombstone voided (a forgotten
+ * signal, a removed preference, a removed lane entry), over all `events`
+ * shards. Returns how many rows
+ * left the index.
+ */
+function dropVoidedRecords(
+  index: Store,
+  store: IndexedStore,
+  shards: ReadonlyArray<ShardStat>,
+): number {
+  const records = shards
+    .filter((shard) => shard.stream === "events")
+    .flatMap((shard) =>
+      readShard(shard.path, {
+        partitionRoot: partitionDir(store.root, shard.partition),
+      }).records.map((r) => r.record),
+    );
+  const db = index.brainRecordsConnection();
+  let removed = 0;
+  for (const id of voidedRecordIds(records)) {
+    const row = getRecord(db, id);
+    if (row === null) continue;
+    removeRecord(index, row);
+    removed++;
+  }
+  return removed;
+}
+
 /** Bring `index` level with the shards in `shards`; returns what changed. */
 function syncShards(
   index: Store,
@@ -296,7 +351,9 @@ function syncShards(
   const device = readDeviceId(config.configPath);
   const totals: SyncTotals = {
     shardsRead: 0,
+    tombstones: 0,
     added: 0,
+    voidableAdded: 0,
     removed: 0,
     completed: 0,
     remoteHlc: null,
@@ -305,14 +362,21 @@ function syncShards(
   try {
     const orphans: Orphans = new Map();
     const present = new Set<string>();
+    // Every shard read from its start this pass (the orphan settling skips
+    // re-reading them), and of those the `events` shards, the only ones
+    // holding records a tombstone voids.
     const readInFull = new Set<string>();
+    const eventsReadInFull = new Set<string>();
     const next: StoreWatermark[] = [];
     for (const shard of shards) {
       present.add(shard.key);
       const mark = marks.get(shard.key);
       if (mark !== undefined && sameStat(mark, shard)) continue;
       const read = readOneShard(index, config, store, shard, mark, totals, device, orphans);
-      if (read.fromStart) readInFull.add(shard.key);
+      if (read.fromStart) {
+        readInFull.add(shard.key);
+        if (shard.stream === "events") eventsReadInFull.add(shard.key);
+      }
       next.push(read.watermark);
     }
     const vanished = [...marks.keys()].filter((key) => !present.has(key));
@@ -321,6 +385,18 @@ function syncShards(
     }
     const settled = settleOrphans(index, config, store, shards, orphans, readInFull);
     totals.removed += settled.removed;
+    // A forgotten signal leaves the index with its tombstone (FORMAT.md,
+    // "Removal"): after a pass that read one, that re-read an events shard
+    // from its start, or that added a record a known tombstone may void (a
+    // line from before the tombstone that synced in late, appended to a
+    // shard already read), every record the tombstones voided is taken out.
+    if (
+      totals.tombstones > 0 ||
+      ((eventsReadInFull.size > 0 || totals.voidableAdded > 0) &&
+        [...TOMBSTONE_KINDS].some((kind) => holdsRecordKind(db, kind)))
+    ) {
+      totals.removed += dropVoidedRecords(index, store, shards);
+    }
     // Watermarks move only once the orphans are settled: a pass that
     // stops before that reads the same shards again next time, and a
     // shard whose orphans could not be settled keeps its old watermark

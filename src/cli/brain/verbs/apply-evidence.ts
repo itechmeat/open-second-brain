@@ -21,7 +21,8 @@ export async function cmdBrainApplyEvidence(argv: string[]): Promise<number> {
       return fail(`brain apply-evidence missing required flag: --${field}`);
     }
   }
-  const { config, vault } = brainVerbContext(flags);
+  // `null` with no vault configured: the evidence is a store record (D14).
+  const { config, vault } = brainVerbContext(flags, { vault: "optional" });
   const explicitAgent = normalizeFlagString(flags["agent"]);
   if (flags["agent"] !== undefined && explicitAgent === null) {
     return fail("--agent must be a non-empty string when provided");

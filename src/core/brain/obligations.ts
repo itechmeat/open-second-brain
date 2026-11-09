@@ -19,15 +19,23 @@
  *   - `remove` retires the page into `Brain/obligations/archive/`.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { slugify } from "../vault.ts";
-import { parseFrontmatter } from "../vault.ts";
 import { obligationPath, obligationsArchiveDir, obligationsDir, validateIsoDate } from "./paths.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoDate, isoSecond } from "./time.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  moveLanePage,
+  parseLanePage,
+  readLaneFile,
+  readLaneText,
+  removeLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 /**
  * Supported cadences. Day-based cadences add a fixed number of days;
@@ -208,8 +216,8 @@ function render(page: Omit<ObligationPage, "path">): string {
 
 function parsePage(vault: string, slug: string): ObligationPage | null {
   const path = obligationPath(vault, slug);
-  if (!existsSync(path)) return null;
-  const [meta, body] = parseFrontmatter(path);
+  if (!lanePageExists(vault, path)) return null;
+  const [meta, body] = parseLanePage(vault, path);
   const cadenceRaw = typeof meta["cadence"] === "string" ? meta["cadence"] : "";
   let cadence: ObligationCadence;
   try {
@@ -250,7 +258,7 @@ function parsePage(vault: string, slug: string): ObligationPage | null {
 /** Create a recurring obligation page. */
 export function addObligation(vault: string, input: AddObligationInput): ObligationPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const title = input.title.trim();
   if (title.length === 0) throw new ObligationError("obligation title must not be empty");
   const cadence = parseCadence(input.cadence);
@@ -258,7 +266,7 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
   const today = isoDate(now);
   const anchor = input.anchor ? requireIsoDate(input.anchor, "anchor") : today;
   const slug = slugify(title);
-  if (existsSync(obligationPath(vault, slug))) {
+  if (lanePageExists(vault, obligationPath(vault, slug))) {
     throw new ObligationError(`obligation already exists: ${slug} (remove it first to recreate)`);
   }
   const page = {
@@ -274,16 +282,15 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
     completions: Object.freeze([] as string[]),
     notes: (input.notes ?? "").trim(),
   };
-  mkdirSync(obligationsDir(vault), { recursive: true });
   const path = obligationPath(vault, slug);
-  atomicWriteFileSync(path, render(page));
+  writeLaneText(vault, path, render(page));
   return Object.freeze({ ...page, path });
 }
 
 /** Record a completion and advance next-due by one cadence interval. */
 export function completeObligation(vault: string, input: CompleteObligationInput): ObligationPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw noObligationError(slug);
@@ -301,7 +308,7 @@ export function completeObligation(vault: string, input: CompleteObligationInput
     completions: Object.freeze([date, ...prior.completions]),
     notes: prior.notes,
   };
-  atomicWriteFileSync(prior.path, render(page));
+  writeLaneText(vault, prior.path, render(page));
   return Object.freeze({ ...page, path: prior.path });
 }
 
@@ -316,7 +323,7 @@ export function showObligation(vault: string, slug: string): ObligationPage | nu
  * before attempting a create that {@link addObligation} would reject.
  */
 export function obligationExists(vault: string, slug: string): boolean {
-  return existsSync(obligationPath(vault, slugify(slug)));
+  return lanePageExists(vault, obligationPath(vault, slugify(slug)));
 }
 
 export interface ObligationListItem extends ObligationPage {
@@ -332,11 +339,11 @@ export function listObligations(
   options: { now?: Date; overdueOnly?: boolean } = {},
 ): ObligationListItem[] {
   const dir = obligationsDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const today = isoDate(options.now ?? new Date());
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   const out: ObligationListItem[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".md")) continue;
     const page = parsePage(vault, name.replace(/\.md$/u, ""));
     if (page === null) continue;
@@ -357,21 +364,25 @@ export function listObligations(
 /** Retire an obligation into Brain/obligations/archive/. */
 export function removeObligation(vault: string, slug: string): RemoveObligationResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const normalized = slugify(slug);
   const activePath = obligationPath(vault, normalized);
-  if (!existsSync(activePath)) throw noObligationError(normalized);
+  if (!lanePageExists(vault, activePath)) throw noObligationError(normalized);
   const archiveDir = obligationsArchiveDir(vault);
-  mkdirSync(archiveDir, { recursive: true });
   let archivePath = join(archiveDir, `${normalized}.md`);
-  for (let suffix = 2; existsSync(archivePath); suffix++) {
+  for (let suffix = 2; lanePageExists(vault, archivePath); suffix++) {
     archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
   }
   try {
-    renameWithRetry(activePath, archivePath);
-  } catch {
-    atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
-    rmSync(activePath, { force: true });
+    moveLanePage(vault, activePath, archivePath);
+  } catch (err) {
+    // The store move is already one operation (tombstone and new entry in
+    // one write): retrying it as two would leave the obligation both
+    // active and archived. Only a legacy rename falls back to copy and
+    // remove, and a page gone since the check still throws.
+    if (lanePagesInStore(vault)) throw err;
+    writeLaneText(vault, archivePath, readLaneFile(vault, activePath));
+    removeLanePage(vault, activePath);
   }
   return Object.freeze({ slug: normalized, archivePath });
 }

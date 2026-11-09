@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -21,6 +21,8 @@ let home: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-aiderwrap-v-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   home = mkdtempSync(join(tmpdir(), "osb-aiderwrap-h-"));
 });
 afterEach(() => {

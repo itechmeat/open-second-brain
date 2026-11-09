@@ -38,6 +38,7 @@ import {
   InvalidExpirationTargetError,
 } from "../core/brain/expiration-set.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
+import { MigrationInProgressError } from "../core/migration-gate.ts";
 import type { HostMemoryWriteErrorCode } from "../core/brain/host-memory-write.ts";
 import { HostMemoryWriteError } from "../core/brain/host-memory-write.ts";
 import type { CreateNoteErrorCode } from "../core/brain/notes/create-note.ts";
@@ -55,6 +56,10 @@ import { BrainParseError } from "../core/brain/parse-error.ts";
 import type { PinnedBatchErrorCode } from "../core/brain/pinned.ts";
 import { PinnedBatchError } from "../core/brain/pinned.ts";
 import { BrainConfigError } from "../core/brain/policy/errors.ts";
+import {
+  BrainSettingError,
+  type BrainSettingErrorCode,
+} from "../core/brain/policy/settings-write.ts";
 import { ResponseCheckError, SEMANTIC_VIOLATION_CODES } from "../core/brain/response-checks.ts";
 import { ResponseShapeError, SHAPE_VIOLATION_CODES } from "../core/brain/response-shape.ts";
 import { SafeguardAbortError, SafeguardTimeoutError } from "../core/brain/safeguard.ts";
@@ -64,12 +69,20 @@ import type { WriteBatchErrorCode } from "../core/brain/write-batch.ts";
 import { WriteBatchError } from "../core/brain/write-batch.ts";
 import { ConfigReadError } from "../core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../core/search/search-error.ts";
+import { StoreWriteError, type StoreWriteFailure } from "../core/store/store-write.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../core/write-binding/index.ts";
+import {
+  VAULT_ADAPTER_REQUIRED_CODE,
+  VAULT_BINDING_MISMATCH_CODE,
+  VaultAdapterRequiredError,
+  VaultBindingMismatchError,
+  VaultBindingsUnreadableError,
+} from "../core/vault-adapter/index.ts";
 import {
   WRITE_REFUSAL_CODES,
   PENDING_STAGE_CONFLICT_CODE,
 } from "../core/brain/pending/pending-lanes.ts";
-import { VAULT_FROZEN_REFUSAL } from "./frozen-refusal.ts";
+import { MIGRATION_IN_PROGRESS_REFUSAL, VAULT_FROZEN_REFUSAL } from "./frozen-refusal.ts";
 import { OWNER_SCOPE_REFUSALS } from "./owner-scope-refusal.ts";
 import {
   INTERNAL_ERROR,
@@ -134,6 +147,11 @@ export const TOOL_ERROR_CODE = Object.freeze({
   argumentForbidden: "argument_forbidden",
   /** A strict distillation refused a quoted span it could not verify. */
   quoteUnverified: "quote_unverified",
+  /**
+   * A store-only write did not land (`StoreWriteError`, design D14 item
+   * 1); the payload names its reason and remedy ({@link ToolErrorDetail}).
+   */
+  storeWriteFailed: "store_write_failed",
 } as const);
 
 /** Closed union over {@link TOOL_ERROR_CODE}. */
@@ -245,6 +263,19 @@ const PINNED_BATCH_CODES = exhaustiveMembers<PinnedBatchErrorCode>()([
   "budget_exceeded",
 ]);
 
+const BRAIN_SETTING_CODES = exhaustiveMembers<BrainSettingErrorCode>()([
+  "unknown_setting",
+  "device_setting",
+  "not_a_setting",
+  "field_required",
+  "invalid_setting_value",
+  "human_value_in_force",
+  "operator_only_setting",
+  "private_setting_value",
+  "no_settings_file",
+  "settings_unreadable",
+]);
+
 const EXACT_STATE_CODES = exhaustiveMembers<ExactStateErrorCode>()([
   "budget_exceeded",
   "invalid_aspect",
@@ -296,7 +327,12 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...Object.values(SHAPE_VIOLATION_CODES),
     ...Object.values(SEMANTIC_VIOLATION_CODES),
     VAULT_FROZEN_REFUSAL,
+    MIGRATION_IN_PROGRESS_REFUSAL,
     WRITE_BINDING_REFUSED_CODE,
+    // The vault adapter's refusals: no vault for a note feature, and a
+    // note write to a vault that is not the one bound to the store.
+    VAULT_ADAPTER_REQUIRED_CODE,
+    VAULT_BINDING_MISMATCH_CODE,
     ...Object.values(WRITE_REFUSAL_CODES),
     // A write retried while its first run is still staged: the queue's
     // own refusal code, carried by `PendingStageConflictError` beside the
@@ -312,6 +348,7 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...NOTE_TITLE_RESOLUTION_CODES,
     ...NOTE_TEMPLATE_CODES,
     ...PINNED_BATCH_CODES,
+    ...BRAIN_SETTING_CODES,
     ...EXACT_STATE_CODES,
     ...HOST_MEMORY_WRITE_CODES,
     ...STORAGE_CAPACITY_CODES,
@@ -330,15 +367,44 @@ export function isToolErrorCode(value: unknown): value is ToolErrorCode {
   return typeof value === "string" && TOOL_ERROR_CODE_SET.has(value);
 }
 
+/**
+ * What a failure carries beside its code, for the failures whose class
+ * names a machine-readable reason and the remedy for it: today a
+ * store-only write that did not land (`store_write_failed`).
+ */
+export interface ToolErrorDetail {
+  readonly reason: StoreWriteFailure;
+  readonly remedy: string;
+}
+
 /** The `_meta` payload an `isError` result carries. */
-export interface ToolErrorMeta {
+export interface ToolErrorMeta extends Partial<ToolErrorDetail> {
   readonly schema: typeof TOOL_ERROR_SCHEMA;
   readonly code: ToolErrorCode;
 }
 
 /** Build the `_meta["open-second-brain/error"]` payload for `code`. */
-export function toolErrorMeta(code: ToolErrorCode): ToolErrorMeta {
-  return { schema: TOOL_ERROR_SCHEMA, code };
+export function toolErrorMeta(code: ToolErrorCode, detail?: ToolErrorDetail): ToolErrorMeta {
+  return detail === undefined
+    ? { schema: TOOL_ERROR_SCHEMA, code }
+    : { schema: TOOL_ERROR_SCHEMA, code, reason: detail.reason, remedy: detail.remedy };
+}
+
+/**
+ * The reason and remedy of a thrown value, walking `cause` like
+ * {@link codeForError}; `undefined` for a failure that carries none. The
+ * remedy is fixed prose per reason (`store/store-write.ts`) and names no
+ * path, so it is safe at every reach.
+ */
+export function errorDetailFor(exc: unknown): ToolErrorDetail | undefined {
+  let current: unknown = exc;
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH && current !== undefined; depth += 1) {
+    if (current instanceof StoreWriteError) {
+      return { reason: current.reason, remedy: current.remedy };
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
 }
 
 /** Total map from each JSON-RPC error code to its string default. */
@@ -387,14 +453,21 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   carried(NoteTitleResolutionError),
   carried(NoteTemplateError),
   carried(PinnedBatchError),
+  carried(BrainSettingError),
   carried(ExactStateError),
   carried(HostMemoryWriteError),
   carried(StorageCapacityError),
   carried(SearchError),
   carried(ResponseShapeError),
   carried(ResponseCheckError),
+  carried(VaultAdapterRequiredError),
+  carried(VaultBindingMismatchError),
+  // Carries the mismatch's code on purpose (see its class): the message
+  // tells a damaged binding file from a swapped vault.
+  carried(VaultBindingsUnreadableError),
   fixed(CountGuardError, COUNT_GUARD_WIRE_CODE),
   fixed(VaultFrozenError, VAULT_FROZEN_REFUSAL),
+  fixed(MigrationInProgressError, MIGRATION_IN_PROGRESS_REFUSAL),
   fixed(SafeguardTimeoutError, TOOL_ERROR_CODE.safeguardTimeout),
   fixed(SafeguardAbortError, TOOL_ERROR_CODE.safeguardAborted),
   fixed(ConfigReadError, TOOL_ERROR_CODE.configUnreadable),
@@ -406,6 +479,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(ExpirationTargetNotFoundError, EXPIRATION_REFUSAL_CODE.targetNotFound),
   fixed(InvalidExpirationTargetError, EXPIRATION_REFUSAL_CODE.invalidTarget),
   fixed(QuoteCheckError, TOOL_ERROR_CODE.quoteUnverified),
+  fixed(StoreWriteError, TOOL_ERROR_CODE.storeWriteFailed),
 ]);
 
 /**

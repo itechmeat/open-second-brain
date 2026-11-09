@@ -43,6 +43,7 @@ import {
   readSingleLine,
   resolveBrainAgent,
   usageError,
+  requireBrainVaultFor,
 } from "../helpers.ts";
 
 /**
@@ -130,6 +131,15 @@ function archiveSection(vault: string, swept: SweptPath): ArchiveSection {
   }
 }
 
+/** The archive section of a machine with no vault: no source archive, so nothing in it. */
+const EMPTY_ARCHIVE_SECTION: ArchiveSection = Object.freeze({
+  entries: 0,
+  totalBytes: 0,
+  missing: 0,
+  mismatched: 0,
+  uncited: 0,
+});
+
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -144,7 +154,18 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     agent: { type: "string" },
     "dry-run": { type: "boolean" },
   });
-  const { config, vault } = brainVerbContext(flags);
+  // With no vault configured (`null`) the pass runs the store-side checks
+  // (design D14); the repair and remediation modes rewrite the legacy tree
+  // and still need a vault.
+  const verbContext = brainVerbContext(flags, { vault: "optional" });
+  const { config, vault: configured } = verbContext;
+  const treeVerb = flags["repair"]
+    ? "doctor --repair"
+    : flags["remediate"]
+      ? "doctor --remediate"
+      : null;
+  if (treeVerb !== null) requireBrainVaultFor(verbContext, treeVerb);
+  const vault = configured;
 
   // `--apply` is a modifier of `--repair`; on its own it would silently
   // fall through to a read-only doctor run, so reject it up front.
@@ -205,7 +226,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
               "(--json or non-TTY stdin); nothing was written",
           );
         } else {
-          const preview = applyRepair(vault, {
+          const preview = applyRepair(requireBrainVaultFor(verbContext, "doctor --repair"), {
             dryRun: true,
             agent: resolveBrainAgent(flags, config),
             configPath: config,
@@ -230,7 +251,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
           }
         }
       }
-      const outcome = applyRepair(vault, {
+      const outcome = applyRepair(requireBrainVaultFor(verbContext, "doctor --repair"), {
         dryRun,
         agent: resolveBrainAgent(flags, config),
         configPath: config,
@@ -281,7 +302,12 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
       return fail("doctor found errors; remediation aborted");
     }
     try {
-      return runRemediate(vault, Boolean(flags["dry-run"]), Boolean(flags["json"]), result);
+      return runRemediate(
+        requireBrainVaultFor(verbContext, "doctor --remediate"),
+        Boolean(flags["dry-run"]),
+        Boolean(flags["json"]),
+        result,
+      );
     } catch (exc) {
       return fail(`remediation failed: ${(exc as Error).message ?? exc}`);
     }
@@ -308,7 +334,8 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   // derived from the streams: an unreadable store names its skip in the
   // stream above, so the failure feeds the exit census and is visible in
   // the same pass instead of one key (or one line) late.
-  const section = archiveSection(vault, swept);
+  // The source archive is a vault's; with no vault it holds nothing.
+  const section = vault === null ? EMPTY_ARCHIVE_SECTION : archiveSection(vault, swept);
 
   // Every code the three streams reported, in the order an operator reads
   // them. Feeds both the rail and the explanation of what the rail could
@@ -323,9 +350,10 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
 
   // Optional decision-model verdicts on alias-merge candidates (use
   // `dedup`); null while off, and both renderings below are unchanged.
-  const aliasVerdicts = await annotateEntityAliasIssues(vault, result.warnings, {
-    configPath: config,
-  });
+  const aliasVerdicts =
+    vault === null
+      ? null
+      : await annotateEntityAliasIssues(vault, result.warnings, { configPath: config });
   const warnings = aliasVerdicts === null ? result.warnings : aliasVerdicts.map((a) => a.item);
   const warningExtra = new Map<DoctorIssue, ReturnType<typeof verdictFields>>();
   const warningLine = new Map<DoctorIssue, string>();

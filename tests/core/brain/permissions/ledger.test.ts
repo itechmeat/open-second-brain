@@ -15,6 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -41,6 +42,8 @@ const savedDeviceId = process.env["O2B_DEVICE_ID"];
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-decisions-ledger-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   // The suite preload pins the empty shard; tests that simulate a device
   // set their own and restore this one.
   process.env["O2B_DEVICE_ID"] = "";
@@ -175,6 +178,13 @@ describe("queryDecisionLedger", () => {
   test("an empty vault yields zero rows and no directory", () => {
     expect(queryDecisionLedger(vault, {})).toEqual([]);
     expect(existsSync(decisionLedgerDir(vault))).toBe(false);
+  });
+
+  test("a legacy row with no string ts is listed, not hidden", () => {
+    appendDecisionLedger(vault, row());
+    const shard = join(decisionLedgerDir(vault), "2026-10.jsonl");
+    appendFileSync(shard, `${JSON.stringify({ actor: "hand-edited", verdict: "deny" })}\n`);
+    expect(queryDecisionLedger(vault, {}).map((r) => r.actor)).toContain("hand-edited");
   });
 
   test("the merged read is ordered by (ts, shardId) across device shards", () => {

@@ -35,9 +35,15 @@ import { computeContentHash } from "./content-hash.ts";
 import { appendEditHistory, type EditHistoryEntry } from "./health/edit-history.ts";
 import { appendPrefAudit, type PrefAuditSink } from "./pref-audit.ts";
 import { PREF_AUDIT_OP } from "./types.ts";
-import { preferencePath, validateSlug } from "./paths.ts";
+import { preferencePathOf, validateSlug } from "./paths.ts";
+import {
+  preferenceLockTarget,
+  preferencesStoreOnly,
+  storePreferenceEntry,
+} from "./preference-store.ts";
 import {
   parsePreference,
+  loadPreference,
   writePreference,
   wouldRewritePreference,
   type WritePreferenceInput,
@@ -143,7 +149,8 @@ function editHistoryEntries(
  * {@link BrainCollisionError} but must not mutate `ctx`.
  */
 export interface WritePreferenceContext {
-  readonly vault: string;
+  /** The vault, or `null` with none (design D14). */
+  readonly vault: string | null;
   readonly path: string;
   readonly existing: BrainPreference | null;
   readonly input: WritePreferenceInput;
@@ -169,7 +176,7 @@ export type WritePreferenceExpectation = (ctx: WritePreferenceContext) => void;
  * when uncontended).
  */
 export function writePreferenceTxn(
-  vault: string,
+  vault: string | null,
   input: WritePreferenceInput,
   expectations: ReadonlyArray<WritePreferenceExpectation>,
   options: WritePreferenceOptions = {},
@@ -177,11 +184,15 @@ export function writePreferenceTxn(
   audit?: PrefAuditSink,
 ): WritePreferenceResult {
   const slug = validateSlug(input.slug);
-  const path = preferencePath(vault, slug);
+  const path = preferencePathOf(vault, slug);
+  // Store-only (task 2.10), and always with no vault: the lock lives in the
+  // device-local state, since a lock file beside the page would write under
+  // `Brain/`, and the existing preference is the store's fold.
+  const storeOnly = vault === null || preferencesStoreOnly(vault, options.configPath);
 
   let handle: ReturnType<typeof acquireLockSync>;
   try {
-    handle = acquireLockSync(path);
+    handle = acquireLockSync(preferenceLockTarget(path, slug, storeOnly));
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ELOCKED") {
@@ -194,7 +205,15 @@ export function writePreferenceTxn(
   }
 
   try {
-    const existing = existsSync(path) ? parsePreference(path) : null;
+    const existing = storeOnly
+      ? loadPreference(
+          vault,
+          slug,
+          options.configPath !== undefined ? { configPath: options.configPath } : {},
+        )
+      : existsSync(path)
+        ? parsePreference(path)
+        : null;
     const ctx: WritePreferenceContext = Object.freeze({
       vault,
       path,
@@ -272,7 +291,10 @@ export function writePreferenceTxn(
           revision_after: inputWithDefaults.revision ?? null,
           hash_before: existing ? computeContentHash(existing.principle, existing.scope) : null,
           hash_after: computeContentHash(inputWithDefaults.principle, inputWithDefaults.scope),
-          private: () => isPrivatePageFile(result.path),
+          private: () =>
+            storeOnly
+              ? (storePreferenceEntry(slug, options.configPath)?.private ?? true)
+              : isPrivatePageFile(result.path),
         },
         { now: audit.now?.() ?? new Date() },
       );

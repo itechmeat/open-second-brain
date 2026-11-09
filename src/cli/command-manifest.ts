@@ -361,6 +361,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),
+        command(
+          "settings",
+          "Read and change the shared brain settings",
+          [flag("vault", "string"), flag("agent", "string"), flag("json", "boolean")],
+          [
+            command("get", "Show one shared brain setting"),
+            command("set", "Set one shared brain setting"),
+            command("unset", "Remove one shared brain setting; its default applies"),
+            command("list", "List the shared brain settings that are set"),
+          ],
+        ),
         command("protect", "Emit runtime deny rules for Brain", [
           flag("target", "string"),
           flag("vault", "string"),
@@ -487,6 +498,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("vault", "string"),
             flag("since", "string"),
             flag("limit", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command(
+          "migrate-store",
+          "Move the legacy brain into the brain store on this machine (--dry-run plans it and writes nothing; --resume continues an interrupted run)",
+          [
+            flag("vault", "string"),
+            flag("dry-run", "boolean"),
+            flag("resume", "boolean"),
+            flag("rollback", "boolean"),
+            flag("wait", "string"),
+            flag("remove-legacy", "boolean"),
+            flag("force-release-gate", "boolean"),
+            flag("force", "boolean"),
             flag("json", "boolean"),
           ],
         ),
@@ -1300,6 +1326,48 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Create the brain store (both partitions, or --partitions shared), or complete a half-created one",
           [flag("partitions", "string"), flag("config", "string"), flag("json", "boolean")],
         ),
+        command(
+          "path",
+          "Print the store root, partitions, device-local state directory and view target, with origin and existence",
+          [flag("config", "string"), flag("json", "boolean")],
+        ),
+        command(
+          "device",
+          "List the devices the store knows, or retire one that is gone",
+          [flag("config", "string"), flag("json", "boolean")],
+          [
+            command("list", "List each device with its last record and state"),
+            command("retire", "Retire a device that is gone (not this machine)", [
+              flag("reason", "string"),
+            ]),
+          ],
+        ),
+      ],
+    ),
+    command(
+      "view",
+      "Human view verbs",
+      [],
+      [
+        command(
+          "writer",
+          "Show the view writer, or make this machine the view writer (--here, --force without a release)",
+          [
+            flag("here", "boolean"),
+            flag("force", "boolean"),
+            flag("config", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command("render", "Render the human view (only the view writer writes pages)", [
+          flag("config", "string"),
+          flag("json", "boolean"),
+        ]),
+        command("recover", "List the replaced versions of a view page, or print one", [
+          flag("print", "string"),
+          flag("config", "string"),
+          flag("json", "boolean"),
+        ]),
       ],
     ),
     command(

@@ -18,10 +18,18 @@
  * (whose grammar admits no dashes) can address them. Reads go through an
  * mtime cache, so a rotation or revocation performed by another process
  * (the CLI) takes effect on this one's next resolve without a restart.
+ *
+ * On a switched machine (design D14 item 15) the token map lives in
+ * device config (`mcp-tokens.json` beside the machine config,
+ * `device-token-path.ts`), which the MCP transport reads first: minting,
+ * rotation and revocation write there (starting from the per-vault map
+ * when no device copy exists yet), under a device-local lock; the
+ * custody audit goes where the audit writer routes it (the store), so
+ * nothing is written into the vault.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { renameWithRetry } from "../../fs-atomic.ts";
@@ -31,7 +39,58 @@ import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { restrictToOwner } from "./owner-acl.ts";
+import { withLocalLock } from "../../store/local-lock.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { deviceTokenStorePath } from "./device-token-path.ts";
 import { tokenStorePath, withSecretsLock } from "./store.ts";
+
+/**
+ * Whether the token map of `vault` lives in device config on the machine
+ * `configPath` names (the process's default config when absent). Fails
+ * closed: a mode check that throws propagates, so a revocation is never
+ * written to the per-vault map while the server reads the device copy.
+ */
+function tokensInDeviceConfig(vault: string, configPath: string | undefined): boolean {
+  return isStoreOnly({ vault, ...(configPath !== undefined ? { configPath } : {}) });
+}
+
+/** The token file the writers write: the device-config copy once switched. */
+function writePath(vault: string, configPath: string | undefined): string {
+  return tokensInDeviceConfig(vault, configPath)
+    ? deviceTokenStorePath(configPath)
+    : tokenStorePath(vault);
+}
+
+/**
+ * The token file a reader of `vault` reads, or `null` when there is none:
+ * the device-config copy once switched (the per-vault map until a writer
+ * first writes the copy), the per-vault map before; with no vault, the
+ * device-config copy when it exists. The one rule the writers here and
+ * the MCP transport (`mcp/token-source.ts`) share, so they always name
+ * the same file for one machine config.
+ */
+export function tokenMapReadPath(vault: string | null, configPath?: string | null): string | null {
+  const config = configPath ?? undefined;
+  const device = deviceTokenStorePath(config);
+  if (vault === null) return existsSync(device) ? device : null;
+  if (!tokensInDeviceConfig(vault, config)) return tokenStorePath(vault);
+  return existsSync(device) ? device : tokenStorePath(vault);
+}
+
+function readPath(vault: string, configPath: string | undefined): string {
+  return tokenMapReadPath(vault, configPath)!;
+}
+
+/** The write guard and lock of a token write, by where the map lives. */
+function withTokenWrite<T>(vault: string, configPath: string | undefined, fn: () => T): T {
+  if (!tokensInDeviceConfig(vault, configPath)) {
+    assertVaultIdentityForWrite(vault);
+    return withSecretsLock(vault, fn);
+  }
+  const path = deviceTokenStorePath(configPath);
+  mkdirSync(dirname(path), { recursive: true });
+  return withLocalLock(path, fn);
+}
 
 export const MCP_TOKENS_SCHEMA_VERSION = 1;
 
@@ -123,8 +182,8 @@ export function mintAgentToken(
   vault: string,
   name: string,
   agent: string,
+  configPath?: string,
 ): { tokenMaterial: string; record: McpTokenRecord } {
-  assertVaultIdentityForWrite(vault);
   const cleanName = validatedName(name);
   const cleanAgent = validatedAgent(agent);
   const tokenMaterial = mintMaterial();
@@ -136,14 +195,14 @@ export function mintAgentToken(
     token_prefix: tokenMaterial.slice(0, TOKEN_PREFIX_LENGTH),
     created_at: isoSecond(),
   };
-  withSecretsLock(vault, () => {
-    const file = readTokenStore(vault);
+  withTokenWrite(vault, configPath, () => {
+    const file = readTokenStore(vault, configPath);
     if (file.tokens[cleanName] !== undefined) {
       throw new McpTokenStoreError(
         `token ${JSON.stringify(cleanName)} already exists; use rotate to replace its material`,
       );
     }
-    writeTokenStore(vault, {
+    writeTokenStore(vault, configPath, {
       version: MCP_TOKENS_SCHEMA_VERSION,
       tokens: { ...file.tokens, [cleanName]: record },
     });
@@ -165,13 +224,13 @@ export function mintAgentToken(
 export function rotateAgentToken(
   vault: string,
   name: string,
+  configPath?: string,
 ): { tokenMaterial: string; record: McpTokenRecord } {
-  assertVaultIdentityForWrite(vault);
   const cleanName = validatedName(name);
   const tokenMaterial = mintMaterial();
   let agent = "";
-  withSecretsLock(vault, () => {
-    const file = readTokenStore(vault);
+  withTokenWrite(vault, configPath, () => {
+    const file = readTokenStore(vault, configPath);
     const existing = file.tokens[cleanName];
     if (existing === undefined) {
       throw new McpTokenStoreError(`unknown token: ${JSON.stringify(cleanName)}`);
@@ -182,7 +241,7 @@ export function rotateAgentToken(
       );
     }
     agent = existing.agent;
-    writeTokenStore(vault, {
+    writeTokenStore(vault, configPath, {
       version: MCP_TOKENS_SCHEMA_VERSION,
       tokens: {
         ...file.tokens,
@@ -199,22 +258,21 @@ export function rotateAgentToken(
   auditToken(vault, "mcp_token_rotated", cleanName, { agent, replaced: true });
   return {
     tokenMaterial,
-    record: readTokenStore(vault).tokens[cleanName]!,
+    record: readTokenStore(vault, configPath).tokens[cleanName]!,
   };
 }
 
 /** Revoke one token: the record stays (history), the material stops resolving. */
-export function revokeAgentToken(vault: string, name: string): boolean {
-  assertVaultIdentityForWrite(vault);
+export function revokeAgentToken(vault: string, name: string, configPath?: string): boolean {
   const cleanName = validatedName(name);
   let revoked = false;
   let agent = "";
-  withSecretsLock(vault, () => {
-    const file = readTokenStore(vault);
+  withTokenWrite(vault, configPath, () => {
+    const file = readTokenStore(vault, configPath);
     const existing = file.tokens[cleanName];
     if (existing === undefined || existing.status === "revoked") return;
     agent = existing.agent;
-    writeTokenStore(vault, {
+    writeTokenStore(vault, configPath, {
       version: MCP_TOKENS_SCHEMA_VERSION,
       tokens: { ...file.tokens, [cleanName]: { ...existing, status: "revoked" } },
     });
@@ -227,8 +285,8 @@ export function revokeAgentToken(vault: string, name: string): boolean {
 // ----- Readers ---------------------------------------------------------------
 
 /** Every record, sorted by name. Metadata only - never the material. */
-export function listAgentTokens(vault: string): McpTokenRecord[] {
-  return Object.values(readTokenStore(vault).tokens).toSorted((a, b) =>
+export function listAgentTokens(vault: string, configPath?: string): McpTokenRecord[] {
+  return Object.values(readTokenStore(vault, configPath).tokens).toSorted((a, b) =>
     a.name.localeCompare(b.name),
   );
 }
@@ -240,8 +298,17 @@ export function listAgentTokens(vault: string): McpTokenRecord[] {
  * {@link resolveAgentForToken}, so minting the first token tightens a
  * running server without a restart.
  */
-export function hasAnyAgentToken(vault: string): boolean {
-  return activeHashIndex(vault).size > 0;
+export function hasAnyAgentToken(vault: string, configPath?: string): boolean {
+  return hasAnyAgentTokenAt(readPath(vault, configPath));
+}
+
+/**
+ * {@link hasAnyAgentToken} for the token file at `path`: the per-vault
+ * file, or the device-config copy a server with no vault reads (design
+ * D14 item 15, `src/mcp/token-source.ts`).
+ */
+export function hasAnyAgentTokenAt(path: string): boolean {
+  return activeHashIndex(path).size > 0;
 }
 
 /**
@@ -257,9 +324,18 @@ export function hasAnyAgentToken(vault: string): boolean {
 export function resolveAgentForToken(
   vault: string,
   presented: string,
+  configPath?: string,
+): { agent: string; name: string } | null {
+  return resolveAgentForTokenAt(readPath(vault, configPath), presented);
+}
+
+/** {@link resolveAgentForToken} for the token file at `path` (see {@link hasAnyAgentTokenAt}). */
+export function resolveAgentForTokenAt(
+  path: string,
+  presented: string,
 ): { agent: string; name: string } | null {
   if (typeof presented !== "string" || presented.length === 0) return null;
-  const index = activeHashIndex(vault);
+  const index = activeHashIndex(path);
   const digest = hashOf(presented);
   const now = nowMs();
   for (const [storedHash, entry] of index) {
@@ -314,8 +390,11 @@ function hashOf(material: string): string {
   return createHash("sha256").update(material).digest("hex");
 }
 
-function readTokenStore(vault: string): TokenStoreFile {
-  const path = tokenStorePath(vault);
+function readTokenStore(vault: string, configPath: string | undefined): TokenStoreFile {
+  return readTokenStoreAt(readPath(vault, configPath));
+}
+
+function readTokenStoreAt(path: string): TokenStoreFile {
   if (!existsSync(path)) return EMPTY_STORE;
   // Same custody posture as `secrets.json`: a store that arrived by copy
   // keeps whatever ACL it came with, and the read re-applies owner-only.
@@ -357,11 +436,16 @@ function readTokenStore(vault: string): TokenStoreFile {
   return { version: MCP_TOKENS_SCHEMA_VERSION, tokens: records };
 }
 
-function writeTokenStore(vault: string, file: TokenStoreFile): void {
-  const path = tokenStorePath(vault);
+function writeTokenStore(
+  vault: string,
+  configPath: string | undefined,
+  file: TokenStoreFile,
+): void {
+  const path = writePath(vault, configPath);
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(file, null, 2) + "\n", { mode: 0o600 });
   renameWithRetry(tmp, path);
+  if (process.platform === "win32") restrictToOwner(path, "file");
   // The writer is the one reader whose cache must not survive its own
   // write: dropping the entry makes the next resolve re-stat, so an
   // in-process rotation takes effect even where the filesystem's mtime
@@ -390,8 +474,7 @@ const cacheByPath = new Map<string, CacheEntry>();
 
 const EMPTY_INDEX: ReadonlyMap<string, HashIndexEntry> = new Map();
 
-function activeHashIndex(vault: string): ReadonlyMap<string, HashIndexEntry> {
-  const path = tokenStorePath(vault);
+function activeHashIndex(path: string): ReadonlyMap<string, HashIndexEntry> {
   if (!existsSync(path)) {
     cacheByPath.delete(path);
     return EMPTY_INDEX;
@@ -402,7 +485,7 @@ function activeHashIndex(vault: string): ReadonlyMap<string, HashIndexEntry> {
     return cached.index;
   }
   const index = new Map<string, HashIndexEntry>();
-  for (const record of Object.values(readTokenStore(vault).tokens)) {
+  for (const record of Object.values(readTokenStoreAt(path).tokens)) {
     if (record.status !== "active") continue;
     const entry: HashIndexEntry = { agent: record.agent, name: record.name };
     index.set(record.token_hash, entry);

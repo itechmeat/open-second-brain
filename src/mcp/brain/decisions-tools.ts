@@ -66,6 +66,7 @@ import { contextReach } from "../tool-contract.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { BRAIN_DECISIONS_REL } from "../../core/brain/path-constants.ts";
 import { deliveryView } from "./reach-events.ts";
+import { laneVault } from "./lane-vault.ts";
 
 const TOOL = "brain_decision";
 
@@ -99,6 +100,8 @@ async function toolBrainDecision(
 ): Promise<Record<string, unknown>> {
   return wrapToolErrors(TOOL, [DecisionError, ReceiptError, OpenDecisionError], async () => {
     const action = coerceStr(args, "action", true)!;
+    // A record-lane tool works with no vault: its pages are store records then.
+    const vault = laneVault(ctx);
     const agent = coerceStr(args, "agent", false) ?? undefined;
     // A decision page the caller cannot read at its reach is answered as
     // an absent one by every action: skipped by the lists, refused by the
@@ -133,7 +136,7 @@ async function toolBrainDecision(
               );
         const rationale = coerceStr(args, "rationale", false) ?? undefined;
         const commitment = coerceStr(args, "commitment", false) ?? undefined;
-        const res = recordDecision(ctx.vault, {
+        const res = recordDecision(vault, {
           title,
           chosen,
           assumption,
@@ -164,7 +167,7 @@ async function toolBrainDecision(
           DECISION_RATING_MAX,
         );
         const rationale = coerceStr(args, "rationale", false) ?? undefined;
-        const res = updateRating(ctx.vault, {
+        const res = updateRating(vault, {
           ...reads,
           slug,
           rating,
@@ -175,7 +178,7 @@ async function toolBrainDecision(
       }
       case "compare": {
         const slugs = coerceStrList(args, "slugs");
-        const rows = compareDecisions(ctx.vault, slugs, reads);
+        const rows = compareDecisions(vault, slugs, reads);
         return {
           action,
           decisions: rows.map((d) => {
@@ -195,7 +198,7 @@ async function toolBrainDecision(
       case "outcome": {
         const slug = coerceStr(args, "slug", true)!;
         const outcome = coerceStr(args, "outcome", true)!;
-        const res = backfillOutcome(ctx.vault, {
+        const res = backfillOutcome(vault, {
           ...reads,
           slug,
           outcome,
@@ -205,7 +208,7 @@ async function toolBrainDecision(
       }
       case "show": {
         const slug = coerceStr(args, "slug", true)!;
-        const res = showDecision(ctx.vault, slug, reads);
+        const res = showDecision(vault, slug, reads);
         if (res === null) throw new DecisionError(`no decision: ${slug}`);
         const rel = decisionDeliveryRel(res.id);
         return {
@@ -225,9 +228,7 @@ async function toolBrainDecision(
       }
       case "list": {
         const ratedOnly = coerceBool(args, "rated");
-        const all = ratedOnly
-          ? listRatedDecisions(ctx.vault, reads)
-          : listDecisions(ctx.vault, reads);
+        const all = ratedOnly ? listRatedDecisions(vault, reads) : listDecisions(vault, reads);
         return {
           action,
           decisions: all.map((d) => ({
@@ -252,7 +253,7 @@ async function toolBrainDecision(
             ? null
             : coerceInt(args, "last_turn", 0, 0, 1_000_000);
         const surfacedIds = coerceStrList(args, "surfaced_ids");
-        const res = recallRatedDecisions(ctx.vault, {
+        const res = recallRatedDecisions(vault, {
           ...reads,
           prompt,
           turn,
@@ -293,10 +294,10 @@ async function toolBrainDecision(
         // id; one naming a page the caller cannot read is dropped before
         // the total and the page are taken.
         const view = everyArtifactRefView(
-          gatedOwnerScopeView(ctx.vault, ctx.agentName),
-          reachView(ctx.vault, contextReach(ctx)),
+          gatedOwnerScopeView(vault, ctx.agentName),
+          reachView(vault, contextReach(ctx)),
         );
-        const page = queryDecisionChangeHistory(ctx.vault, {
+        const page = queryDecisionChangeHistory(vault, {
           ...(view.filtersNothing ? {} : { keep: (r) => view.visible(r.subject) }),
           ...(subject ? { subject } : {}),
           ...(cursor ? { cursor } : {}),
@@ -322,7 +323,7 @@ async function toolBrainDecision(
         const title = coerceStr(args, "title", true)!;
         const chosen = coerceStr(args, "chosen", false) ?? undefined;
         const hits = findSimilarDecisions(
-          ctx.vault,
+          vault,
           {
             title,
             ...(chosen ? { chosen } : {}),
@@ -345,7 +346,7 @@ async function toolBrainDecision(
         const question = coerceStr(args, "question", true)!;
         const options = coerceStrList(args, "options");
         const context = coerceStr(args, "context", false) ?? undefined;
-        const res = openDecision(ctx.vault, {
+        const res = openDecision(vault, {
           title,
           question,
           options,
@@ -367,7 +368,7 @@ async function toolBrainDecision(
             `brain_decision: 'status' must be one of ${OPEN_DECISION_STATUSES.join(", ")}`,
           );
         }
-        const listed = listOpenDecisions(ctx.vault, {
+        const listed = listOpenDecisions(vault, {
           ...(statusRaw !== undefined ? { status: statusRaw } : {}),
           ...reads,
         });
@@ -387,7 +388,7 @@ async function toolBrainDecision(
       }
       case "show_open": {
         const id = coerceStr(args, "id", true)!;
-        const res = showOpenDecision(ctx.vault, id, reads);
+        const res = showOpenDecision(vault, id, reads);
         if (res === null) throw new OpenDecisionError(`no open decision: ${id}`);
         const rel = decisionDeliveryRel(res.id);
         return {
@@ -414,10 +415,10 @@ async function toolBrainDecision(
         // Reach boundary: a record below the caller's reach is answered
         // exactly like an absent one, before anything is written - the
         // same predicate rate and outcome answer their reads with.
-        if (showOpenDecision(ctx.vault, id, reads) === null) {
+        if (showOpenDecision(vault, id, reads) === null) {
           throw new OpenDecisionError(`no open decision: ${id}`);
         }
-        const res = resolveOpenDecision(ctx.vault, id, {
+        const res = resolveOpenDecision(vault, id, {
           choice,
           ...(rationale ? { rationale } : {}),
           ...(agent ? { actor: agent } : {}),
@@ -429,10 +430,10 @@ async function toolBrainDecision(
         const reason = coerceStr(args, "reason", true)!;
         // Reach boundary: same as resolve - a below-reach id is an
         // absent id, with no existence leak.
-        if (showOpenDecision(ctx.vault, id, reads) === null) {
+        if (showOpenDecision(vault, id, reads) === null) {
           throw new OpenDecisionError(`no open decision: ${id}`);
         }
-        discardOpenDecision(ctx.vault, id, {
+        discardOpenDecision(vault, id, {
           reason,
           ...(agent ? { actor: agent } : {}),
         });

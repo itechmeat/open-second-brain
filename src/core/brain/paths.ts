@@ -25,10 +25,11 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { isFileAlreadyExists } from "../fs-atomic.ts";
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import { JSONL_LEDGER_EXT, resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import {
@@ -108,7 +109,9 @@ export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 export * from "./path-constants.ts";
 
 /**
- * The runtime hooks' audit root: `<vault>/.open-second-brain/hook-audit`.
+ * The runtime hooks' audit root: `<vault>/.open-second-brain/hook-audit`,
+ * or the same path under the device-local state once this machine is
+ * switched (`state/machine-state.ts`, design D14 item 1).
  *
  * Outside `Brain/` deliberately - it is derived operational evidence, not
  * an authored artifact - and therefore not guarded by
@@ -116,22 +119,28 @@ export * from "./path-constants.ts";
  * fail-open path where a throw would cost the operator their prompt.
  */
 export function hookAuditDir(vault: string): string {
-  return ensureInsideVault(join(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR), vault);
+  return machineStatePath(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR);
 }
+
+// The machine-state builders below name a vault-relative location and
+// resolve it through `machineStatePath`: the vault on an unswitched
+// machine, the device-local state once switched (design D14 items 6, 9,
+// 11 and 13). Derived graph JSON, watermarks, artifacts, payloads, write
+// images and snapshots are device-local; machines need not agree on them.
 
 /** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
 export function claimGraphPath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
+  return machineStatePath(vault, BRAIN_ROOT_REL, BRAIN_CLAIM_GRAPH_FILE);
 }
 
 /** Path of the rollup-ladder ledger: `Brain/rollup-ladder.json`. */
-export function rollupLedgerPath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ROLLUP_LEDGER_FILE), vault);
+export function rollupLedgerPath(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, BRAIN_ROLLUP_LEDGER_FILE);
 }
 
 /** Path of the cross-topic rule ledger: `Brain/cross-topic-rules.json` (t_642bc2b8). */
-export function crossTopicLedgerPath(vault: string): string {
-  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CROSS_TOPIC_LEDGER_FILE), vault);
+export function crossTopicLedgerPath(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, BRAIN_CROSS_TOPIC_LEDGER_FILE);
 }
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -185,6 +194,30 @@ export function brainDirs(vault: string): BrainDirs {
     entities: ensureInsideVault(join(vault, BRAIN_ENTITIES_REL), vault),
     bases: ensureInsideVault(join(vault, BRAIN_BASES_REL), vault),
     snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
+  };
+}
+
+/**
+ * {@link brainDirs}, or with no vault (`null`, design D14) the same
+ * folders as the vault-relative names the store's rebuilt pages carry
+ * (`Brain/inbox`, ...). For readers that list memory folders through the
+ * store facades (`memory-pages.ts`), which take either form; never for a
+ * file operation.
+ */
+export function brainDirsOf(vault: string | null): BrainDirs {
+  if (vault !== null) return brainDirs(vault);
+  return {
+    brain: BRAIN_ROOT_REL,
+    inbox: BRAIN_INBOX_REL,
+    processed: BRAIN_PROCESSED_REL,
+    archived: BRAIN_ARCHIVED_SIGNALS_REL,
+    pending: BRAIN_PENDING_REL,
+    preferences: BRAIN_PREFERENCES_REL,
+    retired: BRAIN_RETIRED_REL,
+    log: BRAIN_LOG_REL,
+    entities: BRAIN_ENTITIES_REL,
+    bases: BRAIN_BASES_REL,
+    snapshots: BRAIN_SNAPSHOTS_REL,
   };
 }
 
@@ -324,7 +357,7 @@ export function brainStateDir(vault: string): string {
  * already covers it.
  */
 export function writeImagesDir(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_WRITE_IMAGES_REL), vault);
+  return machineStatePath(vault, BRAIN_WRITE_IMAGES_REL);
 }
 
 /**
@@ -341,12 +374,12 @@ export function writeImagePath(vault: string, sha256: string): string {
         "expected 64 lowercase hexadecimal characters",
     );
   }
-  return ensureInsideVault(join(writeImagesDir(vault), sha256), vault);
+  return join(writeImagesDir(vault), sha256);
 }
 
 /** The payload registry's store: `Brain/.payloads/`. */
 export function payloadsDir(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_PAYLOADS_REL), vault);
+  return machineStatePath(vault, BRAIN_PAYLOADS_REL);
 }
 
 /**
@@ -364,7 +397,7 @@ export function payloadPath(vault: string, sha256: string): string {
         "expected 64 lowercase hexadecimal characters",
     );
   }
-  return ensureInsideVault(join(payloadsDir(vault), `${sha256}.txt`), vault);
+  return join(payloadsDir(vault), `${sha256}.txt`);
 }
 
 /** A single exact-state aspect page: `Brain/state/<aspect>.md` (t_b0c9d0a3). */
@@ -402,6 +435,21 @@ export function processedSignalPath(vault: string, date: string, slug: string): 
 export function preferencePath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(brainDirs(vault).preferences, `pref-${s}.md`), vault);
+}
+
+/**
+ * {@link preferencePath}, or with no vault (`null`) the vault-relative
+ * name the store's rebuilt page carries (`Brain/preferences/pref-<slug>.md`).
+ */
+export function preferencePathOf(vault: string | null, slug: string): string {
+  if (vault !== null) return preferencePath(vault, slug);
+  return posix.join(BRAIN_PREFERENCES_REL, `pref-${validateSlug(slug)}.md`);
+}
+
+/** {@link retiredPath}, or with no vault the vault-relative name (`Brain/retired/ret-<slug>.md`). */
+export function retiredPathOf(vault: string | null, slug: string): string {
+  if (vault !== null) return retiredPath(vault, slug);
+  return posix.join(BRAIN_RETIRED_REL, `ret-${validateSlug(slug)}.md`);
 }
 
 /** Ingested source summary page: `Brain/sources/src-<slug>.md`. */
@@ -475,7 +523,7 @@ export function skillProposalRejectedPath(vault: string, slug: string): string {
 /** Accept-journal path: `Brain/skill-proposals/accept-journal/<slug>.json`. */
 export function skillAcceptJournalPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.json`), vault);
+  return machineStatePath(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.json`);
 }
 
 /**
@@ -490,7 +538,7 @@ export function skillAcceptJournalPath(vault: string, slug: string): string {
  */
 export function skillAcceptPriorContentPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.prior.md`), vault);
+  return machineStatePath(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.prior.md`);
 }
 
 /** Per-skill benchmark task set: `Brain/skill-benchmarks/<skill>/tasks.json`. */
@@ -630,10 +678,7 @@ export function tensionPath(vault: string, slug: string): string {
 
 /** Proposal scan watermark path: `Brain/procedural-memory/proposal-watermark.json`. */
 export function proposalWatermarkPath(vault: string): string {
-  return ensureInsideVault(
-    join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "proposal-watermark.json"),
-    vault,
-  );
+  return machineStatePath(vault, BRAIN_PROCEDURAL_MEMORY_REL, "proposal-watermark.json");
 }
 
 /** Shard stem of the recurrence support ledger under `Brain/log/`. */
@@ -703,7 +748,7 @@ export function captureArchivePath(vault: string, id: string): string {
  * last capture acknowledged by a `/catchup` reply.
  */
 export function captureWatermarkPath(vault: string): string {
-  return ensureInsideVault(join(capturesDir(vault), ".catchup-watermark.json"), vault);
+  return machineStatePath(vault, BRAIN_CAPTURES_REL, ".catchup-watermark.json");
 }
 
 /**
@@ -854,7 +899,7 @@ export const PREF_AUDIT_STEM = "device";
 
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {
-  return brainDirs(vault).snapshots;
+  return machineStatePath(vault, BRAIN_SNAPSHOTS_REL);
 }
 
 /**
@@ -880,10 +925,7 @@ export const SNAPSHOT_STORE_ARCHIVE_SUFFIX = ".store.sqlite.zst";
 /** Snapshot archive path: `Brain/.snapshots/<run_id>.tar.zst`. */
 export function snapshotPath(vault: string, runId: string): string {
   const id = validateRunId(runId);
-  return ensureInsideVault(
-    join(brainDirs(vault).snapshots, `${id}${SNAPSHOT_ARCHIVE_SUFFIX}`),
-    vault,
-  );
+  return join(snapshotsDir(vault), `${id}${SNAPSHOT_ARCHIVE_SUFFIX}`);
 }
 
 /**
@@ -896,15 +938,12 @@ export function snapshotPath(vault: string, runId: string): string {
  */
 export function snapshotStorePath(vault: string, runId: string): string {
   const id = validateRunId(runId);
-  return ensureInsideVault(
-    join(brainDirs(vault).snapshots, `${id}${SNAPSHOT_STORE_ARCHIVE_SUFFIX}`),
-    vault,
-  );
+  return join(snapshotsDir(vault), `${id}${SNAPSHOT_STORE_ARCHIVE_SUFFIX}`);
 }
 
 /** Artifacts root: `Brain/.artifacts/`. */
 export function brainArtifactsDir(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_ARTIFACTS_REL), vault);
+  return machineStatePath(vault, BRAIN_ARTIFACTS_REL);
 }
 
 /** Knowledge-gap task notes root: `Brain/gap-tasks/` (A3 / t_67d38036). */
@@ -915,7 +954,7 @@ export function brainGapTasksDir(vault: string): string {
 /** Per-run artifact directory: `Brain/.artifacts/<run_id>/`. */
 export function artifactRunDir(vault: string, runId: string): string {
   const id = validateRunId(runId);
-  return ensureInsideVault(join(brainArtifactsDir(vault), id), vault);
+  return join(brainArtifactsDir(vault), id);
 }
 
 /**
@@ -926,7 +965,7 @@ export function artifactRunDir(vault: string, runId: string): string {
  */
 export function artifactPath(vault: string, runId: string, artifactId: string): string {
   const aid = validateRunId(artifactId);
-  return ensureInsideVault(join(artifactRunDir(vault, runId), `${aid}.json`), vault);
+  return join(artifactRunDir(vault, runId), `${aid}.json`);
 }
 
 // ----- Validators -----------------------------------------------------------

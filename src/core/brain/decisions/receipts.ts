@@ -38,7 +38,9 @@ import { appendLogEvent } from "../log.ts";
 import { decodeOffsetCursor, encodeOffsetCursor } from "../offset-cursor.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { dualWrite } from "../../store/dual-write.ts";
+import { readLedgerRows } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { routeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../../store/reference-privacy.ts";
 
@@ -74,7 +76,7 @@ const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 /** `decision-change.jsonl` or `decision-change.<deviceId>.jsonl`, via the shared ledger-shard grammar. */
 const RECEIPT_STEM = "decision-change";
-const RECEIPT_GRAMMAR = jsonlLedgerGrammar(RECEIPT_STEM);
+export const RECEIPT_GRAMMAR = jsonlLedgerGrammar(RECEIPT_STEM);
 
 /** Cap on the length of any single string field (mirrors note-text caps). */
 const FIELD_MAX_LEN = 2000;
@@ -252,8 +254,6 @@ export function appendDecisionChangeReceipt(
   vault: string,
   input: AppendReceiptInput,
 ): AppendReceiptResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
   // Closed-schema gate: reject any unexpected field before doing anything.
   for (const key of Object.keys(input)) {
     if (!ALLOWED_INPUT_KEYS.has(key)) {
@@ -290,13 +290,18 @@ export function appendDecisionChangeReceipt(
   // read raises rather than reporting an empty store when the directory
   // exists and cannot be listed, so a replay under a denied read refuses
   // instead of appending a second copy of the same change.
-  const existing = readDecisionChangeReceipts(vault).receipts.find(
+  const readOptions = input.configPath !== undefined ? { configPath: input.configPath } : {};
+  const storeOnly = isStoreOnly({ vault, ...readOptions });
+  const existing = readDecisionChangeReceipts(vault, readOptions).receipts.find(
     (r) => r.idempotency_key === idempotencyKey,
   );
   if (existing) {
+    // The same `path` rule as an append: the shard on an unswitched
+    // machine, the store ledger once switched (no legacy path that never
+    // exists there).
     return Object.freeze({
       appended: false,
-      path: receiptShardPath(vault, input.configPath),
+      path: storeOnly ? RECEIPT_STORE_SOURCE : receiptShardPath(vault, input.configPath),
       receipt: existing,
     });
   }
@@ -316,35 +321,48 @@ export function appendDecisionChangeReceipt(
     idempotency_key: idempotencyKey,
   });
 
-  mkdirSync(receiptsDir(vault), { recursive: true });
-  const path = receiptShardPath(vault, input.configPath);
-  appendFileSync(path, JSON.stringify(receipt) + "\n");
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // A receipt about a private item (its subject, evidence or rationale
-  // names a private or unjudgeable preference or page) stays out of `shared`.
-  dualWrite(
-    () =>
+  // One `decision-receipts` ledger row on a store-only machine (design D14
+  // item 1), this device's receipt shard plus the dual write otherwise. A
+  // receipt about a private item (its subject, evidence or rationale names
+  // a private or unjudgeable preference or page) stays out of `shared`.
+  const routed = routeWrite({
+    legacy: () => {
+      // Vault-identity write guard (context-integrity-gates, Unit J).
+      assertVaultIdentityForWrite(vault);
+      mkdirSync(receiptsDir(vault), { recursive: true });
+      const shard = receiptShardPath(vault, input.configPath);
+      appendFileSync(shard, JSON.stringify(receipt) + "\n");
+      return shard;
+    },
+    store: () =>
       ledgerRowRecord(
         DUAL_WRITE_LEDGERS.decisionReceipts,
         receipt,
         rowNamesPrivatePage(vault, receipt) ? "private" : "shared",
       ),
-    { vault },
-  );
+    context: { vault, ...(input.configPath !== undefined ? { configPath: input.configPath } : {}) },
+  });
+  // The store ledger names the receipt once switched, for an append and a
+  // replay alike (never a device-local shard path).
+  const path = routed.mode === "legacy" ? routed.value : RECEIPT_STORE_SOURCE;
   // Surface the change in the merged activity timeline. Emitted only on an
   // actual append, never on an idempotent replay, so the log never
   // double-counts a change. Fail-soft: a log hiccup must not lose the receipt.
   try {
-    appendLogEvent(vault, {
-      timestamp: ts,
-      eventType: BRAIN_LOG_EVENT_KIND.decisionChangeReceipt,
-      body: {
-        subject,
-        reason_code: reasonCode,
-        idempotency_key: idempotencyKey,
-        agent: actor,
+    appendLogEvent(
+      vault,
+      {
+        timestamp: ts,
+        eventType: BRAIN_LOG_EVENT_KIND.decisionChangeReceipt,
+        body: {
+          subject,
+          reason_code: reasonCode,
+          idempotency_key: idempotencyKey,
+          agent: actor,
+        },
       },
-    });
+      { failOpen: true },
+    );
   } catch {
     // The JSONL receipt is authoritative; the timeline mirror is best-effort.
   }
@@ -394,7 +412,31 @@ export interface ReadReceiptsResult {
  * @throws {@link ReceiptError} when the receipt directory exists and
  *   cannot be listed.
  */
-export function readDecisionChangeReceipts(vault: string): ReadReceiptsResult {
+export function readDecisionChangeReceipts(
+  vault: string,
+  options: { readonly configPath?: string } = {},
+): ReadReceiptsResult {
+  // A store-only machine (design D14 item 1) reads the `decision-receipts`
+  // ledger rows, sorted by `ts` with fold order breaking ties. The machine
+  // config decides the mode and the store, as it does for the append.
+  const context = {
+    vault,
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+  };
+  if (isStoreOnly(context)) {
+    const warnings: ReceiptParseWarning[] = [];
+    const receipts: DecisionChangeReceipt[] = [];
+    readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.decisionReceipts, () => [], context).forEach(
+      (row, index) => {
+        const receipt = coerceReceipt(row, RECEIPT_STORE_SOURCE, index + 1, warnings);
+        if (receipt !== null) receipts.push(receipt);
+      },
+    );
+    return {
+      receipts: receipts.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)),
+      warnings,
+    };
+  }
   const dir = receiptsDir(vault);
   let names: string[];
   try {
@@ -457,6 +499,9 @@ export function readDecisionChangeReceipts(vault: string): ReadReceiptsResult {
 
   return { receipts: tagged.map((t) => t.receipt), warnings };
 }
+
+/** The `path` a warning about a store row names: the ledger it came from. */
+const RECEIPT_STORE_SOURCE = `store:ledgers/${DUAL_WRITE_LEDGERS.decisionReceipts}`;
 
 function coerceReceipt(
   parsed: unknown,

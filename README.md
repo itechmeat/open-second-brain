@@ -133,6 +133,7 @@ Open Second Brain 1.98.0 is the agent-presence and self-improvement release. `o2
 | Mental model, vault layout, dream pass, safety properties | [`docs/how-it-works.md`](docs/how-it-works.md)                   |
 | Every CLI verb and flag                                   | [`docs/cli-reference.md`](docs/cli-reference.md)                 |
 | MCP protocol, tools, writer split                         | [`docs/mcp.md`](docs/mcp.md)                                     |
+| Brain store: setup, sync, migration, the human view       | [`docs/brain-store.md`](docs/brain-store.md)                     |
 | Architecture and configuration model                      | [`docs/architecture.md`](docs/architecture.md)                   |
 | Updating (`o2b update`) and upgrade notes                 | [`docs/updating.md`](docs/updating.md)                           |
 | Observability events                                      | [`docs/observability.md`](docs/observability.md)                 |

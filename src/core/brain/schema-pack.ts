@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 
+import { isStoreOnly } from "../store/store-only.ts";
 import { escapeRegex } from "../strings.ts";
 import { brainConfigPath } from "./paths.ts";
+import { STORE_SCHEMA_PACK_SOURCE, storeSchemaConfigText } from "./schema-pack-store.ts";
 import {
   SCHEMA_VOCAB_CATEGORIES,
   resolveSchemaVocabulary,
@@ -65,7 +67,11 @@ export const ABSENT_SCHEMA_CONFIG_TEXT = "schema_version: 1\n";
  * this entirely.
  */
 export interface SchemaPackSource {
-  /** Absolute path of `Brain/_brain.yaml`, whether or not it exists. */
+  /**
+   * Absolute path of `Brain/_brain.yaml`, whether or not it exists; on a
+   * store-only machine the name of the settings records the pack lives in
+   * ({@link STORE_SCHEMA_PACK_SOURCE}).
+   */
   readonly path: string;
   /** False when the file is absent and the default text was substituted. */
   readonly present: boolean;
@@ -75,14 +81,27 @@ export interface SchemaPackSource {
 }
 
 /** Read the schema pack and report whether its config file was there. */
-export function readSchemaPackSource(vault: string): SchemaPackSource {
+export function readSchemaPackSource(vault: string | null): SchemaPackSource {
+  // A store-only machine keeps the pack in the shared settings records
+  // `brain.schema.<field>` (design D14 item 3), never in `_brain.yaml`.
+  // No vault means store-only too.
+  if (vault === null || isStoreOnly({ vault })) {
+    const stored = storeSchemaConfigText();
+    const text = stored ?? ABSENT_SCHEMA_CONFIG_TEXT;
+    return Object.freeze({
+      path: STORE_SCHEMA_PACK_SOURCE,
+      present: stored !== null,
+      text,
+      pack: parseSchemaPack(text),
+    });
+  }
   const path = brainConfigPath(vault);
   const present = existsSync(path);
   const text = present ? readFileSync(path, "utf8") : ABSENT_SCHEMA_CONFIG_TEXT;
   return Object.freeze({ path, present, text, pack: parseSchemaPack(text) });
 }
 
-export function loadSchemaPack(vault: string): SchemaPack {
+export function loadSchemaPack(vault: string | null): SchemaPack {
   return readSchemaPackSource(vault).pack;
 }
 

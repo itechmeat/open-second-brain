@@ -19,6 +19,20 @@ import type { RollupLadderEntry } from "./rollup-ladder.ts";
 import type { SalienceGateVerdict } from "./salience-gate.ts";
 import type { BrainRetiredReason, DreamOpenQuestion } from "./types.ts";
 
+/** The human view render pass at the end of a dream pass. */
+export interface DreamViewOutcome {
+  readonly status: string;
+  /** One readable line: what the pass did. */
+  readonly summary: string;
+  /** The view writer, when this machine is not it. */
+  readonly writer?: string;
+  /**
+   * Pages the render's time budget did not reach; they render on the next
+   * pass. Present when the pass rendered.
+   */
+  readonly deferred?: number;
+}
+
 /**
  * Structured non-fatal warning emitted alongside a dream summary. The
  * dream pass still completes when warnings are present; callers
@@ -109,6 +123,13 @@ export interface DreamRunSummary {
    * extension point for future advisory checks.
    */
   readonly warnings: ReadonlyArray<DreamWarning>;
+  /**
+   * The human view render pass that ran at the end of this pass (design
+   * D7): what it did, and on a machine that is not the view writer, the
+   * writer's device id. Absent when the brain store is not in use on this
+   * machine, and on a dry run.
+   */
+  readonly view?: DreamViewOutcome;
   /**
    * Sub-operations the dream pass attempted but could not fully
    * verify. Empty on every clean run; populated by future
@@ -262,6 +283,12 @@ export interface DreamOptions {
    * run worth guarding with a deadline is a run worth reporting on.
    */
   readonly onProgress?: import("./progress.ts").ProgressSink;
+  /**
+   * Time budget of the view render at the end of the pass, in
+   * milliseconds (default `VIEW_DREAM_BUDGET_MS`); pages it does not reach
+   * are deferred to the next pass and counted in `view.deferred`.
+   */
+  readonly viewBudgetMs?: number;
   /**
    * Per-run gate overrides (no-dead-ends, Unit E). Additive: omitted, the
    * run reads every gate from `Brain/_brain.yaml` exactly as before.

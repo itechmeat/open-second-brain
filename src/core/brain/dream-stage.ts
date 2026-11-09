@@ -33,10 +33,9 @@
  * surface because `failed_gates` flips).
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
@@ -51,7 +50,18 @@ import {
   type SalienceGateVerdict,
 } from "./salience-gate.ts";
 import { isoSecond } from "./time.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneDirs,
+  moveLaneTree,
+  readLaneFile,
+  removeLaneTree,
+  writeLaneText,
+} from "../store/lane-pages.ts";
+import { storePagesIn } from "./memory-pages.ts";
+import { formatFrontmatter } from "../vault.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 
 export const DREAM_STAGE_SCHEMA_VERSION = "o2b.dream-stage.v1";
 
@@ -239,6 +249,17 @@ function appliedRoot(vault: string): string {
 /** Active inbox signals (not processed/) with content hashes. */
 function scanSources(vault: string): DreamStageSource[] {
   const inbox = brainDirs(vault).inbox;
+  if (isStoreOnly({ vault })) {
+    // A store-only machine: the live inbox signals of the fold, each hashed
+    // over the page it renders, so stage and apply compare like with like.
+    return storePagesIn(vault, inbox)
+      .filter((page) => page.kind === "signal")
+      .map((page) => ({
+        path: page.rel,
+        sha256: sha256Hex(formatFrontmatter(page.meta, page.body)),
+      }))
+      .toSorted(byPath);
+  }
   if (!existsSync(inbox)) return [];
   const out: DreamStageSource[] = [];
   for (const entry of readdirSync(inbox, { withFileTypes: true })) {
@@ -250,7 +271,13 @@ function scanSources(vault: string): DreamStageSource[] {
       // A torn read shows up as plan drift later, not as a stage crash.
     }
   }
-  return out.toSorted((a, b) => (a.path < b.path ? -1 : 1));
+  return out.toSorted(byPath);
+}
+
+/** Ordinal path order, one rule for both branches. */
+function byPath(a: DreamStageSource, b: DreamStageSource): number {
+  if (a.path === b.path) return 0;
+  return a.path < b.path ? -1 : 1;
 }
 
 /** Flatten one plan into proposal records for proposals.jsonl. */
@@ -335,7 +362,7 @@ function renderReport(
  */
 export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBundle {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const summary = dream(vault, {
     now: opts.now,
     dryRun: true,
@@ -352,21 +379,25 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
   // the first free -N suffix instead of overwriting a prior bundle.
   const base = `stage-${stagedAt.replaceAll(/[:T]/g, "").replace("Z", "")}`;
   let runId = base;
-  for (let suffix = 2; existsSync(join(stagedRoot(vault), runId)); suffix++) {
+  for (let suffix = 2; lanePageExists(vault, join(stagedRoot(vault), runId)); suffix++) {
     runId = `${base}-${suffix}`;
   }
   const dir = join(stagedRoot(vault), runId);
-  mkdirSync(dir, { recursive: true });
 
   const proposals = planToProposals(plan);
   const proposalsBody = proposals.map((p) => JSON.stringify(p)).join("\n") + "\n";
   const sourcesBody =
     sources.length === 0 ? "" : sources.map((s) => JSON.stringify(s)).join("\n") + "\n";
 
-  atomicWriteFileSync(join(dir, "proposals.jsonl"), proposalsBody);
-  atomicWriteFileSync(join(dir, "sources.jsonl"), sourcesBody);
-  atomicWriteFileSync(join(dir, "REPORT.md"), renderReport(runId, stagedAt, plan, salience) + "\n");
-  atomicWriteFileSync(
+  writeLaneText(vault, join(dir, "proposals.jsonl"), proposalsBody);
+  writeLaneText(vault, join(dir, "sources.jsonl"), sourcesBody);
+  writeLaneText(
+    vault,
+    join(dir, "REPORT.md"),
+    renderReport(runId, stagedAt, plan, salience) + "\n",
+  );
+  writeLaneText(
+    vault,
     join(dir, "manifest.json"),
     JSON.stringify(
       {
@@ -405,9 +436,9 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
 }
 
 /** Parse one bundle manifest; null on any defect (fail-soft reads). */
-function readManifest(dir: string): Record<string, unknown> | null {
+function readManifest(vault: string, dir: string): Record<string, unknown> | null {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    const parsed: unknown = JSON.parse(readLaneFile(vault, join(dir, "manifest.json")));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     const m = parsed as Record<string, unknown>;
     if (m["schema"] !== DREAM_STAGE_SCHEMA_VERSION) return null;
@@ -479,7 +510,7 @@ export function validateDreamBundle(
     });
   }
   const dir = join(stagedRoot(vault), runId);
-  const manifest = readManifest(dir);
+  const manifest = readManifest(vault, dir);
   if (manifest === null) {
     return Object.freeze({
       valid: false,
@@ -527,7 +558,7 @@ export function applyDreamBundle(
   opts: DreamStageOptions,
 ): DreamStageApplyOutcome {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const validation = validateDreamBundle(vault, runId, opts);
   if (!validation.valid) {
     return Object.freeze({ applied: false, validation });
@@ -540,16 +571,16 @@ export function applyDreamBundle(
   });
 
   const dir = join(stagedRoot(vault), runId);
-  const manifest = readManifest(dir);
+  const manifest = readManifest(vault, dir);
   const appliedDir = join(appliedRoot(vault), runId);
-  mkdirSync(appliedRoot(vault), { recursive: true });
   if (manifest !== null) {
-    atomicWriteFileSync(
+    writeLaneText(
+      vault,
       join(dir, "manifest.json"),
       JSON.stringify({ ...manifest, applied_at: isoSecond(opts.now) }, null, 2) + "\n",
     );
   }
-  renameWithRetry(dir, appliedDir);
+  moveLaneTree(vault, dir, appliedDir);
 
   try {
     appendMetric(vault, {
@@ -702,7 +733,7 @@ export function retriageDreamBundle(
   if (!isValidRunId(runId)) {
     throw new DreamRetriageError(runId, "that is not an id this staging surface issues");
   }
-  const manifest = readManifest(join(stagedRoot(vault), runId));
+  const manifest = readManifest(vault, join(stagedRoot(vault), runId));
   if (manifest === null) {
     throw new DreamRetriageError(
       runId,
@@ -787,11 +818,11 @@ export function retriageDreamBundle(
 /** Remove one staged bundle. True when it existed. */
 export function discardDreamBundle(vault: string, runId: string): boolean {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   if (!isValidRunId(runId)) return false;
   const dir = join(stagedRoot(vault), runId);
-  if (!existsSync(dir)) return false;
-  rmSync(dir, { recursive: true, force: true });
+  if (!lanePageExists(vault, dir)) return false;
+  removeLaneTree(vault, dir);
   return true;
 }
 
@@ -802,13 +833,11 @@ export function listDreamBundles(vault: string): DreamBundleInfo[] {
     [stagedRoot(vault), "staged"],
     [appliedRoot(vault), "applied"],
   ] as const) {
-    if (!existsSync(root)) continue;
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const manifest = readManifest(join(root, entry.name));
+    for (const name of listLaneDirs(vault, root)) {
+      const manifest = readManifest(vault, join(root, name));
       if (manifest === null) continue;
       out.push({
-        runId: entry.name,
+        runId: name,
         status,
         stagedAt: String(manifest["staged_at"] ?? ""),
         proposals: Number(manifest["proposals"] ?? 0),

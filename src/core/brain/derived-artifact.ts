@@ -29,12 +29,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { assertLaneWrite, readLaneText, writeLaneText } from "../store/lane-pages.ts";
 
 /** The fields every derived artifact carries, beside its own payload. */
 export interface DerivedArtifact {
@@ -70,10 +68,10 @@ export function writeDerivedArtifact<T extends DerivedArtifact>(
   relPath: string,
   artifact: T,
 ): void {
-  assertVaultIdentityForWrite(vaultDir);
+  assertLaneWrite(vaultDir);
+  // A record-lane file: a store record once switched (task 2.10 WP6).
   const path = ensureInsideVault(join(vaultDir, relPath), vaultDir);
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  writeLaneText(vaultDir, path, `${JSON.stringify(artifact, null, 2)}\n`);
 }
 
 /**
@@ -94,8 +92,9 @@ export function readDerivedArtifact<T extends DerivedArtifact>(
 ): T | null {
   try {
     const path = ensureInsideVault(join(vaultDir, relPath), vaultDir);
-    if (!existsSync(path)) return null;
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const text = readLaneText(vaultDir, path);
+    if (text === null) return null;
+    const parsed: unknown = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     const record = parsed as Record<string, unknown>;
     if (record["schema"] !== expectedSchema) return null;

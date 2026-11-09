@@ -53,13 +53,12 @@
  * seam never reaches the neutralizer under either mode.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { atomicWriteText, renameWithRetry } from "../../fs-atomic.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import {
   BRAIN_CAPTURES_PROCESSED_REL,
   BRAIN_CAPTURES_REL,
@@ -71,7 +70,6 @@ import {
   captureWatermarkPath,
   vaultRelative,
 } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { declaredPageTypes } from "../schema-pack.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE,
@@ -79,6 +77,15 @@ import {
   neutralizedMarkersFrontmatter,
   resolveMarkdownNeutralizeModeForProcess,
 } from "../text/neutralize-markdown.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  moveLanePage,
+  parseLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 
 /** Frontmatter `kind:` marker of a staged inbound capture. */
 export const BRAIN_CAPTURE_KIND = "brain-capture";
@@ -275,7 +282,7 @@ function splitGuidance(body: string, id: string): { body: string; guidance: stri
 /** Write one capture note into the staging area through the contract. */
 export function writeCaptureNote(vault: string, input: WriteCaptureInput): CaptureNote {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const body = requireNonEmpty(input.body, "body");
   const source = requireNonEmpty(input.provenance.source, "source");
   const sender = requireNonEmpty(input.provenance.sender, "sender");
@@ -330,7 +337,6 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   }
 
   const dir = capturesDir(vault);
-  mkdirSync(dir, { recursive: true });
   const { prefix, slug } = captureBaseId(
     storedBody,
     { source, sender, capturedAt },
@@ -351,7 +357,8 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
       // pass: without them a collision here reported a raw errno naming
       // an absolute path, which leaks the operator's home directory into
       // CLI output and MCP envelopes and never says what collided.
-      writeFrontmatterAtomic(
+      writeLanePage(
+        vault,
         allocation.path,
         captureFrontmatter(captureId, provenance, storedGuidance, neutralized),
         renderCaptureBody(storedBody, storedGuidance),
@@ -399,11 +406,16 @@ function captureFrontmatter(
   };
 }
 
-function parseCaptureFile(absPath: string, relPath: string, staged: boolean): CaptureNote | null {
+function parseCaptureFile(
+  vault: string,
+  absPath: string,
+  relPath: string,
+  staged: boolean,
+): CaptureNote | null {
   let meta: FrontmatterMap;
   let body: string;
   try {
-    [meta, body] = parseFrontmatter(absPath);
+    [meta, body] = parseLanePage(vault, absPath);
   } catch {
     return null;
   }
@@ -437,12 +449,11 @@ function listCapturesIn(
   relRoot: string,
   staged: boolean,
 ): CaptureNote[] {
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const out: CaptureNote[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const abs = join(dir, name);
-    const note = parseCaptureFile(abs, `${relRoot}/${name}`, staged);
+    const note = parseCaptureFile(vault, abs, `${relRoot}/${name}`, staged);
     if (note !== null) out.push(note);
   }
   return out;
@@ -476,10 +487,12 @@ export function listAllCaptures(vault: string): CaptureNote[] {
 /** Read one capture by id from either the staging or archive area. */
 export function readCaptureNote(vault: string, id: string): CaptureNote | null {
   const staging = captureStagingPath(vault, id);
-  if (existsSync(staging)) return parseCaptureFile(staging, `${BRAIN_CAPTURES_REL}/${id}.md`, true);
+  if (lanePageExists(vault, staging)) {
+    return parseCaptureFile(vault, staging, `${BRAIN_CAPTURES_REL}/${id}.md`, true);
+  }
   const archive = captureArchivePath(vault, id);
-  if (existsSync(archive)) {
-    return parseCaptureFile(archive, `${BRAIN_CAPTURES_PROCESSED_REL}/${id}.md`, false);
+  if (lanePageExists(vault, archive)) {
+    return parseCaptureFile(vault, archive, `${BRAIN_CAPTURES_PROCESSED_REL}/${id}.md`, false);
   }
   return null;
 }
@@ -487,22 +500,25 @@ export function readCaptureNote(vault: string, id: string): CaptureNote | null {
 /** Move a staged capture into the processed archive through the contract. */
 export function archiveCapture(vault: string, id: string): CaptureNote {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const staging = captureStagingPath(vault, id);
-  if (!existsSync(staging)) {
+  if (!lanePageExists(vault, staging)) {
     throw new CaptureContractError(`no staged capture to archive: ${id}`);
   }
-  const dir = capturesProcessedDir(vault);
-  mkdirSync(dir, { recursive: true });
   const archive = captureArchivePath(vault, id);
-  try {
-    renameWithRetry(staging, archive);
-  } catch {
-    // Cross-device rename fallback: copy then remove the source.
-    atomicWriteText(archive, readFileSync(staging, "utf8"));
-    rmSync(staging, { force: true });
+  if (lanePagesInStore(vault)) {
+    moveLanePage(vault, staging, archive);
+  } else {
+    mkdirSync(capturesProcessedDir(vault), { recursive: true });
+    try {
+      renameWithRetry(staging, archive);
+    } catch {
+      // Cross-device rename fallback: copy then remove the source.
+      atomicWriteText(archive, readFileSync(staging, "utf8"));
+      rmSync(staging, { force: true });
+    }
   }
-  const note = parseCaptureFile(archive, `${BRAIN_CAPTURES_PROCESSED_REL}/${id}.md`, false);
+  const note = parseCaptureFile(vault, archive, `${BRAIN_CAPTURES_PROCESSED_REL}/${id}.md`, false);
   if (note === null) {
     throw new CaptureContractError(`archived capture is unreadable: ${id}`);
   }
@@ -537,8 +553,11 @@ export function readCatchupWatermark(vault: string): string | null {
 /** Advance the catchup watermark to `id`. */
 export function writeCatchupWatermark(vault: string, id: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  mkdirSync(capturesDir(vault), { recursive: true });
+  assertLaneWrite(vault);
+  // The watermark is machine state: in the vault on an unswitched machine,
+  // in device-local state once switched (`machineStatePath`).
+  const path = captureWatermarkPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
   const payload: WatermarkFile = { last_acknowledged: id };
-  atomicWriteText(captureWatermarkPath(vault), `${JSON.stringify(payload)}\n`);
+  atomicWriteText(path, `${JSON.stringify(payload)}\n`);
 }

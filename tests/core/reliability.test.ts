@@ -16,7 +16,10 @@ import {
 import { withFileLock } from "../../src/core/reliability/lock.ts";
 import { buildProbeReport } from "../../src/core/reliability/probe.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
-import { withDeviceId } from "../helpers/device-id.ts";
+import { withDeviceId, useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const RESEARCH_TYPE = "research";
 const LOGGED_KEY = fakeCredential("secret-", "value");

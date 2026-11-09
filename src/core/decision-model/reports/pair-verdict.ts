@@ -23,14 +23,11 @@
  * Read-only.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-
 import { normalizeEntityName } from "../../brain/entities/canonical.ts";
 import { buildEntityIndex } from "../../brain/entities/index-builder.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../../brain/entities/status-scope.ts";
 import type { BrainEntity } from "../../brain/entities/types.ts";
-import { brainDirs } from "../../brain/paths.ts";
+import { preferencePresence } from "../../brain/preference.ts";
 import { showTension } from "../../brain/tensions.ts";
 import type { ContinuityRecord } from "../../brain/continuity/types.ts";
 import { listDecisionModelCalls } from "../record.ts";
@@ -100,10 +97,10 @@ function recordedPairs(record: ContinuityRecord): RecordedPair[] {
 
 function preferenceState(vault: string, id: string): "active" | "retired" | "missing" {
   if (!/^pref-[A-Za-z0-9._-]+$/u.test(id) || id.includes("..")) return "missing";
-  const dirs = brainDirs(vault);
-  if (existsSync(join(dirs.preferences, `${id}.md`))) return "active";
-  if (existsSync(join(dirs.retired, `ret-${id.slice("pref-".length)}.md`))) return "retired";
-  return "missing";
+  // Both modes: `preferencePresence` picks the source (the pages, or the
+  // fold once switched).
+  const presence = preferencePresence(vault, id.slice("pref-".length));
+  return presence === "absent" ? "missing" : presence;
 }
 
 function preferenceOutcome(vault: string, pair: RecordedPair): PairOutcome {

@@ -19,6 +19,8 @@ import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-write-log-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 

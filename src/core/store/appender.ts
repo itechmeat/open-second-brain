@@ -11,7 +11,10 @@
  *
  * Steps for one record:
  *  1. Refuse a partition this machine does not hold.
- *  2. Take the next clock stamp (send rule, persisted per device).
+ *  2. Take the next clock stamp (send rule, persisted per device), after
+ *     the newest stamp this process read from the store (receive rule,
+ *     `clock-floor.ts`), so a record that replaces or removes one it read
+ *     folds after it.
  *  3. Build the envelope. When the line would exceed the line-size cap,
  *     write the body as a blob first and put a blob reference on the line;
  *     the blob is complete before any line names it. Its temp file goes to
@@ -30,6 +33,7 @@
 import { closeSync, fstatSync, fsyncSync, openSync, readSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { observedClockFloor } from "./clock-floor.ts";
 import { tickClock, type WallClock } from "./clock-store.ts";
 import {
   BLOB_REF_BYTES_KEY,
@@ -85,7 +89,7 @@ export class PartitionUnavailableError extends Error {
   constructor(partition: StorePartition, root: string) {
     super(
       `this machine does not hold the ${partition} partition of the brain store at ${root}; ` +
-        `the record was not written. Sync the ${partition} folder to this machine to write ${partition} records here.`,
+        "the record was not written",
     );
     this.name = "PartitionUnavailableError";
     this.partition = partition;
@@ -164,7 +168,12 @@ export function appendRecord(
     input.ledger === undefined
       ? { stream: input.stream }
       : { stream: input.stream, ledger: input.ledger };
-  const hlc = tickClock(store.deviceStateDir, store.device, options.now);
+  const hlc = tickClock(
+    store.deviceStateDir,
+    store.device,
+    options.now,
+    observedClockFloor(store.root),
+  );
   const month = shardMonth(hlc.physical);
   // Validates the stream, ledger and device before anything is written.
   const rel = shardRelPath(ref, store.device, month);

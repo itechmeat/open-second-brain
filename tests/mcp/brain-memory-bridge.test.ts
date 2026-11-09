@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,8 @@ const savedEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-membridge-"));
   vault = join(tmp, "vault");
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-membridge-cfg-"));
   configPath = join(configHome, "config.yaml");
   for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {

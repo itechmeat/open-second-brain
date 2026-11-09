@@ -1,20 +1,12 @@
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmdirSync,
-  rmSync,
-  unlinkSync,
-} from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
-import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
+import { slugify } from "../vault.ts";
 import { resolveSkillsDir } from "../config.ts";
 import { SKILL_FILE_NAME } from "../surface/skills.ts";
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
@@ -66,16 +58,27 @@ import {
   skillProposalRejectedPath,
 } from "./paths.ts";
 import { JSONL_LEDGER_EXT, resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import {
   appendContinuityRecord,
   listContinuityRecords,
   type ContinuityRecord,
 } from "./continuity/store.ts";
 import type { ContinuityPayload } from "./continuity/types.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import { routeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  removeLanePage,
+  writeLanePage,
+  writeLaneText,
+  readLaneFile,
+} from "../store/lane-pages.ts";
+import { defaultSkillsDir } from "../surface/skills-dir.ts";
+import { VERIFIER_REJECTION_LEDGER_STEM } from "./path-constants.ts";
 
 /**
  * Pattern kind stamped on a proposal an author DECLARED through an
@@ -298,14 +301,14 @@ const SUGGESTED_BODY_HEADING = "## Suggested skill body";
 const ACCEPT_LOCK_NAME = "accept";
 
 /** Shard stem of the verifier-rejection JSONL ledger inside the proposals root. */
-const VERIFIER_REJECTION_LEDGER_STEM = "verifier-rejections";
+export { VERIFIER_REJECTION_LEDGER_STEM };
 
 export function learnSkillProposals(
   vault: string,
   opts: SkillProposalLearnOptions = {},
 ): SkillProposalLearnResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const now = opts.now ?? new Date();
   const minSupport = Math.max(2, opts.minSupport ?? DEFAULT_MIN_SUPPORT);
 
@@ -401,12 +404,17 @@ export function learnSkillProposals(
     const pendingPath = skillProposalPendingPath(vault, slug);
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
     const rejectedPath = skillProposalRejectedPath(vault, slug);
-    if (existsSync(pendingPath) || existsSync(acceptedPath) || existsSync(rejectedPath)) {
+    if (
+      lanePageExists(vault, pendingPath) ||
+      lanePageExists(vault, acceptedPath) ||
+      lanePageExists(vault, rejectedPath)
+    ) {
       suppressed.push(proposalId);
       continue;
     }
 
-    writeFrontmatterAtomic(
+    writeLanePage(
+      vault,
       pendingPath,
       {
         schema_version: 1,
@@ -462,7 +470,7 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
   patternKind: string;
 }> {
   const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, "pending"), vault);
-  if (!existsSync(dir)) return Object.freeze([]);
+  if (!lanePageExists(vault, dir)) return Object.freeze([]);
 
   const out: Array<{
     id: string;
@@ -470,10 +478,10 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
     status: string;
     patternKind: string;
   }> = [];
-  for (const name of readdirSync(dir).toSorted()) {
+  for (const name of listLaneFiles(vault, dir, "").toSorted()) {
     if (!name.endsWith(".md")) continue;
     const path = ensureInsideVault(join(dir, name), vault);
-    const [fm] = parseFrontmatter(path);
+    const [fm] = parseLanePage(vault, path);
     if (fm["kind"] !== "brain-skill-proposal") continue;
     if (typeof fm["id"] !== "string") continue;
     out.push({
@@ -554,7 +562,7 @@ export function draftDeclaredSkillProposal(
   input: DeclaredSkillProposalInput,
 ): DeclaredSkillProposalResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const planned = planDeclaredSkillProposal(vault, input);
   if ("declined" in planned) return planned.declined;
   const plan = planned.plan;
@@ -562,7 +570,8 @@ export function draftDeclaredSkillProposal(
   const now = (input.now ?? new Date()).toISOString();
   const sourceRefs = [...input.sourceRefs];
 
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     plan.path,
     {
       schema_version: 1,
@@ -691,7 +700,7 @@ export function draftMaturePageSkillProposal(
   input: MaturePageSkillProposalInput,
 ): DeclaredSkillProposalResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const planned = planDeclaredSkillProposal(
     vault,
     { name: input.name, body: input.body, sourceRefs: input.sourceRefs },
@@ -704,7 +713,8 @@ export function draftMaturePageSkillProposal(
   const sourceRefs = [...input.sourceRefs];
   const triggers = input.triggers.map((t) => t.trim()).filter((t) => t.length > 0);
 
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     plan.path,
     {
       schema_version: 1,
@@ -822,7 +832,7 @@ export function stageScoredRewriteProposal(
   input: ScoredRewriteProposalInput,
 ): ScoredRewriteStagingResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const name = input.skill.name.trim();
   if (!name) {
     throw new DeclaredSkillProposalError("scored rewrite proposal requires a skill name");
@@ -926,7 +936,8 @@ export function stageScoredRewriteProposal(
   });
   const documentSha256 = sha256Hex(document);
 
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     plan.path,
     {
       schema_version: 1,
@@ -1070,7 +1081,7 @@ function planDeclaredSkillProposal(
 
   for (const phase of PROPOSAL_PHASES) {
     const occupied = proposalPhasePath(vault, phase, slug);
-    if (!existsSync(occupied)) continue;
+    if (!lanePageExists(vault, occupied)) continue;
     return {
       declined: {
         id,
@@ -1120,7 +1131,7 @@ export function acceptSkillProposal(
   opts: SkillProposalAcceptOptions = {},
 ): SkillProposalReviewResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   // Validated before anything touches disk: a malformed contract must not
   // half-accept a proposal.
   const contract = contractFrontmatter(opts.contract);
@@ -1131,11 +1142,11 @@ export function acceptSkillProposal(
     resolveOutstandingAccepts(vault);
 
     const pendingPath = skillProposalPendingPath(vault, slug);
-    if (!existsSync(pendingPath)) {
+    if (!lanePageExists(vault, pendingPath)) {
       throw new Error(`pending skill proposal not found: ${slug}`);
     }
 
-    const [fm, body] = parseFrontmatter(pendingPath);
+    const [fm, body] = parseLanePage(vault, pendingPath);
     if (fm["kind"] !== "brain-skill-proposal") {
       throw new Error(`invalid skill proposal file: ${pendingPath}`);
     }
@@ -1175,8 +1186,8 @@ export function acceptSkillProposal(
       startedAt: now,
       // Captured up front so a rollback never deletes a file this
       // sequence did not create.
-      acceptedExisted: existsSync(acceptedPath),
-      materializedExisted: existsSync(materializedPath),
+      acceptedExisted: lanePageExists(vault, acceptedPath),
+      materializedExisted: lanePageExists(vault, materializedPath),
       materializedPath,
       // Procedure materializations never consult the skills tree, so they
       // record no root and recovery keeps its default resolution for them.
@@ -1185,7 +1196,8 @@ export function acceptSkillProposal(
     writeSkillAcceptJournal(vault, journal);
 
     try {
-      writeFrontmatterAtomic(
+      writeLanePage(
+        vault,
         acceptedPath,
         {
           ...fm,
@@ -1214,15 +1226,18 @@ export function acceptSkillProposal(
       // copy that is not there.
       if (isRewrite && journal.materializedExisted) {
         const priorPath = skillAcceptPriorContentPath(vault, slug);
+        // The copy is machine state beside the journal: a plain file in
+        // both modes, never a lane record.
         mkdirSync(dirname(priorPath), { recursive: true });
-        atomicWriteFileSync(priorPath, readFileSync(materializedPath, "utf8"));
+        atomicWriteFileSync(priorPath, readLaneFile(vault, materializedPath));
         journal = { ...journal, priorContentPath: priorPath };
       }
 
       journal = { ...journal, phase: "materialize" };
       writeSkillAcceptJournal(vault, journal);
       if (skillDraft === null) {
-        writeFrontmatterAtomic(
+        writeLanePage(
+          vault,
           materializedPath,
           {
             schema_version: 1,
@@ -1255,8 +1270,8 @@ export function acceptSkillProposal(
         // an incumbent SKILL.md, and only after the journal captured the
         // incumbent bytes above. Every other producer here is still
         // exclusive-create.
-        mkdirSync(dirname(materializedPath), { recursive: true });
-        writeFrontmatterAtomic(
+        writeLanePage(
+          vault,
           materializedPath,
           {
             name: skillDraft.name,
@@ -1277,7 +1292,7 @@ export function acceptSkillProposal(
 
       journal = { ...journal, phase: "commit" };
       writeSkillAcceptJournal(vault, journal);
-      unlinkSync(pendingPath);
+      removeLanePage(vault, pendingPath);
       rebuildProceduralProjections(vault);
     } catch (error) {
       compensateSkillAccept(vault, journal, error);
@@ -1310,7 +1325,7 @@ export function acceptSkillProposal(
  */
 export function recoverSkillProposalAccepts(vault: string): ReadonlyArray<SkillAcceptRecovery> {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const lock = acquireAcceptLock(vault);
   try {
     return Object.freeze(resolveOutstandingAccepts(vault));
@@ -1334,7 +1349,7 @@ export function recoverSkillProposalAccepts(vault: string): ReadonlyArray<SkillA
  */
 export function discardUnreadableSkillAcceptJournals(vault: string): ReadonlyArray<string> {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const lock = acquireAcceptLock(vault);
   try {
     const discarded = readSkillAcceptJournals(vault).unreadable.map((entry) => entry.path);
@@ -1391,6 +1406,9 @@ export function skillAcceptLockPath(vault: string): string {
  */
 function acquireAcceptLock(vault: string): LockHandle {
   try {
+    // One primitive in both modes (refuse at once, never break a lock); the
+    // target is machine state, so a store-only machine's lock file is
+    // device-local and the refusal names the file that is really there.
     return acquireLockSync(acceptLockTarget(vault));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
@@ -1402,7 +1420,7 @@ function acquireAcceptLock(vault: string): LockHandle {
 
 /** Lock target guarding the accept sequence and the journal sweep. */
 function acceptLockTarget(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, ACCEPT_LOCK_NAME), vault);
+  return machineStatePath(vault, BRAIN_SKILL_PROPOSALS_REL, ACCEPT_LOCK_NAME);
 }
 
 /** Caller must already hold {@link acceptLockTarget}. */
@@ -1425,17 +1443,18 @@ function resolveSkillAccept(
   journal: SkillAcceptJournalEntry,
 ): SkillAcceptRecoveryAction {
   const committed =
-    journal.phase === "commit" && !existsSync(skillProposalPendingPath(vault, journal.slug));
+    journal.phase === "commit" &&
+    !lanePageExists(vault, skillProposalPendingPath(vault, journal.slug));
 
   if (!committed) {
     if (!journal.acceptedExisted) {
-      rmSync(skillProposalAcceptedPath(vault, journal.slug), { force: true });
+      removeLanePage(vault, skillProposalAcceptedPath(vault, journal.slug));
     }
     if (!journal.materializedExisted) {
       // The recorded path, never a re-derived one: a `mature_page` accept
       // materializes under the skills root, which the slug does not name.
       const target = journal.materializedPath ?? procedurePath(vault, journal.slug);
-      rmSync(target, { force: true });
+      removeLanePage(vault, target);
       // A skill directory this sequence created is now empty; leaving it
       // would make `discoverSkills` report a root with a nameless hole in
       // it. `rmdirSync` refuses a non-empty directory, which is exactly the
@@ -1477,11 +1496,13 @@ function resolveSkillAccept(
  * posture as an unreadable journal marker.
  */
 function restorePriorSkillContent(vault: string, journal: SkillAcceptJournalEntry): void {
-  const priorPath = journal.priorContentPath;
-  if (priorPath === undefined) return;
-  // The copy is a vault artifact the accept sequence wrote; a path that
-  // escapes the vault is a hand-edited journal, not a recovery input.
-  const source = ensureInsideVault(priorPath, vault);
+  if (journal.priorContentPath === undefined) return;
+  // The copy is machine state the accept sequence wrote beside the journal
+  // (the vault unswitched, the device-local state once switched), always
+  // at the one derived location: the recorded path only says a copy was
+  // taken. A path recorded before the switch names the vault the state
+  // moved away from, and a hand-edited one is no recovery input.
+  const source = skillAcceptPriorContentPath(vault, journal.slug);
   let prior: string;
   try {
     prior = readFileSync(source, "utf8");
@@ -1518,7 +1539,7 @@ function restorePriorSkillContent(vault: string, journal: SkillAcceptJournalEntr
   }
   // The restore rides the shared atomic writer: an interrupted rollback
   // leaves either the incumbent or the candidate, never a hybrid.
-  atomicWriteFileSync(target, prior);
+  writeLaneText(vault, target, prior);
 }
 
 /**
@@ -1661,7 +1682,7 @@ export function recordSkillRewriteGrade(
   input: SkillRewriteGradeRecordInput,
 ): ContinuityRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const payload = validateRewriteGradePayload(input.payload);
   return appendContinuityRecord(vault, {
     kind: "skill_rewrite_eval_grade",
@@ -1809,13 +1830,13 @@ export function readRewriteIncumbent(
     );
   }
   const path = join(resolveSkillsRoot(vault, opts.skillsRoot), skillName, SKILL_FILE_NAME);
-  if (!existsSync(path)) {
+  if (!lanePageExists(vault, path)) {
     throw new DeclaredSkillProposalError(
       `no incumbent SKILL.md for '${skillName}' at ${path}; a rewrite gates a candidate ` +
         "against an existing skill, not a fresh one",
     );
   }
-  const [fm, body] = parseFrontmatter(path);
+  const [fm, body] = parseLanePage(vault, path);
   // Unlike the proposal paths, there is no default here: the incumbent's
   // version is what the staged proposal bumps, and inventing one would
   // silently rewrite a skill's history. A corrupted incumbent is refused.
@@ -1925,9 +1946,9 @@ export function readSkillRewriteStatus(vault: string, skillName: string): SkillR
   let receipt: SkillRewriteStatusReceipt | null = null;
   const tasksPath = skillBenchmarkTasksPath(vault, skillName);
   const specPath = skillBenchmarkSpecPath(vault, skillName);
-  if (existsSync(tasksPath) && existsSync(specPath)) {
-    const tasks = parseSkillBenchmarkTasks(JSON.parse(readFileSync(tasksPath, "utf8")), tasksPath);
-    const spec = parseSkillRewriteSpec(JSON.parse(readFileSync(specPath, "utf8")), specPath);
+  if (lanePageExists(vault, tasksPath) && lanePageExists(vault, specPath)) {
+    const tasks = parseSkillBenchmarkTasks(JSON.parse(readLaneFile(vault, tasksPath)), tasksPath);
+    const spec = parseSkillRewriteSpec(JSON.parse(readLaneFile(vault, specPath)), specPath);
     const take = verifyRewriteTake(spec, tasks);
     receipt = {
       schema_version: spec.schemaVersion,
@@ -1982,7 +2003,7 @@ export function readSkillRewriteStatus(vault: string, skillName: string): SkillR
   let pendingSlug: string | null = null;
   for (const proposal of listPendingSkillProposals(vault)) {
     if (proposal.patternKind !== SCORED_REWRITE_PATTERN_KIND) continue;
-    const [fm] = parseFrontmatter(skillProposalPendingPath(vault, proposal.slug));
+    const [fm] = parseLanePage(vault, skillProposalPendingPath(vault, proposal.slug));
     if (fm[SKILL_REWRITES_SKILL_KEY] === skillName) {
       pendingSlug = proposal.slug;
       break;
@@ -2023,8 +2044,8 @@ function findReviewedProposal(
 ): { phase: SkillProposalPhase; fm: Record<string, unknown> } {
   for (const phase of PROPOSAL_PHASES) {
     const path = proposalPhasePath(vault, phase, slug);
-    if (!existsSync(path)) continue;
-    const [fm] = parseFrontmatter(path);
+    if (!lanePageExists(vault, path)) continue;
+    const [fm] = parseLanePage(vault, path);
     return { phase, fm: fm as Record<string, unknown> };
   }
   throw new Error(`skill proposal not found in any phase: ${slug}`);
@@ -2040,25 +2061,26 @@ export function rejectSkillProposal(
   opts: { now?: Date; note: string },
 ): SkillProposalReviewResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   if (!opts.note.trim()) {
     throw new Error("rejecting skill proposal requires a non-empty note");
   }
 
   const now = (opts.now ?? new Date()).toISOString();
   const pendingPath = skillProposalPendingPath(vault, slug);
-  if (!existsSync(pendingPath)) {
+  if (!lanePageExists(vault, pendingPath)) {
     throw new Error(`pending skill proposal not found: ${slug}`);
   }
 
-  const [fm, body] = parseFrontmatter(pendingPath);
+  const [fm, body] = parseLanePage(vault, pendingPath);
   if (fm["kind"] !== "brain-skill-proposal") {
     throw new Error(`invalid skill proposal file: ${pendingPath}`);
   }
   const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
   const rejectedPath = skillProposalRejectedPath(vault, slug);
 
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     rejectedPath,
     {
       ...fm,
@@ -2075,16 +2097,16 @@ export function rejectSkillProposal(
     },
   );
 
-  unlinkSync(pendingPath);
+  removeLanePage(vault, pendingPath);
   rebuildProceduralProjections(vault);
   return { id, slug, status: "rejected", proposalPath: rejectedPath };
 }
 
 function readWatermark(vault: string): WatermarkState {
   const path = watermarkPath(vault);
-  if (!existsSync(path)) return { lastCreatedAt: null, lastId: null };
+  if (!lanePageExists(vault, path)) return { lastCreatedAt: null, lastId: null };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(readLaneFile(vault, path)) as Record<string, unknown>;
     return {
       lastCreatedAt: typeof parsed["lastCreatedAt"] === "string" ? parsed["lastCreatedAt"] : null,
       lastId: typeof parsed["lastId"] === "string" ? parsed["lastId"] : null,
@@ -2096,9 +2118,10 @@ function readWatermark(vault: string): WatermarkState {
 
 function writeWatermark(vault: string, state: WatermarkState): void {
   const path = proposalWatermarkPath(vault);
-  const root = ensureInsideVault(dirname(path), vault);
-  mkdirSync(root, { recursive: true });
+  // The watermark is machine state (`machineStatePath`): in the vault on an
+  // unswitched machine, device-local once switched, so no vault check here.
   const payload = JSON.stringify(state, null, 2);
+  mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, `${payload}\n`);
 }
 
@@ -2192,11 +2215,11 @@ function findProposalByNameKey(
   familyPrefix = false,
 ): FoundProposal | null {
   const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, phase), vault);
-  if (!existsSync(dir)) return null;
-  for (const name of readdirSync(dir).toSorted()) {
+  if (!lanePageExists(vault, dir)) return null;
+  for (const name of listLaneFiles(vault, dir, "").toSorted()) {
     if (!name.endsWith(".md")) continue;
     const path = ensureInsideVault(join(dir, name), vault);
-    const [fm, body] = parseFrontmatter(path);
+    const [fm, body] = parseLanePage(vault, path);
     if (fm["kind"] !== "brain-skill-proposal") continue;
     const stored = fm["name_key"];
     const matches =
@@ -2231,7 +2254,8 @@ function mergePendingProposal(
 ): void {
   const priorEvidence = Number.parseInt(String(match.fm["evidence_count"] ?? "0"), 10) || 0;
   const priorConfidence = Number.parseFloat(String(match.fm["confidence"] ?? "0")) || 0;
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     match.path,
     {
       ...match.fm,
@@ -2257,7 +2281,8 @@ function evolveAcceptedProposal(
 ): void {
   const priorEvidence = Number.parseInt(String(match.fm["evidence_count"] ?? "0"), 10) || 0;
   const nextVersion = parseVersion(match.fm["version"]) + 1;
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     match.path,
     {
       ...match.fm,
@@ -2272,9 +2297,10 @@ function evolveAcceptedProposal(
   );
 
   const procPath = procedurePath(vault, match.slug);
-  if (existsSync(procPath)) {
-    const [procFm, procBody] = parseFrontmatter(procPath);
-    writeFrontmatterAtomic(
+  if (lanePageExists(vault, procPath)) {
+    const [procFm, procBody] = parseLanePage(vault, procPath);
+    writeLanePage(
+      vault,
       procPath,
       { ...procFm, version: nextVersion, updated_at: now.toISOString() },
       procBody,
@@ -2308,15 +2334,19 @@ function appendVerifierRejection(
   entry: { id: string; name_key: string; reason: string; at: string },
   sources: ReadonlyArray<ContinuityRecord>,
 ): void {
-  const path = verifierRejectionLedgerPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // The proposal's name is drawn from session turns: a row whose turns are
-  // flagged private, or that names a private or unjudgeable page (in the
-  // row or in those turns), goes to `private` only.
-  dualWrite(
-    () =>
+  // One `verifier-rejections` ledger row on a store-only machine (design
+  // D14 item 1), this device's rejection ledger line plus the dual write
+  // otherwise. The proposal's name is drawn from session turns: a row
+  // whose turns are flagged private, or that names a private or
+  // unjudgeable page (in the row or in those turns), goes to `private`
+  // only.
+  routeWrite({
+    legacy: () => {
+      const path = verifierRejectionLedgerPath(vault);
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
+    },
+    store: () =>
       ledgerRowRecord(
         DUAL_WRITE_LEDGERS.verifierRejections,
         entry,
@@ -2325,8 +2355,8 @@ function appendVerifierRejection(
           ? "private"
           : "shared",
       ),
-    { vault },
-  );
+    context: { vault },
+  });
 }
 
 function detectCandidates(
@@ -2694,8 +2724,8 @@ function verifyScoredRewriteGate(
   let spec: SkillRewriteSpec;
   let tasks: ReturnType<typeof parseSkillBenchmarkTasks>;
   try {
-    tasks = parseSkillBenchmarkTasks(JSON.parse(readFileSync(tasksPath, "utf8")), tasksPath);
-    spec = parseSkillRewriteSpec(JSON.parse(readFileSync(specPath, "utf8")), specPath);
+    tasks = parseSkillBenchmarkTasks(JSON.parse(readLaneFile(vault, tasksPath)), tasksPath);
+    spec = parseSkillRewriteSpec(JSON.parse(readLaneFile(vault, specPath)), specPath);
   } catch (error) {
     throw new Error(
       `scored rewrite gate for '${skillName}': the benchmark documents cannot be read to ` +
@@ -2771,8 +2801,8 @@ function verifyScoredRewriteGate(
  */
 export function pendingSkillProposalPatternKind(vault: string, slug: string): string | null {
   const pendingPath = skillProposalPendingPath(vault, slug);
-  if (!existsSync(pendingPath)) return null;
-  const [fm] = parseFrontmatter(pendingPath);
+  if (!lanePageExists(vault, pendingPath)) return null;
+  const [fm] = parseLanePage(vault, pendingPath);
   return typeof fm["pattern_kind"] === "string" ? fm["pattern_kind"] : null;
 }
 
@@ -2786,7 +2816,7 @@ export function pendingSkillProposalPatternKind(vault: string, slug: string): st
 function resolveSkillsRoot(vault: string, override: string | undefined): string {
   const explicit = override?.trim();
   if (explicit) return explicit;
-  return resolveSkillsDir() ?? join(vault, "Brain", "skills");
+  return resolveSkillsDir() ?? defaultSkillsDir(vault);
 }
 
 function renderAcceptedSkillBody(proposalId: string, name: string, proposalBody: string): string {

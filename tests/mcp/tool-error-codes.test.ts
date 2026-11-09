@@ -38,10 +38,20 @@ import { ConfigReadError } from "../../src/core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../../src/core/search/search-error.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
 import {
+  VAULT_ADAPTER_REQUIRED_CODE,
+  VAULT_BINDING_MISMATCH_CODE,
+  VaultAdapterRequiredError,
+  VaultBindingMismatchError,
+  VaultBindingsUnreadableError,
+} from "../../src/core/vault-adapter/index.ts";
+import {
   PENDING_STAGE_CONFLICT_CODE,
   WRITE_REFUSAL_CODES,
 } from "../../src/core/brain/pending/pending-lanes.ts";
-import { VAULT_FROZEN_REFUSAL } from "../../src/mcp/frozen-refusal.ts";
+import {
+  MIGRATION_IN_PROGRESS_REFUSAL,
+  VAULT_FROZEN_REFUSAL,
+} from "../../src/mcp/frozen-refusal.ts";
 import { OutputContractError } from "../../src/mcp/output-contract.ts";
 import { OWNER_SCOPE_REFUSALS } from "../../src/mcp/owner-scope-refusal.ts";
 import {
@@ -93,6 +103,7 @@ const NEW_TOKENS = [
   "brain_artifact_unparseable",
   "argument_forbidden",
   "quote_unverified",
+  "store_write_failed",
 ] as const;
 
 /**
@@ -101,6 +112,17 @@ const NEW_TOKENS = [
  * core unions by `tsc`, and against this list by the test.
  */
 const TYPE_ONLY_MEMBERS = [
+  // shared brain settings (brain_settings)
+  "unknown_setting",
+  "device_setting",
+  "not_a_setting",
+  "field_required",
+  "invalid_setting_value",
+  "human_value_in_force",
+  "operator_only_setting",
+  "private_setting_value",
+  "no_settings_file",
+  "settings_unreadable",
   // write batch
   "invalid_operation",
   "invalid_path",
@@ -172,12 +194,16 @@ class Nameless extends Error {}
 const UNCLASSIFIED_PREFIX = "warning: unclassified tool error mapped to internal_error: ";
 
 describe("TOOL_ERROR_CODES", () => {
+  test("registers the no-vault refusal, so it reaches the wire without a warning", () => {
+    expect(isToolErrorCode("vault_required")).toBe(true);
+  });
+
   test("is frozen and unique", () => {
     expect(Object.isFrozen(TOOL_ERROR_CODES)).toBe(true);
     expect(new Set(TOOL_ERROR_CODES).size).toBe(TOOL_ERROR_CODES.length);
   });
 
-  test("is exactly the imported vocabularies plus the 22 new tokens", () => {
+  test("is exactly the imported vocabularies plus the 23 new tokens", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
       ...SEARCH_ERROR_CODES,
@@ -185,7 +211,10 @@ describe("TOOL_ERROR_CODES", () => {
       ...Object.values(SHAPE_VIOLATION_CODES),
       ...Object.values(SEMANTIC_VIOLATION_CODES),
       VAULT_FROZEN_REFUSAL,
+      MIGRATION_IN_PROGRESS_REFUSAL,
       WRITE_BINDING_REFUSED_CODE,
+      VAULT_ADAPTER_REQUIRED_CODE,
+      VAULT_BINDING_MISMATCH_CODE,
       ...Object.values(WRITE_REFUSAL_CODES),
       PENDING_STAGE_CONFLICT_CODE,
       REACH_REFUSAL,
@@ -256,6 +285,14 @@ describe("codeForError", () => {
     expect(codeForError(new SearchError("INDEX_MISSING", "no index"))).toBe("INDEX_MISSING");
     expect(codeForError(new PinnedBatchError("budget_exceeded", -1, "too big"))).toBe(
       "budget_exceeded",
+    );
+    expect(codeForError(new VaultAdapterRequiredError("create note"))).toBe("vault_required");
+    expect(codeForError(new VaultBindingMismatchError("/v", "detail"))).toBe(
+      "vault_binding_mismatch",
+    );
+    // The same code on purpose: the binding cannot vouch for the vault either way.
+    expect(codeForError(new VaultBindingsUnreadableError("/state/vault-binding.json"))).toBe(
+      "vault_binding_mismatch",
     );
     expect(lines).toEqual([]);
   });

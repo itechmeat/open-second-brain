@@ -29,8 +29,11 @@ import {
 } from "../../../../src/core/brain/git/store.ts";
 import type { GitCommitRecord, GitTagRecord } from "../../../../src/core/brain/git/store.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../../src/core/brain/sync-lockfile.ts";
-import { withDeviceId } from "../../../helpers/device-id.ts";
+import { withDeviceId, useUnshardedLegacyLog } from "../../../helpers/device-id.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

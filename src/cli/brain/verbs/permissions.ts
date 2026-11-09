@@ -1,9 +1,9 @@
 import {
-  loadPermissionsDocument,
   PermissionsDocumentError,
   type PermissionAction,
   type PermissionsDocument,
 } from "../../../core/brain/permissions/document.ts";
+import { loadPermissionsDocumentFor } from "../../../core/brain/permissions/document-source.ts";
 import {
   queryDecisionLedger,
   type DecisionLedgerFilter,
@@ -78,7 +78,7 @@ interface DecisionTableRow {
 function show(flags: BrainVerbFlags, json: boolean): number {
   const { vault } = brainVerbContext(flags);
   try {
-    const { document, path } = loadPermissionsDocument(vault);
+    const { document, path } = loadPermissionsDocumentFor(vault);
     if (document === null) {
       if (json) {
         okJson({ document: null, path });

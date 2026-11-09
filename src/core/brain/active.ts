@@ -31,8 +31,9 @@
  * PostCompact hook + MCP resources") which closes BRAIN-FUT-006.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { legacyVaultOf } from "./no-vault.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -44,7 +45,10 @@ import {
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
-import { parseRetired } from "./preference.ts";
+import { compiledDigestPath, digestsRenderedOnDemand } from "./compiled-digest-path.ts";
+import { legacyMemoryPage, type MemoryPage, storeMemoryPages } from "./memory-pages.ts";
+import { withLogReadPass } from "./log-days.ts";
+import { parseRetiredMeta } from "./preference.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import {
   SUPERSEDED_BY_KEY,
@@ -55,7 +59,7 @@ import {
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "./path-constants.ts";
-import { brainActivePath, brainDirsForWrite } from "./paths.ts";
+import { brainActivePath, brainDirsForWrite, brainDirsOf } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
@@ -166,7 +170,7 @@ export interface RegenerateActiveResult {
  * the agent's view of every healthy rule. Corruption is the domain of
  * `brain_doctor`; this render's job is to surface what is knowable.
  */
-export function renderActive(vault: string, opts: RenderActiveOptions = {}): ActiveRender {
+export function renderActive(vault: string | null, opts: RenderActiveOptions = {}): ActiveRender {
   const now = opts.now ?? new Date();
 
   const readable = opts.readable ?? READ_EVERYTHING;
@@ -252,7 +256,7 @@ export function renderActive(vault: string, opts: RenderActiveOptions = {}): Act
  * case - a local reader with no enforced scope - is served the file's own
  * bytes, unchanged.
  */
-export function readerNarrowsActive(vault: string, opts: ActiveReaderOptions): boolean {
+export function readerNarrowsActive(vault: string | null, opts: ActiveReaderOptions): boolean {
   if (opts.restricted === true) return true;
   return resolveOwnerScopeDelivery(vault, opts.agentScope).enforcedScope !== null;
 }
@@ -263,8 +267,11 @@ export function readerNarrowsActive(vault: string, opts: ActiveReaderOptions): b
  * the same generation the shared file does. Nothing is written. Callers
  * ask {@link readerNarrowsActive} first and serve the file otherwise.
  */
-export function renderActiveForReader(vault: string, opts: ActiveReaderOptions): ActiveRender {
-  const generatedAt = readGeneratedAt(brainActivePath(vault));
+export function renderActiveForReader(
+  vault: string | null,
+  opts: ActiveReaderOptions,
+): ActiveRender {
+  const generatedAt = readGeneratedAt(compiledDigestPath(vault, "active"));
   return renderActive(vault, {
     ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
@@ -277,10 +284,37 @@ export function renderActiveForReader(vault: string, opts: ActiveReaderOptions):
  * itself for a local reader with no enforced scope, the reader render
  * otherwise. The file must exist; the caller regenerates it first.
  */
-export function readActiveForReader(vault: string, opts: ActiveReaderOptions): string {
+export function readActiveForReader(vault: string | null, opts: ActiveReaderOptions): string {
   return readerNarrowsActive(vault, opts)
     ? renderActiveForReader(vault, opts).document
-    : readFileSync(brainActivePath(vault), "utf8");
+    : readFileSync(compiledDigestPath(vault, "active"), "utf8");
+}
+
+/**
+ * The file a reader of the shared digest reads: `Brain/active.md` on an
+ * unswitched machine, as it is; on a store-only machine the device-local
+ * cache, rendered first (D14 item 7: the digest is rendered on demand,
+ * and the cache keeps its generation while the body is unchanged).
+ */
+export function activeDigestPathForRead(
+  vault: string | null,
+  opts: RegenerateActiveOptions = {},
+): string {
+  if (vault !== null && !digestsRenderedOnDemand(vault)) return brainActivePath(vault);
+  // The cached generation stands while a render at its own instant still
+  // gives its body: what changed since is time alone, as for a vault file
+  // the next dream pass has not rewritten yet. A changed input renders now.
+  const path = compiledDigestPath(vault, "active");
+  const stamp = readGeneratedAt(path);
+  const stampMs = stamp === null ? Number.NaN : Date.parse(stamp);
+  // One read pass: the check render and a regeneration share one log read.
+  return withLogReadPass(() => {
+    if (stamp !== null && !Number.isNaN(stampMs)) {
+      const atStamp = renderActive(vault, { now: new Date(stampMs) });
+      if (readExistingBody(path) === atStamp.body.trim()) return path;
+    }
+    return regenerateActive(vault, opts).path;
+  });
 }
 
 /**
@@ -292,11 +326,11 @@ export function readActiveForReader(vault: string, opts: ActiveReaderOptions): s
  * for why a per-request visibility filter must not reach this file.
  */
 export function regenerateActive(
-  vault: string,
+  vault: string | null,
   opts: RegenerateActiveOptions = {},
 ): RegenerateActiveResult {
   const now = opts.now ?? new Date();
-  const path = brainActivePath(vault);
+  const path = compiledDigestPath(vault, "active");
   const rendered = renderActive(vault, { now });
 
   // `readExistingBody` returns the trimmed body (parseFrontmatter
@@ -305,6 +339,9 @@ export function regenerateActive(
   const existingBody = readExistingBody(path);
   const changed = existingBody === null || existingBody !== rendered.body.trim();
   if (changed) {
+    // The device-local cache directory of a store-only machine may not
+    // exist yet; the vault's `Brain/` always does when this is reached.
+    if (digestsRenderedOnDemand(vault)) mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, rendered.document);
   }
 
@@ -322,7 +359,10 @@ export function regenerateActive(
  * Exported as the single source of truth for fire-and-warn semantics
  * so the same swallow shape isn't copy-pasted at each call site.
  */
-export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptions = {}): void {
+export function regenerateActiveQuiet(
+  vault: string | null,
+  opts: RegenerateActiveOptions = {},
+): void {
   try {
     regenerateActive(vault, opts);
   } catch (err) {
@@ -351,11 +391,12 @@ export function readGeneratedAt(path: string): string | null {
 }
 
 function readActivePreferences(
-  vault: string,
+  vault: string | null,
   agentScope: string | undefined,
   readable: (rel: string) => boolean,
 ): BrainPreference[] {
-  const dirs = brainDirsForWrite(vault);
+  // With no vault the folders are the store's (design D14).
+  const dirs = vault === null ? brainDirsOf(null) : brainDirsForWrite(vault);
   // The shared delivery-path walk (context-integrity-gates, Unit A) owns
   // the listing and the parse; a corrupted or status/folder-mismatched
   // file is omitted there, and `brain_doctor` is the surface that flags
@@ -374,6 +415,13 @@ function readActivePreferences(
   return out;
 }
 
+function legacyRetiredPages(vault: string | null): MemoryPage[] {
+  const root = legacyVaultOf(vault, "readRecentlyRetired");
+  const dir = brainDirsForWrite(root).retired;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((name) => legacyMemoryPage(root, "retired", name));
+}
+
 /**
  * Retirement KEEPS ownership (context-integrity-gates, A7): a retired
  * memory is withdrawn from the active set, never published. The gate
@@ -382,26 +430,30 @@ function readActivePreferences(
  * list it always did.
  */
 function readRecentlyRetired(
-  vault: string,
+  vault: string | null,
   limit: number,
   agentScope: string | undefined,
   readable: (rel: string) => boolean,
 ): BrainRetired[] {
-  const dirs = brainDirsForWrite(vault);
-  if (!existsSync(dirs.retired)) return [];
+  // Store pages on a store-only machine; only an unswitched machine
+  // resolves (and guards) the legacy folder, so a read never trips the
+  // write guard (frozen vault, migration in progress) for a folder it
+  // does not read.
+  const pages = storeMemoryPages(vault, "retired") ?? legacyRetiredPages(vault);
   const scope = resolveOwnerScopeDelivery(vault, agentScope).enforcedScope;
   const out: BrainRetired[] = [];
   // The serve-with-correction chain index, built on the first
   // pointer-bearing record and reused for the rest of the walk: a vault
   // whose retired records carry no pointer never pays for it.
   let chainLookup: ChainLookup | null = null;
-  for (const name of readdirSync(dirs.retired)) {
+  for (const page of pages) {
+    const name = page.name;
     // Filtered BEFORE the newest-first cut, so a withheld record never
     // pushes a visible one out of the list either.
     if (!name.endsWith(".md") || !readable(posix.join(BRAIN_RETIRED_REL, name))) continue;
-    const full = join(dirs.retired, name);
+    const full = page.path;
     try {
-      const retired = parseRetired(full);
+      const retired = parseRetiredMeta(page.read()[0], full);
       if (scope !== null && !isPreferenceVisible(retired, scope)) continue;
       // Serve-with-correction coupling (truth-correctable-time-aware,
       // contract item 3): a retired record whose frontmatter declares a

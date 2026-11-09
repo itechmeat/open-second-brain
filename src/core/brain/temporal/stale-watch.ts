@@ -18,8 +18,9 @@ import { join } from "node:path";
 
 import { brainDirs } from "./../paths.ts";
 import { vaultRelative } from "../../path-safety.ts";
-import { parsePreference } from "./../preference.ts";
-import { parseSignal } from "./../signal.ts";
+import { memoryFromStore, memoryRecordReads, signalPageRaw } from "../memory-pages.ts";
+import { parsePreference, parsePreferenceMeta } from "./../preference.ts";
+import { parseSignal, parseStoreSignal } from "./../signal.ts";
 import { fileAgeMs, msToWholeDays } from "./../time.ts";
 import type { ResolvedBrainTemporalConfig } from "./../types.ts";
 import type { TimelineIndex } from "./types.ts";
@@ -87,14 +88,19 @@ function scanPreferences(
 ): StalePreferenceRow[] {
   const out: StalePreferenceRow[] = [];
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return out;
-  for (const entry of readdirSync(dirs.preferences, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("pref-")) continue;
-    const path = join(dirs.preferences, entry.name);
+  const fromStore = memoryFromStore(vault);
+  if (!fromStore && !existsSync(dirs.preferences)) return out;
+  for (const { path, read } of memoryRecordReads(
+    vault,
+    fromStore,
+    dirs.preferences,
+    "pref-",
+    parsePreference,
+    (page) => parsePreferenceMeta(page.meta, page.path),
+  )) {
     let pref;
     try {
-      pref = parsePreference(path);
+      pref = read();
     } catch {
       continue;
     }
@@ -120,14 +126,19 @@ function scanPreferences(
 function scanSignals(vault: string, thresholdDays: number, nowMs: number): StaleSignalRow[] {
   const out: StaleSignalRow[] = [];
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.inbox)) return out;
-  for (const entry of readdirSync(dirs.inbox, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("sig-")) continue;
-    const path = join(dirs.inbox, entry.name);
+  const fromStore = memoryFromStore(vault);
+  if (!fromStore && !existsSync(dirs.inbox)) return out;
+  for (const { path, read } of memoryRecordReads(
+    vault,
+    fromStore,
+    dirs.inbox,
+    "sig-",
+    parseSignal,
+    (page) => parseStoreSignal(page.path, page.meta, signalPageRaw(page)),
+  )) {
     let signal;
     try {
-      signal = parseSignal(path);
+      signal = read();
     } catch {
       continue;
     }
@@ -150,6 +161,9 @@ function scanSignals(vault: string, thresholdDays: number, nowMs: number): Stale
 
 function scanLogFiles(vault: string, thresholdDays: number, nowMs: number): StaleLogFileRow[] {
   const out: StaleLogFileRow[] = [];
+  // A store-only machine keeps its log in the store, not in day files: a
+  // leftover legacy file is no live log entry to report as stale.
+  if (memoryFromStore(vault)) return out;
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return out;
   for (const entry of readdirSync(dirs.log, { withFileTypes: true })) {

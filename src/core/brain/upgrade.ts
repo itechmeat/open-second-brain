@@ -32,6 +32,7 @@ import { manualRevisionAhead, renderBrainManualFor } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { storeOnlyMode } from "../store/store-only.ts";
 
 // ----- Public types --------------------------------------------------------
 
@@ -90,6 +91,8 @@ export interface ApplyUpgradeOptions {
    */
   readonly plan?: UpgradePlan;
   readonly agent?: string;
+  /** The machine config the store-only decision reads (default: the configured one). */
+  readonly configPath?: string;
   readonly now?: Date;
 }
 
@@ -183,7 +186,37 @@ const UPGRADE_SEAL_REFUSAL =
   "was written and no snapshot was taken; re-run `o2b brain upgrade --dry-run` to get a sealed " +
   "plan, then apply it.";
 
+/**
+ * The refusal on a machine that writes the brain store only (design D14
+ * item 1): the managed files live in the legacy tree, which a switched
+ * machine leaves exactly as it is until the tree leaves the vault, and a
+ * vault with no legacy tree must not get one (it would send the machine
+ * back to the legacy layout).
+ */
+const UPGRADE_STORE_ONLY_REFUSAL =
+  "upgrade refused: this machine writes the brain store only (it has switched to the store, " +
+  "or the vault has no legacy Brain/ tree), so there are no managed files to upgrade. Its " +
+  "settings and records live in the store; nothing was written.";
+
+/** {@link applyUpgrade}'s refusal on a store-only machine: no failure, nothing to upgrade. */
+export class BrainUpgradeStoreOnlyError extends BrainUpgradeError {
+  constructor() {
+    super(UPGRADE_STORE_ONLY_REFUSAL);
+    this.name = "BrainUpgradeStoreOnlyError";
+  }
+}
+
+/**
+ * Whether the managed-file upgrade does not apply to `vault` on this
+ * machine: it writes the brain store only. A caller checks this before
+ * planning or prompting, and records no upgrade failure for it.
+ */
+export function upgradeBlockedByStore(vault: string, configPath?: string): boolean {
+  return storeOnlyMode({ vault, ...(configPath !== undefined ? { configPath } : {}) }).storeOnly;
+}
+
 export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): UpgradeApplyResult {
+  if (upgradeBlockedByStore(vault, opts.configPath)) throw new BrainUpgradeStoreOnlyError();
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const plan = opts.plan ?? planUpgrade(vault);

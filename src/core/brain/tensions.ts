@@ -27,13 +27,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
 
 import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName } from "../config.ts";
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sanitiseTextField } from "../redactor.ts";
-import { pageVisibility, strictestVisibility } from "../graph/visibility.ts";
+import { strictestVisibility } from "../graph/visibility.ts";
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -44,12 +42,21 @@ import {
   type NoteForContradiction,
 } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { isPrivateFrontmatter } from "../store/private-page.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { tensionPath, tensionsDir } from "./paths.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_HEALTH_DEFAULTS } from "./policy.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainSignalSign } from "./types.ts";
+import {
+  assertLaneWrite,
+  laneEntryInPrivate,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -349,8 +356,8 @@ function scalarString(meta: Readonly<Record<string, unknown>>, key: string): str
 
 function parsePage(vault: string, slug: string): TensionRecord | null {
   const path = tensionPath(vault, slug);
-  if (!existsSync(path)) return null;
-  const [meta, body] = parseFrontmatter(path);
+  if (!lanePageExists(vault, path)) return null;
+  const [meta, body] = parseLanePage(vault, path);
   if (meta["type"] !== TENSION_TYPE) return null;
   const statusChangedRaw = scalarString(meta, "status_changed_at");
   const reasonRaw = scalarString(meta, "resolution_reason");
@@ -380,7 +387,10 @@ function parsePage(vault: string, slug: string): TensionRecord | null {
     agent: scalarString(meta, "agent"),
     quoteA: quotes.get(subjectA) ?? "",
     quoteB: quotes.get(subjectB) ?? "",
-    visibility: Object.freeze(pageVisibility(meta)),
+    // The declared tokens and an informal privacy marker's reservation
+    // (`access: private`, a hand edit): the verdict of a transition and
+    // the page it renders both keep a reservation however it was spelled.
+    visibility: remoteDenyVisibilityTokens(meta),
     path,
   });
 }
@@ -426,7 +436,7 @@ export function persistTension(
   opts: PersistTensionOptions = {},
 ): PersistTensionResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const { idLow, idHigh, signLow, signHigh, quoteLow, quoteHigh } = canonicalPair(finding);
   const slug = tensionSlug(finding);
   const dedupKey = tensionDedupKey(finding);
@@ -448,10 +458,13 @@ export function persistTension(
       detectedAt: stampedAt,
       quoteA: cleanQuote(quoteLow),
       quoteB: cleanQuote(quoteHigh),
-      visibility: opts.visibility ?? prior.visibility,
+      // A re-detection never lowers the page's own reservation.
+      visibility:
+        opts.visibility === undefined
+          ? prior.visibility
+          : strictestVisibility(opts.visibility, prior.visibility),
     };
-    mkdirSync(tensionsDir(vault), { recursive: true });
-    atomicWriteFileSync(prior.path, render(next));
+    writeLaneText(vault, prior.path, render(next));
     return { record: Object.freeze({ ...next, path: prior.path }), created: false };
   }
 
@@ -478,21 +491,24 @@ export function persistTension(
     visibility: opts.visibility ?? [],
   };
 
-  mkdirSync(tensionsDir(vault), { recursive: true });
   const path = tensionPath(vault, slug);
-  atomicWriteFileSync(path, render(record));
-
-  appendLogEvent(vault, {
-    timestamp: stampedAt,
-    eventType: BRAIN_LOG_EVENT_KIND.tension,
-    body: {
-      tension: `[[${record.id}]]`,
-      action: "detected",
-      status: record.status,
-      subject_a: idLow,
-      subject_b: idHigh,
-      agent,
-    },
+  // One operation, one verdict: the page and its log event go to the
+  // partition the page's visibility decides. Once switched there is no
+  // page file for the event's `[[tension-...]]` link to be judged by.
+  withOperationPrivacy(tensionIsPrivate(record), () => {
+    writeLaneText(vault, path, render(record));
+    appendLogEvent(vault, {
+      timestamp: stampedAt,
+      eventType: BRAIN_LOG_EVENT_KIND.tension,
+      body: {
+        tension: `[[${record.id}]]`,
+        action: "detected",
+        status: record.status,
+        subject_a: idLow,
+        subject_b: idHigh,
+        agent,
+      },
+    });
   });
 
   return { record: Object.freeze({ ...record, path }), created: true };
@@ -640,7 +656,7 @@ function transition(
   // page rewrite below precedes `appendLogEvent`, so leaning on that
   // call's guard would land the new status in the wrong store first -
   // the same defect `persistTension` was fixed for.
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new TensionError(`no tension: ${slug}`);
   const rule = TRANSITIONS[verb];
@@ -660,21 +676,25 @@ function transition(
     statusChangedAt: stampedAt,
     resolutionReason: reason ?? prior.resolutionReason,
   };
-  atomicWriteFileSync(prior.path, render(next));
-
-  appendLogEvent(vault, {
-    timestamp: stampedAt,
-    eventType: BRAIN_LOG_EVENT_KIND.tension,
-    body: {
-      tension: `[[${prior.id}]]`,
-      action: verb,
-      from: prior.status,
-      status: rule.to,
-      subject_a: prior.subjectA,
-      subject_b: prior.subjectB,
-      ...(reason !== null ? { reason } : {}),
-      agent,
-    },
+  // The rewrite and its event under one verdict, as on create. A tension
+  // private by its partition alone (written inside a private operation,
+  // with no `visibility:`) stays private: its event must not reach shared.
+  withOperationPrivacy(tensionIsPrivate(prior) || laneEntryInPrivate(vault, prior.path), () => {
+    writeLaneText(vault, prior.path, render(next));
+    appendLogEvent(vault, {
+      timestamp: stampedAt,
+      eventType: BRAIN_LOG_EVENT_KIND.tension,
+      body: {
+        tension: `[[${prior.id}]]`,
+        action: verb,
+        from: prior.status,
+        status: rule.to,
+        subject_a: prior.subjectA,
+        subject_b: prior.subjectB,
+        ...(reason !== null ? { reason } : {}),
+        agent,
+      },
+    });
   });
 
   return Object.freeze({ ...next, path: prior.path });
@@ -707,6 +727,11 @@ export function resolveTension(
   return transition(vault, slug, TENSION_TRANSITION.resolve, opts);
 }
 
+/** Whether a tension's page reserves it (its `visibility:` holds the remote-deny token). */
+function tensionIsPrivate(record: Pick<TensionRecord, "visibility">): boolean {
+  return isPrivateFrontmatter({ visibility: [...record.visibility] });
+}
+
 // ----- Reads ----------------------------------------------------------------
 
 /** One tension, or null. */
@@ -716,10 +741,10 @@ export function showTension(vault: string, slug: string): TensionRecord | null {
 
 /** Every tension, sorted by slug. */
 export function listTensions(vault: string): TensionRecord[] {
+  // `listLaneFiles` answers [] for a missing folder in both modes.
   const dir = tensionsDir(vault);
-  if (!existsSync(dir)) return [];
   const out: TensionRecord[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".md") || !name.startsWith("tension-")) continue;
     const slug = name.replace(/^tension-/u, "").replace(/\.md$/u, "");
     const page = parsePage(vault, slug);

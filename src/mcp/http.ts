@@ -32,7 +32,7 @@ import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } 
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import { discoverConfig, resolveAgentName } from "../core/config.ts";
-import { hasAnyAgentToken, resolveAgentForToken } from "../core/brain/secrets/token-store.ts";
+import { hasAnyMcpToken, resolveMcpToken } from "./token-source.ts";
 
 export type { RequestIdentity };
 
@@ -133,7 +133,7 @@ export async function startHttp(
   // Binding to a NON-loopback interface exposes the Brain on the network, so
   // a credential source is mandatory there - the shared key, or a non-empty
   // per-agent token map (write-side-trust, Task 7). No permissive fallback.
-  if (!isLoopbackHost(host) && !hasCredentialSource(apiKey, ctx.vault)) {
+  if (!isLoopbackHost(host) && !hasCredentialSource(apiKey, ctx.vault, ctx.configPath ?? null)) {
     throw new Error(
       "HTTP MCP transport bound to a non-loopback host requires --api-key or at least one " +
         `minted agent token (host=${host}); refusing to expose an unauthenticated endpoint on the network`,
@@ -496,7 +496,7 @@ function authenticateHttpRequest(
   let mapNonEmpty = false;
   if (configTokensRequired || networkBare) {
     try {
-      mapNonEmpty = hasAnyAgentToken(mcp.vault);
+      mapNonEmpty = hasAnyMcpToken({ vault: mcp.vault, configPath: mcp.configPath });
     } catch (err) {
       warnTokenStoreUnreadable(stderr, err);
       // Enforcement was REQUESTED (the config key, or the exposed bind),
@@ -512,7 +512,7 @@ function authenticateHttpRequest(
     apiKey,
     resolveToken: (candidate) => {
       try {
-        return resolveAgentForToken(mcp.vault, candidate);
+        return resolveMcpToken({ vault: mcp.vault, configPath: mcp.configPath }, candidate);
       } catch (err) {
         warnTokenStoreUnreadable(stderr, err);
         // Null, not a throw: the presented credential then fails the way
@@ -577,9 +577,13 @@ export function authenticateRequest(
 }
 
 /** Whether the bind would have any credential source to demand. */
-function hasCredentialSource(apiKey: string | null, vault: string): boolean {
+function hasCredentialSource(
+  apiKey: string | null,
+  vault: string | null,
+  configPath: string | null,
+): boolean {
   if (apiKey !== null && apiKey !== "") return true;
-  return hasAnyAgentToken(vault);
+  return hasAnyMcpToken({ vault, configPath });
 }
 
 /** Canonical loopback host names a rebinding guard trusts. */

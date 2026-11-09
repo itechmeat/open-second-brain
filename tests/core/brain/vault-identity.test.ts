@@ -1014,6 +1014,9 @@ describe("what the guard does NOT catch", () => {
   test("a cold-start mis-resolution proceeds and is reported, not refused", () => {
     // The reviewer's probe: a never-existent sibling root.
     const wrong = `${vault}t`;
+    // A legacy tree with no identity marker yet: without `Brain/` the root
+    // would be a fresh install, which writes the brain store only.
+    mkdirSync(join(wrong, "Brain"), { recursive: true });
     try {
       expect(() =>
         appendLogEvent(wrong, {

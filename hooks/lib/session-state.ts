@@ -35,6 +35,7 @@ import {
   readRegularFileNoFollow,
 } from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
+import { machineStateRoot } from "../../src/core/state/machine-state.ts";
 
 /** The vault's hook-surface directory. */
 const OSB_DIR = ".open-second-brain";
@@ -100,9 +101,23 @@ function scopeSlug(sessionId: string | null | undefined): string {
   return `${slug.slice(0, LOSSY_SLUG_KEEP)}-${digest}`;
 }
 
-/** Absolute path of the state file for one vault + session scope. */
+/**
+ * Absolute path of the state file for one vault + session scope: under the
+ * vault, or under the device-local state once this machine is switched
+ * (`state/machine-state.ts`, design D14).
+ */
 export function hookStateFilePath(vault: string, sessionId: string | null | undefined): string {
-  return join(vault, OSB_DIR, HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
+  return stateFileAt(machineStateRoot(vault), sessionId);
+}
+
+/**
+ * The state file of one scope below a machine-state root already resolved.
+ * Each public entry point resolves the root ONCE (`machineStateRoot` asks
+ * the store on an unswitched machine) and hands it down, so the symlink
+ * check, the read and the write of one operation all name the same tree.
+ */
+function stateFileAt(root: string, sessionId: string | null | undefined): string {
+  return join(root, OSB_DIR, HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
 }
 
 /**
@@ -111,8 +126,8 @@ export function hookStateFilePath(vault: string, sessionId: string | null | unde
  * directory, so every reader, writer and the prune refuse such a tree: reads
  * answer empty, writes fail, the sweep removes nothing.
  */
-function hookStateDirIsSymlinked(vault: string): boolean {
-  return derivedDirIsSymlinked(vault, OSB_DIR, HOOK_STATE_DIR);
+function hookStateDirIsSymlinked(root: string): boolean {
+  return derivedDirIsSymlinked(root, OSB_DIR, HOOK_STATE_DIR);
 }
 
 /**
@@ -121,8 +136,8 @@ function hookStateDirIsSymlinked(vault: string): boolean {
  * object so callers never throw and a corrupt file behaves exactly like a fresh
  * one.
  */
-function readState(vault: string, sessionId: string | null | undefined): Record<string, unknown> {
-  return loadState(vault, sessionId) ?? {};
+function readState(root: string, sessionId: string | null | undefined): Record<string, unknown> {
+  return loadState(root, sessionId) ?? {};
 }
 
 /**
@@ -131,11 +146,11 @@ function readState(vault: string, sessionId: string | null | undefined): Record<
  * not a regular file).
  */
 function loadState(
-  vault: string,
+  root: string,
   sessionId: string | null | undefined,
 ): Record<string, unknown> | null {
-  if (hookStateDirIsSymlinked(vault)) return {};
-  const read = readRegularFileNoFollow(hookStateFilePath(vault, sessionId));
+  if (hookStateDirIsSymlinked(root)) return {};
+  const read = readRegularFileNoFollow(stateFileAt(root, sessionId));
   if (read.status === "absent") return {};
   if (read.status !== "ok") return null;
   try {
@@ -155,7 +170,7 @@ function loadState(
  * so a caller can name it. Never throws.
  */
 export function isHookStateCorrupt(vault: string, sessionId: string | null | undefined): boolean {
-  return loadState(vault, sessionId) === null;
+  return loadState(machineStateRoot(vault), sessionId) === null;
 }
 
 /**
@@ -186,7 +201,7 @@ export function readHookStamp(
   key: string,
   nowMs: number = Date.now(),
 ): HookStamp | null {
-  return parseHookStamp(readState(vault, sessionId)[key], nowMs);
+  return parseHookStamp(readState(machineStateRoot(vault), sessionId)[key], nowMs);
 }
 
 /** Bounded busy-retry acquiring the per-scope advisory lock. */
@@ -306,12 +321,13 @@ export function updateHookState<T>(
 ): HookStateUpdateOutcome<T> {
   let lock: LockHandle | null = null;
   try {
-    if (hookStateDirIsSymlinked(vault)) return { status: "failed" };
-    const path = hookStateFilePath(vault, sessionId);
+    const root = machineStateRoot(vault);
+    if (hookStateDirIsSymlinked(root)) return { status: "failed" };
+    const path = stateFileAt(root, sessionId);
     mkdirSync(dirname(path), { recursive: true });
     lock = acquireScopeLock(path, opts.tryOnce === true);
     if (lock === null) return { status: "busy" };
-    const next = mutate(readState(vault, sessionId), opts.nowMs ?? Date.now());
+    const next = mutate(readState(root, sessionId), opts.nowMs ?? Date.now());
     // Private mode: the re-grounding queue holds digest parts (standing and
     // scoped rules, the memory digest), the same class of text the inject
     // cache keeps at 0o600.
@@ -374,8 +390,9 @@ export function pruneHookStateFiles(
   const maxAgeMs = opts.maxAgeMs ?? PRUNE_MAX_AGE_MS;
   const maxFiles = opts.maxFiles ?? PRUNE_MAX_FILES;
   const nowMs = opts.nowMs ?? Date.now();
-  if (hookStateDirIsSymlinked(vault)) return 0;
-  const dir = join(vault, OSB_DIR, HOOK_STATE_DIR);
+  const root = machineStateRoot(vault);
+  if (hookStateDirIsSymlinked(root)) return 0;
+  const dir = join(root, OSB_DIR, HOOK_STATE_DIR);
   let names: string[];
   try {
     names = readdirSync(dir);

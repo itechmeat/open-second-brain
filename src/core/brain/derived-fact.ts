@@ -14,10 +14,9 @@
  * provenance/provenance.ts and the recall trust-ordering helper).
  */
 
-import { existsSync } from "node:fs";
-
 import { vaultRelative } from "../path-safety.ts";
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from "./policy.ts";
+import { memoryPageExists } from "./memory-pages.ts";
 import { preferencePath } from "./paths.ts";
 import { writePreference } from "./preference.ts";
 import { DERIVED_FACT_SHAPE, DERIVED_FACT_SURFACE, assertResponseShape } from "./response-shape.ts";
@@ -141,7 +140,7 @@ export function deriveFact(
     if (!slug) throw new DeriveFactError("premise id must not be empty");
     const premisePath = preferencePath(vault, slug);
     if (
-      !existsSync(premisePath) ||
+      !memoryPageExists(vault, vaultRelative(premisePath, vault)) ||
       (opts.readable !== undefined && !opts.readable(vaultRelative(premisePath, vault)))
     ) {
       throw new DeriveFactError(`premise preference not found: ${JSON.stringify(premise)}`);

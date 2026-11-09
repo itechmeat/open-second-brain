@@ -16,12 +16,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePageInPreferenceFolders } from "../memory-pages.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { buildBacklinkIndex, type BacklinkRef } from "../backlinks.ts";
 import { brainDirs } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import { findUnlinkedMentions, type MentionRef } from "./unlinked-mentions.ts";
+import { requireVaultAdapter, WIKILINK_AUDIT } from "../../vault-adapter/index.ts";
 
 /** One linker pointing at the target. */
 export interface ConceptLinker {
@@ -69,10 +71,11 @@ export interface BuildConceptClusterOptions {
  * order. Returns a frozen object.
  */
 export function buildConceptCluster(
-  vault: string,
+  vaultOrNull: string | null,
   targetId: string,
   opts: BuildConceptClusterOptions = {},
 ): ConceptClusterEnvelope {
+  const vault = requireVaultAdapter(vaultOrNull, WIKILINK_AUDIT.conceptCluster);
   const normalised = normaliseWikilinkTarget(targetId);
   const scope = opts.ownerScope ?? null;
   const targetTitle = resolveTitle(vault, normalised);
@@ -114,6 +117,13 @@ export function buildConceptCluster(
 }
 
 function resolveTitle(vault: string, targetId: string): string {
+  if (memoryFromStore(vault)) {
+    // Store-only (task 2.10): the preference fold's record, as its page.
+    // The same two folders the legacy lookup reads.
+    const page = storePageInPreferenceFolders(vault, targetId);
+    const titleRaw = page?.meta["title"];
+    return typeof titleRaw === "string" && titleRaw.trim().length > 0 ? titleRaw.trim() : targetId;
+  }
   const dirs = brainDirs(vault);
   const candidates = [
     join(dirs.preferences, `${targetId}.md`),

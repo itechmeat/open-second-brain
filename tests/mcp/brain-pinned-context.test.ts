@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,9 @@ const savedEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-pinned-"));
   vault = join(tmp, "vault");
+  // A legacy tree: these tests pin `Brain/pinned.md` on an unswitched
+  // machine (a vault with no `Brain/` is store-only, task 2.10).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-pinned-cfg-"));
   configPath = join(configHome, "config.yaml");
   for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {

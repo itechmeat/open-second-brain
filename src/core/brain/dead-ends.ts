@@ -10,17 +10,21 @@
  * instead of deleting history.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
-import { parseFrontmatterText, slugify, writeFrontmatterAtomic } from "../vault.ts";
+import { slugify } from "../vault.ts";
+import {
+  assertLaneWrite,
+  listLaneFiles,
+  moveLanePage,
+  readLanePage,
+  writeLanePage,
+} from "../store/lane-pages.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { allocateAndCreate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { renameWithRetry } from "../fs-atomic.ts";
 
 /** Active dead-ends kept before overflow archives the oldest. */
 export const DEAD_END_MAX_ACTIVE = 100;
@@ -92,8 +96,9 @@ function renderBody(approach: string, reason: string, context: string | null): s
  * suffixes, matching the signal naming discipline.
  */
 export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordDeadEndResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Vault-identity write guard (context-integrity-gates, Unit J) on an
+  // unswitched machine; a store-only one checks the store identity.
+  assertLaneWrite(vault);
   const approach = sanitiseTextField(input.approach, {
     maxLen: APPROACH_MAX_LEN,
     singleLine: true,
@@ -108,7 +113,6 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
   if (!input.agent || input.agent.trim() === "") throw new Error("dead-end missing field: agent");
 
   const dir = deadEndsDir(vault);
-  mkdirSync(dir, { recursive: true });
   const date = isoDate(input.now);
   const createdAt = isoSecond(input.now);
 
@@ -134,7 +138,7 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
         approach,
         tags: ["brain", "brain/dead-end"],
       };
-      writeFrontmatterAtomic(allocation.path, metadata, renderBody(approach, reason, context), {
+      writeLanePage(vault, allocation.path, metadata, renderBody(approach, reason, context), {
         overwrite: false,
         existsErrorKind: "dead-end",
         vaultForRelativePath: vault,
@@ -178,10 +182,9 @@ function trimActive(
     .filter((entry) => readable === undefined || readable(vaultRelative(entry.path, vault)));
   if (overflow.length === 0) return [];
   const archiveDir = join(deadEndsDir(vault), "archive");
-  mkdirSync(archiveDir, { recursive: true });
   const archived: string[] = [];
   for (const entry of overflow) {
-    renameWithRetry(entry.path, join(archiveDir, `${entry.id}.md`));
+    moveLanePage(vault, entry.path, join(archiveDir, `${entry.id}.md`));
     archived.push(entry.id);
   }
   return archived;
@@ -203,17 +206,16 @@ function parseSections(body: string): { reason: string; context: string | null }
  */
 export function listDeadEnds(vault: string): ListDeadEndsResult {
   const dir = deadEndsDir(vault);
-  if (!existsSync(dir)) return { entries: [], warnings: [] };
-
   const entries: DeadEndEntry[] = [];
   const warnings: DeadEndParseWarning[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const path = join(dir, name);
     let metadata: FrontmatterMap;
     let body: string;
     try {
-      [metadata, body] = parseFrontmatterText(readFileSync(path, "utf8"));
+      const page = readLanePage(vault, path);
+      if (page === null) continue;
+      ({ frontmatter: metadata, body } = page);
     } catch (exc) {
       warnings.push({ path, message: `unparseable dead-end: ${(exc as Error).message ?? exc}` });
       continue;

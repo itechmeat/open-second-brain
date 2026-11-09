@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,8 @@ let ctx: { vault: string; configPath: string };
 
 beforeEach(async () => {
   vault = mkdtempSync(join(tmpdir(), "o2b-recall-fb-vault-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-recall-fb-cfg-"));
   const configPath = join(configHome, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${vault}\n`);

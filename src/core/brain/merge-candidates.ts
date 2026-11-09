@@ -18,12 +18,9 @@
  * ({@link isMergeResolved}).
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
 import { isMergeResolved, mergePointerLookup } from "./page-meta/page-id.ts";
-import { brainDirs } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { parsePreferenceMeta } from "./preference.ts";
 import { findSimilarPairs, tokenise } from "./similarity.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 
@@ -124,13 +121,11 @@ export function findMergeCandidates(
 }
 
 function readPreferences(vault: string): BrainPreference[] {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return [];
   const out: BrainPreference[] = [];
-  for (const f of readdirSync(dirs.preferences, { withFileTypes: true })) {
-    if (!f.isFile() || !f.name.endsWith(".md") || !f.name.startsWith("pref-")) continue;
+  for (const f of memoryFolderPages(vault, "preferences", { regularFilesOnly: true })) {
+    if (!f.name.endsWith(".md") || !f.name.startsWith("pref-")) continue;
     try {
-      out.push(parsePreference(join(dirs.preferences, f.name)));
+      out.push(parsePreferenceMeta(f.read()[0], f.path));
     } catch {
       // doctor reports corruption; the detector skips silently.
     }

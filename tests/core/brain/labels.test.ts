@@ -79,6 +79,8 @@ describe("assignNoteLabel / removeNoteLabel", () => {
 
   beforeEach(() => {
     vault = mkdtempSync(join(tmpdir(), "o2b-labels-"));
+    // An unswitched vault: its Brain/ tree is the legacy layout under test.
+    mkdirSync(join(vault, "Brain"), { recursive: true });
     mkdirSync(join(vault, "Notes"), { recursive: true });
     writeFileSync(
       join(vault, "Notes", "rollout.md"),

@@ -22,12 +22,19 @@
  * recompute counters.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { isPrivatePageFile, isPrivatePreference } from "../store/dual-write-records.ts";
+import { PREFERENCE_EVIDENCE_KIND, type EvidenceResult } from "../store/constants.ts";
+import {
+  isPrivatePageFile,
+  isPrivatePreference,
+  MERGED_FROM_FIELD,
+  preferenceEvidenceRecord,
+} from "../store/dual-write-records.ts";
+import { storeWrite } from "../store/store-write.ts";
 
 import { regenerateActiveQuiet } from "./active.ts";
+import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { guardEntityMerge, type GuardEntityLike } from "./truth/merge-guard.ts";
@@ -35,7 +42,13 @@ import { resolveAppendShardId } from "./ledger-shards.ts";
 import { appendLogEvent, logShardWikilink } from "./log.ts";
 import { brainDirs, preferencePath } from "./paths.ts";
 import { appendPrefAudit } from "./pref-audit.ts";
-import { moveToRetired, parsePreference, writePreference } from "./preference.ts";
+import {
+  loadPreference,
+  moveToRetired,
+  parsePreference,
+  preferencePresence,
+  writePreference,
+} from "./preference.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON, PREF_AUDIT_OP } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
@@ -104,33 +117,36 @@ export function mergePreferences(
   const keepPath = preferencePath(vault, keepSlug);
   const dropPath = preferencePath(vault, dropSlug);
 
-  if (!existsSync(keepPath)) {
-    if (existsSync(join(brainDirs(vault).retired, `ret-${keepSlug}.md`))) {
+  // The pages on an unswitched machine, the store's fold once switched.
+  const keepPresence = preferencePresence(vault, keepSlug);
+  if (keepPresence !== "active") {
+    if (keepPresence === "retired") {
       throw new BrainMergeError(
         "keep-not-found",
         `keep '${keepId}' is already retired; cannot merge into a retired pref`,
       );
     }
-    throw new BrainMergeError(
-      "keep-not-found",
-      `keep '${keepId}' not found under Brain/preferences/`,
-    );
+    throw new BrainMergeError("keep-not-found", `keep preference '${keepId}' not found`);
   }
-  if (!existsSync(dropPath)) {
-    if (existsSync(join(brainDirs(vault).retired, `ret-${dropSlug}.md`))) {
-      throw new BrainMergeError(
-        "drop-already-retired",
-        `drop '${dropId}' is already in Brain/retired/`,
-      );
+  const dropPresence = preferencePresence(vault, dropSlug);
+  if (dropPresence !== "active") {
+    if (dropPresence === "retired") {
+      throw new BrainMergeError("drop-already-retired", `drop '${dropId}' is already retired`);
     }
-    throw new BrainMergeError(
-      "drop-not-found",
-      `drop '${dropId}' not found under Brain/preferences/`,
-    );
+    throw new BrainMergeError("drop-not-found", `drop preference '${dropId}' not found`);
   }
 
-  const keep = parsePreference(keepPath);
-  const drop = parsePreference(dropPath);
+  // Once switched the fold is the only source: a preference gone since
+  // the presence check is not found, and no page path is read.
+  const storeOnly = preferencesStoreOnly(vault);
+  const load = (slug: string, path: string, code: "keep-not-found" | "drop-not-found") => {
+    const loaded = loadPreference(vault, slug);
+    if (loaded !== null) return loaded;
+    if (storeOnly) throw new BrainMergeError(code, `preference 'pref-${slug}' not found`);
+    return parsePreference(path);
+  };
+  const keep = load(keepSlug, keepPath, "keep-not-found");
+  const drop = load(dropSlug, dropPath, "drop-not-found");
 
   if (!isMergeableStatus(keep.status)) {
     throw new BrainMergeError(
@@ -203,7 +219,10 @@ export function mergePreferences(
     applied_sum,
     violated_sum,
     last_evidence_at,
-    retired_path: join(brainDirs(vault).retired, `ret-${dropSlug}.md`),
+    // Once switched no page is written: the retired record's id names it.
+    retired_path: storeOnly
+      ? `ret-${dropSlug}`
+      : join(brainDirs(vault).retired, `ret-${dropSlug}.md`),
   });
 
   if (dryRun) return plan;
@@ -237,6 +256,44 @@ export function mergePreferences(
     },
     { overwrite: true },
   );
+
+  // 1b. Once switched the fold derives the counters from evidence records
+  //     and ignores a counter written as a field, so the keep absorbs the
+  //     drop's counters as evidence: one evidence record per drop
+  //     evidence record, private when either side is.
+  if (storeOnly) {
+    const dropEntry = storePreferenceEntry(dropSlug);
+    const keepEntry = storePreferenceEntry(keepSlug);
+    // The merge's steps are separate store writes. A merge retried after
+    // a step past this one failed (the drop still active) must not copy
+    // the drop's evidence a second time: each copy names the record it
+    // copies, and a record the keep already holds a copy of is skipped.
+    const copied = new Set(
+      (keepEntry?.state.history ?? [])
+        .map((record) => record.body[MERGED_FROM_FIELD])
+        .filter((id): id is string => typeof id === "string"),
+    );
+    const evidence = (dropEntry?.state.history ?? []).filter(
+      (record) => record.kind === PREFERENCE_EVIDENCE_KIND && !copied.has(record.id),
+    );
+    if (evidence.length > 0) {
+      const pairPrivate = (keepEntry?.private ?? true) || (dropEntry?.private ?? true);
+      storeWrite(
+        () =>
+          evidence.map((record) =>
+            preferenceEvidenceRecord({
+              id: keep.id,
+              result: record.body["result"] as EvidenceResult,
+              artifact: typeof record.body["artifact"] === "string" ? record.body["artifact"] : "",
+              agent: opts.agentName ?? "merge",
+              private: pairPrivate,
+              mergedFrom: record.id,
+            }),
+          ),
+        { vault },
+      );
+    }
+  }
 
   // 2. Move drop to retired/ with merged-into reason. moveToRetired
   //    re-reads the source file, so the latest on-disk state is
@@ -278,7 +335,10 @@ export function mergePreferences(
         hash_after: keepHash,
         // The row names the drop too (`merged-in <drop>`): private when
         // either side is. The drop is already in `retired/` by now.
-        private: () => isPrivatePageFile(keepPath) || isPrivatePreference(vault, dropSlug),
+        private: () =>
+          (storeOnly
+            ? (storePreferenceEntry(keepSlug)?.private ?? true)
+            : isPrivatePageFile(keepPath)) || isPrivatePreference(vault, dropSlug),
       },
       { now },
     );
@@ -306,7 +366,9 @@ export function mergePreferences(
 
   // 4. Regenerate active.md so the operator sees the new state on
   //    their next session start.
-  regenerateActiveQuiet(vault, { now });
+  // The digest is a page of the legacy tree; a store-only machine renders
+  // it on demand (design D14 item 7).
+  if (!preferencesStoreOnly(vault)) regenerateActiveQuiet(vault, { now });
 
   return plan;
 }

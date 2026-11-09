@@ -142,7 +142,20 @@ export interface RequestIdentity {
 }
 
 export interface ServerContext {
+  /**
+   * The vault this server serves. On a server with no vault (design D14)
+   * reading it throws the uniform "this tool needs a vault" refusal, so a
+   * vault-adapter tool refuses at its first use of the vault and every
+   * other tool never notices. Read {@link contextVault} where no vault is
+   * an answer rather than a refusal.
+   */
   readonly vault: string;
+  /**
+   * The vault, or `null` when the server runs with none. Set by the live
+   * server; absent on a hand-built context, whose `vault` is then the
+   * answer.
+   */
+  readonly vaultOrNull?: string | null;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
   readonly capabilityReport?: ToolCapabilityReport;
@@ -304,4 +317,29 @@ export interface ToolDefinition {
  */
 export function contextReach(ctx: ServerContext): TransportReach {
   return resolvedTransportReach(ctx.reach);
+}
+
+/**
+ * The vault a context serves, or `null` when it serves none: for the tools
+ * that answer without a vault (`second_brain_status`), which must not trip
+ * the refusal reading `ctx.vault` raises there.
+ */
+export function contextVault(ctx: ServerContext): string | null {
+  return ctx.vaultOrNull !== undefined ? ctx.vaultOrNull : ctx.vault;
+}
+
+/**
+ * Stable error code of the refusal a vault-adapter tool gives on a server
+ * with no vault: the vault adapter's own code, one definition for both.
+ */
+export { VAULT_ADAPTER_REQUIRED_CODE as VAULT_REQUIRED_CODE } from "../core/vault-adapter/codes.ts";
+
+/** The refusal message of `tool` on a server with no vault. */
+export function vaultRequiredToolMessage(tool: string | undefined): string {
+  const subject = tool === undefined ? "this request" : `\`${tool}\``;
+  return (
+    `${subject} needs a vault, and this Open Second Brain server runs without one; ` +
+    "configure a vault (`o2b init --vault <path>`, or `vault:` in the machine config) " +
+    "and restart the server. The brain store tools work without a vault."
+  );
 }

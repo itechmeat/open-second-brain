@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { captureSessionLifecycleEvent } from "../../../src/core/brain/session-lifecycle.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 

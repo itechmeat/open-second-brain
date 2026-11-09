@@ -310,6 +310,7 @@ describe("executeHostBackup", () => {
   test("two backups inside one second produce two distinct files", () => {
     const home = tmpDir("osb-hb-exec-");
     const vault = tmpDir("osb-hb-vault-");
+    mkdirSync(join(vault, "Brain"), { recursive: true }); // a legacy tree: unswitched
     mkdirSync(join(home, ".claude"), { recursive: true });
     const target = join(home, ".claude", "settings.json");
     writeFileSync(target, '{"theme":"dark"}\n');
@@ -433,6 +434,7 @@ describe("executeHostBackup", () => {
   test("success appends exactly one receipt with actor, pid, before-hash, summary", () => {
     const home = tmpDir("osb-hb-rcpt-");
     const vault = tmpDir("osb-hb-vault6-");
+    mkdirSync(join(vault, "Brain"), { recursive: true }); // a legacy tree: unswitched
     mkdirSync(join(home, ".claude"), { recursive: true });
     const target = join(home, ".claude", "settings.json");
     const contents = '{"theme":"dark"}\n';

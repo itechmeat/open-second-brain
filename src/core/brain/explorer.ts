@@ -29,15 +29,14 @@
  * not, so the narrowing lives with the caller that writes bytes outward.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { deniedReservationKey, PREFERENCE_DENY_REASON, type PreferenceDenial } from "./export.ts";
-import { brainDirs } from "./paths.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
-import { parseFrontmatter } from "../vault.ts";
+import { memoryFolderPages, type MemoryFolder } from "./memory-pages.ts";
+import { parsePreferenceMeta, parseRetiredMeta } from "./preference.ts";
 import {
   BRAIN_PREFERENCE_STATUS,
   type BrainConfidence,
@@ -136,27 +135,26 @@ export interface CollectExplorerDataOptions {
  * guessed at.
  */
 export function collectExplorerDenials(vault: string): ReadonlyArray<PreferenceDenial> {
-  const dirs = brainDirs(vault);
   const denied: PreferenceDenial[] = [];
-  const scan = (dir: string, prefix: string): void => {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+  const scan = (folder: MemoryFolder, prefix: string): void => {
+    for (const entry of memoryFolderPages(vault, folder, { regularFilesOnly: true })) {
+      if (!entry.name.endsWith(".md")) continue;
       if (!entry.name.startsWith(prefix)) continue;
-      const path = join(dir, entry.name);
       // `parseFrontmatter` cannot throw; a file it cannot read yields an
       // empty map, which denies nothing - and the parse-failure refusal
       // has already stopped the export before this list is read.
-      const [meta] = parseFrontmatter(path);
-      const key = deniedReservationKey(meta);
+      const [meta] = entry.read();
+      // A record the store holds in `private` is denied whatever its
+      // fields say (`store-record-visibility.ts`): fail closed.
+      const key = deniedReservationKey(meta) ?? (entry.private ? "visibility" : null);
       if (key === null) continue;
       const id = meta["id"];
       if (typeof id !== "string") continue;
       denied.push({ id, reason: PREFERENCE_DENY_REASON, denied_by: key });
     }
   };
-  scan(dirs.preferences, "pref-");
-  scan(dirs.retired, "ret-");
+  scan("preferences", "pref-");
+  scan("retired", "ret-");
   // Sorted like the shared collectors' denial lists: the report rides
   // byte-deterministic surfaces (the stderr notice), and the explorer's
   // own output ordering is stable by id.
@@ -168,7 +166,6 @@ export function collectExplorerData(
   vault: string,
   opts: CollectExplorerDataOptions = {},
 ): ExplorerGraph {
-  const dirs = brainDirs(vault);
   // Build the backlink index first so node factories can stamp the
   // final count in one pass — avoids the prior write-then-overwrite
   // shape that left a transient `backlink_count: 0` on every node.
@@ -185,35 +182,29 @@ export function collectExplorerData(
     });
   };
 
-  if (existsSync(dirs.preferences)) {
-    for (const entry of readdirSync(dirs.preferences, {
-      withFileTypes: true,
-    })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      if (!entry.name.startsWith("pref-")) continue;
-      const path = join(dirs.preferences, entry.name);
-      try {
-        const pref = parsePreference(path);
-        nodes.push(nodeFromPreference(pref, countFor(pref.id)));
-        knownIds.add(pref.id);
-      } catch (err) {
-        recordFailure(path, err);
-      }
+  for (const entry of memoryFolderPages(vault, "preferences", { regularFilesOnly: true })) {
+    if (!entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith("pref-")) continue;
+    const path = entry.path;
+    try {
+      const pref = parsePreferenceMeta(entry.read()[0], path);
+      nodes.push(nodeFromPreference(pref, countFor(pref.id)));
+      knownIds.add(pref.id);
+    } catch (err) {
+      recordFailure(path, err);
     }
   }
 
-  if (existsSync(dirs.retired)) {
-    for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      if (!entry.name.startsWith("ret-")) continue;
-      const path = join(dirs.retired, entry.name);
-      try {
-        const ret = parseRetired(path);
-        nodes.push(nodeFromRetired(ret, countFor(ret.id)));
-        knownIds.add(ret.id);
-      } catch (err) {
-        recordFailure(path, err);
-      }
+  for (const entry of memoryFolderPages(vault, "retired", { regularFilesOnly: true })) {
+    if (!entry.name.endsWith(".md")) continue;
+    if (!entry.name.startsWith("ret-")) continue;
+    const path = entry.path;
+    try {
+      const ret = parseRetiredMeta(entry.read()[0], path);
+      nodes.push(nodeFromRetired(ret, countFor(ret.id)));
+      knownIds.add(ret.id);
+    } catch (err) {
+      recordFailure(path, err);
     }
   }
   parseFailures.sort((a, b) => a.path.localeCompare(b.path));

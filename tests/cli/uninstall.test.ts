@@ -297,8 +297,10 @@ describe("uninstall --target vault resolution", () => {
     const configured = join(tmp, "vault-configured");
     const envVault = join(tmp, "vault-env");
     const home = join(tmp, "home");
-    mkdirSync(configured, { recursive: true });
-    mkdirSync(envVault, { recursive: true });
+    // Legacy vaults: the install manifest lives in the vault. A vault with
+    // no `Brain/` is store-only and keeps it device-local instead.
+    mkdirSync(join(configured, "Brain"), { recursive: true });
+    mkdirSync(join(envVault, "Brain"), { recursive: true });
     mkdirSync(home, { recursive: true });
     const config = join(tmp, "config.yaml");
     writeFileSync(config, `vault: "${configured}"\n`);

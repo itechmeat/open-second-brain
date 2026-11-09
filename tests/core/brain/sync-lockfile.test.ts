@@ -343,6 +343,9 @@ describe("every module that takes a lock is under a scanned root", () => {
     ["core/brain/session-mining-surveys.ts", ".open-second-brain"],
     ["core/brain/sessions/discover.ts", ".open-second-brain"],
     ["core/brain/skill-proposals.ts", "Brain"],
+    // the lane page store locks a record-lane page on an unswitched
+    // machine (task 2.10 WP6); its pages live under Brain/
+    ["core/store/lane-pages.ts", "Brain"],
   ]);
 
   /** Every `src/` file that calls the lock primitive, vault-relative to `src/`. */

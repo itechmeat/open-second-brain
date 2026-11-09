@@ -29,6 +29,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { laneVault } from "./lane-vault.ts";
 
 function pageJson(page: ObligationPage): Record<string, unknown> {
   return {
@@ -71,6 +72,8 @@ function toolBrainObligation(
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
+  // A record-lane tool works with no vault: its pages are store records then.
+  const vault = laneVault(ctx);
   // Every operation answers at the caller's reach: a page the caller may
   // not read is listed, shown, completed and removed exactly as an absent
   // one would be, so neither its text nor its existence crosses, and it
@@ -80,7 +83,7 @@ function toolBrainObligation(
     readable !== undefined && !readable(obligationRel(slug));
   try {
     if (operation === "list") {
-      const items = listObligations(ctx.vault, { overdueOnly: args["overdue"] === true });
+      const items = listObligations(vault, { overdueOnly: args["overdue"] === true });
       // A listed slug is the file's own stem, which need not be slug-shaped,
       // so its page is asked about as it is named on disk.
       const kept =
@@ -95,7 +98,7 @@ function toolBrainObligation(
       // `addObligation` refuses a taken slug and never overwrites it; the
       // refusal is the one answer that cannot match an absent page's,
       // because creating the page would replace the withheld one.
-      const page = addObligation(ctx.vault, {
+      const page = addObligation(vault, {
         title,
         cadence,
         agent: resolveAgentName(ctx.configPath ?? undefined),
@@ -112,17 +115,17 @@ function toolBrainObligation(
       }
     }
     if (operation === "show") {
-      const page = showObligation(ctx.vault, slug);
+      const page = showObligation(vault, slug);
       if (page === null) return { operation, slug, present: false };
       return { operation, present: true, obligation: pageJson(page) };
     }
     if (operation === "done") {
       const date = coerceStr(args, "date", false);
-      const page = completeObligation(ctx.vault, { slug, ...(date ? { date } : {}) });
+      const page = completeObligation(vault, { slug, ...(date ? { date } : {}) });
       return { operation, obligation: pageJson(page) };
     }
     if (operation === "remove") {
-      const removed = removeObligation(ctx.vault, slug);
+      const removed = removeObligation(vault, slug);
       // The archive name steps past every name already taken in archive/,
       // readable or not, so below local reach it is left out of the answer.
       if (readable !== undefined) return { operation, slug: removed.slug };
@@ -224,7 +227,7 @@ export const CALENDAR_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_obligation",
     kind: "write",
     description:
-      "Recurring obligations under Brain/obligations/ with a deterministic cadence-driven next-due date: add, done (advances next_due one interval), list (optionally overdue-only), show, remove. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days.",
+      "Recurring obligations with a deterministic cadence-driven next-due date: add, done (advances next_due one interval), list (optionally overdue-only), show, remove. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days.",
     inputSchema: {
       type: "object",
       properties: {

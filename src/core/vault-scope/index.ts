@@ -43,6 +43,7 @@ import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from "no
 import { join, sep } from "node:path";
 
 import { loadBrainConfig } from "../brain/policy.ts";
+import { brainSettingsFromStore } from "../brain/policy/load.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { toPosix } from "../path-safety.ts";
 import {
@@ -276,12 +277,17 @@ const DEFAULT_SCOPE: VaultScope = buildScope(DEFAULT_VAULT_IGNORE_PATHS, null, "
  * every vault.
  *
  * A missing file is not an error here — existing vaults may predate
- * `_brain.yaml`. A present-but-invalid config is different: fail closed
+ * `_brain.yaml`; on a store-only machine the settings come from the store. A present-but-invalid config is different: fail closed
  * so walkers do not silently index or scan paths the operator meant to
  * exclude.
  */
-export function resolveVaultScope(vault: string): VaultScope {
-  if (!existsSync(brainConfigPath(vault))) return DEFAULT_SCOPE;
+export function resolveVaultScope(vault: string | null): VaultScope {
+  // On a store-only machine the `vault:` block is a shared setting
+  // (design D14 item 3); the store reader answers the defaults when no
+  // record sets it.
+  if (vault !== null && !brainSettingsFromStore(vault) && !existsSync(brainConfigPath(vault))) {
+    return DEFAULT_SCOPE;
+  }
   const cfg = loadBrainConfig(vault);
   const ignore = cfg.vault?.ignore_paths;
   const include = cfg.vault?.include_paths ?? null;

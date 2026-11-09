@@ -25,7 +25,9 @@ import { join, posix, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { realpathInsideVault } from "../path-safety.ts";
-import { parseFrontmatter } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatter, parseFrontmatterText } from "../vault.ts";
+import { rewriteStorePreference, storePreferencePages } from "./preference-page-write.ts";
+import { preferencesStoreOnly } from "./preference-store.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { matchScope, mayDescend, resolveVaultScope } from "../vault-scope/index.ts";
 import { pathCovers, type VaultScopeRules } from "../vault-scope/defaults.ts";
@@ -516,7 +518,13 @@ export function retargetWikilinks(
     failed: Object.freeze([]),
     withheld: 0,
   });
-  if (!existsSync(abs)) return empty;
+  // Store-only (task 2.10): the legacy `Brain/` tree is read-only to this
+  // machine (design D11a); the preferences the store's fold holds are
+  // rewritten instead, each as the fields the rewrite changes.
+  // A counting pass reads the same side the applying pass writes, so its
+  // blast radius matches; only the writes are gated on `apply`.
+  const storeOnly = preferencesStoreOnly(vault);
+  if (!existsSync(abs) && !storeOnly) return empty;
 
   const rules = resolveVaultScope(vault).rules;
   const neverRewrite = opts.neverRewrite ?? [];
@@ -528,7 +536,44 @@ export function retargetWikilinks(
   const failed: WikilinkRewriteFailure[] = [];
   let withheld = 0;
 
-  for (const file of markdownFilesUnder(vault, abs, rules)) {
+  const rewriteText = (raw: string): string | null => {
+    const segments = segmentCode(raw);
+    const prose = segments.filter((segment) => !segment.code);
+    if (!ordered.some((retarget) => prose.some((s) => mentionsIn(s.text, retarget.from)))) {
+      return null;
+    }
+    return segments
+      .map((segment) => (segment.code ? segment.text : ordered.reduce(rewriteOne, segment.text)))
+      .join("");
+  };
+  const storePages = storeOnly
+    ? storePreferencePages(vault).filter((page) => root === "" || pathCovers(root, page.rel))
+    : [];
+  for (const page of storePages) {
+    if (readable !== undefined && !readable(page.rel)) {
+      withheld += 1;
+      continue;
+    }
+    files.push(page.rel);
+    const raw = formatFrontmatter(page.meta, page.body);
+    const next = rewriteText(raw);
+    if (next === null) continue;
+    matched.push(page.rel);
+    if (!apply) continue;
+    if (neverRewrite.some((prefix) => pathCovers(prefix, page.rel)) || next === raw) continue;
+    try {
+      const [nextMeta, nextBody] = parseFrontmatterText(next);
+      if (rewriteStorePreference(vault, page, nextMeta, undefined, nextBody)) {
+        rewritten.push(page.rel);
+      }
+    } catch (err) {
+      failed.push({ path: page.rel, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  for (const file of existsSync(abs) ? markdownFilesUnder(vault, abs, rules) : []) {
+    // The legacy tree is read-only once switched (see above).
+    if (storeOnly && pathCovers(BRAIN_ROOT_REL, file.rel)) continue;
     // Asked BEFORE the read, so a file the caller may not read contributes
     // nothing - not its bytes, not a match, not a rewrite, not its name.
     if (readable !== undefined && !readable(file.rel)) {

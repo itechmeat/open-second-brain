@@ -18,11 +18,10 @@
  * operator needs to see in the list.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../../vault.ts";
 import { compareStable } from "./scan.ts";
+import { lanePageExists, listLaneFiles, parseLanePage } from "../../store/lane-pages.ts";
 
 /** Where the commit miner puts its drafts, relative to the vault root. */
 export const DECISION_CANDIDATES_DIR = ["Brain", "decisions", "candidates"] as const;
@@ -71,13 +70,12 @@ export function listRepoDecisionCandidates(
   repoKey: string,
 ): ReadonlyArray<DecisionCandidateFact> {
   const dir = join(vault, ...DECISION_CANDIDATES_DIR);
-  if (!existsSync(dir)) return Object.freeze([]);
+  if (!lanePageExists(vault, dir)) return Object.freeze([]);
 
   const facts: DecisionCandidateFact[] = [];
-  for (const name of readdirSync(dir).toSorted(compareStable)) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir).toSorted(compareStable)) {
     const path = join(dir, name);
-    const [metadata, body] = parseFrontmatter(path);
+    const [metadata, body] = parseLanePage(vault, path);
     if (stringField(metadata["repo_key"]) !== repoKey) continue;
     const stem = name.slice(0, -".md".length);
     facts.push(

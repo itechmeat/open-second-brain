@@ -37,7 +37,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import lockfile from "proper-lockfile";
@@ -45,16 +45,24 @@ import lockfile from "proper-lockfile";
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatterText, SLUG_MAX_LEN, slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { decisionsDir, decisionPath } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { recordDecision } from "./record.ts";
 import { appendDecisionChangeReceipt, DECISION_CHANGE_REASON } from "./receipts.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  readLaneFile,
+  readLaneText,
+  writeLaneText,
+  lanePagesInStore,
+  withLaneLock,
+} from "../../store/lane-pages.ts";
 
 // ----- Vocabulary -----------------------------------------------------------
 
@@ -397,7 +405,7 @@ function parseOpenRecord(vault: string, fileName: string): OpenDecisionRecord | 
   const path = join(decisionsDir(vault), fileName);
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readLaneFile(vault, path);
   } catch (err) {
     throw new OpenDecisionFieldError(
       path,
@@ -520,10 +528,10 @@ export function listOpenDecisions(
   opts: ListOpenDecisionsOptions = {},
 ): ListOpenDecisionsResult {
   const dir = decisionsDir(vault);
-  if (!existsSync(dir)) return { records: [], unreadable: [] };
+  if (!lanePageExists(vault, dir)) return { records: [], unreadable: [] };
   const records: OpenDecisionRecord[] = [];
   const unreadable: Array<{ path: string; reason: string }> = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(OPEN_FILE_EXT) || !name.startsWith(OPEN_FILE_PREFIX)) continue;
     const path = join(dir, name);
     if (opts.readable !== undefined && !opts.readable(openDecisionsRel(stripExt(name)))) continue;
@@ -572,6 +580,9 @@ export function showOpenDecision(
  */
 function withOpenDirLock<T>(vault: string, body: () => T): T {
   const dir = decisionsDir(vault);
+  // A store-only machine holds the same lock device-locally: no lock file
+  // and no decisions directory land in the vault.
+  if (lanePagesInStore(vault)) return withLaneLock(vault, dir, body);
   mkdirSync(dir, { recursive: true });
   const release = lockfile.lockSync(dir, { stale: OPEN_LOCK_STALE_MS, realpath: false });
   try {
@@ -593,7 +604,7 @@ function withOpenDirLock<T>(vault: string, body: () => T): T {
  */
 export function openDecision(vault: string, input: OpenDecisionInput): OpenDecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const title = requireTextField(input.title, "title", TITLE_MAX_LEN);
   const question = optionalTextField(input.question, "question", BODY_MAX_LEN);
   if (!question) throw new OpenDecisionError("open decision: question is required");
@@ -624,7 +635,7 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
     const slug = slugify(title);
     let id = `${OPEN_FILE_PREFIX}${slug}`;
     let suffix = 2;
-    while (existsSync(join(dir, `${id}${OPEN_FILE_EXT}`))) {
+    while (lanePageExists(vault, join(dir, `${id}${OPEN_FILE_EXT}`))) {
       id = `${OPEN_FILE_PREFIX}${slug}-${suffix}`;
       suffix += 1;
     }
@@ -647,20 +658,24 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
       agent,
       path: join(dir, `${id}${OPEN_FILE_EXT}`),
     });
-    atomicWriteFileSync(record.path, renderRecord(record));
+    writeLaneText(vault, record.path, renderRecord(record));
 
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(now),
-        eventType: BRAIN_LOG_EVENT_KIND.decisionOpen,
-        agent,
-        body: {
-          open: `[[${record.id}]]`,
-          title,
-          options: String(options.length),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(now),
+          eventType: BRAIN_LOG_EVENT_KIND.decisionOpen,
           agent,
+          body: {
+            open: `[[${record.id}]]`,
+            title,
+            options: String(options.length),
+            agent,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch {
       // The record file is authoritative; the timeline mirror is best-effort.
     }
@@ -812,8 +827,8 @@ function resolveMintTarget(vault: string, record: OpenDecisionRecord): ResolveMi
   let suffix = 0;
   for (;;) {
     const path = decisionPath(vault, slug);
-    if (!existsSync(path)) return { title, slug, ours: false };
-    if (readFileSync(path, "utf8").includes(reference)) return { title, slug, ours: true };
+    if (!lanePageExists(vault, path)) return { title, slug, ours: false };
+    if ((readLaneText(vault, path) ?? "").includes(reference)) return { title, slug, ours: true };
     title = sanitiseMintTitle(derivedMintTitle(sanitised, record.id, suffix));
     slug = slugify(title);
     suffix = suffix === 0 ? 2 : suffix + 1;
@@ -839,7 +854,7 @@ export function resolveOpenDecision(
   input: ResolveOpenDecisionInput,
 ): { decision: string } {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const choice = requireTextField(input.choice, "choice", OPTION_MAX_LEN);
   return withOpenDirLock(vault, () => {
     const record = requireOpenRecord(vault, id);
@@ -893,20 +908,24 @@ export function resolveOpenDecision(
       choice,
       decision: `[[${decisionId}]]`,
     });
-    atomicWriteFileSync(record.path, renderRecord(stamped));
+    writeLaneText(vault, record.path, renderRecord(stamped));
 
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(now),
-        eventType: BRAIN_LOG_EVENT_KIND.decisionResolved,
-        agent: actor,
-        body: {
-          open: `[[${record.id}]]`,
-          decision: `[[${decisionId}]]`,
-          choice,
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(now),
+          eventType: BRAIN_LOG_EVENT_KIND.decisionResolved,
           agent: actor,
+          body: {
+            open: `[[${record.id}]]`,
+            decision: `[[${decisionId}]]`,
+            choice,
+            agent: actor,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch {
       // The record file is authoritative; the timeline mirror is best-effort.
     }
@@ -947,7 +966,7 @@ export function discardOpenDecision(
   input: DiscardOpenDecisionInput,
 ): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const reason = requireTextField(input.reason, "reason", REASON_MAX_LEN);
   withOpenDirLock(vault, () => {
     const record = requireOpenRecord(vault, id);
@@ -964,19 +983,23 @@ export function discardOpenDecision(
       discardedAt: isoSecond(now),
       discardReason: reason,
     });
-    atomicWriteFileSync(record.path, renderRecord(stamped));
+    writeLaneText(vault, record.path, renderRecord(stamped));
 
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(now),
-        eventType: BRAIN_LOG_EVENT_KIND.decisionDiscarded,
-        agent: actor,
-        body: {
-          open: `[[${record.id}]]`,
-          reason,
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(now),
+          eventType: BRAIN_LOG_EVENT_KIND.decisionDiscarded,
           agent: actor,
+          body: {
+            open: `[[${record.id}]]`,
+            reason,
+            agent: actor,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch {
       // The record file is authoritative; the timeline mirror is best-effort.
     }

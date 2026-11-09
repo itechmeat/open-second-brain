@@ -47,6 +47,7 @@ import {
   type DerivedArtifact,
 } from "../derived-artifact.ts";
 import type { EntityLexiconHandle } from "./canonical.ts";
+import { laneEntryClockMs, lanePagesInStore, readLaneText } from "../../store/lane-pages.ts";
 
 /** Schema tag of the lexicon payload shape. */
 export const ENTITY_LEXICON_SCHEMA_VERSION = "o2b.entity-lexicon.v1";
@@ -401,11 +402,20 @@ export function __clearEntityLexiconCache(): void {
 export function resolveEntityLexicon(vault: string): EntityLexiconHandle | null {
   const root = resolve(vault);
   let key = "absent";
-  try {
-    const st = statSync(join(root, ENTITY_LEXICON_ARTIFACT_REL), { bigint: true });
-    key = `${st.mtimeNs}:${st.size}`;
-  } catch {
-    key = "absent";
+  if (lanePagesInStore(root)) {
+    // A store-only machine: the artifact is a lane record, keyed by that
+    // record (its clock and size), as the file is keyed by its own mtime
+    // and size: an unrelated store write must not force a corpus re-read.
+    const artifact = join(root, ENTITY_LEXICON_ARTIFACT_REL);
+    const text = readLaneText(root, artifact);
+    if (text !== null) key = `store:${laneEntryClockMs(root, artifact) ?? "?"}:${text.length}`;
+  } else {
+    try {
+      const st = statSync(join(root, ENTITY_LEXICON_ARTIFACT_REL), { bigint: true });
+      key = `${st.mtimeNs}:${st.size}`;
+    } catch {
+      key = "absent";
+    }
   }
   const cached = RESOLVE_CACHE.get(root);
   if (cached !== undefined && cached.key === key) return cached.handle;

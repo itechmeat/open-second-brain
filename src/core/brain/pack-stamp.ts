@@ -55,7 +55,9 @@ import { peekCorpusGenerationSync } from "../search/store.ts";
 import { defaultConfigPath } from "../config.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import { loadIntegrityConfigSafe } from "./policy.ts";
+import type { MemoryPage } from "./memory-pages.ts";
 import { listPreferenceFiles } from "./preferences-collect.ts";
+import { formatFrontmatter } from "../vault.ts";
 
 /**
  * The stamp's field names. Caller-owned by `stamp.ts`'s contract, so
@@ -107,7 +109,7 @@ function brainTreeToken(vault: string): string {
   const lines: string[] = [];
   for (const dir of [dirs.preferences, dirs.retired]) {
     for (const file of listPreferenceFiles(dir)) {
-      lines.push(digestLine(vault, file.path));
+      lines.push(file.page === undefined ? digestLine(vault, file.path) : storedLine(file.page));
     }
   }
   // The config the pack reads. Always digested, present or not: an
@@ -118,6 +120,17 @@ function brainTreeToken(vault: string): string {
     .update(lines.join("\n"))
     .digest("hex")
     .slice(0, BRAIN_TREE_DIGEST_CHARS);
+}
+
+/**
+ * One digested line for a page the store's fold rebuilt (a store-only
+ * machine, task 2.10): there is no file to stat, so the line carries the
+ * page's content digest, which moves whenever a record changes it.
+ */
+function storedLine(page: MemoryPage): string {
+  const [meta, body] = page.read();
+  const content = createHash("sha256").update(formatFrontmatter(meta, body)).digest("hex");
+  return [page.rel, "stored", content].join(DIGEST_FIELD_SEP);
 }
 
 /**

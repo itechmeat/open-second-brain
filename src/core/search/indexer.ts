@@ -431,7 +431,9 @@ function readUtf8(absPath: string): string {
  * reindex was starting up - recreated the vault directory, filled it with
  * an empty index and reported "added: 0 files" with exit 0.
  */
-function assertVaultDirectory(vault: string): void {
+function assertVaultDirectory(vault: string | null): void {
+  // No vault: the index holds the brain store only, and there is nothing to check.
+  if (vault === null) return;
   let isDir = false;
   try {
     isDir = statSync(vault).isDirectory();
@@ -2272,7 +2274,11 @@ export async function indexCheck(
 
   let vaultReadable = false;
   try {
-    if (statSync(config.vault).isDirectory()) {
+    // No vault (design D14): the index holds the brain store only, which
+    // the store checks report on; there is no vault to read.
+    if (config.vault === null) {
+      vaultReadable = true;
+    } else if (statSync(config.vault).isDirectory()) {
       vaultReadable = true;
     } else {
       fatal.push(`vault path exists but is not a directory: ${config.vault}`);

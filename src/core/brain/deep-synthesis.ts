@@ -14,6 +14,7 @@
  * (Kernel B) via {@link synthesisCandidates}.
  */
 
+import { requireVaultAdapter } from "../vault-adapter/index.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -366,6 +367,8 @@ export async function deepSynthesis(
   topic: string,
   opts: DeepSynthesisOptions,
 ): Promise<DeepSynthesisReport> {
+  // A dossier over vault notes: a vault-adapter feature (design D14 item 8).
+  const vault = requireVaultAdapter(config.vault, "deep synthesis");
   const limit = opts.limit ?? 30;
   const staleAgeDays = opts.staleAgeDays ?? 90;
   // Fetch raw CHUNK hits well past the note limit: one long document
@@ -412,7 +415,7 @@ export async function deepSynthesis(
   // produce byte-identical reports.
   let guardEntities: ReadonlyArray<ContaminationEntityLike> = [];
   try {
-    guardEntities = buildEntityIndex(config.vault).entities;
+    guardEntities = buildEntityIndex(vault).entities;
   } catch {
     guardEntities = [];
   }
@@ -477,7 +480,7 @@ export async function deepSynthesis(
     // path that cannot be stat'ed is `unreadable` in exactly its sense.
     // The relation edges collected above are kept, as they were before,
     // because they came from the search index rather than from disk.
-    const ageMs = fileAgeMs(join(config.vault, note.path), opts.now.getTime());
+    const ageMs = fileAgeMs(join(vault, note.path), opts.now.getTime());
     if (ageMs === null) {
       excludedFindings.push(Object.freeze({ path: note.path, reason: "unreadable" }));
       continue;
@@ -505,7 +508,7 @@ export async function deepSynthesis(
     // than dropping it silently.
     let content: string;
     try {
-      content = readFileSync(join(config.vault, note.path), "utf8");
+      content = readFileSync(join(vault, note.path), "utf8");
     } catch {
       continue;
     }
@@ -539,7 +542,7 @@ export async function deepSynthesis(
           continue;
         }
         try {
-          const text = readFileSync(join(config.vault, rel), "utf8");
+          const text = readFileSync(join(vault, rel), "utf8");
           citedContentCache.set(rel, text);
           sourceTexts.push(text);
         } catch {

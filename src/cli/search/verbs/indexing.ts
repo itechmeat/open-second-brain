@@ -435,7 +435,8 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     // database was abandoned and never swapped in, so this run left the
     // live index exactly as it found it - which is a rebuild that did not
     // happen, whoever asked for it to stop.
-    if (selfHeal !== undefined) {
+    // A self-heal run is a vault's maintenance record; none without one.
+    if (selfHeal !== undefined && cfg.vault !== null) {
       recordSelfHealOutcome(
         cfg.vault,
         SELF_HEAL_REINDEX_OUTCOME.failed,
@@ -451,7 +452,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   } finally {
     interrupt.release();
   }
-  if (selfHeal !== undefined) {
+  if (selfHeal !== undefined && cfg.vault !== null) {
     recordSelfHealOutcome(
       cfg.vault,
       SELF_HEAL_REINDEX_OUTCOME.completed,
@@ -608,7 +609,10 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
 
 function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string {
   const lines: string[] = [];
-  lines.push(`indexing vault: ${cfg.vault}`);
+  // With no vault the index holds the brain store's records only.
+  lines.push(
+    cfg.vault === null ? "indexing the brain store (no vault)" : `indexing vault: ${cfg.vault}`,
+  );
   lines.push(`  added:    ${stats.added} files, ${stats.chunksTotal} chunks`);
   lines.push(`  updated:  ${stats.updated} files`);
   lines.push(`  unchanged: ${stats.unchanged} files`);

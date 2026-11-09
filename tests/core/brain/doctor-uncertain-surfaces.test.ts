@@ -27,6 +27,10 @@ import {
   resetVaultIdentityPins,
   writeVaultIdentity,
 } from "../../../src/core/brain/vault-identity.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

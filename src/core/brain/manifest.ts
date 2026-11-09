@@ -19,11 +19,12 @@ import { pathCovers } from "../vault-scope/defaults.ts";
 import {
   BRAIN_ROOT_REL,
   BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
-  brainDirs,
+  snapshotsDir,
   validateRunId,
 } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { isBrainSnapshotReason, type BrainSnapshotReason } from "./types.ts";
+import type { WriteLane } from "./freeze-marker.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
@@ -429,7 +430,7 @@ export function manifestSidecarPath(vault: string, runId: string): string {
   // could read a manifest outside the snapshots directory wherever a
   // caller passed the id through before its own validation ran.
   const id = validateRunId(runId);
-  return join(brainDirs(vault).snapshots, `${id}.manifest.json`);
+  return join(snapshotsDir(vault), `${id}.manifest.json`);
 }
 
 /**
@@ -583,9 +584,15 @@ function isNonNegativeInteger(value: unknown): boolean {
  * Write the sidecar manifest atomically. Pretty-printed with two-space
  * indent so a manual `cat` or `git diff` stays readable.
  */
-export function writeManifestSidecar(vault: string, runId: string, manifest: BrainManifest): void {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+export function writeManifestSidecar(
+  vault: string,
+  runId: string,
+  manifest: BrainManifest,
+  lane?: WriteLane,
+): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J), on the
+  // lane of the snapshot the sidecar describes.
+  assertVaultIdentityForWrite(vault, undefined, lane);
   const path = manifestSidecarPath(vault, runId);
   atomicWriteFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
 }

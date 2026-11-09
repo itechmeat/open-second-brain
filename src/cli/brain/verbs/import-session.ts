@@ -632,20 +632,24 @@ function logImports(
 ): void {
   for (const f of files) {
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.importSession,
-        body: {
-          agent,
-          file: `[[${f.file}]]`,
-          format: f.format,
-          turns_scanned: String(f.turns_scanned),
-          signals_created: String(f.signals_created),
-          signals_deduped: String(f.signals_deduped),
-          tool_replays: String(f.tool_replays),
-          malformed: String(f.malformed),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(new Date()),
+          eventType: BRAIN_LOG_EVENT_KIND.importSession,
+          body: {
+            agent,
+            file: `[[${f.file}]]`,
+            format: f.format,
+            turns_scanned: String(f.turns_scanned),
+            signals_created: String(f.signals_created),
+            signals_deduped: String(f.signals_deduped),
+            tool_replays: String(f.tool_replays),
+            malformed: String(f.malformed),
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append import-session log failed: ${(err as Error).message}\n`,

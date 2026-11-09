@@ -22,6 +22,10 @@ import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { parseLogDay } from "../../../src/core/brain/log.ts";
 import { buildToolTable, findTool } from "../../../src/mcp/tools.ts";
 import type { ServerContext } from "../../../src/mcp/tool-contract.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;
@@ -199,4 +203,21 @@ test("unconfigured setups keep the previous result shape (no mirror key)", async
   })) as Record<string, unknown>;
   expect("mirror" in res).toBe(false);
   expect("mirror_reason" in res).toBe(false);
+});
+
+/**
+ * Once the shared namespace is store-only on this machine, a store write
+ * lands in this machine's own store, never in the shared vault: the
+ * mirror refuses up front instead of duplicating the origin record there
+ * and reporting `ok`.
+ */
+test("a shared vault with no legacy tree is a misconfigured mirror, and nothing is written", () => {
+  rmSync(join(shared, "Brain"), { recursive: true, force: true });
+  const signal = mirrorSignal(shared, vault, SIGNAL_INPUT);
+  expect(signal.outcome).toBe(MIRROR_OUTCOME.misconfigured);
+  expect(signal.reason).toContain("store-only");
+  expect(mirrorNote(shared, vault, { text: "hello", agent: "a" }).outcome).toBe(
+    MIRROR_OUTCOME.misconfigured,
+  );
+  expect(readdirSync(shared)).toEqual([]);
 });

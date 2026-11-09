@@ -35,13 +35,20 @@ import {
 } from "../ledger-shards.ts";
 import type { LedgerShardGrammar } from "../ledger-shards.ts";
 import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isFullSha } from "./reader.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { dualWrite } from "../../store/dual-write.ts";
+import { processDirsEnv } from "../../platform-dirs.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
+import { dualWrite, type DualWriteRecord } from "../../store/dual-write.ts";
+import { withLocalLock } from "../../store/local-lock.ts";
+import { readLedgerRows, readLedgerRowsByDevice } from "../../store/read/ledger-rows.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { storesStateDir } from "../../store/store-paths.ts";
+import { storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
 export interface GitCommitRecord {
@@ -152,7 +159,32 @@ function commitsPath(vault: string, repoKey: string): string {
 }
 
 function statePath(vault: string, repoKey: string): string {
+  // The watermark is this machine's own ingest progress, recomputable by a
+  // full re-scan (design D14 item 11): a store-only machine keeps it in
+  // its device-local state, scoped by the store (`machineStatePath`), so
+  // two stores ingesting one checkout never share it.
+  if (isStoreOnly({ vault })) return join(gitStateLocalDir(vault), repoKey, STATE_FILE_NAME);
   return join(gitStoreDir(vault, repoKey), STATE_FILE_NAME);
+}
+
+/** Device-local directory of the store-only ingest watermarks, one folder per repository. */
+function gitStateLocalDir(vault: string): string {
+  return machineStatePath(vault, "Brain", "projects", "git");
+}
+
+/** Where this machine keeps the ingest watermark of `repoKey` (for the ingest's rescan clear). */
+export function gitStatePath(vault: string, repoKey: string): string {
+  return statePath(vault, repoKey);
+}
+
+/**
+ * Where the digest projection of `repoKey` is written: the repository's
+ * store directory under the vault, or the device-local state once
+ * switched (no byte under `Brain/`).
+ */
+export function gitDigestPath(vault: string, repoKey: string): string {
+  if (isStoreOnly({ vault })) return join(gitStateLocalDir(vault), repoKey, DIGEST_FILE_NAME);
+  return join(gitStoreDir(vault, repoKey), DIGEST_FILE_NAME);
 }
 
 function serializeRecord(record: GitRecord): string {
@@ -177,12 +209,15 @@ function serializeRecord(record: GitRecord): string {
   });
 }
 
-function parseRecord(line: string): GitRecord | null {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(line);
-  } catch {
-    return null;
+/** One record: a legacy JSONL line, or the `record` of a store row. */
+function parseRecord(line: unknown): GitRecord | null {
+  let raw: unknown = line;
+  if (typeof line === "string") {
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      return null;
+    }
   }
   if (typeof raw !== "object" || raw === null) return null;
   const rec = raw as Record<string, unknown>;
@@ -243,19 +278,77 @@ function recordTime(record: GitRecord): number {
  * would list twice and a `limit` would count the copies.
  */
 function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
+  // A store-only machine (design D14 item 1) reads this repository's rows
+  // of the `git-commits` ledger. The legacy merge interleaves the device
+  // shards by record time, each shard in its own file order (a record with
+  // no readable time follows its predecessor of the same shard); the store
+  // rows are grouped by the device that appended them, each device's in
+  // fold order, which is its append order, and merged the same way, so
+  // `limit` and the latest-tag view keep one timeline across the switch.
+  let legacy = false;
+  const entries = readLedgerRowsByDevice<unknown>(
+    DUAL_WRITE_LEDGERS.gitCommits,
+    (legacyVault) => {
+      legacy = true;
+      return readLegacyRecords(legacyVault, repoKey);
+    },
+    { vault },
+  ).flatMap(({ row, device }) => {
+    const record = repoRecordOf(row, repoKey);
+    return record === null ? [] : [{ record, device: device ?? "" }];
+  });
+  const merged = legacy
+    ? entries.map((e) => e.record)
+    : interleaveShardRows(byDevice(entries), recordTime);
+  const seen = new Set<string>();
+  return merged.filter((record) => {
+    const identity = recordIdentity(record);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+/** `row` as a record of `repoKey`: a parsed legacy record, or a store row of that repository. */
+function repoRecordOf(row: unknown, repoKey: string): GitRecord | null {
+  if (isGitRecordShape(row)) return row;
+  if (row === null || typeof row !== "object") return null;
+  const { repo_key: key, record } = row as { repo_key?: unknown; record?: unknown };
+  return key === repoKey ? parseRecord(record) : null;
+}
+
+/** Store rows grouped into one shard per appending device, each in its read order. */
+function byDevice(
+  entries: ReadonlyArray<{ record: GitRecord; device: string }>,
+): Array<{ shardId: string; rows: GitRecord[] }> {
+  const shards = new Map<string, GitRecord[]>();
+  for (const { record, device } of entries) {
+    const rows = shards.get(device);
+    if (rows === undefined) shards.set(device, [record]);
+    else rows.push(record);
+  }
+  return [...shards].map(([shardId, rows]) => ({ shardId, rows }));
+}
+
+/** The legacy shards of one repository, interleaved by record time. */
+function readLegacyRecords(vault: string, repoKey: string): GitRecord[] {
   const shards = readShardLinesByShard(gitStoreDir(vault, repoKey), COMMITS_GRAMMAR).map(
     (shard) => ({
       shardId: shard.shardId,
       rows: shard.rows.map(parseRecord).filter((record) => record !== null),
     }),
   );
-  const seen = new Set<string>();
-  return interleaveShardRows(shards, recordTime).filter((record) => {
-    const identity = recordIdentity(record);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
+  return interleaveShardRows(shards, recordTime);
+}
+
+/** Whether a row is an already parsed record (the legacy reader's output). */
+function isGitRecordShape(row: unknown): row is GitRecord {
+  if (row === null || typeof row !== "object") return false;
+  const kind = (row as { kind?: unknown }).kind;
+  return (
+    (kind === "commit" && typeof (row as { sha?: unknown }).sha === "string") ||
+    (kind === "tag" && typeof (row as { targetSha?: unknown }).targetSha === "string")
+  );
 }
 
 /**
@@ -287,6 +380,19 @@ export function appendGitRecords(
   repoKey: string,
   records: ReadonlyArray<GitRecord>,
 ): AppendGitRecordsResult {
+  // A store-only machine (design D14 item 1) appends `git-commits` ledger
+  // rows only. The dedup read and the append stay one critical section,
+  // under a device-local lock per repository.
+  if (isStoreOnly({ vault })) {
+    return withLocalLock(
+      join(storesStateDir(processDirsEnv()), GIT_STORE_LOCK_DIR, repoKey),
+      () => {
+        const { result, lines } = planGitAppend(vault, repoKey, records);
+        if (lines.length > 0) storeWrite(() => gitCommitRows(repoKey, lines), { vault });
+        return result;
+      },
+    );
+  }
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const handle = acquireLockSyncWithRetry(commitsPath(vault, repoKey), undefined, {
@@ -303,23 +409,24 @@ export function appendGitRecords(
   // ingest does not hold it through one store append per line.
   if (result.lines.length > 0) {
     const lines = result.lines;
-    dualWrite(
-      () =>
-        lines.map((line) =>
-          ledgerRowRecord(
-            DUAL_WRITE_LEDGERS.gitCommits,
-            {
-              repo_key: repoKey,
-              record: JSON.parse(line) as unknown,
-            },
-            // Commit messages and paths can name private work.
-            "private-when-held",
-          ),
-        ),
-      { vault },
-    );
+    dualWrite(() => gitCommitRows(repoKey, lines), { vault });
   }
   return result.result;
+}
+
+/** Device-local lock directory of the store-only dedup-then-append, one lock per repository. */
+const GIT_STORE_LOCK_DIR = "git-commits";
+
+/** The store rows of appended record lines. */
+function gitCommitRows(repoKey: string, lines: ReadonlyArray<string>): DualWriteRecord[] {
+  return lines.map((line) =>
+    ledgerRowRecord(
+      DUAL_WRITE_LEDGERS.gitCommits,
+      { repo_key: repoKey, record: JSON.parse(line) as unknown },
+      // Commit messages and paths can name private work.
+      "private-when-held",
+    ),
+  );
 }
 
 /** What the locked append wrote: the outcome, and the lines it appended. */
@@ -329,6 +436,20 @@ interface LockedAppend {
 }
 
 function appendGitRecordsLocked(
+  vault: string,
+  repoKey: string,
+  records: ReadonlyArray<GitRecord>,
+): LockedAppend {
+  const planned = planGitAppend(vault, repoKey, records);
+  if (planned.lines.length > 0) {
+    mkdirSync(gitStoreDir(vault, repoKey), { recursive: true });
+    appendFileSync(commitsPath(vault, repoKey), planned.lines.join(""));
+  }
+  return planned;
+}
+
+/** The records of `records` not yet stored, as serialized lines, with the outcome counts. */
+function planGitAppend(
   vault: string,
   repoKey: string,
   records: ReadonlyArray<GitRecord>,
@@ -351,10 +472,6 @@ function appendGitRecordsLocked(
     if (record.kind === "commit") appendedCommits += 1;
     else appendedTags += 1;
     lines.push(serializeRecord(record) + "\n");
-  }
-  if (lines.length > 0) {
-    mkdirSync(gitStoreDir(vault, repoKey), { recursive: true });
-    appendFileSync(commitsPath(vault, repoKey), lines.join(""));
   }
   return { result: { appended: lines.length, appendedCommits, appendedTags, skipped }, lines };
 }
@@ -417,12 +534,13 @@ export function listGitTags(vault: string, repoKey: string): ReadonlyArray<GitTa
 
 /** Watermark write; the sha grammar is enforced before anything lands. */
 export function writeGitState(vault: string, repoKey: string, state: GitState): void {
+  const storeOnly = isStoreOnly({ vault });
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  if (!storeOnly) assertVaultIdentityForWrite(vault);
   if (!isFullSha(state.lastSha)) {
     throw new Error(`git state lastSha must be a full 40-hex git sha, got: ${state.lastSha}`);
   }
-  mkdirSync(gitStoreDir(vault, repoKey), { recursive: true });
+  mkdirSync(dirname(statePath(vault, repoKey)), { recursive: true });
   atomicWriteFileSync(
     statePath(vault, repoKey),
     JSON.stringify(
@@ -492,6 +610,30 @@ const VANISHED_ENTRY_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"])
  * list.
  */
 export function listGitRepos(vault: string): ReadonlyArray<GitRepoEntry> {
+  // A store-only machine (design D14 item 1) knows a repository by its
+  // `git-commits` rows and by the watermark it keeps in device-local state.
+  if (isStoreOnly({ vault })) {
+    const keys = new Set<string>();
+    for (const row of readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.gitCommits, () => [], {
+      vault,
+    })) {
+      const key = (row as { repo_key?: unknown } | null)?.repo_key;
+      if (typeof key === "string" && key !== "") keys.add(key);
+    }
+    // Only repository folders: a stray file or a temp file is no repo.
+    const local = gitStateLocalDir(vault);
+    if (existsSync(local)) {
+      for (const entry of readdirSync(local, { withFileTypes: true })) {
+        if (entry.isDirectory()) keys.add(entry.name);
+      }
+    }
+    return Object.freeze(
+      [...keys].toSorted().map((key) => {
+        const probe = readGitState(vault, key);
+        return Object.freeze({ key, state: probe.state, stateError: probe.error });
+      }),
+    );
+  }
   const root = gitStoreRootDir(vault);
   if (!existsSync(root)) return [];
   const entries: GitRepoEntry[] = [];

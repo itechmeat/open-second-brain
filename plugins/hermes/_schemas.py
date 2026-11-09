@@ -25,7 +25,7 @@ import copy
 from typing import Any
 
 STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedback',
-        'description': 'Record one Brain taste signal in `Brain/inbox/sig-*.md`. With '
+        'description': 'Record one Brain taste signal in the signal inbox. With '
                        '`force_confirmed: true`, create the preference directly (skips the '
                        'dream trial window).',
         'inputSchema': {   'type': 'object',
@@ -131,8 +131,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
     {   'name': 'brain_apply_evidence',
         'description': 'Record whether an active preference was applied, violated, or marked '
                        'outdated against a freshly-produced durable artifact. Appends one '
-                       'event to `Brain/log/<today>.md`. A single `outdated` event triggers '
-                       'retire on the next dream pass.',
+                       "event to today's brain log. A single `outdated` event triggers retire "
+                       'on the next dream pass.',
         'inputSchema': {   'type': 'object',
                            'properties': {   'pref_id': {   'type': 'string',
                                                             'description': 'Preference id '
@@ -206,8 +206,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                            'required': ['text'],
                            'additionalProperties': False}},
     {   'name': 'brain_pinned_context',
-        'description': 'Read, write, append, or clear the transient current-task scratchpad at '
-                       '`Brain/pinned.md`. Use for facts that should survive context rotation '
+        'description': 'Read, write, append, or clear the transient current-task scratchpad '
+                       '(pinned context). Use for facts that should survive context rotation '
                        'but should not become permanent preferences. Pass `operations` to '
                        'apply an ordered batch atomically (all-or-nothing).',
         'inputSchema': {   'type': 'object',
@@ -275,10 +275,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                                                                             'additionalProperties': False}}},
                            'additionalProperties': False}},
     {   'name': 'brain_context',
-        'description': 'Pull the current Brain/active.md body, pinned current-task context, '
-                       'and active-preference counts. Use at session start when SessionStart '
-                       'hook is unavailable (Cursor, Aider, raw Claude API). Regenerates '
-                       'Brain/active.md when absent or stale.',
+        'description': 'Pull the active-preferences digest, pinned current-task context, and '
+                       'active-preference counts. Use at session start when SessionStart hook '
+                       'is unavailable (Cursor, Aider, raw Claude API). Regenerates the digest '
+                       'when absent or stale.',
         'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {   'name': 'brain_context_pack',
         'description': 'Return the highest-tier, most recent vault slice under `max_tokens` - '
@@ -1046,10 +1046,9 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                            'additionalProperties': False}},
     {   'name': 'brain_search',
         'description': 'Full-text search across the vault. Optional semantic layer when '
-                       'configured. Persists access events and opt-in reinforce/telemetry '
-                       'ledgers under Brain/search/. When a query misses, consult '
-                       'brain_recall_gate before widening recall: it classifies whether '
-                       'widening is warranted.',
+                       'configured. Persists access events and the opt-in reinforce and '
+                       'telemetry ledgers. When a query misses, consult brain_recall_gate '
+                       'before widening recall: it classifies whether widening is warranted.',
         'inputSchema': {   'type': 'object',
                            'properties': {   'query': {   'type': 'string',
                                                           'minLength': 1,

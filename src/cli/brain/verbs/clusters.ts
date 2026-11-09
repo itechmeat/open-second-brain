@@ -10,7 +10,7 @@
  * failure, 2 on usage errors.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -42,12 +42,18 @@ import { isoSecond, MS_PER_DAY } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
-import { listVaultPages, parseFrontmatter } from "../../../core/vault.ts";
+import { listVaultPages } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
+import {
+  laneEntryClockMs,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+} from "../../../core/store/lane-pages.ts";
 
 const USAGE =
   "usage: o2b brain clusters run [--min-size N] [--batch-size N] [--if-stale] [--progress] | " +
@@ -66,12 +72,16 @@ function clustersStaleness(vault: string, nowMs: number): StalenessResult {
   const inputs = listVaultPages(vault, { reach: CLI_TRANSPORT_REACH })
     .map((p) => p.path)
     .filter((p) => !p.startsWith(clustersDir));
-  const outputs = existsSync(clustersDir)
-    ? readdirSync(clustersDir)
-        .filter((f) => f.endsWith(".md"))
-        .map((f) => join(clustersDir, f))
-    : [];
-  return evaluateStaleness(inputs, outputs, { nowMs, maxAgeMs: materializeMaxAgeMs(vault) });
+  // On a store-only machine the cluster notes are lane records: the last
+  // run is stamped by its records' clock, against the input notes' mtimes.
+  // The lane API answers both modes (the folder and the file mtimes before
+  // the switch).
+  const outputs = listLaneFiles(vault, clustersDir).map((f) => join(clustersDir, f));
+  return evaluateStaleness(inputs, outputs, {
+    nowMs,
+    maxAgeMs: materializeMaxAgeMs(vault),
+    outputStampMs: (path: string) => laneEntryClockMs(vault, path),
+  });
 }
 
 /**
@@ -146,7 +156,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
   try {
     if (action === "list") {
       const dir = join(vault, "Brain", "clusters");
-      if (!existsSync(dir)) {
+      if (!lanePageExists(vault, dir)) {
         if (asJson) okJson({ clusters: [], ...nextCommandField("cluster-notes-absent") });
         else ok("no cluster notes yet");
         // no-dead-ends, phase 3: this pointer was hand-written in the
@@ -155,11 +165,9 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         emitNextStep("cluster-notes-absent", stream);
         return 0;
       }
-      const clusters = readdirSync(dir)
-        .filter((f) => f.endsWith(".md"))
-        .toSorted()
+      const clusters = listLaneFiles(vault, dir)
         .map((f) => {
-          const [meta] = parseFrontmatter(join(dir, f));
+          const [meta] = parseLanePage(vault, join(dir, f));
           return meta["kind"] === "brain-cluster"
             ? {
                 path: `Brain/clusters/${f}`,

@@ -69,6 +69,7 @@ import { foldPreferences } from "../../../src/core/store/fold-preferences.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { deviceStateDirFor, dualWriteStatusPath } from "../../../src/core/store/store-paths.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { forgetHeldPartitions, moveNeverHeld, neverHeld } from "../../helpers/held-partitions.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
@@ -320,7 +321,7 @@ describe("flag on: each legacy write lands in both places with matching content"
   test("a partition that arrives after the first write is used without a restart", () => {
     seedPreference("first"); // opens and caches the store with both partitions
     const parked = join(parent, "private-parked");
-    renameSync(join(storeRoot, "private"), parked);
+    moveNeverHeld(storeRoot, parked);
     seedPreference("while-away", { visibility: ["private"] });
     expect(readDualWriteStatus().failures).toBe(1);
     renameSync(parked, join(storeRoot, "private")); // the sync delivers it again
@@ -424,7 +425,7 @@ describe("store failures never fail the legacy write", () => {
 
   test("a private record on a machine without the private partition is refused, the legacy write kept", () => {
     seedPreference("open"); // opens the store with both partitions
-    rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+    neverHeld(storeRoot);
     const path = seedPreference("hidden", { visibility: ["private"] });
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(storeRoot, "private"))).toBe(false);
@@ -464,6 +465,9 @@ describe("a torn identity file under a running process", () => {
 });
 
 describe("no store yet", () => {
+  // A machine that never had a store: the root and its list of held partitions are gone.
+  beforeEach(forgetHeldPartitions);
+
   test("dual writes never create a store: they are skipped and counted, the legacy writes kept", () => {
     rmSync(storeRoot, { recursive: true, force: true });
     const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -526,7 +530,7 @@ describe("truth claims", () => {
   });
 
   test("from an open page go to shared on a machine without the private partition", () => {
-    rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+    neverHeld(storeRoot);
     mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
     writeFileSync(join(vault, "Brain", "notes", "standup.md"), "# Standup\n");
     appendSampleClaim();
@@ -542,7 +546,7 @@ function ledgerRows(partition: "shared" | "private", ledger: string): StoreRecor
 }
 
 function dropPrivatePartition(): void {
-  rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+  neverHeld(storeRoot);
 }
 
 function appendTurn(text: string): void {

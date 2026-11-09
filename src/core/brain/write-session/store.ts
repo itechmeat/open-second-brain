@@ -16,11 +16,8 @@
  * (never a throw), mirroring `readGitState` / the log parser.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../fs-atomic.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   isTerminalWriteSessionStatus,
   type WriteSessionError,
@@ -31,6 +28,16 @@ import {
   type WriteSessionRecord,
   type WriteSessionStatus,
 } from "./types.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  readLaneText,
+  removeLanePage,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
+import { deviceMintTag } from "../record-name.ts";
 
 /** Session ids are lowercase slugs - the grammar doubles as path safety. */
 const SESSION_ID_RE = /^ws-[a-z0-9][a-z0-9-]*$/;
@@ -65,8 +72,9 @@ export function writeSessionPath(vault: string, id: string): string {
 
 /**
  * Allocate a collision-free session id from the supplied timestamp.
- * `ws-<yyyymmdd>-<hhmmss>` with `-2`, `-3`, ... suffixes when a session
- * landed in the same second - deterministic for fixture callers.
+ * `ws-<yyyymmdd>-<hhmmss>` (plus this device's tag once switched, see
+ * `deviceMintTag`) with `-2`, `-3`, ... suffixes when a session landed in
+ * the same second - deterministic for fixture callers.
  */
 export function allocateWriteSessionId(vault: string, nowIso: string): string {
   const ts = Date.parse(nowIso);
@@ -74,11 +82,15 @@ export function allocateWriteSessionId(vault: string, nowIso: string): string {
     throw new Error(`invalid session timestamp: ${nowIso}`);
   }
   const iso = new Date(ts).toISOString();
-  const stem = `ws-${iso.slice(0, 10).replaceAll("-", "")}-${iso.slice(11, 19).replaceAll(":", "")}`;
-  if (!existsSync(join(writeSessionDir(vault), `${stem}.json`))) return stem;
+  const second = `ws-${iso.slice(0, 10).replaceAll("-", "")}-${iso.slice(11, 19).replaceAll(":", "")}`;
+  // Once switched the id carries this device's tag: two synced devices
+  // starting a session in the same second would otherwise write one entry.
+  const tag = lanePagesInStore(vault) ? deviceMintTag() : null;
+  const stem = tag === null ? second : `${second}-${tag}`;
+  if (!lanePageExists(vault, join(writeSessionDir(vault), `${stem}.json`))) return stem;
   for (let n = 2; n < 10_000; n++) {
     const candidate = `${stem}-${n}`;
-    if (!existsSync(join(writeSessionDir(vault), `${candidate}.json`))) return candidate;
+    if (!lanePageExists(vault, join(writeSessionDir(vault), `${candidate}.json`))) return candidate;
   }
   throw new Error(`could not allocate a write-session id for ${stem}`);
 }
@@ -231,9 +243,8 @@ function applyTtl(record: WriteSessionRecord, nowIso: string): WriteSessionRecor
 /** Persist a session record atomically (updates an EXISTING session). */
 export function saveWriteSession(vault: string, record: WriteSessionRecord): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  mkdirSync(writeSessionDir(vault), { recursive: true });
-  atomicWriteFileSync(writeSessionPath(vault, record.id), serializeRecord(record));
+  assertLaneWrite(vault);
+  writeLaneText(vault, writeSessionPath(vault, record.id), serializeRecord(record));
 }
 
 /**
@@ -249,13 +260,14 @@ export function createWriteSession(
   build: (id: string) => WriteSessionRecord,
 ): WriteSessionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  mkdirSync(writeSessionDir(vault), { recursive: true });
+  assertLaneWrite(vault);
   for (let attempt = 0; attempt < 10_000; attempt++) {
     const id = allocateWriteSessionId(vault, nowIso);
     const record = build(id);
     try {
-      atomicCreateFileSyncExclusive(writeSessionPath(vault, id), serializeRecord(record));
+      writeLaneText(vault, writeSessionPath(vault, id), serializeRecord(record), {
+        exclusive: true,
+      });
       return record;
     } catch (exc) {
       if ((exc as NodeJS.ErrnoException).code === "EEXIST") continue;
@@ -279,12 +291,15 @@ export function readWriteSession(vault: string, id: string, nowIso: string): Wri
     });
   }
   const path = writeSessionPath(vault, id);
-  if (!existsSync(path)) {
+  // Read once: a session removed meanwhile (a sweep, a delete) is missing,
+  // never a corrupt one.
+  const text = readLaneText(vault, path);
+  if (text === null) {
     return Object.freeze({ session: null, error: null, expiredOnRead: false });
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    raw = JSON.parse(text);
   } catch (exc) {
     return Object.freeze({
       session: null,
@@ -309,10 +324,10 @@ export function listWriteSessions(
   vault: string,
   nowIso: string,
 ): ReadonlyArray<WriteSessionRecord> {
+  // `listLaneFiles` answers [] for a missing folder in both modes.
   const dir = writeSessionDir(vault);
-  if (!existsSync(dir)) return [];
   const sessions: WriteSessionRecord[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".json")) continue;
     const probe = readWriteSession(vault, name.slice(0, -".json".length), nowIso);
     if (probe.session !== null) sessions.push(probe.session);
@@ -326,8 +341,8 @@ export function listWriteSessions(
 /** Remove one session file (idempotent). */
 export function deleteWriteSession(vault: string, id: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  rmSync(writeSessionPath(vault, id), { force: true });
+  assertLaneWrite(vault);
+  removeLanePage(vault, writeSessionPath(vault, id));
 }
 
 export interface SweepWriteSessionsResult {
@@ -341,24 +356,23 @@ export interface SweepWriteSessionsResult {
  */
 export function sweepWriteSessions(vault: string, nowIso: string): SweepWriteSessionsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const dir = writeSessionDir(vault);
-  if (!existsSync(dir)) return Object.freeze({ removed: 0, kept: 0 });
   let removed = 0;
   let kept = 0;
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".json")) continue;
     const id = name.slice(0, -".json".length);
     if (!isWriteSessionId(id)) {
       // A *.json name outside the id grammar can never become a live
       // session - it is corrupt by definition; sweep owns its removal.
-      rmSync(join(dir, name), { force: true });
+      removeLanePage(vault, join(dir, name));
       removed += 1;
       continue;
     }
     const probe = readWriteSession(vault, id, nowIso);
     if (probe.session === null || isTerminalWriteSessionStatus(probe.session.status)) {
-      rmSync(join(dir, name), { force: true });
+      removeLanePage(vault, join(dir, name));
       removed += 1;
     } else {
       kept += 1;

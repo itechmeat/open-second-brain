@@ -41,6 +41,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 
 import { appendSeparated, scanLinesFromEnd } from "./log-append-io.ts";
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
@@ -55,7 +56,8 @@ import {
 import { WRITE_LANE } from "./freeze-marker.ts";
 import { isValidDeviceId } from "../config.ts";
 import { listShardedFiles, resolveAppendShardId } from "./ledger-shards.ts";
-import { dualWrite } from "../store/dual-write.ts";
+import type { DualWriteRecord } from "../store/dual-write.ts";
+import { routeWrite, type StoreWriteError } from "../store/store-write.ts";
 import { acquireDirLock } from "../store/local-lock.ts";
 import { logEventRecord } from "../store/dual-write-records.ts";
 import { operationPrivacy, type PrivacyVerdict } from "../store/operation-privacy.ts";
@@ -97,8 +99,31 @@ export interface ParseLogDayResult {
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
 }
 
+/** Where {@link appendLogEvent} put the event. */
 export interface AppendLogEventResult {
+  /**
+   * The file that now holds the event: the Markdown day page on an
+   * unswitched machine, the store shard of its `log-event` record on a
+   * store-only one, and the empty string when a fail-open store write did
+   * not land.
+   */
   readonly logPath: string;
+  /** `legacy`: the vault's log day files (plus the dual write); `store`: the store only. */
+  readonly stored: "legacy" | "store";
+  /** The store record id on a store-only machine, else `null`. */
+  readonly recordId: string | null;
+  /**
+   * The store shard of that record as `<partition>/<partition-relative
+   * path>` (`shared/log/<device>/<YYYY-MM>.jsonl`) on a store-only
+   * machine, else `null`.
+   */
+  readonly storeShard: string | null;
+  /**
+   * Why a fail-open store write did not land (the error doctor also
+   * counts); absent when the event landed. Branch on this, never on an
+   * empty `logPath`.
+   */
+  readonly failed?: StoreWriteError;
 }
 
 /**
@@ -332,6 +357,17 @@ export interface AppendLogEventOptions {
    * Judged only when dual writes are on.
    */
   readonly storePrivate?: PrivacyVerdict;
+  /**
+   * Hooks and other best-effort paths (design D14 item 1): on a
+   * store-only machine a store failure is counted in the device-local
+   * store-write status and the call returns instead of throwing. Without
+   * it a store-only failure throws `StoreWriteError` with its remedy. No
+   * effect on an unswitched machine, whose legacy append still throws as
+   * before and whose dual write never does.
+   */
+  readonly failOpen?: boolean;
+  /** The machine config the store-only switch and the store root come from. */
+  readonly configPath?: string;
 }
 
 /**
@@ -353,7 +389,7 @@ export function logEventPrivacyContent(body: Readonly<Record<string, unknown>>):
 }
 
 export function appendLogEvent(
-  vault: string,
+  vault: string | null,
   event: BrainLogEntry,
   opts: AppendLogEventOptions = {},
 ): AppendLogEventResult {
@@ -381,16 +417,6 @@ export function appendLogEvent(
   // canonical representation so two calls with identical input produce
   // byte-identical output (idempotency requirement).
   const ts = parseIsoUtc(event.timestamp);
-  const path = logShardPath(vault, ts.date, deviceId);
-  const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
-  // The AUDIT lane (who-wrote-what, Task C). This appender is one of the
-  // two callers that skip the freeze check, and it is the reason the lane
-  // exists at all: `freeze`, `unfreeze` and `write-refused` are events
-  // about a frozen vault, so a freeze that silenced the log would erase
-  // the record of itself and of every write it refused. The identity
-  // assertion still runs - a log line landing in the wrong store is as
-  // wrong as a note landing there.
-  const logDir = brainDirsForWrite(vault, undefined, WRITE_LANE.audit).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
   const withAgent =
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"
@@ -410,6 +436,91 @@ export function appendLogEvent(
     [ORIGIN_CHANNEL_FIELD]: originChannelStamp(),
   });
   const diskEvent: BrainLogEntry = { ...event, body: eventBody };
+
+  // The store record (the dual write on an unswitched machine, the only
+  // write on a store-only one, design D14 item 1). An event that names a
+  // private page (a private preference's id and principle, a private
+  // note's link, in any field and inside free text), whose body carries a
+  // `<private>` region or the placeholder a stripped one leaves, or that
+  // belongs to a private operation goes to `private` only. A reconcile
+  // event's guessed preference is judged only when its page exists
+  // (`logRefsNamePrivatePage`). Store-only records carry no hash chain:
+  // store integrity is the record sums plus partition digests (D14 item
+  // 10); the chain stays a property of the legacy day files.
+  const storeRecord = (): DualWriteRecord => {
+    const guessed = reconcileTopicPreferenceId(diskEvent);
+    const isPrivate = operationPrivacy(vault, {
+      inherit: [
+        opts.storePrivate,
+        () => guessed !== undefined && logRefsNamePrivatePage(vault, [guessed], guessed),
+      ],
+      content: [logEventPrivacyContent(diskEvent.body)],
+    });
+    return logEventRecord(diskEvent, isPrivate());
+  };
+
+  const routed = routeWrite({
+    legacy: () => appendLegacyLogEvent(requireLegacyVault(vault), diskEvent, ts, deviceId),
+    store: storeRecord,
+    context: {
+      vault,
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+    },
+    ...(opts.failOpen === true ? { failOpen: true } : {}),
+  });
+  if (routed.mode === "legacy") {
+    return { logPath: routed.value, stored: "legacy", recordId: null, storeShard: null };
+  }
+  const landed = routed.records[0];
+  if (landed === undefined) {
+    return {
+      logPath: "",
+      stored: "store",
+      recordId: null,
+      storeShard: null,
+      ...(routed.failed !== undefined ? { failed: routed.failed } : {}),
+    };
+  }
+  // The shard path ends in its partition-relative path, below the
+  // partition folder whose name is the partition.
+  const partitionDir = landed.path.slice(0, landed.path.length - landed.rel.length - 1);
+  return {
+    logPath: landed.path,
+    stored: "store",
+    recordId: landed.record.id,
+    storeShard: `${basename(partitionDir)}/${landed.rel}`,
+  };
+}
+
+/** An unswitched machine has a legacy tree, so it has a vault. */
+function requireLegacyVault(vault: string | null): string {
+  if (vault === null || vault.trim() === "") {
+    throw new Error("appendLogEvent: the legacy log needs a vault");
+  }
+  return vault;
+}
+
+/**
+ * The legacy append (unswitched machines): one JSONL row with its hash
+ * chain link and one Markdown block, under the log directory lock.
+ * Returns the Markdown day page's path.
+ */
+function appendLegacyLogEvent(
+  vault: string,
+  diskEvent: BrainLogEntry,
+  ts: { readonly date: string; readonly hms: string },
+  deviceId: string,
+): string {
+  const path = logShardPath(vault, ts.date, deviceId);
+  const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
+  // The AUDIT lane (who-wrote-what, Task C). This appender is one of the
+  // two callers that skip the freeze check, and it is the reason the lane
+  // exists at all: `freeze`, `unfreeze` and `write-refused` are events
+  // about a frozen vault, so a freeze that silenced the log would erase
+  // the record of itself and of every write it refused. The identity
+  // assertion still runs - a log line landing in the wrong store is as
+  // wrong as a note landing there.
+  const logDir = brainDirsForWrite(vault, undefined, WRITE_LANE.audit).log;
 
   // §23 (v0.10.8): each event lands in both `<date>.jsonl` (machine
   // surface, primary for `readLogDay`) and `<date>.md` (human-facing
@@ -452,28 +563,15 @@ export function appendLogEvent(
   } finally {
     release();
   }
-
-  // Brain store dual write (task 1.11): off by default, never fails this append.
-  // An event that names a private page (a private preference's id and
-  // principle, a private note's link, in any field and inside free text),
-  // whose body carries a `<private>` region or the placeholder a stripped
-  // one leaves, or that belongs to a private operation goes to `private`
-  // only. A reconcile event's guessed preference is judged only when its
-  // page exists (`logRefsNamePrivatePage`).
-  const guessed = reconcileTopicPreferenceId(diskEvent);
-  const isPrivate = operationPrivacy(vault, {
-    inherit: [
-      opts.storePrivate,
-      () => guessed !== undefined && logRefsNamePrivatePage(vault, [guessed], guessed),
-    ],
-    content: [logEventPrivacyContent(diskEvent.body)],
-  });
-  dualWrite(() => logEventRecord(diskEvent, isPrivate()), { vault });
-
-  return { logPath: path };
+  return path;
 }
 
 // ----- Renderers ------------------------------------------------------------
+
+/** The header of a log day page: its frontmatter and title line. */
+export function renderLogDayHeader(date: string): string {
+  return renderFileHeader(date);
+}
 
 function renderFileHeader(date: string): string {
   // Frontmatter is hand-rendered (not via `formatFrontmatter`) because

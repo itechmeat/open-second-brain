@@ -224,7 +224,7 @@ describe("budgetActiveBody: the headline tier ladder", () => {
   const TIER_NOTICE =
     // Labels are the full headings, exactly as the drop notice names them.
     "_Headlines kept to fit the injection budget: Most-applied (30d) (5), Quarantine (5). " +
-    "Call `brain_context` (or read `Brain/active.md`) for the full preference set._";
+    "Call `brain_context` (or run `o2b brain export --format llms-txt`) for the full preference set._";
 
   test("five chars over budget: the least important section tiers first and the high-value one survives whole", () => {
     const input = reviewScenarioBody();

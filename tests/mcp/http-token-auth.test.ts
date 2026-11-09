@@ -41,6 +41,10 @@ let handle: HttpServerHandle | null = null;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-http-token-"));
+  // These tests pin an unswitched machine: tokens minted the per-vault way
+  // next to a legacy tree. A vault with no `Brain/` is a store-only fresh
+  // install (design D14 item 1), whose writes need a device id and a store.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(async () => {

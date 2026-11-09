@@ -93,7 +93,9 @@ function discoverDeviceConfig(): ReturnType<ConfigModule["discoverConfig"]> {
  * a locked envelope raises the named locked-store refusal, never a silent
  * env fallback.
  */
-function storeValue(vault: string, name: string): string | undefined {
+function storeValue(vault: string | null, name: string): string | undefined {
+  // The custody store is the vault's; with no vault only the environment answers.
+  if (vault === null) return undefined;
   const held = custodyStore()
     .listSecrets(vault)
     .some((meta) => meta.name === name);
@@ -112,7 +114,7 @@ function storeValue(vault: string, name: string): string | undefined {
  * the store's plaintext is handed to the caller exactly where the value is
  * used.
  */
-export function secretProvider(vault: string): SecretProvider {
+export function secretProvider(vault: string | null): SecretProvider {
   const env = process.env;
   return new Proxy(env as SecretProvider, {
     get(_target, prop) {
@@ -132,7 +134,7 @@ export function secretProvider(vault: string): SecretProvider {
  * reference that resolves nowhere keeps the existing
  * `SecretReferenceError` behavior.
  */
-export function resolveNamedSecret(vault: string, value: string): string {
+export function resolveNamedSecret(vault: string | null, value: string): string {
   if (!isSecretReferenceValue(value)) return value;
   return resolveSecretReference(value.trim(), secretProvider(vault));
 }

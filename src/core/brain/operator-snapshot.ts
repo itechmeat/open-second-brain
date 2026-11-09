@@ -30,7 +30,8 @@ import {
 } from "../maintenance/self-heal-upgrade-state.ts";
 import { runHygieneScan } from "./hygiene/scan.ts";
 import type { HygieneFinding } from "./hygiene/types.ts";
-import { brainConfigPath, brainDirs, brainManualPath, vaultRelative } from "./paths.ts";
+import { memoryFromStore, storePagesIn } from "./memory-pages.ts";
+import { brainConfigPath, brainDirsOf, brainManualPath, vaultRelative } from "./paths.ts";
 import { loadTemporalConfigSafe } from "./policy.ts";
 import { listProfiles } from "./portability/profiles.ts";
 import { buildReviewCandidates } from "./review-candidates.ts";
@@ -213,7 +214,7 @@ export interface BuildOperatorSnapshotOptions {
  * source runs a dry-run dream (read-only). Never mutates the vault.
  */
 export async function buildOperatorSnapshot(
-  vault: string,
+  vault: string | null,
   opts: BuildOperatorSnapshotOptions = {},
 ): Promise<OperatorSnapshot> {
   const now = opts.now ?? new Date();
@@ -224,7 +225,9 @@ export async function buildOperatorSnapshot(
   };
 
   // --- State-file health ---
-  const configPresent = existsSync(brainConfigPath(vault));
+  // With no vault (design D14) the brain settings are store records with
+  // shipped defaults, so there is no settings file to miss.
+  const configPresent = vault === null || existsSync(brainConfigPath(vault));
   let searchDbPath: string | null = null;
   try {
     searchDbPath = resolveSearchConfig({ vault, configPath: opts.configPath ?? undefined }).dbPath;
@@ -240,12 +243,13 @@ export async function buildOperatorSnapshot(
   const store = readStoreGroup(searchDbPath, now, opts.writerLockHeldAt);
 
   // --- Automatic upgrade ---
-  const selfHealUpgradeFailure = readSelfHealUpgradeFailure(vault);
+  // Both read files a vault's upgrade writes; with no vault there are none.
+  const selfHealUpgradeFailure = vault === null ? null : readSelfHealUpgradeFailure(vault);
   if (selfHealUpgradeFailure !== null) {
     problem("self-heal-upgrade-failed", describeSelfHealUpgradeFailure(selfHealUpgradeFailure));
   }
-  const manualAhead = readManualRevisionAhead(vault);
-  if (manualAhead !== null) {
+  const manualAhead = vault === null ? null : readManualRevisionAhead(vault);
+  if (manualAhead !== null && vault !== null) {
     problem(
       "managed-file-from-newer-release",
       `${describeManualRevisionAhead(vaultRelative(brainManualPath(vault), vault), manualAhead)}; ` +
@@ -279,34 +283,41 @@ export async function buildOperatorSnapshot(
   }
 
   // --- Hygiene ---
-  try {
-    const hy = runHygieneScan(vault, {
-      now,
-      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
-    });
-    const keepFinding = opts.keepFinding;
-    const findings =
-      keepFinding === undefined ? hy.findings : hy.findings.filter((f) => keepFinding(f));
-    if (findings.length > 0) {
-      problem("hygiene-findings", `${findings.length} hygiene finding(s)`);
+  // The hygiene and stale scans walk vault notes. With no vault they are
+  // not run (design D14): the snapshot says so below rather than reading
+  // as a clean scan.
+  if (vault !== null) {
+    try {
+      const hy = runHygieneScan(vault, {
+        now,
+        ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+      });
+      const keepFinding = opts.keepFinding;
+      const findings =
+        keepFinding === undefined ? hy.findings : hy.findings.filter((f) => keepFinding(f));
+      if (findings.length > 0) {
+        problem("hygiene-findings", `${findings.length} hygiene finding(s)`);
+      }
+    } catch {
+      problem("hygiene-findings", "hygiene scan failed to run");
     }
-  } catch {
-    problem("hygiene-findings", "hygiene scan failed to run");
   }
 
   // --- Stale scan ---
   let staleTotal = 0;
-  try {
-    const cfg = loadTemporalConfigSafe(vault);
-    const index = buildTimelineIndex(vault, {});
-    const stale = findStaleEntries(index, vault, cfg, { now });
-    staleTotal =
-      stale.stalePreferences.length + stale.staleSignals.length + stale.staleLogFiles.length;
-    if (staleTotal > 0) {
-      problem("stale-notes", `${staleTotal} stale entr${staleTotal === 1 ? "y" : "ies"}`);
+  if (vault !== null) {
+    try {
+      const cfg = loadTemporalConfigSafe(vault);
+      const index = buildTimelineIndex(vault, {});
+      const stale = findStaleEntries(index, vault, cfg, { now });
+      staleTotal =
+        stale.stalePreferences.length + stale.staleSignals.length + stale.staleLogFiles.length;
+      if (staleTotal > 0) {
+        problem("stale-notes", `${staleTotal} stale entr${staleTotal === 1 ? "y" : "ies"}`);
+      }
+    } catch {
+      problem("stale-notes", "stale scan failed to run");
     }
-  } catch {
-    problem("stale-notes", "stale scan failed to run");
   }
 
   // --- Review candidates (dry-run dream) ---
@@ -334,9 +345,9 @@ export async function buildOperatorSnapshot(
 
   return Object.freeze({
     counts: Object.freeze({
-      preferences: countMarkdown(brainDirs(vault).preferences),
-      retired: countMarkdown(brainDirs(vault).retired),
-      inbox: countMarkdown(brainDirs(vault).inbox),
+      preferences: countMarkdown(vault, brainDirsOf(vault).preferences),
+      retired: countMarkdown(vault, brainDirsOf(vault).retired),
+      inbox: countMarkdown(vault, brainDirsOf(vault).inbox),
     }),
     staleTotal,
     reviewQueue,
@@ -345,7 +356,7 @@ export async function buildOperatorSnapshot(
     healthVerdict,
     problems: Object.freeze(problems),
     healthy: problems.length === 0,
-    frozen: readFreezeMarker(vault),
+    frozen: vault === null ? null : readFreezeMarker(vault),
     selfHealUpgradeFailure,
     store,
   });
@@ -479,8 +490,21 @@ export function renderOperatorSnapshot(snap: OperatorSnapshot): string {
   return out.join("\n");
 }
 
-/** Count `.md` files directly under `dir` (non-recursive). Missing dir = 0. */
-function countMarkdown(dir: string): number {
+/**
+ * Count `.md` files directly under `dir` (non-recursive). Missing dir = 0.
+ * On a store-only machine (task 2.10): the fold's records whose page sat
+ * in `dir`.
+ */
+function countMarkdown(vault: string | null, dir: string): number {
+  if (vault === null || memoryFromStore(vault)) {
+    // A failed probe degrades to 0 like the legacy branch, never rejects
+    // the whole snapshot.
+    try {
+      return storePagesIn(vault, dir).length;
+    } catch {
+      return 0;
+    }
+  }
   if (!existsSync(dir)) return 0;
   try {
     let n = 0;

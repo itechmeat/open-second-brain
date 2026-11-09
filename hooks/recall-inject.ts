@@ -53,7 +53,6 @@ import {
   resolveRecallInjectDedupe,
   resolveRecallInjectEnabled,
   resolveTokenImpactLedgerEnabled,
-  resolveVault,
 } from "../src/core/config.ts";
 import {
   decisionModelModeFor,
@@ -96,6 +95,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { isHookStateCorrupt } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /**
  * Record one decision on both surfaces: the hook audit trail, and the
@@ -357,8 +357,10 @@ async function main(): Promise<void> {
 
     const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
     auditVault = vault;
     const configPath = defaultConfigPath();
 

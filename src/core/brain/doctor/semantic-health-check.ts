@@ -17,6 +17,8 @@ import {
   type SemanticHealthReport,
 } from "../health/reconcile.ts";
 import { toPosix } from "../../path-safety.ts";
+import { INBOX_FOLDER_STATES, memoryFromStore } from "../memory-pages.ts";
+import { storeSignalRecords } from "../memory-page-records.ts";
 import { brainDirs } from "../paths.ts";
 import { BRAIN_HEALTH_DEFAULTS, loadBrainConfigDetailed, resolveHealth } from "../policy.ts";
 import { parseSignal } from "../signal.ts";
@@ -73,7 +75,21 @@ interface SignalSignRecord {
  * each to its id, sign, and principle. Files that fail to parse are
  * skipped (their schema errors surface through the signal record check).
  */
-function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
+function readAllSignalRecords(vault: string, configPath?: string): ReadonlyArray<SignalSignRecord> {
+  if (memoryFromStore(vault, configPath)) {
+    // Store-only (task 2.10): the signal fold, in the states the three
+    // inbox folders held.
+    const context = configPath !== undefined ? { configPath } : {};
+    return storeSignalRecords(vault, INBOX_FOLDER_STATES, context).records.map(
+      ({ path, signal }) => ({
+        path,
+        id: signal.id,
+        sign: signal.signal,
+        principle: signal.principle,
+        created_at: signal.created_at,
+      }),
+    );
+  }
   const dirs = brainDirs(vault);
   const out: SignalSignRecord[] = [];
   for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
@@ -116,10 +132,11 @@ export function checkSemanticHealth(
   health: ResolvedBrainHealthConfig,
   now: Date,
   readable?: (rel: string) => boolean,
+  configPath?: string,
 ): SemanticHealthReport {
   const isReadable = (path: string): boolean =>
     readable === undefined || readable(toPosix(relative(vault, path)));
-  const allSignals = readAllSignalRecords(vault);
+  const allSignals = readAllSignalRecords(vault, configPath);
   const signals =
     readable === undefined ? allSignals : allSignals.filter((s) => isReadable(s.path));
   const prefRecords =

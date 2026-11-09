@@ -44,6 +44,15 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
+import { storePreferenceMeta } from "./preference.ts";
+import { routePreferencePage } from "./preference-page-write.ts";
+import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
+import { PREFERENCE_OPAQUE_FIELDS, SIGNAL_OPAQUE_FIELDS } from "../store/operation-privacy.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { isPrivateFrontmatter } from "../store/private-page.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
+import { preferencePageRel, signalPageRel } from "../store/read/memory-ids.ts";
+import { routeSignalState, storeSignal } from "./signal-state.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -211,6 +220,97 @@ function candidatePaths(vault: string, id: string): { kind: ExpirationTargetKind
   throw new InvalidExpirationTargetError(id);
 }
 
+/** The artifact an expiration change addresses, wherever it lives. */
+interface ExpirationTarget {
+  /** Vault-relative path, `/`-separated (nominal once switched). */
+  readonly relPath: string;
+  readonly abs: string;
+  readonly previous: string | null;
+  /** The page's frontmatter on an unswitched machine; `null` once switched. */
+  readonly frontmatter: Record<string, unknown> | null;
+}
+
+function previousOf(meta: Readonly<Record<string, unknown>>): string | null {
+  const raw = meta[EXPIRATION_DATE_FIELD];
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/** The first candidate page that exists, in search order. */
+function pageTarget(
+  vault: string,
+  id: string,
+  dirs: ReadonlyArray<string>,
+  opts: SetExpirationOptions,
+): ExpirationTarget {
+  const searched: string[] = [];
+  for (const dir of dirs) {
+    const candidate = ensureInsideVault(join(dir, `${id}.md`), vault);
+    const rel = candidate
+      .slice(vault.length + 1)
+      .split("\\")
+      .join("/");
+    searched.push(rel);
+    if (existsSync(candidate) && (opts.readable === undefined || opts.readable(rel))) {
+      const [meta] = parseFrontmatter(candidate);
+      return { relPath: rel, abs: candidate, previous: previousOf(meta), frontmatter: meta };
+    }
+  }
+  throw new ExpirationTargetNotFoundError(id, searched);
+}
+
+/**
+ * The signal or preference the store's folds hold under `id`. A signal
+ * in any state but rejected, and a preference active or retired, can
+ * carry a lifetime, as their pages could.
+ */
+function storeTarget(
+  vault: string,
+  kind: ExpirationTargetKind,
+  id: string,
+  opts: SetExpirationOptions,
+): ExpirationTarget {
+  if (kind === EXPIRATION_TARGET_KIND.signal) {
+    const found = storeSignal(id);
+    // The page the signal's state places it at, never an empty path.
+    const rel = found === undefined ? null : signalPageRel(id, found.state);
+    if (
+      found === undefined ||
+      rel === null ||
+      found.state === "rejected" ||
+      !readableRel(rel, opts)
+    ) {
+      throw new ExpirationTargetNotFoundError(id, [rel ?? id]);
+    }
+    return {
+      relPath: rel,
+      abs: join(vault, ...rel.split("/")),
+      previous: previousOf(found.frontmatter),
+      frontmatter: null,
+    };
+  }
+  const slug = preferenceSlugOf(id);
+  const page = storePreferenceMeta(slug);
+  const rel = preferencePageRel(slug, page?.retired === true);
+  if (page === null || page.retired !== id.startsWith("ret-") || !readableRel(rel, opts)) {
+    throw new ExpirationTargetNotFoundError(id, [rel]);
+  }
+  return {
+    relPath: rel,
+    abs: join(vault, ...rel.split("/")),
+    previous: previousOf(page.meta),
+    frontmatter: null,
+  };
+}
+
+/** The slug of a preference id, active (`pref-`) or retired (`ret-`). */
+function preferenceSlugOf(id: string): string {
+  return id.replace(/^(pref|ret)-/, "");
+}
+
+function readableRel(rel: string, opts: SetExpirationOptions): boolean {
+  return opts.readable === undefined || opts.readable(rel);
+}
+
 /**
  * Set, change, or clear the `expiration_date` of one signal or
  * preference, addressed by id.
@@ -242,29 +342,13 @@ export function setExpiration(
     }
   }
 
-  const searched: string[] = [];
-  let abs: string | null = null;
-  for (const dir of dirs) {
-    const candidate = ensureInsideVault(join(dir, `${trimmed}.md`), vault);
-    const rel = candidate
-      .slice(vault.length + 1)
-      .split("\\")
-      .join("/");
-    searched.push(rel);
-    if (existsSync(candidate) && (opts.readable === undefined || opts.readable(rel))) {
-      abs = candidate;
-      break;
-    }
-  }
-  if (abs === null) throw new ExpirationTargetNotFoundError(trimmed, searched);
-  const relPath = abs
-    .slice(vault.length + 1)
-    .split("\\")
-    .join("/");
-
-  const [meta, body] = parseFrontmatter(abs);
-  const priorRaw = meta[EXPIRATION_DATE_FIELD];
-  const previous = typeof priorRaw === "string" && priorRaw.length > 0 ? priorRaw : null;
+  // Store-only (task 2.10): the artifact is found in the store's folds and
+  // the change is one record; no page is rewritten.
+  const storeOnly = preferencesStoreOnly(vault);
+  const target = storeOnly
+    ? storeTarget(vault, kind, trimmed, opts)
+    : pageTarget(vault, trimmed, dirs, opts);
+  const { relPath, previous, frontmatter } = target;
   if (comparableExpiration(previous) === normalized) {
     // Byte-identical no-op, including the clear-what-is-already-clear
     // case. Reporting `changed: false` rather than rewriting keeps a
@@ -279,25 +363,65 @@ export function setExpiration(
     });
   }
 
-  const nextMeta: FrontmatterMap = { ...meta };
-  if (normalized === null) delete nextMeta[EXPIRATION_DATE_FIELD];
-  else nextMeta[EXPIRATION_DATE_FIELD] = normalized;
-  writeFrontmatterAtomic(abs, nextMeta, body, { overwrite: true });
-
-  const at = isoSecond(opts.now ?? new Date());
-  appendLogEvent(vault, {
-    timestamp: at,
-    eventType: BRAIN_LOG_EVENT_KIND.expirationSet,
-    body: {
-      target: `[[${trimmed}]]`,
-      kind,
-      // Both sides of the change, because "cleared" and "set to X" are
-      // different events and the log is where an operator reconstructs
-      // which one happened.
-      expiration: normalized ?? EXPIRATION_CLEAR,
-      previous: previous ?? EXPIRATION_CLEAR,
-      agent: opts.agent?.trim() ? opts.agent.trim() : DEFAULT_AGENT,
-    },
+  const legacy = (): void => {
+    const [meta, body] = parseFrontmatter(target.abs);
+    const nextMeta: FrontmatterMap = { ...meta };
+    if (normalized === null) delete nextMeta[EXPIRATION_DATE_FIELD];
+    else nextMeta[EXPIRATION_DATE_FIELD] = normalized;
+    writeFrontmatterAtomic(target.abs, nextMeta, body, { overwrite: true });
+  };
+  const fields = { [EXPIRATION_DATE_FIELD]: normalized };
+  const slug = preferenceSlugOf(trimmed);
+  // One verdict for the whole operation (the state record and its log
+  // event): the target is private when the fold holds it private once
+  // switched, or when its page is private or names a private page before
+  // the switch. The one-field patch alone would judge nothing private.
+  const targetPrivate = (): boolean => {
+    if (storeOnly) {
+      return kind === EXPIRATION_TARGET_KIND.signal
+        ? (storeSignal(trimmed)?.private ?? true)
+        : (storePreferenceEntry(slug)?.private ?? true);
+    }
+    if (frontmatter === null) return true;
+    const opaque =
+      kind === EXPIRATION_TARGET_KIND.signal ? SIGNAL_OPAQUE_FIELDS : PREFERENCE_OPAQUE_FIELDS;
+    return isPrivateFrontmatter(frontmatter) || rowNamesPrivatePage(vault, frontmatter, opaque);
+  };
+  const logChange = (): void => {
+    appendLogEvent(vault, {
+      timestamp: isoSecond(opts.now ?? new Date()),
+      eventType: BRAIN_LOG_EVENT_KIND.expirationSet,
+      body: {
+        target: `[[${trimmed}]]`,
+        kind,
+        // Both sides of the change, because "cleared" and "set to X" are
+        // different events and the log is where an operator reconstructs
+        // which one happened.
+        expiration: normalized ?? EXPIRATION_CLEAR,
+        previous: previous ?? EXPIRATION_CLEAR,
+        agent: opts.agent?.trim() ? opts.agent.trim() : DEFAULT_AGENT,
+      },
+    });
+  };
+  withOperationPrivacy(targetPrivate, () => {
+    if (kind === EXPIRATION_TARGET_KIND.signal) {
+      routeSignalState({
+        vault,
+        id: trimmed,
+        fields,
+        ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
+        ...(frontmatter !== null ? { legacyFrontmatter: frontmatter } : {}),
+        legacy,
+      });
+    } else {
+      routePreferencePage({
+        vault,
+        slug,
+        frontmatter: { [EXPIRATION_DATE_FIELD]: normalized ?? null } as FrontmatterMap,
+        legacy,
+      });
+    }
+    logChange();
   });
 
   return Object.freeze({

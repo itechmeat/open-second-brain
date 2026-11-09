@@ -21,10 +21,12 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import type { ManifestEntry } from "./types.ts";
+import { machineStatePath } from "../state/machine-state.ts";
+import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 
 const SUPPORTED_SCHEMA_VERSIONS = new Set<number>([1]);
 
@@ -34,7 +36,7 @@ export interface Manifest {
 }
 
 export function manifestPath(vault: string): string {
-  return join(vault, ".open-second-brain", "install.lock.json");
+  return machineStatePath(vault, DERIVED_STORE_DIR, "install.lock.json");
 }
 
 export function readManifest(vault: string): Manifest {

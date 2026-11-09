@@ -123,6 +123,14 @@ export const STORE_LOCKS_DIR = "locks";
 /** Device-local subdirectory of the persisted hybrid logical clock. */
 export const STORE_CLOCK_DIR = "clock";
 
+/**
+ * Device-local file (in a store's device-local directory, one per store
+ * root, the root's hash before the extension) listing every shard this
+ * machine has seen, so a shard that later goes missing reads as
+ * unreadable rather than as "no records" (`seen-shards.ts`).
+ */
+export const SEEN_SHARDS_FILE = "seen-shards.json";
+
 // ---------------------------------------------------------------------------
 // Folds of mutable entities and state digests (tasks 1.6 and 1.7, design D4
 // and D6). One block, so it merges cleanly beside other additions.
@@ -193,12 +201,10 @@ export const PREFERENCE_COUNTER_FIELDS = Object.freeze([
 ] as const);
 
 /** Setting keys this version knows and validates. Other keys fold as plain JSON values. */
-export const SETTING_VIEW_WRITER = "view.writer";
 export const SETTING_VIEW_LANGUAGE = "view.language";
 export const SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records";
 export const SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions";
 export const SETTING_KEYS = Object.freeze([
-  SETTING_VIEW_WRITER,
   SETTING_VIEW_LANGUAGE,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,

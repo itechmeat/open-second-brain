@@ -5,7 +5,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +24,7 @@ import {
 } from "../../../src/core/store/store-paths.ts";
 import { openStore } from "../../../src/core/store/store-open.ts";
 import { ensureStore, makeTempStore, type TempStore } from "./fixtures/temp-store.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 const NOV_2026 = Date.UTC(2026, 10, 6, 12, 0, 0);
 
@@ -106,7 +106,7 @@ describe("shard appender", () => {
   test("a write to a partition this machine does not hold is refused with a clear message", () => {
     tmp.open("dev-a");
     // This machine syncs only the shared partition.
-    rmSync(join(tmp.root, "private"), { recursive: true, force: true });
+    neverHeld(tmp.root);
     const sharedOnly = tmp.open("dev-a");
     const write = () =>
       appendRecord(sharedOnly, {
@@ -293,4 +293,37 @@ describe("concurrent appends on one device", () => {
     expect(switches).toBeGreaterThan(WORKERS - 1);
     expect(store.storeId).toMatch(/^[0-9A-Z]{26}$/);
   }, 60_000);
+});
+
+describe("a record read before a write", () => {
+  let tmp: TempStore;
+  beforeEach(() => {
+    tmp = makeTempStore("osb-store-append-read-");
+  });
+  afterEach(() => tmp.cleanup());
+
+  const INPUT = {
+    partition: "shared",
+    stream: "events",
+    kind: "feedback",
+    agent: "a1",
+    body: { n: 1 },
+  } as const;
+
+  test("a peer's record stamped ahead of this clock: the next local record folds after it", () => {
+    const peer = appendRecord(tmp.open("dev-b"), INPUT, { now: () => NOV_2026 + 5 * 60_000 });
+    const local = tmp.open("dev-a");
+    // Read, as a fold does, before the write.
+    readShard(peer.path, { partitionRoot: partitionDir(tmp.root, "shared") });
+    const mine = appendRecord(local, INPUT, { now: () => NOV_2026 });
+    expect(compareRecords(mine.record, peer.record)).toBeGreaterThan(0);
+  });
+
+  test("a record more than a day ahead is not adopted", () => {
+    const far = NOV_2026 + 2 * 24 * 60 * 60_000;
+    const peer = appendRecord(tmp.open("dev-b"), INPUT, { now: () => far });
+    readShard(peer.path, { partitionRoot: partitionDir(tmp.root, "shared") });
+    const mine = appendRecord(tmp.open("dev-a"), INPUT, { now: () => NOV_2026 });
+    expect(parseHlc(mine.record.hlc)!.physical).toBe(NOV_2026);
+  });
 });

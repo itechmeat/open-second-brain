@@ -26,19 +26,16 @@
  * (`preference: [[pref-foo]]`) both match.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
-import { brainDirs } from "./paths.ts";
 import { filterExpired, isExpired } from "./expiration.ts";
 import type { BrainLogEntry } from "./log.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
+import { memoryFolderPages, memoryPageNamed, type MemoryFolder } from "./memory-pages.ts";
+import { logDayReader } from "./log-days.ts";
+import { parsePreferenceMeta, parseRetiredMeta } from "./preference.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import { everyArtifactRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { reachView } from "./reach-view.ts";
 import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
-import { parseSignal } from "./signal.ts";
+import { parseSignalPage } from "./signal.ts";
 import {
   SUPERSEDED_BY_KEY,
   buildChainLookup,
@@ -48,7 +45,6 @@ import {
 } from "./lifecycle/tombstone.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { vaultRelative } from "../path-safety.ts";
-import { parseFrontmatter } from "../vault.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 import type { BrainPreference, BrainRetired, BrainSignal } from "./types.ts";
@@ -176,7 +172,6 @@ export function queryByPreference(vault: string, pref_id: string): QueryByPrefer
   // catch it later, we never want `join(dirs.preferences, ...)` to
   // resolve outside the intended directory under any operator error.
   const SLUG_RE = /^[A-Za-z0-9._-]+$/;
-  const dirs = brainDirs(vault);
   let preference: BrainPreference | BrainRetired | null = null;
 
   if (id.startsWith("pref-")) {
@@ -184,14 +179,14 @@ export function queryByPreference(vault: string, pref_id: string): QueryByPrefer
     if (!SLUG_RE.test(slug)) {
       throw new BrainNotFoundError(pref_id);
     }
-    const activePath = join(dirs.preferences, `${id}.md`);
-    if (existsSync(activePath)) {
-      preference = parsePreference(activePath);
+    const active = memoryPageNamed(vault, "preferences", `${id}.md`);
+    if (active !== null) {
+      preference = parsePreferenceMeta(active.read()[0], active.path);
     } else {
       // Fallback to the retired version with the same slug stem.
-      const retiredPathCandidate = join(dirs.retired, `ret-${slug}.md`);
-      if (existsSync(retiredPathCandidate)) {
-        preference = parseRetired(retiredPathCandidate);
+      const retired = memoryPageNamed(vault, "retired", `ret-${slug}.md`);
+      if (retired !== null) {
+        preference = parseRetiredMeta(retired.read()[0], retired.path);
       }
     }
   } else if (id.startsWith("ret-")) {
@@ -199,9 +194,9 @@ export function queryByPreference(vault: string, pref_id: string): QueryByPrefer
     if (!SLUG_RE.test(slug)) {
       throw new BrainNotFoundError(pref_id);
     }
-    const retiredPathCandidate = join(dirs.retired, `${id}.md`);
-    if (existsSync(retiredPathCandidate)) {
-      preference = parseRetired(retiredPathCandidate);
+    const retired = memoryPageNamed(vault, "retired", `${id}.md`);
+    if (retired !== null) {
+      preference = parseRetiredMeta(retired.read()[0], retired.path);
     }
   } else {
     throw new BrainNotFoundError(pref_id);
@@ -256,16 +251,15 @@ export function queryByTopic(
   const now = options.now ?? new Date();
   const showExpired = options.showExpired ?? false;
 
-  const dirs = brainDirs(vault);
   let signals: BrainSignal[] = [];
 
   // Collect signals from inbox/, inbox/processed/ and inbox/archived/.
   // We do not recurse — those two are the only allowed sub-folders of
   // `inbox/` and `readdirSync` with `withFileTypes` lets us pick file
   // vs directory entries deterministically.
-  collectSignals(dirs.inbox, want, signals);
-  collectSignals(dirs.processed, want, signals);
-  collectSignals(dirs.archived, want, signals);
+  collectSignals(vault, "inbox", want, signals);
+  collectSignals(vault, "processed", want, signals);
+  collectSignals(vault, "archived", want, signals);
   signals.sort((a, b) => a.created_at.localeCompare(b.created_at));
   // Expiration filter (C5): drop signals past their expiration_date
   // unless the caller opts into showExpired. The files stay on disk —
@@ -281,9 +275,9 @@ export function queryByTopic(
     reachView(vault, resolvedTransportReach(options.transportReach)),
   );
   let preference: BrainPreference | BrainRetired | null = null;
-  preference = findPreferenceForTopic(vault, dirs.preferences, want, "preference", view);
+  preference = findPreferenceForTopic(vault, "preferences", want, "preference", view);
   if (!preference) {
-    preference = findPreferenceForTopic(vault, dirs.retired, want, "retired", view);
+    preference = findPreferenceForTopic(vault, "retired", want, "retired", view);
   }
   // Expiration filter (C5): an active preference past its expiration_date
   // is dropped from the default result (surfaced only under showExpired).
@@ -352,27 +346,32 @@ export function readAllLogEntries(vault: string): BrainLogEntry[] {
   // Shard-aware (Memory Integrity Suite): dates from the single
   // discovery helper, entries merged across device shards.
   const out: BrainLogEntry[] = [];
-  for (const date of listLogDates(vault)) {
-    const { entries } = readLogDay(vault, date);
+  const log = logDayReader(vault);
+  for (const date of log.dates) {
+    const { entries } = log.day(date);
     for (const e of entries) out.push(e);
   }
   return out;
 }
 
-function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
-  if (!existsSync(dir)) return;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
+function collectSignals(
+  vault: string,
+  folder: MemoryFolder,
+  topic: string,
+  out: BrainSignal[],
+): void {
+  for (const entry of memoryFolderPages(vault, folder, { regularFilesOnly: true })) {
     if (!entry.name.startsWith("sig-") || !entry.name.endsWith(".md")) {
       continue;
     }
-    const path = join(dir, entry.name);
+    const path = entry.path;
     // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
     // excluded from recall.
-    if (isTombstoned(parseFrontmatter(path)[0])) continue;
+    const [meta, body] = entry.read();
+    if (isTombstoned(meta)) continue;
     let sig: BrainSignal;
     try {
-      sig = parseSignal(path);
+      sig = parseSignalPage(meta, body, path);
     } catch {
       // Unit F, deliberately NOT converted: this catch does not swallow a
       // frontmatter read. `parseSignal` is the typed validator and its
@@ -400,37 +399,36 @@ function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
  */
 function findPreferenceForTopic(
   vault: string,
-  dir: string,
+  folder: MemoryFolder,
   topic: string,
   kind: "preference" | "retired",
   view: ArtifactRefView,
 ): BrainPreference | BrainRetired | null {
-  if (!existsSync(dir)) return null;
   const prefix = kind === "preference" ? "pref-" : "ret-";
   // Sort by filename so the "first match" is deterministic across runs
   // and filesystems. `readdirSync` order is platform-dependent (it is
   // explicitly unspecified by POSIX and by Node) — without an explicit
   // sort, two preferences with the same topic could be returned in
   // different orders on different machines.
-  const entries = readdirSync(dir, { withFileTypes: true })
-    .slice()
-    .toSorted((a, b) => a.name.localeCompare(b.name));
+  const entries = memoryFolderPages(vault, folder, { regularFilesOnly: true }).toSorted((a, b) =>
+    a.name.localeCompare(b.name),
+  );
   // The serve-with-correction chain index, built on the first
   // pointer-bearing record and reused for the rest of the walk: a vault
   // whose records carry no pointer never pays for it.
   let chainLookup: ChainLookup | null = null;
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
     if (!entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
       continue;
     }
-    const path = join(dir, entry.name);
+    const path = entry.path;
     // Belief lifecycle suite (t_7d5a3589): a tombstoned entry is excluded
     // from recall while remaining on disk for audit.
-    const [meta] = parseFrontmatter(path);
+    const [meta] = entry.read();
     if (isTombstoned(meta)) continue;
     try {
-      const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
+      const parsed =
+        kind === "preference" ? parsePreferenceMeta(meta, path) : parseRetiredMeta(meta, path);
       // Skipped, not returned-then-dropped: see `ownerScope` on
       // {@link QueryByTopicOptions}.
       if (parsed.topic === topic && view.visible(parsed.id)) {

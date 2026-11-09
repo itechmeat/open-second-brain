@@ -6,7 +6,7 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { handleSearchSubcommand } from "../../src/cli/search.ts";
@@ -23,6 +23,8 @@ const origWrite = process.stdout.write.bind(process.stdout);
 
 beforeEach(() => {
   ({ vault, cleanup } = createTempVault("rerank-fit-cli"));
+  // A legacy Brain/ tree: an unswitched machine keeps its demand log in the vault.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configPath = join(vault, "config.json");
   out = "";
   // Capture stdout for JSON assertions.

@@ -1,6 +1,6 @@
 ---
 name: open-second-brain
-description: Use Open Second Brain to read, write, and maintain an agent-owned second brain in an Obsidian-compatible Markdown vault. The agent owns one top-level directory (`Brain/`). User-authored notes live wherever the operator names them and are read-only inputs when listed in `notes.read_paths`.
+description: Use Open Second Brain to read, write, and maintain an agent-owned second brain beside an Obsidian-compatible Markdown vault. The agent reaches its brain memory only through Open Second Brain tools and commands, never through file paths. User-authored notes live wherever the operator names them and are read-only inputs when listed in `notes.read_paths`.
 ---
 
 # Open Second Brain
@@ -9,24 +9,25 @@ Use this skill when a user asks an agent to use, configure, inspect, or maintain
 
 ## Layout
 
-Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent generates on its own lives under it. The exception is the note-lifecycle family (`brain_note_lifecycle`, `brain_scaffold_stub`), which acts on a user-note path the caller names and can move a note to a second top-level directory, `Archive/`.
+Open Second Brain keeps everything the agent generates on its own in its brain memory, and stores that memory itself. On a machine switched to the brain store the memory lives in the store; on a machine still on the legacy layout it is a tree inside the vault. Never read, create or edit those files by hand, and never assume where they are: the `store` block of `second_brain_status` says which layout this machine uses (`migration.switched`), and `o2b store path` names the store's location. The exception is the note-lifecycle family (`brain_note_lifecycle`, `brain_scaffold_stub`), which acts on a user-note path the caller names and can move a note to a top-level vault directory, `Archive/`.
 
-- **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
-- **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in `Brain/_brain.yaml`; the agent never writes to them.
+- **Brain memory** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
+- **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in the brain settings; the agent never writes to them.
+- **Brain settings** - the values every machine of this brain shares (`notes.read_paths`, the dream gates, `primary_agent`, `guardrails.*`, the `decision_model.enabled` opt-out). Read them with `brain_settings` (`action: get` or `list`) or `o2b brain settings get|list`. The operator changes them with `o2b brain settings set|unset`; an agent can use `brain_settings` (`action: set` or `unset`). An agent never overrides a value the operator set: on a machine switched to the brain store the tool refuses with `human_value_in_force`; on a machine still on the legacy layout, where the settings file records no author, a value that differs from the shipped default counts as the operator's and is refused the same way. Operator-only keys are refused with `operator_only_setting` on every machine, whether or not the operator set them: the whole `integrity` block, `notes.read_paths`, `vault.ignore_paths` and `vault.include_paths`, `write_binding.path_prefixes`, the `sessions` capture patterns, the `guardrails` promotion thresholds, instruction-file ceiling and trust and owner-scope toggles, and the `decision_model.enabled` opt-out, which only the operator turns back on. A setting of one machine (snapshots, storage, embeddings, decision-model endpoints) is refused with the machine-config key to set instead.
 
 ## Core principles
 
 - Treat the vault as user-owned durable knowledge.
-- Write only into `Brain/`. Never write to user-authored note folders.
-- Keep raw operational evidence separate from synthesized knowledge: per-event records go to `Brain/log/`, preferences live in `Brain/preferences/`.
+- Write brain memory only through Open Second Brain tools and commands. Never write to user-authored note folders.
+- Keep raw operational evidence separate from synthesized knowledge: per-event records go to the brain log (`brain_apply_evidence`, `brain_note`), and preferences are promoted by the dream pass (`brain_dream`).
 - Never write secrets, tokens, passwords, private keys, or credential-bearing connection strings.
-- Prefer deterministic CLI commands (`o2b brain ...`, `o2b doctor`, `o2b status`) over guessing file paths.
+- Prefer deterministic CLI commands (`o2b brain ...`, `o2b doctor`, `o2b status`, `o2b store path`) over guessing file paths.
 
 ## Default workflow
 
 1. Check whether Open Second Brain is configured: `o2b status` or `second_brain_status` MCP tool.
-2. Read the machine-local config if available (vault path, agent identity, timezone).
-3. Read the vault-local operating manual `Brain/_BRAIN.md` - this is the per-vault contract for agents.
+2. Read the machine-local config if available (vault path, agent identity, timezone); `o2b status` prints it.
+3. Read the current preferences with `brain_context` (CLI: `o2b brain export --format llms-txt`). When a task needs a location, ask `o2b store path` (store root, partitions, this device's state directory) instead of building a path.
 4. Record taste signals as they arrive in dialogue via `brain_feedback` (see the `brain-memory` skill).
 5. After producing a durable artifact, check applicable preferences and record evidence via `brain_apply_evidence` (see the `brain-memory` skill).
 6. For read access to vault pages by title, use `second_brain_query`.
@@ -42,7 +43,7 @@ Name the surface a question is shaped for, and route to it explicitly:
 
 ## Safety
 
-If a write operation might affect anything outside the `Brain/` directory, ask for explicit confirmation. When in doubt, prefer `Brain/`.
+If a write operation might affect anything outside the brain memory, ask for explicit confirmation. When in doubt, record through the brain tools rather than editing a vault file.
 
 Decision-model verdicts (`decision_model` on `brain_hygiene scan` dedup findings, doctor alias candidates and `brain_tension verify`) are advisory only: merges, dismissals and resolutions still need an explicit action.
 
@@ -51,5 +52,5 @@ To label a note, call `brain_labels suggest` before `assign`; `suggest` never as
 ## See also
 
 - `brain-memory` skill — when and how to call `brain_feedback` / `brain_apply_evidence`.
-- `Brain/_BRAIN.md` (in each vault) — operating manual for that vault, generated by `o2b brain init`.
+- `o2b store path` and the `store` block of `second_brain_status` — where the brain store, its partitions and this device's state live.
 - `docs/plans/2026-05-15-brain-observing-memory.md` (in the repo) — full design.

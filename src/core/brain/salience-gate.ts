@@ -58,11 +58,11 @@
  * one the operator never set.
  */
 
+import { vaultRelativeOf } from "./no-vault.ts";
 import { computeConfidence } from "./confidence.ts";
 import { computeLessons } from "./lessons.ts";
 import { observedReuseRates } from "./observed-use.ts";
 import { describe as describeValue } from "./policy/field-checks.ts";
-import { vaultRelative } from "../path-safety.ts";
 import type { BrainConfig, BrainPreference } from "./types.ts";
 
 /** Share of the score the decayed outcome mass can buy. */
@@ -161,7 +161,8 @@ export interface SalienceGateVerdict {
 }
 
 export interface SalienceFoldSetInput {
-  readonly vault: string;
+  /** The vault, or `null` with none (design D14). */
+  readonly vault: string | null;
   readonly preferences: ReadonlyArray<SalienceCandidate>;
   readonly cfg: BrainConfig;
   readonly now: Date;
@@ -296,7 +297,7 @@ export function collectSalienceFoldSet(
 
   return Object.freeze(
     preferences.map((candidate) => {
-      const relative = vaultRelative(candidate.path, vault);
+      const relative = vaultRelativeOf(candidate.path, vault);
       // Observed use is keyed by path when the emitter knew one, else by
       // id; the id is tried first so a record carrying both resolves the
       // same way every run.

@@ -15,6 +15,9 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-brain-signal-"));
+  // A legacy tree: these tests pin the page layout of an unswitched
+  // machine (a vault with no `Brain/` is store-only, task 2.10).
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

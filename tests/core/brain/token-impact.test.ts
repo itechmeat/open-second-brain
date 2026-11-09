@@ -17,6 +17,10 @@ import {
   TOKEN_COUNT_METHODS,
 } from "../../../src/core/brain/token-impact.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

@@ -26,7 +26,9 @@ import type { EmbeddingProvider } from "../../../search/embeddings/contract.ts";
 import { findMergeCandidates } from "../../merge-candidates.ts";
 import { isMergeResolved, mergePointerLookup } from "../../page-meta/page-id.ts";
 import { brainDirs } from "../../paths.ts";
-import { parsePreference } from "../../preference.ts";
+import { memoryFromStore, storePagesIn } from "../../memory-pages.ts";
+import { parsePreference, parsePreferenceMeta } from "../../preference.ts";
+import type { BrainPreference } from "../../types.ts";
 import { hygieneFindingId } from "./id.ts";
 import type { HygieneDetectorContext, HygieneFinding } from "../types.ts";
 
@@ -69,14 +71,29 @@ interface PrefCandidate {
   readonly mergedInto: string | null;
 }
 
-function listPreferenceCandidates(vault: string): PrefCandidate[] {
+/**
+ * The preferences to read, in name order: the folder's files, or on a
+ * store-only machine (task 2.10) the fold's records by their page.
+ */
+function preferenceReads(vault: string): ReadonlyArray<() => BrainPreference> | null {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
+  if (memoryFromStore(vault)) {
+    return storePagesIn(vault, dir).map((page) => () => parsePreferenceMeta(page.meta, page.path));
+  }
+  if (!existsSync(dir)) return null;
+  return readdirSync(dir)
+    .toSorted()
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => () => parsePreference(join(dir, name)));
+}
+
+function listPreferenceCandidates(vault: string): PrefCandidate[] {
+  const reads = preferenceReads(vault);
+  if (reads === null) return [];
   const out: PrefCandidate[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const read of reads) {
     try {
-      const pref = parsePreference(join(dir, name));
+      const pref = read();
       out.push({
         id: pref.id,
         topic: pref.topic,

@@ -44,6 +44,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
+import { loadPermissionsDocumentFor } from "../permissions/document-source.ts";
 import { dirname, join, posix, sep, win32 } from "node:path";
 
 import { resolveAgentName } from "../../config.ts";
@@ -71,13 +72,13 @@ import {
   type VaultScope,
 } from "../../vault-scope/index.ts";
 import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL, isUnderBrainRoot } from "../paths.ts";
+import { viewFolderRefusal } from "../../view/vault-guard.ts";
 import { requireNextStep } from "../next-step.ts";
 import { BrainConfigError, loadIntegrityConfigSafe } from "../policy.ts";
-import { loadPermissionsDocument } from "../permissions/document.ts";
 import { appendDecisionLedger } from "../permissions/ledger.ts";
 import { OWNER_SCOPE_WRITES_KEY, refuseCrossOwnerWrite } from "../trust/owner-write-gate.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
 import { checkWriteBinding } from "../../write-binding/index.ts";
 import { validateArtifact } from "../write-session/validate.ts";
 import type { WriteSessionError } from "../write-session/types.ts";
@@ -475,6 +476,13 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
       `the Brain machinery root is not writable via create_note: ${relPath} resolves to ${landsAt}`,
     );
   }
+  // The human view folder, when it sits in the vault, is the view
+  // writer's: a page edited there is read back with human authority
+  // (`core/view/vault-guard.ts`), so a note tool must not write it.
+  for (const rel of new Set([relPath, landsAt])) {
+    const viewRefusal = viewFolderRefusal(vault, rel, "create_note");
+    if (viewRefusal !== null) throw new CreateNoteError("excluded", viewRefusal);
+  }
 
   // Vault scope is ONE policy every consumer obeys, so a write is
   // refused wherever a walk would be refused - a note authored outside
@@ -653,7 +661,7 @@ export function noteOwnerGateVerdict(
   // token's agent, never for whoever the process config names.
   const resolved = subject?.agent ?? resolveAgentName(configPath);
   const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
-  const { document } = loadPermissionsDocument(vault);
+  const { document } = loadPermissionsDocumentFor(vault, configPath);
   const verdict = refuseCrossOwnerWrite({
     frontmatterOwner: named,
     resolvedIdentity: resolved,
@@ -757,7 +765,9 @@ function createNoteInScope(vault: string, input: CreateNoteInput): CreateNoteRes
   // Vault-identity write guard (context-integrity-gates, Unit J). This
   // backs `brain_create_note`, `brain_append_note`, and
   // `brain_update_note` - the headline note writers.
-  assertVaultIdentityForWrite(vault);
+  // Through the vault adapter (design D14 items 8, 13): a vault is
+  // required, and the vault identity guard holds.
+  assertNoteVaultForWrite(vault, "note writes");
   const { relPath, abs, originChannel } = resolveNoteTarget(vault, input.path);
   const callerFrontmatter = input.frontmatter ?? {};
   // The owner-write gate runs BEFORE the body resolves, before validation,

@@ -98,8 +98,15 @@ describe("o2b mcp --probe", () => {
     expect(res.stdout).toMatch(/[1-9]\d* tools/);
   });
 
-  test("--probe without vault exits non-zero with FAIL message", async () => {
+  test("--probe without a vault starts the server with no vault (design D14)", async () => {
     const res = await runCli(["mcp", "--probe"], { stdin: "" });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("mcp probe ok");
+    expect(res.stdout).toContain("vault=none");
+  });
+
+  test("--probe with an explicitly empty --vault is still a FAIL", async () => {
+    const res = await runCli(["mcp", "--probe", "--vault", ""], { stdin: "" });
     expect(res.returncode).toBeGreaterThan(0);
     expect(res.stdout).toContain("mcp probe FAIL");
   });

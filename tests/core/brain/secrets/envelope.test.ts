@@ -47,6 +47,9 @@ let keyPath: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-envelope-"));
+  // A legacy vault: its keyfile lives in the vault. A vault with no
+  // `Brain/` is store-only and keeps it in device-local state.
+  mkdirSync(join(vault, "Brain"));
   keyPath = join(secretsDir(vault), "keyfile");
   loadOrCreateKey(keyPath);
 });

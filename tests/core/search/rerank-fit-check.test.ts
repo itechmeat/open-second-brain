@@ -10,7 +10,7 @@
  */
 
 import { test, expect } from "bun:test";
-import { statSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, statSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -21,6 +21,10 @@ import type { RerankProvider } from "../../../src/core/search/rerank/contract.ts
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { recordQueryDemand } from "../../../src/core/brain/query-demand.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 /** A provider that returns preset scores per query, ignoring documents. */
 function fixedProvider(scoresByQuery: Record<string, ReadonlyArray<number>>): RerankProvider {
@@ -177,6 +181,8 @@ test("a sample set where every query rejects reports inapplicable, never a silen
 
 test("integration: local reranker over a real index is read-only (no config/store writes)", async () => {
   const { vault, dbPath, cleanup } = createTempVault("fit-integration");
+  // A legacy Brain/ tree: an unswitched machine keeps its demand log in the vault.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   try {
     writeMd(vault, "a.md", "# Alpha\n\nAlpha beta gamma delta about postgres backups.\n");
     writeMd(vault, "b.md", "# Beta\n\nAlpha beta gamma staging deploy pipelines here.\n");

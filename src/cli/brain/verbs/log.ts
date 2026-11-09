@@ -1,5 +1,11 @@
-import { breakDetail, verifyLogChain } from "../../../core/brain/log-chain.ts";
+import {
+  breakDetail,
+  LOG_CHAIN_COVERS,
+  STORE_LOG_INTEGRITY,
+  verifyLogChain,
+} from "../../../core/brain/log-chain.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
+import { isStoreOnly } from "../../../core/store/store-only.ts";
 import { brainVerbContext, fail, info, parse, writeJson } from "../helpers.ts";
 
 /**
@@ -27,7 +33,10 @@ const LOG_USAGE =
   "                    where each one stops linking up: shard path, line\n" +
   "                    number, and whether the line was edited, removed or\n" +
   "                    stripped of its chain fields. Reports only - nothing\n" +
-  "                    here rewrites a log to make it verify.\n";
+  "                    here rewrites a log to make it verify. Covers the\n" +
+  "                    legacy day files only: brain store records carry no\n" +
+  "                    chain, their checksums and state digests are checked\n" +
+  "                    by `o2b brain doctor`.\n";
 
 export async function handleBrainLogSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
@@ -62,11 +71,18 @@ export async function cmdBrainLogVerify(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const { vault } = brainVerbContext(flags);
+  const { vault, config } = brainVerbContext(flags, { vault: "optional" });
+  // A store-only machine (design D14 items 1 and 10) writes its log to the
+  // store, whose records carry no chain; what is left to walk here is the
+  // legacy day files it may still hold.
+  const storeOnly = isStoreOnly({ vault, configPath: config });
 
   let result;
   try {
-    result = verifyLogChain(vault);
+    result =
+      vault === null
+        ? { covers: LOG_CHAIN_COVERS, shards: [], notices: [], ok: true }
+        : verifyLogChain(vault);
   } catch (exc) {
     return fail(`log verify failed: ${(exc as Error).message ?? exc}`);
   }
@@ -74,6 +90,9 @@ export async function cmdBrainLogVerify(argv: string[]): Promise<number> {
   if (flags["json"]) {
     writeJson({
       ok: result.ok,
+      covers: result.covers,
+      store_only: storeOnly,
+      ...(storeOnly ? { store_integrity: STORE_LOG_INTEGRITY } : {}),
       shards: result.shards.map((shard) => ({
         path: shard.path,
         date: shard.date,
@@ -96,8 +115,13 @@ export async function cmdBrainLogVerify(argv: string[]): Promise<number> {
     return result.ok ? 0 : 1;
   }
 
+  if (storeOnly) info(`this machine writes the brain store only: ${STORE_LOG_INTEGRITY}`);
   if (result.shards.length === 0) {
-    info(`no chained log shard under ${brainDirs(vault).log}: nothing to verify`);
+    info(
+      vault === null
+        ? "no vault, so no legacy log day file: nothing to verify"
+        : `no chained log shard under ${brainDirs(vault).log}: nothing to verify`,
+    );
     // Still a finding when the directory itself could not be listed.
     for (const notice of result.notices) info(`  ${notice.detail}`);
     return result.ok ? 0 : 1;

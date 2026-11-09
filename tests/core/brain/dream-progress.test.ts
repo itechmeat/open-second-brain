@@ -33,7 +33,7 @@ import {
 } from "../../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
-import { digestVaultFiles, digestVaultTree } from "../../helpers/vault-digest.ts";
+import { treeEntries, digestVaultTree } from "../../helpers/vault-digest.ts";
 
 let vault: string;
 let configHome: string;
@@ -170,13 +170,13 @@ describe("dream progress", () => {
       const NORMALISED_PREFIX = "Brain/log/";
       const authored = (root: string): Map<string, string> => {
         const kept = new Map<string, string>();
-        for (const [path, digest] of digestVaultFiles(root)) {
+        for (const [path, digest] of treeEntries(root)) {
           if (EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
           // Digest everywhere else; the day log is text, so it is compared
           // as normalised text and a mismatch prints the offending line.
           kept.set(
             path,
-            path.startsWith(NORMALISED_PREFIX)
+            path.startsWith(NORMALISED_PREFIX) && digest !== "d"
               ? readFileSync(join(root, path), "utf8")
                   .replaceAll(ARCHIVE_SIZE_FIELD, ARCHIVE_SIZE_PLACEHOLDER)
                   .replaceAll(CHAIN_HASH_FIELD, CHAIN_HASH_PLACEHOLDER)

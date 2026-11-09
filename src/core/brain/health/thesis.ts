@@ -39,13 +39,10 @@
  * on every Syncthing peer.
  */
 
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { parseFrontmatter, slugify } from "../../vault.ts";
+import { FileAlreadyExistsError } from "../../fs-atomic.ts";
+import { slugify } from "../../vault.ts";
 import { nextDueDate, parseCadence, type ObligationCadence } from "../obligations.ts";
 import { thesesDir, thesisPath, validateIsoDate } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { type BrainSignalSign, type BrainCommitmentTier } from "../types.ts";
 import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
@@ -57,6 +54,13 @@ import {
 } from "./contradiction.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { parseIsoUtc } from "./iso-time.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -212,8 +216,8 @@ function parseStatus(raw: unknown): ThesisStatus {
 
 function parsePage(vault: string, slug: string): ThesisPage | null {
   const path = thesisPath(vault, slug);
-  if (!existsSync(path)) return null;
-  const [meta, body] = parseFrontmatter(path);
+  if (!lanePageExists(vault, path)) return null;
+  const [meta, body] = parseLanePage(vault, path);
   let cadence: ObligationCadence;
   try {
     cadence = parseCadence(typeof meta["cadence"] === "string" ? meta["cadence"] : "");
@@ -243,13 +247,13 @@ function parsePage(vault: string, slug: string): ThesisPage | null {
 /** Create a declared-thesis page. Refuses to clobber an existing slug. */
 export function recordThesis(vault: string, input: RecordThesisInput): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const statement = input.statement.trim();
   if (statement.length === 0) throw new ThesisError("thesis statement must not be empty");
   const cadence = parseCadence(input.cadence ?? "monthly");
   const now = input.now ?? new Date();
   const slug = slugify(statement);
-  if (existsSync(thesisPath(vault, slug))) {
+  if (lanePageExists(vault, thesisPath(vault, slug))) {
     throw new ThesisError(`thesis already exists: ${slug} (remove it first to recreate)`);
   }
   const page = {
@@ -267,16 +271,24 @@ export function recordThesis(vault: string, input: RecordThesisInput): ThesisPag
     commitment: validateCommitmentTier(input.commitment),
     notes: (input.notes ?? "").trim(),
   };
-  mkdirSync(thesesDir(vault), { recursive: true });
   const path = thesisPath(vault, slug);
-  atomicWriteFileSync(path, render(page));
+  // An exclusive create: a second process creating the same slug between
+  // the check above and this write is refused, not folded over the first.
+  try {
+    writeLaneText(vault, path, render(page), { exclusive: true });
+  } catch (err) {
+    if (err instanceof FileAlreadyExistsError) {
+      throw new ThesisError(`thesis already exists: ${slug} (remove it first to recreate)`);
+    }
+    throw err;
+  }
   return Object.freeze({ ...page, path });
 }
 
 /** Revise a thesis; bumps `last_updated` to now (or the injected clock). */
 export function updateThesis(vault: string, input: UpdateThesisInput): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new ThesisError(`no thesis: ${slug}`);
@@ -302,7 +314,7 @@ export function updateThesis(vault: string, input: UpdateThesisInput): ThesisPag
       input.commitment !== undefined ? validateCommitmentTier(input.commitment) : prior.commitment,
     notes: input.notes !== undefined ? input.notes.trim() : prior.notes,
   };
-  atomicWriteFileSync(prior.path, render(page));
+  writeLaneText(vault, prior.path, render(page));
   return Object.freeze({ ...page, path: prior.path });
 }
 
@@ -316,7 +328,7 @@ export function recordThesisSupport(
   opts: { date?: string; now?: Date } = {},
 ): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const normalized = slugify(slug);
   const prior = parsePage(vault, normalized);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);
@@ -324,20 +336,20 @@ export function recordThesisSupport(
   const date = opts.date ? validateIsoDate(opts.date) : isoDate(now);
   const page = { ...prior, lastSupportAt: date, lastUpdated: isoDate(now) };
   const { path: _path, ...rest } = page;
-  atomicWriteFileSync(prior.path, render(rest));
+  writeLaneText(vault, prior.path, render(rest));
   return Object.freeze(page);
 }
 
 /** Formally close a thesis (the graveyard's recommended action). */
 export function closeThesis(vault: string, slug: string): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const normalized = slugify(slug);
   const prior = parsePage(vault, normalized);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);
   const page = { ...prior, status: THESIS_STATUS.closed };
   const { path: _path, ...rest } = page;
-  atomicWriteFileSync(prior.path, render(rest));
+  writeLaneText(vault, prior.path, render(rest));
   return Object.freeze(page);
 }
 
@@ -349,9 +361,9 @@ export function showThesis(vault: string, slug: string): ThesisPage | null {
 /** All theses sorted by slug; optionally only the active ones. */
 export function listTheses(vault: string, options: { activeOnly?: boolean } = {}): ThesisPage[] {
   const dir = thesesDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const out: ThesisPage[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".md") || !name.startsWith("thesis-")) continue;
     const slug = name.replace(/^thesis-/u, "").replace(/\.md$/u, "");
     const page = parsePage(vault, slug);

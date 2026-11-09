@@ -774,6 +774,11 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
    * Hermes context compaction, which rewrites no ledger.
    */
   receiptCompaction: "receipt-compaction",
+  /**
+   * Pre-import point taken before `o2b brain migrate-store` moves the
+   * legacy brain into the brain store (design D11 step 3).
+   */
+  storeMigration: "store-migration",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */

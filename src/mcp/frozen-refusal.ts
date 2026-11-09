@@ -35,6 +35,7 @@ import { appendLogEvent } from "../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../core/brain/types.ts";
 import { isoSecond } from "../core/brain/time.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
+import { MigrationInProgressError } from "../core/migration-gate.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 /** The refusal token, named in the message and carried in `data`. */
@@ -83,19 +84,53 @@ function recordRefusal(
 }
 
 /**
- * Re-raise a frozen-vault refusal ahead of any generic error mapping.
+ * Re-raise a typed write refusal ahead of any generic error mapping: a
+ * frozen vault, or a store migration running on this machine.
  *
  * The tool handlers wrap an unrecognised throw in an `INTERNAL_ERROR`
- * MCPError, which is right for an I/O fault and wrong for this: a freeze
- * is a state an operator asked for, and a caller told "internal error"
- * learns neither that nor the command that lifts it. A converter calls
- * this first so the typed refusal reaches the dispatch seam, which is
- * where it becomes the structured refusal and the `write-refused` event.
+ * MCPError, which is right for an I/O fault and wrong for these: each is a
+ * state an operator started, and a caller told "internal error" learns
+ * neither that nor the command that ends it. A converter calls this first
+ * so the typed refusal reaches the dispatch seam, which is where it
+ * becomes the structured refusal. Only the freeze is also recorded as a
+ * `write-refused` event (see {@link migrationInProgressRefusal}).
  *
- * A no-op for every other error, so a call site pays one `instanceof`.
+ * A no-op for every other error, so a call site pays two `instanceof`.
  */
 export function rethrowVaultFrozen(err: unknown): void {
-  if (err instanceof VaultFrozenError) throw err;
+  if (err instanceof VaultFrozenError || err instanceof MigrationInProgressError) throw err;
+}
+
+/** The refusal token of a write refused by a running store migration. */
+export const MIGRATION_IN_PROGRESS_REFUSAL = "migration_in_progress";
+
+/** The structured payload of that refusal, the shape {@link VaultFrozenData} has. */
+export interface MigrationInProgressData {
+  readonly code: typeof MIGRATION_IN_PROGRESS_REFUSAL;
+  readonly tool: string;
+  readonly run_id: string;
+  readonly since: string;
+  readonly next_command: string;
+}
+
+/**
+ * Turn a {@link MigrationInProgressError} into the refusal a caller
+ * receives: the same structured shape as a frozen vault's. Nothing is
+ * appended to the Brain log, which the migration is moving into the store
+ * at that moment; the gate itself is the record.
+ */
+export function migrationInProgressRefusal(tool: string, err: MigrationInProgressError): MCPError {
+  // The error's own message already names the resume command; it is in
+  // `next_command` for a caller that acts on the data.
+  const message = `${tool}: refused (${MIGRATION_IN_PROGRESS_REFUSAL}). ${err.message}.`;
+  const data: MigrationInProgressData = Object.freeze({
+    code: MIGRATION_IN_PROGRESS_REFUSAL,
+    tool,
+    run_id: err.gate.run_id,
+    since: err.gate.since,
+    next_command: err.next_command,
+  });
+  return new MCPError(INVALID_PARAMS, message, data);
 }
 
 /**

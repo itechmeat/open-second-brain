@@ -30,7 +30,8 @@ const savedEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-search-"));
   vault = join(tmp, "vault");
-  mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configPath = join(tmp, "config.yaml");
   for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
     savedEnv[k] = process.env[k];

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePagesIn } from "../brain/memory-pages.ts";
 import { BRAIN_INBOX_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../brain/paths.ts";
 import type { ActivityWindow } from "./activity-git.ts";
 
@@ -38,10 +39,23 @@ function countInWindow(dir: string, win: ActivityWindow): number {
   return n;
 }
 
+/**
+ * {@link countInWindow} on a store-only machine (task 2.10): the fold's
+ * records whose page sat in `rel` and were last written inside the window.
+ */
+function countStoreInWindow(vault: string, rel: string, win: ActivityWindow): number {
+  const start = win.startUtc.getTime();
+  const end = win.endUtc.getTime();
+  return storePagesIn(vault, rel).filter((p) => p.updatedMs >= start && p.updatedMs < end).length;
+}
+
 export function vaultDelta(vault: string, win: ActivityWindow): VaultDelta {
-  const newSignals = countInWindow(join(vault, BRAIN_INBOX_REL), win);
-  const newPreferences = countInWindow(join(vault, BRAIN_PREFERENCES_REL), win);
-  const newRetired = countInWindow(join(vault, BRAIN_RETIRED_REL), win);
+  const fromStore = memoryFromStore(vault);
+  const count = (rel: string): number =>
+    fromStore ? countStoreInWindow(vault, rel, win) : countInWindow(join(vault, rel), win);
+  const newSignals = count(BRAIN_INBOX_REL);
+  const newPreferences = count(BRAIN_PREFERENCES_REL);
+  const newRetired = count(BRAIN_RETIRED_REL);
   return {
     newSignals,
     newPreferences,

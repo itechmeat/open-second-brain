@@ -322,6 +322,70 @@ const C = WRITE_CATEGORY;
  * through `atomicWriteFileSync` instead of truncating them in place.
  */
 const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object.freeze({
+  // --- The record-lane page store (task 2.10 WP6) ----------------------
+  "src/core/store/lane-pages.ts": {
+    categories: [C.lifecycleMove, C.retentionDelete],
+    calls: ["renameSync", "rmSync"],
+    reason:
+      "on an unswitched machine the lane page store moves a record-lane page into its archive " +
+      "folder and removes a page its lane module retired, exactly as the lane modules did before; " +
+      "pages themselves are written through the shared atomic writers, and a store-only machine " +
+      "writes lane-entry records instead.",
+  },
+  // --- The brain store migration (task 2.3) -----------------------------
+  "src/core/store-migration/exporters.ts": {
+    categories: [C.appendOnlyLedger, C.retentionDelete, C.machineArtifact],
+    calls: ["appendFileSync", "rmSync", "writeFileSync"],
+    reason:
+      "the rollback's legacy exporters write store records back into the legacy layout on purpose: " +
+      "signal and record-lane pages, preference pages rewritten from their fold, pinned context, and " +
+      "one appended row per log event in this device's own day shard; a page whose fold removed it " +
+      "is deleted. They run only under the migration gate during a rollback.",
+  },
+  "src/core/store-migration/removal.ts": {
+    categories: [C.archiveTransfer, C.lifecycleMove],
+    calls: ["cpSync", "renameSync", "rmSync"],
+    reason:
+      "removing the legacy tree moves Brain/ and the derived store folder out of the vault into a " +
+      "dated device-local archive by rename, or by copy, verify and remove across filesystems; " +
+      "nothing is deleted without a verified archive copy. Its journal naming the archive is a " +
+      "device-local file, removed once the removal is recorded.",
+  },
+  "src/core/store-migration/transition-watermark.ts": {
+    categories: [C.machineArtifact],
+    calls: ["writeFileSync"],
+    reason:
+      "the automatic transition import keeps its hourly throttle stamp and its per-file watermark " +
+      "of the legacy tree (recorded by the migration and the transition imports at their final " +
+      "pass) as two small JSON files in the device-local migration folder; it reads the vault and " +
+      "writes nothing into it.",
+  },
+  "src/core/store-migration/rollback.ts": {
+    categories: [C.archiveTransfer, C.appendOnlyLedger, C.machineArtifact],
+    calls: ["appendFileSync", "cpSync", "rmSync", "writeFileSync"],
+    reason:
+      "the rollback replaces Brain/ with the migration snapshot's extracted tree (the snapshot " +
+      "folders kept) and keeps its restore state and its per-record replay journal in the " +
+      "device-local migration folder.",
+  },
+  "src/core/store-migration/backup.ts": {
+    categories: [C.archiveTransfer, C.machineArtifact, C.retentionDelete],
+    calls: ["copyFileSync", "rmSync", "writeFileSync"],
+    reason:
+      "the migration backup copies the snapshot archive and every backup-class surface OUT of the " +
+      "vault into the device-local migration folder, writes its manifest and the unparseable-item " +
+      "archive there, and removes the scratch folder of its test restore; it reads the vault and " +
+      "never writes into it.",
+  },
+  "src/core/store-migration/local-state.ts": {
+    categories: [C.archiveTransfer, C.machineArtifact],
+    calls: ["copyFileSync"],
+    reason:
+      "the migration copies device-local and backup-class surfaces OUT of the vault into the " +
+      "device-local migration folder, and copies accepted skills from the legacy Brain/skills " +
+      "tree to the vault's own skills/ folder (files agents read, never store records), each " +
+      "copy verified by hash and never over a different file already there.",
+  },
   // --- The shared writers themselves ------------------------------------
   "src/core/brain/log-append-io.ts": {
     categories: [C.sharedWriterItself, C.appendOnlyLedger],
@@ -489,11 +553,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "the cross-device copy-then-remove fallback taken when `rename(2)` cannot span " +
       "filesystems.",
   },
-  "src/core/brain/dead-ends.ts": {
-    categories: [C.lifecycleMove],
-    calls: ["renameSync"],
-    reason: "moves dead-end notes past the active cap into `archive/`; the bytes are unchanged.",
-  },
   "src/core/brain/dream-apply.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync"],
@@ -503,45 +562,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "deliberately best-effort per signal, because a source already moved by an earlier run is " +
       "benign on a rerun while a real I/O failure is still surfaced.",
   },
-  "src/core/brain/dream-stage.ts": {
-    categories: [C.lifecycleMove, C.retentionDelete],
-    calls: ["renameSync", "rmSync"],
-    reason:
-      "renames a whole staged bundle DIRECTORY into `applied/` - a directory move has " +
-      "no file-writer form - and discards a bundle the operator dropped.",
-  },
-  "src/core/brain/intake/extract-intake.ts": {
-    categories: [C.lifecycleMove],
-    calls: ["unlinkSync"],
-    reason:
-      "the stage arm of the intake's disposition contract moves each CREATED entity page " +
-      "into the review queue: `stageForReview` lands the page's exact bytes on the staged " +
-      "entry first and the canonical copy is unlinked second, so a crash between the two " +
-      "leaves both copies and never zero. The page is not rewritten - the queue's apply " +
-      "publishes the staged bytes verbatim - so no content is authored here.",
-  },
   "src/core/brain/intentions.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync", "rmSync"],
     reason:
       "archives an active intention into `history/` under a collision-suffixed name, " +
       "with the same cross-device copy-then-remove fallback.",
-  },
-  "src/core/brain/obligations.ts": {
-    categories: [C.lifecycleMove],
-    calls: ["renameSync", "rmSync"],
-    reason:
-      "archives a closed obligation; the fallback arm writes the copy through " +
-      "`atomicWriteFileSync` and removes the source.",
-  },
-  "src/core/brain/pledges.ts": {
-    categories: [C.lifecycleMove],
-    calls: ["renameSync", "rmSync"],
-    reason:
-      "archives a removed pledge into `Brain/pledges/archive/` under a collision-suffixed " +
-      "name, the obligations move one family over; the fallback arm re-reads the page and " +
-      "writes the copy through `atomicWriteFileSync`, then removes the source. The rename is " +
-      "`renameWithRetry`, the shared helper the detector reads as its renameSync shape.",
   },
   "src/core/brain/pending/pending-lanes.ts": {
     categories: [C.lifecycleMove],
@@ -607,12 +633,24 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],
-    calls: ["renameSync"],
+    calls: ["copyFileSync", "renameSync", "rmSync", "writeFileSync"],
     reason:
       "moves an orphaned generated page into the cleanup directory under a name proven free by " +
       "the suffix loop immediately above the call, so the move can never overwrite a page already " +
       "parked there. The bytes are the page's own and are unchanged by the move; there is no " +
-      "content for a writer to render and nothing to make atomic beyond `rename(2)` itself.",
+      "content for a writer to render and nothing to make atomic beyond `rename(2)` itself. " +
+      "Across volumes (the device-local snapshots folder of a switched machine) the move is a " +
+      "copy, then the source's removal; a page a store-only machine holds as a lane record is " +
+      "written out with an exclusive create (`wx`) under the same free name.",
+  },
+  "src/core/brain/skill-accept-journal.ts": {
+    categories: [C.machineArtifact, C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "the skill accept journal and its prior-content copy are device-local repair markers " +
+      "(machine state: the vault's Brain/ on an unswitched machine, the device-local state once " +
+      "switched), written as plain files so they never become synced lane records; clearing one " +
+      "is the end of the transaction it recorded.",
   },
   "src/core/brain/signal-retire.ts": {
     categories: [C.lifecycleMove],
@@ -631,33 +669,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
 
   // --- Retention, reset and cleanup deletes ------------------------------
-  "src/core/brain/entities/label-hygiene.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "prunes entity records inside `withDestructiveSnapshot`, which is the safety " +
-      "mechanism here; the surviving records' rewrites go through " +
-      "`writeFrontmatterAtomic` in the same block.",
-  },
-  "src/core/brain/entities/page-merge.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "archives the dropped entity page inside `withDestructiveSnapshot`, which is the " +
-      "recovery story this verb is built on; the survivor rewrite, the alias add and the " +
-      "inbound-edge retargets in the same block route through `writeFrontmatterAtomic`, " +
-      "and a removed page has no file form a shared writer could produce.",
-  },
-  "src/core/brain/provenance/source-archive.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "discards one content-addressed archive entry when delete-by-source has established " +
-      "its last citing page is in the same confirmed deletion - the store's write half (the " +
-      "redacted put) routes through `atomicWriteFileSync`, and a removal is not a write any " +
-      "shared writer has a form for. The path is derived from the entry's own sha-256 and " +
-      "validated before the join, so the only file this call can address is the entry named.",
-  },
   "src/core/brain/exact-state.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
@@ -667,30 +678,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "state on this lane - there is no empty-file representation to write instead - so no shared " +
       "writer has a form for this operation.",
   },
-  "src/core/brain/gaps/gap-loop.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "prunes closed gap tasks past their retention window, and only those whose own frontmatter " +
-      "carries a parseable `closed_at` older than the cutoff - a task with an unreadable or " +
-      "missing date is skipped rather than swept. A delete writes no bytes, so there is nothing " +
-      "for a shared writer to make atomic; the frontmatter re-check is the safety here.",
-  },
   "src/core/brain/git/ingest.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
     reason:
       "clears the git ingest `state.json` on a rescan that found no head, so the next " +
       "run starts as an initial walk rather than inheriting a stale marker.",
-  },
-  "src/core/brain/pledge-intake.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "removes the pages this same intake created when a subsequent create fails " +
-      "mid-batch, restoring the pre-intake state the no-partial-batches promise names; " +
-      "a rollback has no file form a shared writer could produce, and the refusal " +
-      "reports every slug it removed and any it could not.",
   },
   "src/core/brain/checkpoint-store.ts": {
     categories: [C.retentionDelete],
@@ -702,26 +695,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "starts from the beginning, which is the same thing a checkpoint rewritten to empty would " +
       "have to mean.",
   },
-  "src/core/brain/ingest/sources-registry.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "deletes a source page after confirming from its own frontmatter that it is one; " +
-      "a concurrent delete is reported, not swallowed.",
-  },
   "src/core/brain/lineage/identity.ts": {
     categories: [C.retentionDelete],
     calls: ["unlinkSync"],
     reason:
       "clears a worktree identity marker, and prunes the oldest markers past the cap. " +
       "A marker's whole content is its existence.",
-  },
-  "src/core/brain/link-graph/communities.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "removes generated cluster notes the current run no longer expects, and only " +
-      "those whose own frontmatter declares the generated kind.",
   },
   "src/core/brain/notes/revert.ts": {
     categories: [C.retentionDelete],
@@ -761,14 +740,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "the way out, and the write half of the same module already goes through " +
       "`atomicWriteFileSync`.",
   },
-  "src/core/brain/skill-accept-journal.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "removes the accept-journal marker once the accept committed; the path is put " +
-      "through `ensureInsideVault` first because the unreadable arm cannot trust the " +
-      "slug in the file.",
-  },
   "src/core/brain/source-cleanup.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
@@ -787,15 +758,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "under `--remediate --apply` only: removes a non-directory occupying a path the " +
       "tree requires to be a directory, immediately before creating it.",
-  },
-  "src/core/brain/write-session/store.ts": {
-    categories: [C.retentionDelete],
-    calls: ["rmSync"],
-    reason:
-      "deletes write-session files, individually and by sweep, idempotent by `force` so a " +
-      "concurrent delete of the same session is not an error. A write session is a staging " +
-      "record whose whole content is its existence for the length of the session, so removal is " +
-      "the operation and there are no bytes for a shared writer to author.",
   },
   "src/core/search/tuning-store.ts": {
     categories: [C.retentionDelete],
@@ -843,20 +805,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "operator-named path. In population only because the module imports the vault " +
       "path vocabulary elsewhere; this write never targets the vault.",
   },
-  "src/core/brain/link-graph/bridge-discovery.ts": {
-    categories: [C.machineArtifact],
-    calls: ["writeFileSync"],
-    reason: "rewrites the dismissed-bridge-pairs JSON set in full; there is no note involved.",
-  },
-  "src/core/brain/link-graph/co-occurrence.ts": {
-    categories: [C.machineArtifact],
-    calls: ["writeFileSync"],
-    reason:
-      "regenerates the co-occurrence JSON artifact in full from the current link graph on every " +
-      "run, so there is no prior content a torn write could destroy - the next pass recomputes " +
-      "the whole document from the pages, which are the source of truth. No note is involved and " +
-      "no Markdown parser ever reads it.",
-  },
   "src/core/brain/portability/pointer.ts": {
     categories: [C.machineArtifact],
     calls: ["rmSync"],
@@ -879,13 +827,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/secrets/store.ts": {
     categories: [C.machineArtifact],
-    calls: ["chmodSync", "renameSync", "writeFileSync"],
+    calls: ["chmodSync", "renameSync", "rmSync", "writeFileSync"],
     reason:
       "hand-rolled tmp-plus-rename because it must write at mode 0600, which " +
       "`atomicWriteFileSync` cannot express. Routing it through the shared writer " +
       "would leave the secrets file world-readable for the length of the swap. " +
       "`chmodSync` re-applies that 0600 on load to a store that arrived with a copied " +
-      "or restored vault, the same custody repair the keyfile beside it gets.",
+      "or restored vault, the same custody repair the keyfile beside it gets. " +
+      "`rmSync` drops this process's own staging folder of the vault-secrets " +
+      "adoption (`<secrets dir>.adopt-<pid>`, in the device-local state), which is " +
+      "copied whole and renamed into place so the secrets folder appears complete or not at all.",
   },
   "src/core/brain/secrets/token-store.ts": {
     categories: [C.machineArtifact],
@@ -1044,6 +995,18 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "`atomicWriteFileSync`. Both are this tool's own per-device state, never a note.",
   },
 
+  "src/core/state/machine-state.ts": {
+    categories: [C.archiveTransfer, C.machineArtifact],
+    calls: ["cpSync", "writeFileSync"],
+    reason:
+      "Resolves where this machine's state lives, and on a store-only machine writes only " +
+      "device-local state outside the vault: the one-time restore of the migration backup " +
+      "(`cpSync` of each backed-up file that has no live copy) and the marker that records it. " +
+      "Its one join onto the vault reads the `.open-second-brain/` an older release kept in a " +
+      "bare vault, copied once into the device-local root by `state-moves.ts`; the vault is " +
+      "never written. Neither is a note, so the shared note writer has nothing to stamp.",
+  },
+
   "src/core/state/migrate.ts": {
     categories: [C.archiveTransfer, C.lifecycleMove, C.retentionDelete],
     calls: ["copyFileSync", "rmSync", "rmdirSync"],
@@ -1127,16 +1090,14 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
 
   // --- Mixed: an accept protocol that moves, appends and rolls back ------
   "src/core/brain/skill-proposals.ts": {
-    categories: [C.appendOnlyLedger, C.lifecycleMove, C.retentionDelete],
-    calls: ["appendFileSync", "rmSync", "rmdirSync", "unlinkSync"],
+    categories: [C.appendOnlyLedger, C.retentionDelete],
+    calls: ["appendFileSync", "rmdirSync"],
     reason:
-      "appends one JSON line per verifier rejection; unlinks the pending proposal only " +
-      "after the accepted copy landed through `writeFrontmatterAtomic`; and removes " +
-      "the accepted copy and the artifact it materialised when a journalled accept is " +
-      "rolled back. The `rmdirSync` is part of that rollback: a `mature_page` accept " +
-      "creates a skill directory to hold its SKILL.md, and `rmdirSync` refuses a " +
-      "non-empty directory, so the empty shell goes and a directory holding anything " +
-      "else stays.",
+      "appends one JSON line per verifier rejection on an unswitched machine (a store-only " +
+      "machine writes the ledger row instead); and, when a journalled `mature_page` accept is " +
+      "rolled back, removes the now-empty skill directory with `rmdirSync`, which refuses a " +
+      "non-empty directory, so the empty shell goes and a directory holding anything else " +
+      "stays. The page moves and removals go through the lane page store.",
   },
 });
 
@@ -1403,8 +1364,30 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * (`src/core/brain/log-append-io.ts`) - the log appender stopped
  * rewriting each day shard through the atomic writer and appends one
  * event per write instead; the raw calls are that writer's implementation.
+ *
+ * 88 -> 89: the brain store migration backup
+ * (`src/core/store-migration/backup.ts`) - it copies the snapshot and the
+ * backup-class surfaces out of the vault into device-local state.
+ *
+ * 89 -> 93: the transition, removal and rollback of the store migration
+ * (`src/core/store-migration/{auto-transition,exporters,removal,rollback}.ts`).
+ *
+ * 93 -> 94: the lane page store (`src/core/store/lane-pages.ts`) moves and
+ * removes record-lane pages on an unswitched machine.
+ * 94 -> 90: the record-lane modules (dead-ends, obligations, pledges,
+ * pledge-intake) write through the lane page store (task 2.10 WP6).
+ * 90 -> 89: write sessions too.
+ * 89 -> 88: gap tasks too.
+ * 88 -> 86: entities (registry, label hygiene, page merge) and derived artifacts write through the lane page store (task 2.10 WP6).
+ * 86 -> 84: procedural memory, skill proposals, the accept journal and extract-intake write through the lane page store (task 2.10 WP6).
+ * 84 -> 81: attention flows, clusters, co-occurrence, hallways, dream bundles and architect notes write through the lane page store (task 2.10 WP6).
+ * 81 -> 79: foresight, cluster and bridge verbs, bridge proposals and the source, report and distillation pages write through the lane page store (task 2.10 WP6).
+ * 79 -> 78: source archives, the review-queue lanes, source cleanup and OKF import write through the lane page store (task 2.10 WP6).
+ * 78 -> 79: the migration places accepted skills from Brain/skills in the vault's skills/ folder as files (task 2.10).
+ * 79 -> 80: the skill accept journal writes its repair markers as machine-state files, not lane records.
+ * 80 -> 81: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
  */
-const DIRECT_WRITE_ROWS = 88;
+const DIRECT_WRITE_ROWS = 81;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1609,8 +1592,51 @@ const DIRECT_WRITE_ROWS = 88;
  * (`src/core/search/brain-store/location.ts`) records the store root it
  * last read in device-local state, through the shared atomic writer, so
  * an unknown probe keeps only an index of the same root.
+ *
+ * 140 -> 141: the store-only predicate (`src/core/store/store-only.ts`)
+ * names the vault's `Brain/` root to tell a fresh install from a legacy
+ * one, and keeps its sticky switch marker in device-local state through
+ * the shared atomic writer; it writes nothing in the vault.
+ *
+ * 141 -> 142: the vault adapter's `.base` stamping
+ * (`src/core/vault-adapter/bases.ts`) moved out of `brain/init.ts`, which
+ * keeps its own rows for `_brain.yaml` and `_BRAIN.md`.
+ *
+ * 142 -> 141: the two memory importers (`import-claude-memory.ts`,
+ * `continuity/promote-host-memory.ts`) no longer write preference pages
+ * themselves; both hand the text to the one preference page write path
+ * (`src/core/brain/preference-page-write.ts`), which writes the page
+ * through the shared atomic writer on an unswitched machine and the
+ * store records only once switched (task 2.10). Two rows leave, one
+ * arrives.
+ *
+ * 141 -> 142: the lane page store (`src/core/store/lane-pages.ts`, task
+ * 2.10 WP6) writes a record-lane page through the shared writers on an
+ * unswitched machine and the store records once switched.
+ * 142 -> 135: the record-lane modules (dead-ends, handoff, obligations,
+ * pledges, pledge-intake, theses, tensions) write through the lane page
+ * store (task 2.10 WP6), so their shared-writer rows leave.
+ * 135 -> 133: report snapshots and write sessions too.
+ * 133 -> 128: decisions, open decisions, design notes, gap tasks and triggers too.
+ * 128 -> 127: commit-mined decision candidates too.
+ * 127 -> 123: entities (registry, label hygiene, page merge) and derived artifacts write through the lane page store (task 2.10 WP6).
+ * 123 -> 118: procedural memory, skill proposals, the accept journal and extract-intake write through the lane page store (task 2.10 WP6).
+ * 118 -> 114: attention flows, clusters, co-occurrence, hallways, dream bundles and architect notes write through the lane page store (task 2.10 WP6).
+ * 114 -> 110: foresight, cluster and bridge verbs, bridge proposals and the source, report and distillation pages write through the lane page store (task 2.10 WP6).
+ * 110 -> 109: source archives, the review-queue lanes, source cleanup and OKF import write through the lane page store (task 2.10 WP6).
+ *
+ * 109 -> 110: the shared brain settings writer
+ * (`src/core/brain/policy/settings-write.ts`) edits `_brain.yaml` on an
+ * unswitched machine; once switched it writes settings records.
+ *
+ * 110 -> 112: the skill accept journal and skill proposals write their
+ * machine-state files (journal, prior-content copy, watermark) as files
+ * with the shared atomic writer, not as lane records.
+ * 112 -> 113: the legacy-tree removal journals its archive
+ * (`removal.json`, device-local migration folder) before the first move,
+ * so an interrupted removal finishes into the same archive.
  */
-const SHARED_HELPER_ROWS = 140;
+const SHARED_HELPER_ROWS = 113;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1715,8 +1741,26 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 86 -> 87: the Brain log's append writer
  * (`src/core/brain/log-append-io.ts`) - the stamp is applied by its caller,
  * `log.ts`, which still reads as a stamped shared-helper row.
+ * 87 -> 88: the brain store migration backup
+ * (`src/core/store-migration/backup.ts`) - copies of machine state carry
+ * no origin channel.
+ * 88 -> 92: the transition, removal and rollback of the store migration -
+ * device-local state, and legacy exports that replay records as written.
+ * 92 -> 93: the lane page store's archive moves and removals stamp no channel.
+ * 93 -> 89: the record-lane modules (dead-ends, obligations, pledges,
+ * pledge-intake) write through the lane page store (task 2.10 WP6).
+ * 89 -> 88: write sessions too.
+ * 88 -> 87: gap tasks too.
+ * 87 -> 85: entities (registry, label hygiene, page merge) and derived artifacts write through the lane page store (task 2.10 WP6).
+ * 85 -> 83: procedural memory, skill proposals, the accept journal and extract-intake write through the lane page store (task 2.10 WP6).
+ * 83 -> 80: attention flows, clusters, co-occurrence, hallways, dream bundles and architect notes write through the lane page store (task 2.10 WP6).
+ * 80 -> 78: foresight, cluster and bridge verbs, bridge proposals and the source, report and distillation pages write through the lane page store (task 2.10 WP6).
+ * 78 -> 77: source archives, the review-queue lanes, source cleanup and OKF import write through the lane page store (task 2.10 WP6).
+ * 77 -> 78: the migration places accepted skills from Brain/skills in the vault's skills/ folder as files (task 2.10).
+ * 78 -> 79: the skill accept journal's repair markers are machine-state files.
+ * 79 -> 80: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
  */
-const UNSTAMPED_DIRECT_ROWS = 87;
+const UNSTAMPED_DIRECT_ROWS = 80;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1819,8 +1863,41 @@ const UNSTAMPED_DIRECT_ROWS = 87;
  * 134 -> 135: the store-aware index location's remembered store root
  * (`src/core/search/brain-store/location.ts`) is device-local machine
  * state, not a note, and carries no origin channel.
+ * 135 -> 136: the store-only predicate's switch marker
+ * (`src/core/store/store-only.ts`) is device-local machine state, not a
+ * note, and carries no origin channel.
+ * 136 -> 137: the vault adapter's `.base` files
+ * (`src/core/vault-adapter/bases.ts`) are view definitions copied from the
+ * bundled templates, not notes, and carry no origin channel.
+ *
+ * 137 -> 136: the memory importers' page writes moved into the one
+ * preference page write path (`src/core/brain/preference-page-write.ts`,
+ * task 2.10); a preference page is not a note and carries no origin
+ * channel, so two unstamped rows leave and one arrives.
+ * 136 -> 137: the lane page store (`src/core/store/lane-pages.ts`) writes
+ * record-lane pages, not notes; it carries no origin channel.
+ * 137 -> 130: the record-lane modules (dead-ends, handoff, obligations,
+ * pledges, pledge-intake, theses, tensions) write through the lane page
+ * store (task 2.10 WP6).
+ * 130 -> 128: report snapshots and write sessions too.
+ * 128 -> 123: decisions, open decisions, design notes, gap tasks and triggers too.
+ * 123 -> 122: commit-mined decision candidates too.
+ * 122 -> 118: entities (registry, label hygiene, page merge) and derived artifacts write through the lane page store (task 2.10 WP6).
+ * 118 -> 113: procedural memory, skill proposals, the accept journal and extract-intake write through the lane page store (task 2.10 WP6).
+ * 113 -> 109: attention flows, clusters, co-occurrence, hallways, dream bundles and architect notes write through the lane page store (task 2.10 WP6).
+ * 109 -> 106: foresight, cluster and bridge verbs, bridge proposals and the source, report and distillation pages write through the lane page store (task 2.10 WP6).
+ * 106 -> 105: source archives, the review-queue lanes, source cleanup and OKF import write through the lane page store (task 2.10 WP6).
+ *
+ * 105 -> 106: the shared brain settings writer edits `_brain.yaml` on an
+ * unswitched machine; a settings file is not a note and carries no origin
+ * channel.
+ *
+ * 106 -> 108: the skill accept journal's and skill proposals' machine-state
+ * files carry no origin channel.
+ * 108 -> 109: the legacy-tree removal's device-local journal, machine
+ * state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 135;
+const UNSTAMPED_SHARED_ROWS = 109;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
@@ -1911,8 +1988,10 @@ describe("origin-channel coverage boundary", () => {
     const stampedShared = sharedRows
       .filter((row) => STAMPED_PATHS.has(row.path))
       .map((row) => row.path);
+    // The ingest summary page still stamps the channel, but it writes
+    // through the lane page store now (task 2.10 WP6), so its row left the
+    // shared-helper class; the stamp is held by `ORIGIN_CHANNEL_STAMPED`.
     expect(stampedShared.toSorted()).toEqual([
-      "src/core/brain/ingest/ingest.ts",
       "src/core/brain/log.ts",
       "src/core/brain/notes/create-note.ts",
       "src/core/brain/signal.ts",

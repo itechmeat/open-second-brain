@@ -301,8 +301,10 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
 // one ownerless recipe - ids and rates only, nothing owner-tagged to reach.
 // 108 -> 109, the brain store wave: brain_changes, one ownerless recipe -
 // record ids from the index, and store records carry no `owner:`.
-export const PROBE_ENTRY_COUNT = 109;
-export const PROBE_RECIPE_COUNT = 252;
+// 109 -> 110, the shared-settings change: brain_settings, one ownerless
+// recipe - settings are one value for every machine, never owner-tagged.
+export const PROBE_ENTRY_COUNT = 110;
+export const PROBE_RECIPE_COUNT = 253;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -532,6 +534,12 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     // fixture vault holds no store at all, so the probe reports none.
     name: "brain_changes",
     calls: one({}, REASON.ownerlessLane),
+  },
+  {
+    // The shared brain settings carry no owner: a setting is one value for
+    // every machine and every agent, and the probe only lists them.
+    name: "brain_settings",
+    calls: one({ action: "list" }, REASON.ownerlessLane),
   },
   {
     name: "brain_claims",

@@ -37,6 +37,9 @@ const NOW = new Date("2026-06-04T12:00:00Z");
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-dead-ends-"));
+  // A legacy Brain/ tree: an unswitched machine's vault. A vault without
+  // one is a fresh install, whose lane pages are store records.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

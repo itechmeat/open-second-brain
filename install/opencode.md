@@ -242,6 +242,7 @@ when a declared divergence outlives the gap it excuses.
 | `SessionStart:gap-agenda`               | opencode exposes no session-start hook to a loaded plugin; the opt-in recall-gap agenda shim has no carrier outside Claude Code / Codex                                                                                    |
 | `SessionStart:backlog-nudge`            | opencode exposes no session-start hook to a loaded plugin; the opt-in backlog nudge shim has no carrier outside Claude Code / Codex                                                                                        |
 | `SessionStart:log-catchup`              | opencode exposes no session-start hook to a loaded plugin; the opt-in log catch-up shim has no carrier outside Claude Code / Codex                                                                                         |
+| `SessionStart:view-render`              | opencode exposes no session-start hook to a loaded plugin; the human view render runs there at the end of every dream pass instead |
 | `SessionEnd:gap-promote`                | opencode exposes no session-end hook; gap promotion runs only where the Claude Code lane fires it                                                                                                                          |
 | `SubagentStop:session-capture`          | opencode has no subagent lifecycle events, so a delegated sub-agent's turns never enter a capturable session                                                                                                               |
 

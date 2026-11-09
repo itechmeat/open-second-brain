@@ -22,6 +22,7 @@ import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr } from "../coerce.ts";
+import { laneVault } from "./lane-vault.ts";
 
 /** Serialize one entity for the MCP payload (no absolute paths). */
 function entityToPayload(
@@ -51,6 +52,8 @@ async function toolBrainEntity(
   // reserved for genuine client-input errors; unexpected registry
   // failures (malformed entity file, I/O) surface as INTERNAL_ERROR.
   const view = coerceStr(args, "view", true)!;
+  // A record-lane tool works with no vault: its pages are store records then.
+  const vault = laneVault(ctx);
   if (view !== "get" && view !== "list") {
     throw new MCPError(INVALID_PARAMS, `brain_entity: unknown view '${view}' (get | list)`);
   }
@@ -75,14 +78,14 @@ async function toolBrainEntity(
 
   try {
     if (view === "get") {
-      const entity = getEntity(ctx.vault, {
+      const entity = getEntity(vault, {
         query: query!,
         ...(category !== null ? { category } : {}),
       });
       if (entity === null) return { found: false, query: query! };
       return { found: true, ...entityToPayload(entity) };
     }
-    const entities = listEntities(ctx.vault, {
+    const entities = listEntities(vault, {
       ...(category !== null ? { category } : {}),
       ...(status !== null ? { status } : {}),
     });
@@ -128,7 +131,7 @@ export const ENTITY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     kind: "read",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Look up (view: get) or list (view: list) canonical entities from the Brain/entities/ registry. Aliases resolve to the canonical record. Read-only; writes go through the o2b CLI.",
+      "Look up (view: get) or list (view: list) canonical entities from the entity registry. Aliases resolve to the canonical record. Read-only; writes go through the o2b CLI.",
     inputSchema: {
       type: "object",
       properties: {

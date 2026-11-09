@@ -58,6 +58,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { machineStateLocation } from "../../state/machine-state.ts";
 import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "../path-constants.ts";
 import { resolveConfiguredIndexPath } from "../../search/paths.ts";
 
@@ -325,17 +326,22 @@ export function measureStorageUsage(
   const refusals = new Set<StorageSurface>();
 
   const brain = join(vault, BRAIN_ROOT_REL);
+  // Machine state lives in the device-local state once this machine is
+  // switched (`state/machine-state.ts`); `.archives` is source text, which
+  // stays with the vault until it moves to the store as blobs. Resolved
+  // with the caller's config, the one the index path below uses.
+  const state = machineStateLocation(vault, opts.configPath).root;
   // The catch-all tree walks everything EXCEPT the dot-dirs that are
-  // surfaces of their own; those five roots are measured separately.
-  measureDirSurface(
-    STORAGE_SURFACE.brainTree,
-    brain,
-    Object.keys(DOT_DIR_SURFACES),
-    readings,
-    refusals,
+  // surfaces of their own. Once the state moved, a copy of a state dot-dir
+  // the legacy tree still keeps in the vault is no surface of its own, so
+  // the tree counts it: no byte the vault holds goes uncounted.
+  const ownSurfaces = Object.keys(DOT_DIR_SURFACES).filter(
+    (dir) => state === vault || dir === ".archives",
   );
+  measureDirSurface(STORAGE_SURFACE.brainTree, brain, ownSurfaces, readings, refusals);
   for (const [dir, surface] of Object.entries(DOT_DIR_SURFACES)) {
-    measureDirSurface(surface, join(brain, dir), [], readings, refusals);
+    const base = dir === ".archives" ? brain : join(state, BRAIN_ROOT_REL);
+    measureDirSurface(surface, join(base, dir), [], readings, refusals);
   }
   const storePath = opts.storePath ?? resolveConfiguredIndexPath(vault, opts.configPath);
   // The store's directory is a counted surface of its own, minus the
@@ -348,7 +354,7 @@ export function measureStorageUsage(
   ];
   measureDirSurface(
     STORAGE_SURFACE.derivedStoreDir,
-    join(vault, DERIVED_STORE_DIR),
+    join(state, DERIVED_STORE_DIR),
     [],
     readings,
     refusals,

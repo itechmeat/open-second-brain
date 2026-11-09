@@ -26,6 +26,10 @@ import {
 } from "../../../../src/core/brain/write-session/engine.ts";
 import { readWriteSession } from "../../../../src/core/brain/write-session/store.ts";
 import { parseLogDay } from "../../../../src/core/brain/log.ts";
+import { useUnshardedLegacyLog } from "../../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

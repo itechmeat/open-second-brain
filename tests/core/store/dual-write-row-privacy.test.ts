@@ -28,6 +28,7 @@ import type { StoreRecord } from "../../../src/core/store/envelope.ts";
 import { rowNamesPrivatePage } from "../../../src/core/store/reference-privacy.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
@@ -233,7 +234,7 @@ describe("idempotency receipts", () => {
   });
 
   test("a private receipt is refused on a machine without the private partition", () => {
-    rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+    neverHeld(storeRoot);
     seedPreference("hush", { visibility: ["private"], idempotency_key: "k-hush" });
     expect(ledgerRows("shared", "idempotency")).toEqual([]);
     expect(readDualWriteStatus().failures).toBeGreaterThan(0);

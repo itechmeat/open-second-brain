@@ -39,12 +39,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
-import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
-import { formatFrontmatter, parseFrontmatter, parseFrontmatterText, slugify } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatterText, slugify } from "../vault.ts";
 import {
   pledgePath,
   pledgesArchiveDir,
@@ -55,10 +54,20 @@ import {
 import { strictestVisibilityOf } from "../graph/visibility.ts";
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { PROMISED_TO_RELATION } from "../graph/relation-vocab.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./distill/quote-spans.ts";
+import {
+  acquireLaneLock,
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  moveLanePage,
+  parseLanePage,
+  readLaneText,
+  removeLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 export class PledgeError extends Error {
   constructor(message: string) {
@@ -309,10 +318,11 @@ function render(page: Omit<PledgePage, "path">, visibility: ReadonlyArray<string
  * the caller commits the returned bytes through its atomic write path.
  */
 export function rewritePledgeFrontmatter(
+  vault: string,
   page: Pick<PledgePage, "path">,
   mutate: (meta: FrontmatterMap) => void,
 ): string {
-  const [meta, body] = parseFrontmatter(page.path);
+  const [meta, body] = parseLanePage(vault, page.path);
   mutate(meta);
   return formatFrontmatter(meta, body);
 }
@@ -323,8 +333,8 @@ function parsePage(vault: string, slug: string): PledgePage | null {
   // `*.md` satisfies `existsSync` and then stalls or throws inside the
   // directory read. A path that is not a page answers null exactly like an
   // absent one, so every surface refuses it before touching its bytes.
-  if (!isSourcePage(path)) return null;
-  const [meta, body] = parseFrontmatter(path);
+  if (lanePagesInStore(vault) ? !lanePageExists(vault, path) : !isSourcePage(path)) return null;
+  const [meta, body] = parseLanePage(vault, path);
   const headerMatch = new RegExp(`^${NOTES_HEADER}$`, "mu").exec(body);
   const headerIndex = headerMatch?.index ?? -1;
   const text = (headerIndex < 0 ? body : body.slice(0, headerIndex)).trim();
@@ -413,9 +423,9 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
   }
   for (const slug of candidates) {
     const path = pledgePath(vault, slug);
-    const handle = acquireLockSyncWithRetry(path);
+    const handle = acquireLaneLock(vault, path);
     try {
-      if (existsSync(path)) {
+      if (lanePageExists(vault, path)) {
         const stored = parsePage(vault, slug);
         // A different identity frees the NEXT candidate; anything this
         // lookup cannot read as a pledge - a non-regular path included -
@@ -429,7 +439,7 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
         continue;
       }
       const resolved = { ...page, slug };
-      atomicWriteFileSync(path, render(resolved, input.visibility));
+      writeLaneText(vault, path, render(resolved, input.visibility));
       return Object.freeze({ ...resolved, path });
     } finally {
       handle.release();
@@ -444,8 +454,9 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
 
 /** Create a one-off pledge page. */
 export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Lane write guard: the vault identity guard on an unswitched machine,
+  // the store identity check on a store-only one (design D14 item 13).
+  assertLaneWrite(vault);
   const title = input.title.trim();
   if (title.length === 0) throw new PledgeError("pledge title must not be empty");
   const due = requireIsoDate(input.due, "due");
@@ -496,15 +507,16 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
 
 /** Stamp a pledge fulfilled. A one-off stays stamped: a second stamp refuses. */
 export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgePage {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Lane write guard: the vault identity guard on an unswitched machine,
+  // the store identity check on a store-only one (design D14 item 13).
+  assertLaneWrite(vault);
   const slug = slugify(input.slug);
   const path = pledgePath(vault, slug);
   // The stamp is a read-modify-write of the whole frontmatter, so it holds
   // the same pledge-path lock a create does: a fulfill racing the intake's
   // re-anchor rewrite (or a second fulfill) must never overwrite either
   // writer's edit.
-  const handle = acquireLockSyncWithRetry(path);
+  const handle = acquireLaneLock(vault, path);
   try {
     const prior = parsePage(vault, slug);
     if (prior === null) throw noPledgeError(slug);
@@ -513,9 +525,10 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
     }
     const now = input.now ?? new Date();
     const date = input.date ? requireIsoDate(input.date, "date") : isoDate(now);
-    atomicWriteFileSync(
+    writeLaneText(
+      vault,
       prior.path,
-      rewritePledgeFrontmatter(prior, (meta) => {
+      rewritePledgeFrontmatter(vault, prior, (meta) => {
         meta["fulfilled"] = date;
       }),
     );
@@ -538,7 +551,7 @@ export function showPledge(vault: string, input: ShowPledgeInput): PledgePage | 
  * that {@link addPledge} would reject.
  */
 export function pledgeExists(vault: string, slug: string): boolean {
-  return existsSync(pledgePath(vault, slugify(slug)));
+  return lanePageExists(vault, pledgePath(vault, slugify(slug)));
 }
 
 /**
@@ -576,15 +589,14 @@ export interface ListPledgesInput {
  */
 export function listPledges(vault: string, input: ListPledgesInput): ReadonlyArray<PledgeListItem> {
   const dir = pledgesDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const today = isoDate(input.now);
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   const out: PledgeListItem[] = [];
   let pagesRead = 0;
   let pagesScanned = 0;
-  for (const name of readdirSync(dir).toSorted()) {
+  for (const name of listLaneFiles(vault, dir, ".md")) {
     if (input.readCap !== undefined && pagesRead >= input.readCap) break;
-    if (!name.endsWith(".md")) continue;
     const slug = name.replace(/\.md$/u, "");
     if (input.readable !== undefined && !input.readable(pledgeRel(slug))) continue;
     // The scan ceiling bounds the PARSING, not only the keeping: a page the
@@ -630,30 +642,38 @@ export function listPledges(vault: string, input: ListPledgesInput): ReadonlyArr
 
 /** Retire a pledge into Brain/pledges/archive/ with a collision suffix. */
 export function removePledge(vault: string, input: { slug: string }): RemovePledgeResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Lane write guard: the vault identity guard on an unswitched machine,
+  // the store identity check on a store-only one (design D14 item 13).
+  assertLaneWrite(vault);
   const normalized = slugify(input.slug);
   const activePath = pledgePath(vault, normalized);
   // The archive move is a mutation of the page's presence, so it holds the
   // same pledge-path lock the family's other writers do: two concurrent
   // removes must not both pass the existence probe and race the rename.
-  const handle = acquireLockSyncWithRetry(activePath);
+  const handle = acquireLaneLock(vault, activePath);
   try {
     // The probe lives inside the lock, like fulfillPledge's read: a page the
     // winning remover already moved answers the named no-pledge refusal here,
     // instead of the archive move's fallback surfacing a raw ENOENT.
-    if (!existsSync(activePath)) throw noPledgeError(normalized);
+    if (!lanePageExists(vault, activePath)) throw noPledgeError(normalized);
     const archiveDir = pledgesArchiveDir(vault);
-    mkdirSync(archiveDir, { recursive: true });
     let archivePath = join(archiveDir, `${normalized}.md`);
-    for (let suffix = 2; existsSync(archivePath); suffix++) {
+    for (let suffix = 2; lanePageExists(vault, archivePath); suffix++) {
       archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
     }
     try {
-      renameWithRetry(activePath, archivePath);
-    } catch {
-      atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
-      rmSync(activePath, { force: true });
+      moveLanePage(vault, activePath, archivePath);
+    } catch (err) {
+      // The store move is one operation (tombstone and new entry under one
+      // verdict): retrying it as two writes would give that up. Only the
+      // legacy rename (a cross-device or sharing failure) gets the copy
+      // fallback, and a page that vanished meanwhile is refused, never
+      // archived as an empty page.
+      if (lanePagesInStore(vault)) throw err;
+      const text = readLaneText(vault, activePath);
+      if (text === null) throw noPledgeError(normalized);
+      writeLaneText(vault, archivePath, text);
+      removeLanePage(vault, activePath);
     }
     return Object.freeze({ slug: normalized, archivePath });
   } finally {

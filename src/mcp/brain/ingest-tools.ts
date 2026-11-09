@@ -886,7 +886,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: DELETE_TOOL,
     kind: "write",
     description:
-      "Remove everything derived from one EXACT source file. DRY-RUN BY DEFAULT: no `confirm` reports the blast radius, deletes nothing. `confirm` deletes derived entries + ingest index artifacts (shared/aggregate pages only reported); originals outside Brain/ only with `include_originals`. Auditable.",
+      "Remove everything derived from one EXACT source file. DRY-RUN BY DEFAULT: no `confirm` reports the blast radius, deletes nothing. `confirm` deletes derived entries + ingest index artifacts (shared/aggregate pages only reported); the original source files only with `include_originals`. Auditable.",
     inputSchema: {
       type: "object",
       properties: {
@@ -900,7 +900,8 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         include_originals: {
           type: "boolean",
-          description: "Also remove the original source file(s) outside Brain/. Default false.",
+          description:
+            "Also remove the original source file(s) the entries were derived from. Default false.",
         },
         agent: {
           type: "string",

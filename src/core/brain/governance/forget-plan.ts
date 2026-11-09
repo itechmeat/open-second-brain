@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 
+import { memoryFromStore, storeRecordPages } from "../memory-pages.ts";
 import { parseFrontmatter } from "../../vault.ts";
+import { storeLogDays } from "../log-days.ts";
 import { brainDirs, vaultRelative } from "../paths.ts";
 
 export interface ForgetPlanEntry {
@@ -35,16 +37,16 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
   }
 
   const entries: ForgetPlanEntry[] = [];
-  for (const path of walkBrainMarkdown(vault)) {
+  for (const { path, read, id } of brainMarkdown(vault)) {
     let text: string;
     try {
-      text = readFileSync(path, "utf8");
+      text = read();
     } catch {
       continue;
     }
     if (!text.includes(source)) continue;
     entries.push({
-      id: readId(path),
+      id: id ?? readId(path),
       path: vaultRelative(path, vault),
       kind: classify(vault, path),
       action: "would-remove-source-support",
@@ -62,6 +64,62 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
       entryCount: entries.length,
     }),
   });
+}
+
+interface BrainMarkdown {
+  readonly path: string;
+  readonly read: () => string;
+  /** The record's id when known without reading the file. */
+  readonly id?: string;
+}
+
+/**
+ * Every Markdown document of the Brain layer. On a store-only machine
+ * (task 2.10) the preferences and signals are the folds' records, as the
+ * pages they would be, the log is one entry per day of the store's
+ * `log-event` records, and their legacy folders are not walked. The
+ * compiled digests are rendered on demand there, not written to the vault,
+ * so they are no document to plan.
+ */
+function brainMarkdown(vault: string): BrainMarkdown[] {
+  if (!memoryFromStore(vault)) {
+    return walkBrainMarkdown(vault).map((path) => ({
+      path,
+      read: () => readFileSync(path, "utf8"),
+    }));
+  }
+  const dirs = brainDirs(vault);
+  // The log is the store's `log-event` records too: one entry per day.
+  const memoryDirs = [dirs.inbox, dirs.preferences, dirs.retired, dirs.log];
+  // `pending/` also stages notes; only its signals are memory records.
+  const isMemory = (path: string): boolean =>
+    memoryDirs.some((dir) => insideDir(path, dir)) ||
+    (insideDir(path, dirs.pending) && basename(path).startsWith("sig-"));
+  const files = walkBrainMarkdown(vault)
+    .filter((path) => !isMemory(path))
+    .map((path) => ({ path, read: () => readFileSync(path, "utf8") }));
+  const records = storeRecordPages(vault, { signalStates: "all" }).map((page) => ({
+    path: page.path,
+    read: () => page.text,
+    id: typeof page.meta["id"] === "string" && page.meta["id"].trim() ? page.meta["id"] : page.id,
+  }));
+  const logDays = (storeLogDays(vault) ?? []).map((day) => ({
+    path: join(dirs.log, `${day.date}.md`),
+    // The entries' own string values, unescaped, as a day file would hold
+    // them: a JSON rendering escapes backslashes, quotes and newlines, so
+    // a source like a Windows path would never match it.
+    read: () => day.entries.flatMap((entry) => stringsOf(entry)).join("\n"),
+    id: day.date,
+  }));
+  return [...files, ...records, ...logDays];
+}
+
+/** Every string value below `value`, depth first. */
+function stringsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsOf);
+  if (value !== null && typeof value === "object") return Object.values(value).flatMap(stringsOf);
+  return [];
 }
 
 function walkBrainMarkdown(vault: string): string[] {

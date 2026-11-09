@@ -81,7 +81,11 @@ export interface CaptureSessionLifecycleResult {
   readonly suppressed_messages: number;
   readonly facts_extracted: number;
   readonly facts_deduped: number;
-  readonly audit_path: string;
+  /**
+   * Where the audit row landed: the week shard, or the store ledger's
+   * name once switched. Absent when a fail-open store write did not land.
+   */
+  readonly audit_path?: string;
   readonly log_path?: string;
   /**
    * True when the host marked this SessionEnd as interrupted
@@ -541,6 +545,9 @@ export async function captureSessionLifecycleEvent(
       },
     },
     vault,
+    // A hook path: a store-only failure is counted device-locally and the
+    // capture goes on (design D14 item 1).
+    { failOpen: true },
   );
 
   return {
@@ -556,7 +563,7 @@ export async function captureSessionLifecycleEvent(
     suppressed_messages: counters.suppressed_messages,
     facts_extracted: counters.facts_extracted,
     facts_deduped: counters.facts_deduped,
-    audit_path: auditPath,
+    ...(auditPath !== "" ? { audit_path: auditPath } : {}),
     ...(logPath ? { log_path: logPath } : {}),
     ...(normalized.interrupted === true ? { interrupted: true } : {}),
     ...(transcriptConsumed !== undefined ? { transcript_consumed: transcriptConsumed } : {}),
@@ -834,22 +841,28 @@ function appendLifecycleLog(
   now: Date,
   counters: MutableCounters,
 ): string {
-  return appendLogEvent(vault, {
-    timestamp: isoSecond(now),
-    eventType: BRAIN_LOG_EVENT_KIND.sessionLifecycle,
-    body: {
-      agent,
-      event: payload.event,
-      ...(payload.sessionId ? { session_id: payload.sessionId } : {}),
-      signals_created: String(counters.signals_created),
-      signals_deduped: String(counters.signals_deduped),
-      tool_replays: String(counters.tool_replays),
-      malformed: String(counters.malformed),
-      suppressed_messages: String(counters.suppressed_messages),
-      facts_extracted: String(counters.facts_extracted),
-      facts_deduped: String(counters.facts_deduped),
+  return appendLogEvent(
+    vault,
+    {
+      timestamp: isoSecond(now),
+      eventType: BRAIN_LOG_EVENT_KIND.sessionLifecycle,
+      body: {
+        agent,
+        event: payload.event,
+        ...(payload.sessionId ? { session_id: payload.sessionId } : {}),
+        signals_created: String(counters.signals_created),
+        signals_deduped: String(counters.signals_deduped),
+        tool_replays: String(counters.tool_replays),
+        malformed: String(counters.malformed),
+        suppressed_messages: String(counters.suppressed_messages),
+        facts_extracted: String(counters.facts_extracted),
+        facts_deduped: String(counters.facts_deduped),
+      },
+      // A hook path: a store-only failure is counted device-locally and the
+      // capture goes on (design D14 item 1).
     },
-  }).logPath;
+    { failOpen: true },
+  ).logPath;
 }
 
 /** Stand-in session identity when the host payload carries none. */

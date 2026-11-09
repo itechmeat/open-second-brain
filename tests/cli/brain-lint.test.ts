@@ -25,7 +25,7 @@ import { brainDirs } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { runCli } from "../helpers/run-cli.ts";
-import { changedPaths, digestVaultFiles, digestVaultTree } from "../helpers/vault-digest.ts";
+import { changedPaths, treeEntries, digestVaultTree } from "../helpers/vault-digest.ts";
 
 let tmp: string;
 let vault: string;
@@ -123,7 +123,7 @@ describe("o2b brain lint --consolidate", () => {
     const reported = [...new Set(preview.fixes.map((f) => toRel(f.path)))].toSorted();
     expect(reported).toEqual(["Brain/log/2026-05-25.md", "Brain/log/2026-05-26.md"]);
 
-    const before = digestVaultFiles(vault);
+    const before = treeEntries(vault);
     const applied = await runCli(
       ["brain", "lint", "--consolidate", "--apply", "--yes", "--vault", vault, "--json"],
       { env: env() },
@@ -133,7 +133,7 @@ describe("o2b brain lint --consolidate", () => {
     expect(result.applied).toBe(true);
     expect(result.files_written).toBe(reported.length);
 
-    expect(changedPaths(before, digestVaultFiles(vault))).toEqual(reported);
+    expect(changedPaths(before, treeEntries(vault))).toEqual(reported);
   });
 
   test("a clean vault reports nothing and writes nothing", async () => {

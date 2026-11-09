@@ -18,8 +18,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 
 import { EXCLUDED_DIRS, extractWikilinks, listVaultPages, parseFrontmatter } from "../../vault.ts";
 import {
@@ -28,8 +27,8 @@ import {
 } from "../../graph/frontmatter-relations.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
+import { assertLaneWrite, readLaneText, writeLaneText } from "../../store/lane-pages.ts";
 
 export const CO_OCCURRENCE_SCHEMA_VERSION = "o2b.cooccurrence.v1";
 
@@ -162,10 +161,10 @@ export function writeCoOccurrenceSuggestions(
   opts: { readonly generatedAt: string },
 ): string {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const path = join(vault, ARTIFACT_REL);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(
+  writeLaneText(
+    vault,
     path,
     JSON.stringify(
       {
@@ -189,9 +188,10 @@ export function writeCoOccurrenceSuggestions(
  */
 export function readCoOccurrenceSuggestions(vault: string): CoOccurrenceResult | null {
   const path = join(vault, ARTIFACT_REL);
-  if (!existsSync(path)) return null;
+  const text = readLaneText(vault, path);
+  if (text === null) return null;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object") return null;
     const record = parsed as Record<string, unknown>;
     if (record["schema"] !== CO_OCCURRENCE_SCHEMA_VERSION) return null;

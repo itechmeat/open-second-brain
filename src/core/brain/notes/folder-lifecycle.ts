@@ -102,9 +102,10 @@ import { classifyRecoverability, type RecoverabilityVerdict } from "../gates/rec
 import { minimalSpellingFor } from "../link-graph/minimal-spelling.ts";
 import { retargetWikilinks } from "../page-dedup.ts";
 import { BRAIN_LOG_REL, BRAIN_CONFIG_FILE, BRAIN_ROOT_REL, isUnderBrainRoot } from "../paths.ts";
+import { viewFolderRefusal } from "../../view/vault-guard.ts";
 import { BrainConfigError } from "../policy.ts";
 import { requireNextStep } from "../next-step.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
 import {
   inspectPath,
   resolveVaultScope,
@@ -440,6 +441,12 @@ function resolveFolderTarget(
       "excluded",
       `the Brain machinery root is not writable via the folder lifecycle: ${relPath} resolves to ${landsAt}`,
     );
+  }
+  // The human view folder in the vault is the view writer's
+  // (`core/view/vault-guard.ts`): no folder moves into or out of it.
+  for (const rel of new Set([relPath, landsAt])) {
+    const viewRefusal = viewFolderRefusal(vault, rel, "the folder lifecycle");
+    if (viewRefusal !== null) throw new CreateNoteError("excluded", viewRefusal);
   }
   if (inspected.excluded) {
     throw new CreateNoteError("excluded", `${scopeRefusal(scope, inspected)}: ${relPath}`);
@@ -885,7 +892,9 @@ export async function folderLifecycle(
   // names real vault paths, and computing one against a vault this
   // process was not pointed at is already the confusion the guard exists
   // to refuse.
-  assertVaultIdentityForWrite(vault);
+  // Through the vault adapter (design D14 items 8, 13): a vault is
+  // required, and the vault identity guard holds.
+  assertNoteVaultForWrite(vault, "the folder lifecycle");
 
   if (!isFolderLifecycleAction(input.action)) {
     throw new NoteLifecycleError(
@@ -896,6 +905,11 @@ export async function folderLifecycle(
   }
   const action = input.action;
   const source = resolveFolderTarget(vault, input.path);
+  // A folder that holds the view folder moves the view's pages with it.
+  const holdsView = viewFolderRefusal(vault, source.relPath, "the folder lifecycle", {
+    container: true,
+  });
+  if (holdsView !== null) throw new CreateNoteError("excluded", holdsView);
   const sourceStat = statOrNull(source.abs);
   if (sourceStat === null || !sourceStat.isDirectory()) {
     throw new NoteLifecycleError("source_missing", `no note folder at ${source.relPath}`);

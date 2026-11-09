@@ -31,22 +31,26 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
 
   if (!flags["dry-run"]) {
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.scanInline,
-        body: {
-          agent,
-          scanned: String(result.scanned),
-          found: String(result.found),
-          created: String(result.created),
-          deduped: String(result.deduped),
-          malformed: String(result.malformed),
-          facts: String(result.facts),
-          skills: String(result.skills),
-          suppressed: String(result.suppressed),
-          errors: String(result.errors.length),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(new Date()),
+          eventType: BRAIN_LOG_EVENT_KIND.scanInline,
+          body: {
+            agent,
+            scanned: String(result.scanned),
+            found: String(result.found),
+            created: String(result.created),
+            deduped: String(result.deduped),
+            malformed: String(result.malformed),
+            facts: String(result.facts),
+            skills: String(result.skills),
+            suppressed: String(result.suppressed),
+            errors: String(result.errors.length),
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(`warning: append scan-inline log failed: ${(err as Error).message}\n`);
     }

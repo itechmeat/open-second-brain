@@ -64,6 +64,7 @@
 import { readFileSync, statSync } from "node:fs";
 
 import { resolveAgentName } from "../../config.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
 import { atomicWriteFileSync, isFileDrift } from "../../fs-atomic.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
 import { assertExpectedCount } from "../count-guard.ts";
@@ -565,6 +566,22 @@ export function compactReceiptLedgers(
   const cutoffMs = nowMs - olderThanDays * MS_PER_DAY;
   const cutoff = canonicalSecond(cutoffMs);
   const dryRun = input.dryRun !== false;
+  // A store-only machine (design D14 item 1) keeps the legacy tree it may
+  // still hold read-only until the tree leaves the vault (D11 step 10):
+  // its receipts are brain store rows now, which the store compacts by
+  // its own rules. A preview still reads the legacy shards.
+  if (
+    !dryRun &&
+    isStoreOnly({
+      vault,
+      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    })
+  ) {
+    throw new Error(
+      "receipt compaction refused: this machine writes the brain store only, so the legacy " +
+        "receipt ledgers under the vault are read-only here; a dry run still previews them",
+    );
+  }
 
   // Gates 1+2: resolve every ref, recount against the disk, collect
   // per-shard plans and failures. Nothing has been written yet.

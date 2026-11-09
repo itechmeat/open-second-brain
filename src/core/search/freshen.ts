@@ -640,8 +640,8 @@ export function maybeFreshenIndex(
         ...o2bCommand(),
         "search",
         "index",
-        "--vault",
-        config.vault,
+        // No vault: the child resolves the same vault-free config.
+        ...(config.vault === null ? [] : ["--vault", config.vault]),
         ...(freshen.configPath !== null ? ["--config", freshen.configPath] : []),
         // Where the claim and the state live, so a child that fails before
         // it can resolve its config can still record it and release.

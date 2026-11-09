@@ -13,16 +13,29 @@
  * than refusing: a pinned write is short, and a refusal would hand the
  * agent a retry for what is only ordinary contention.
  *
+ * On a store-only machine (task 2.10) pinned context is the pinned
+ * register of the store (`store/fold-pinned.ts`): reads come from it,
+ * every commit is one `pinned-set` or `pinned-clear` record, the lock is
+ * device-local and nothing under `Brain/` changes.
+ *
  * Under the brain store dual-write flag every committed state is also
  * appended to the store as a full-text `pinned-set` (or a `pinned-clear`),
  * with the authority of the process's origin (see `store/dual-write.ts`).
  */
 
+import { legacyVaultOf } from "./no-vault.ts";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { pinnedRecord } from "../store/dual-write-records.ts";
-import { authorityFromOrigin, dualWrite, isDualWriteEnabled } from "../store/dual-write.ts";
+import { authorityFromOrigin, isDualWriteEnabled } from "../store/dual-write.ts";
+import type { StoreInspection } from "../store/store-open.ts";
+import { configuredStore, readEntitiesOf } from "../store/read/store-entities.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { storesStateDir } from "../store/store-paths.ts";
+import { routeWrite } from "../store/store-write.ts";
+import { processDirsEnv } from "../platform-dirs.ts";
 import { pinnedTextIsPrivate } from "../store/reference-privacy.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { brainPinnedPath } from "./paths.ts";
@@ -37,8 +50,9 @@ export interface PinnedContext {
   readonly content: string;
 }
 
-export function readPinnedContext(vault: string): PinnedContext {
-  const path = brainPinnedPath(vault);
+export function readPinnedContext(vault: string | null): PinnedContext {
+  if (pinnedStoreOnly(vault)) return { path: pinnedLocation(vault), ...readStorePinned() };
+  const path = brainPinnedPath(legacyVaultOf(vault, "readPinnedContext"));
   if (!existsSync(path)) {
     return { path, present: false, content: "" };
   }
@@ -50,12 +64,86 @@ export function readPinnedContext(vault: string): PinnedContext {
 }
 
 /**
+ * The vault identity guard of a pinned write; with no vault the store
+ * write checks the store identity instead (design D14 item 13).
+ */
+function guardPinnedWrite(vault: string | null): void {
+  if (vault !== null) assertVaultIdentityForWrite(vault);
+}
+
+/** Whether pinned context for `vault` lives in the store only (task 2.10). */
+function pinnedStoreOnly(vault: string | null): boolean {
+  // No vault means store-only too (design D14).
+  return vault === null || isStoreOnly({ vault });
+}
+
+/**
+ * The pinned register this machine reads and writes: `private` when it
+ * holds that partition, `shared` otherwise (FORMAT.md, "Pinned context").
+ * The one rule the reported name and the read follow.
+ */
+function pinnedPartition(store: StoreInspection | null = configuredStore()): "private" | "shared" {
+  return store !== null && store.partitions.has("private") ? "private" : "shared";
+}
+
+/**
+ * Prefix of the name a store-only machine reports for its pinned context:
+ * `store:<partition>/pinned`, the register the text lives in. It is a name,
+ * not a file path, so no result hands a caller a legacy `Brain/` path for
+ * text that was never written there.
+ */
+const PINNED_STORE_NAME_PREFIX = "store:";
+
+/** Where the pinned context of `vault` lives: the register, or the legacy file. */
+function pinnedLocation(vault: string | null): string {
+  return pinnedStoreOnly(vault)
+    ? `${PINNED_STORE_NAME_PREFIX}${pinnedPartition()}/pinned`
+    : brainPinnedPath(legacyVaultOf(vault, "pinnedLocation"));
+}
+
+function readStorePinned(): { present: boolean; content: string } {
+  const store = configuredStore();
+  if (store === null) return { present: false, content: "" };
+  const content = readEntitiesOf(store).pinned.get(pinnedPartition(store))?.content ?? null;
+  return content === null
+    ? { present: false, content: "" }
+    : { present: true, content: content.trimEnd() };
+}
+
+/**
+ * Write the pinned text: `Brain/pinned.md` plus the dual write on an
+ * unswitched machine, the record only once switched. `namesPrivate` is
+ * judged lazily, only when a record is built.
+ */
+function commitPinned(
+  vault: string | null,
+  content: string | null,
+  namesPrivate: () => boolean,
+): void {
+  routeWrite({
+    legacy: () => {
+      const text = content ?? "";
+      atomicWriteFileSync(
+        brainPinnedPath(legacyVaultOf(vault, "commitPinned")),
+        text.length > 0 ? `${text}\n` : "",
+      );
+    },
+    store: () => pinnedRecord(content, authorityFromOrigin(), namesPrivate()),
+    context: { vault },
+  });
+}
+
+/**
  * Run `fn` holding the pinned file's sync lock. Whatever `fn` reads of the
  * current content it must read INSIDE this call, or the lock protects
- * nothing.
+ * nothing. Once switched the lock lives in the device-local state, so
+ * taking it writes nothing under `Brain/`.
  */
-function withPinnedLock<T>(vault: string, fn: () => T): T {
-  const handle = acquireLockSyncWithRetry(brainPinnedPath(vault));
+function withPinnedLock<T>(vault: string | null, fn: () => T): T {
+  const target = pinnedStoreOnly(vault)
+    ? join(storesStateDir(processDirsEnv()), "pinned")
+    : brainPinnedPath(legacyVaultOf(vault, "withPinnedLock"));
+  const handle = acquireLockSyncWithRetry(target);
   try {
     return fn();
   } finally {
@@ -63,19 +151,19 @@ function withPinnedLock<T>(vault: string, fn: () => T): T {
   }
 }
 
-export function writePinnedContext(vault: string, content: unknown): PinnedContext {
+export function writePinnedContext(vault: string | null, content: unknown): PinnedContext {
   const normalised = normalisePinnedContentNoTruncate(content);
   // Vault-identity write guard (Unit J) BEFORE the lock, as clear and the
   // batch path do: a refused vault gets no lock file and no lock wait.
-  assertVaultIdentityForWrite(vault);
+  guardPinnedWrite(vault);
   return withPinnedLock(vault, () => commitPinnedContent(vault, normalised, "write"));
 }
 
-export function appendPinnedContext(vault: string, content: unknown): PinnedContext {
+export function appendPinnedContext(vault: string | null, content: unknown): PinnedContext {
   const incoming = normalisePinnedContentNoTruncate(content);
   if (incoming.length === 0) return readPinnedContext(vault);
 
-  assertVaultIdentityForWrite(vault);
+  guardPinnedWrite(vault);
   return withPinnedLock(vault, () => {
     const current = readPinnedContext(vault).content;
     const next = current.length > 0 ? `${current}\n\n${incoming}` : incoming;
@@ -93,28 +181,25 @@ export function appendPinnedContext(vault: string, content: unknown): PinnedCont
  * the batch `operations` mode and Hermes' native memory store use).
  */
 function commitPinnedContent(
-  vault: string,
+  vault: string | null,
   normalised: string,
   operation: "write" | "append",
 ): PinnedContext {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  guardPinnedWrite(vault);
   assertWithinPinnedBudget(normalised, operation);
-  const path = brainPinnedPath(vault);
-  atomicWriteFileSync(path, normalised.length > 0 ? `${normalised}\n` : "");
-  // Brain store dual write (task 1.11), inside the pinned lock so the store
-  // sees replacements in the order the file did.
-  dualWrite(
-    () => pinnedRecord(normalised, authorityFromOrigin(), pinnedTextIsPrivate(vault, normalised)),
-    { vault },
-  );
+  const path = pinnedLocation(vault);
+  // Brain store write (dual write behind the flag on an unswitched
+  // machine), inside the pinned lock so the store sees replacements in the
+  // order the file did.
+  commitPinned(vault, normalised, () => pinnedTextIsPrivate(vault, normalised));
   return { path, present: true, content: normalised };
 }
 
-export function clearPinnedContext(vault: string): PinnedContext {
+export function clearPinnedContext(vault: string | null): PinnedContext {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  const path = brainPinnedPath(vault);
+  guardPinnedWrite(vault);
+  const path = pinnedLocation(vault);
   return withPinnedLock(vault, () => {
     // A clear goes where a set of the text it clears goes, so it lands in
     // the same partition register as that set. The text is read only for
@@ -122,15 +207,14 @@ export function clearPinnedContext(vault: string): PinnedContext {
     // the old file, and one that cannot be read is judged private (fail
     // closed), never shared.
     let namesPrivate = true;
-    if (isDualWriteEnabled()) {
+    if (pinnedStoreOnly(vault) || isDualWriteEnabled()) {
       try {
         namesPrivate = pinnedTextIsPrivate(vault, readPinnedContext(vault).content);
       } catch {
         namesPrivate = true;
       }
     }
-    atomicWriteFileSync(path, "");
-    dualWrite(() => pinnedRecord(null, authorityFromOrigin(), namesPrivate), { vault });
+    commitPinned(vault, null, () => namesPrivate);
     return { path, present: true, content: "" };
   });
 }
@@ -245,11 +329,11 @@ export interface PinnedBatchResult extends PinnedContext {
  * the guard a property of the argument shape rather than of the vault.
  */
 export function applyPinnedOperations(
-  vault: string,
+  vault: string | null,
   operations: ReadonlyArray<PinnedOperation>,
 ): PinnedBatchResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  guardPinnedWrite(vault);
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new PinnedBatchError("invalid_operation", -1, "operations must be a non-empty array");
   }
@@ -264,12 +348,8 @@ export function applyPinnedOperations(
 
     assertWithinPinnedBudget(projected, "batch");
 
-    const path = brainPinnedPath(vault);
-    atomicWriteFileSync(path, projected.length > 0 ? `${projected}\n` : "");
-    dualWrite(
-      () => pinnedRecord(projected, authorityFromOrigin(), pinnedTextIsPrivate(vault, projected)),
-      { vault },
-    );
+    const path = pinnedLocation(vault);
+    commitPinned(vault, projected, () => pinnedTextIsPrivate(vault, projected));
     return {
       path,
       present: true,

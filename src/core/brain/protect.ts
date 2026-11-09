@@ -38,7 +38,9 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { configuredStore } from "../store/read/store-entities.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 
 import {
   atomicCreateFileSyncExclusive,
@@ -48,6 +50,7 @@ import {
 import { escapeRegex } from "../strings.ts";
 import { BRAIN_ROOT_REL, brainConfigPath, brainDirs, collisionCandidateName } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /** Bumped on any structural change to manifest / fence layout. */
 export const PROTECT_SCHEMA_VERSION = 1;
@@ -328,8 +331,9 @@ interface ManifestFile {
   entries: ManifestRecord[];
 }
 
+/** The manifest: in the vault, or in the device-local state once switched (D14 item 6). */
 function manifestPath(vault: string): string {
-  return join(vault, MANIFEST_DIR, MANIFEST_FILE);
+  return machineStatePath(vault, MANIFEST_DIR, MANIFEST_FILE);
 }
 
 function parseManifestFile(raw: string, path: string): ManifestFile {
@@ -374,7 +378,9 @@ export function writeManifest(vault: string, entry: ManifestRecord): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const path = manifestPath(vault);
-  mkdirSync(join(vault, MANIFEST_DIR), { recursive: true });
+  // The manifest's own folder: the device-local state once switched, so no
+  // empty `.open-second-brain/` is left in the vault.
+  mkdirSync(dirname(path), { recursive: true });
   const file: ManifestFile = existsSync(path)
     ? parseManifestFile(readFileSync(path, "utf8"), path)
     : { entries: [] };
@@ -463,6 +469,9 @@ export function removeManifestEntry(vault: string, target: ProtectTarget): void 
 // ─── Apply / unprotect ────────────────────────────────────────────────
 
 function ensureVaultBootstrapped(vault: string): void {
+  // A store-only machine is set up once its store is: its legacy tree may
+  // be gone (removed after the migration) or never have existed.
+  if (isStoreOnly({ vault }) && configuredStore() !== null) return;
   if (!existsSync(join(vault, BRAIN_ROOT_REL))) {
     throw new BrainProtectError(
       `vault at ${vault} has no ${BRAIN_ROOT_REL}/ directory; run \`o2b brain init\` first`,

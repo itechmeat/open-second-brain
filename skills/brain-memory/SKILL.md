@@ -1,6 +1,6 @@
 ---
 name: brain-memory
-description: Record taste signals and apply-evidence events into the Brain observing-memory layer of Open Second Brain. INVOKE this skill (and call `brain_feedback`) the moment the user expresses a preference, dislike, correction, or rule in dialogue — "don't do X", "use A instead of B", "I prefer Y", "X is wrong here", or any explicit imperative that should outlive the current turn. SEPARATELY invoke (and call `brain_apply_evidence`) right after you produce a durable artifact (code shipped, file written, content drafted, config change) and at least one preference in `Brain/preferences/` has a `scope` that plausibly applies — record whether you `applied` or `violated` it. SKIP only for casual chat, exploration without a stated rule, read-only inspection, and trivial edits. When a preference plausibly applies but you are unsure, RECORD with `note: "speculative; <reason>"` rather than skipping — the dream pass discards single-event speculative entries that do not recur, so coverage costs less than missing the signal. WRITE the `principle` and `note` fields in the same natural language the user has been speaking in this session; technical identifiers (`topic` slug, `pref_id`, `scope`) stay English.
+description: Record taste signals and apply-evidence events into the Brain observing-memory layer of Open Second Brain. INVOKE this skill (and call `brain_feedback`) the moment the user expresses a preference, dislike, correction, or rule in dialogue — "don't do X", "use A instead of B", "I prefer Y", "X is wrong here", or any explicit imperative that should outlive the current turn. SEPARATELY invoke (and call `brain_apply_evidence`) right after you produce a durable artifact (code shipped, file written, content drafted, config change) and at least one active preference (`brain_context` lists them) has a `scope` that plausibly applies — record whether you `applied` or `violated` it. SKIP only for casual chat, exploration without a stated rule, read-only inspection, and trivial edits. When a preference plausibly applies but you are unsure, RECORD with `note: "speculative; <reason>"` rather than skipping — the dream pass discards single-event speculative entries that do not recur, so coverage costs less than missing the signal. WRITE the `principle` and `note` fields in the same natural language the user has been speaking in this session; technical identifiers (`topic` slug, `pref_id`, `scope`) stay English.
 ---
 
 # Brain Memory
@@ -26,11 +26,11 @@ Parameters:
 Optional but **strongly recommended**:
 
 - `raw`: the verbatim quote that triggered the signal. Without it the
-  signal file lands without a `## Raw` body — counters keep working,
+  signal lands without a `## Raw` body — counters keep working,
   but the audit trail loses the original phrasing. Pass the exact
   sentence the user said (or the exact line of the artifact the
   signal is about). v0.10.1 dropped the `_(not provided)_` placeholder
-  precisely so an absent `raw` is now visible: the file simply has no
+  precisely so an absent `raw` is now visible: the signal simply has no
   body, which should be the rare case, not the norm.
 
 Optional:
@@ -38,7 +38,7 @@ Optional:
 - `scope`: soft category for later application-scope matching — `writing`, `coding`, `process`, `design`, `infra`, `docs`. Pick the narrowest accurate one.
 - `source`: array of wikilinks to the artifacts or notes that triggered the signal — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0]]`. Improves later auditability.
 
-The server creates `Brain/inbox/sig-<date>-<slug>.md` and resolves collisions deterministically.
+The server records the signal in the inbox under an id `sig-<date>-<slug>` and resolves id collisions deterministically.
 
 ## When to call `brain_apply_evidence`
 
@@ -46,14 +46,14 @@ Call **once per (preference, artifact) pair**, right after a durable artifact la
 
 Discover applicable preferences first. Options:
 
-- Read `Brain/preferences/` directly — files `pref-*.md` are tiny.
+- Call `brain_context` for every active preference with its `scope` (CLI: `o2b brain export --format llms-txt`).
 - Call `brain_query --topic <slug>` to fetch a topic-scoped slice.
 - Call `brain_query --preference <id>` for a single preference plus its evidence trail.
 
 Parameters:
 
 - `pref_id`: id of the preference you are recording against (`pref-no-internal-abbrev`).
-- `artifact`: wikilink identifying what you produced — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0.md]]`, `[[Brain/preferences/pref-no-internal-abbrev]]`. The wikilink resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
+- `artifact`: wikilink identifying what you produced — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0.md]]`, `[[pref-no-internal-abbrev]]`. A wikilink to a vault note resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
 - `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it, `outdated` if the artifact shows the rule itself is obsolete (one `outdated` event retires the preference on the next dream pass). Recording a `violated` event is not a failure — it is what trains the system.
 - `agent`: your runtime identity.
 
@@ -78,7 +78,7 @@ When a preference *might* apply but you are unsure, do not skip — record the e
 When a turn changed files (Write / Edit / MultiEdit / apply_patch) and none of `brain_feedback`, `brain_apply_evidence` or `brain_note` was called, the Stop hook continues the turn once with a single line: "Open Second Brain: this turn changed files but recorded no brain event. ..." Claude Code shows it as Stop hook feedback; Codex and other runtimes receive it as a continuation prompt. It is a prompt to decide, not an error:
 
 - a rule the user stated this turn → `brain_feedback`;
-- an active preference in `Brain/preferences/` applied, violated or made obsolete by the change → `brain_apply_evidence` with `result: applied | violated | outdated`;
+- an active preference (`brain_context` lists them) applied, violated or made obsolete by the change → `brain_apply_evidence` with `result: applied | violated | outdated`;
 - a durable milestone that fits neither (release shipped, PR merged, fact discovered) → `brain_note`;
 - nothing worth recording (the four cases under "When NOT to call") → finish the reply without comment.
 
@@ -92,7 +92,7 @@ Mixed-language session → match the most recent user message at the time the ar
 
 ## Self-discovery
 
-- `brain_query --preference pref-foo` — full preference frontmatter + every evidence record in `Brain/log/*` referencing it.
+- `brain_query --preference pref-foo` — full preference frontmatter + every evidence record in the brain log referencing it.
 - `brain_query --topic <slug>` — all artifacts (signals, current preference, retired ones) by topic.
 - `brain_query --since <ISO>` — recent log events of any type.
 - `brain_brief` (`view="digest"`) — daily summary of what `dream` did: new unconfirmed, confirmations, retirements, confidence shifts, contradictions.
@@ -121,8 +121,8 @@ o2b brain apply-evidence \
 - Imperative voice in `principle`. Specific over generic.
 - Never include secrets, tokens, API keys, or credentials in `principle`, `note`, or `source`.
 - Do not edit historical signals, preferences, or log entries by hand — the `dream` pass is the only writer for transitions.
-- Do not write into `Brain/.snapshots/` or `Brain/retired/` directly — those are managed by `dream` and `o2b brain reject` only.
-- `o2b brain reject` requires `--reason <text>` from v0.10.1 onward. The reason is persisted on the retired file as `user_rejected_reason`. The next dream pass will mark any future signal on the same `(topic, scope)` as `signal-suppressed` and move it straight to `processed/` — do not re-record the same signal hoping it will re-grow into a preference. If you genuinely disagree with a past reject, raise it with the user; do not route around it via `brain_feedback`.
+- Do not create or edit brain memory files (snapshots, retired preferences, signals, log) by hand — snapshots and retirement are managed by `dream` and `o2b brain reject` only.
+- `o2b brain reject` requires `--reason <text>` from v0.10.1 onward. The reason is persisted on the retired preference as `user_rejected_reason`. The next dream pass will mark any future signal on the same `(topic, scope)` as `signal-suppressed` and consume it without promotion — do not re-record the same signal hoping it will re-grow into a preference. If you genuinely disagree with a past reject, raise it with the user; do not route around it via `brain_feedback`.
 
 ## Examples — good vs bad
 
@@ -152,7 +152,7 @@ When no agent is in the loop at the moment the rule is formed, the
 user can write an `@osb` marker directly into any vault markdown
 file — a Daily note, a project plan, a self-chat scratchpad. The
 operator runs `o2b brain scan-inline` later to capture every marker
-into `Brain/inbox/`. Two shapes are recognised:
+into the signal inbox. Two shapes are recognised:
 
 ```text
 @osb feedback negative topic=mocking principle="don't mock DB in integration tests" scope=testing

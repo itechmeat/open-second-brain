@@ -10,6 +10,8 @@
  * its audit row with zero contributions, which the fold skips.
  */
 
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
@@ -59,6 +61,8 @@ afterEach(async () => {
 /** Indexed with embeddings, then served under a positive gate on an unpriced model. */
 async function gatedIndex(): Promise<ResolvedSearchConfig> {
   const v = createTempVault("feedback-spend-gate");
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(v.vault, "Brain"), { recursive: true });
   cleanup = v.cleanup;
   writeMd(v.vault, "Notes/fox.md", "# Fox\n\nThe quick brown fox jumps over the lazy dog.");
   const config = makeConfig({
@@ -125,6 +129,8 @@ test("feedback on an index with no embeddings records the layer contributions", 
   // Keyword-only by construction: the system the re-run measured is the
   // one that serves, so its shares are signal, not a degradation.
   const v = createTempVault("feedback-no-embeddings");
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(v.vault, "Brain"), { recursive: true });
   cleanup = v.cleanup;
   writeMd(v.vault, "Notes/fox.md", "# Fox\n\nThe quick brown fox jumps over the lazy dog.");
   const config = makeConfig({
@@ -163,6 +169,8 @@ test.skipIf(!sqliteVecLoadable())(
     // `hybrid-degraded` umbrella is noted. The judged page still arrives
     // through the relational arm, scored without the semantic lane.
     const v = createTempVault("feedback-empty-fit");
+    // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+    mkdirSync(join(v.vault, "Brain"), { recursive: true });
     cleanup = v.cleanup;
     writeMd(v.vault, "qx.md", '---\nrelated: "[[neighbor]]"\n---\n\nalpha topic.');
     writeMd(v.vault, "neighbor.md", "# Beta\n\nbeta divergent content.");

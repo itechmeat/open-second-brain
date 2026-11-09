@@ -28,6 +28,10 @@ import {
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
 } from "../../../src/core/brain/types.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 const NOW = new Date("2026-05-18T10:00:00Z");

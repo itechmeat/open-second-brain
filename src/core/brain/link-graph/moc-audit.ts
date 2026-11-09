@@ -25,6 +25,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePageInPreferenceFolders } from "../memory-pages.ts";
 import { FRONTMATTER_RE } from "../../vault.ts";
 import { buildBacklinkIndex } from "../backlinks.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
@@ -32,6 +33,7 @@ import { brainDirs, vaultRelative } from "../paths.ts";
 import { BRAIN_LINK_GRAPH_DEFAULTS, loadBrainConfig, resolveLinkGraph } from "../policy.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./parse-wikilink.ts";
+import { requireVaultAdapter, WIKILINK_AUDIT } from "../../vault-adapter/index.ts";
 
 /** Inclusive minimum backlink count for the `wellCovered` bucket. */
 const WELL_COVERED_MIN_BACKLINKS = 2;
@@ -193,10 +195,16 @@ export function resolveHubThresholds(vault: string): HubBodyThresholds {
 /** The {@link AuditMocOptions.readable} answer when none is given. */
 const READ_EVERY_PAGE = (): boolean => true;
 
-export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {}): MocAuditReport {
+export function auditMoc(
+  vaultOrNull: string | null,
+  hubId: string,
+  opts: AuditMocOptions = {},
+): MocAuditReport {
+  const vault = requireVaultAdapter(vaultOrNull, WIKILINK_AUDIT.mocAudit);
   const hubCanonical = normaliseWikilinkTarget(hubId);
   const view = ownerScopeView(vault, opts.ownerScope ?? null);
-  const hubPath = locateArtifact(vault, hubCanonical);
+  const hub = locateArtifact(vault, hubCanonical);
+  const hubPath = hub?.path ?? null;
   const readable = opts.readable ?? READ_EVERY_PAGE;
   // A hub the caller may not see reads as a hub that is not there: the
   // same sentence an absent hub produces, so the two are indistinguishable.
@@ -204,7 +212,7 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
     throw new MocAuditError(`hub note not found: ${hubCanonical}`);
   }
 
-  const hubBody = stripFrontmatter(readFileSync(hubPath, "utf8"));
+  const hubBody = stripFrontmatter(hub!.text());
 
   const thresholds = resolveThresholds(vault, opts);
   const verdict = evaluateHubBody(hubBody, thresholds, { selfTarget: hubCanonical });
@@ -230,7 +238,8 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
   const missingCounts = new Map<string, number>();
 
   for (const target of outboundTargets) {
-    const memberPath = locateArtifact(vault, target);
+    const located = locateArtifact(vault, target);
+    const memberPath = located?.path ?? null;
     // A member this caller may not see leaves no trace in any bucket -
     // not even the missing one, which would decide exists-vs-absent for it.
     if (memberPath && (!view.visible(target) || !readable(vaultRelative(memberPath, vault)))) {
@@ -240,7 +249,7 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
       missingCounts.set(target, (missingCounts.get(target) ?? 0) + 1);
       continue;
     }
-    const memberBody = stripFrontmatter(readFileSync(memberPath, "utf8"));
+    const memberBody = stripFrontmatter(located!.text());
     const backlinks = index.get(target) ?? [];
     // Don't count the hub's own outbound reference toward the
     // bucket assignment; the bucket measures coverage by OTHER
@@ -269,9 +278,9 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
   for (const target of outboundTargets) {
     if (!missingCounts.has(target)) continue;
     for (const member of outboundTargets) {
-      const path = locateArtifact(vault, member);
-      if (!path || !view.visible(member) || !readable(vaultRelative(path, vault))) continue;
-      const body = stripFrontmatter(readFileSync(path, "utf8"));
+      const found = locateArtifact(vault, member);
+      if (!found || !view.visible(member) || !readable(vaultRelative(found.path, vault))) continue;
+      const body = stripFrontmatter(found.text());
       for (const bracketBody of extractWikilinkRichBodies(body)) {
         const t = parseWikilinkRich(bracketBody).target;
         if (t === target) {
@@ -301,10 +310,24 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
   });
 }
 
-function locateArtifact(vault: string, id: string): string | null {
+/**
+ * The preference or retired page `id` names: its path and its text. On a
+ * store-only machine (task 2.10) the fold's record, as the page it would be.
+ */
+function locateArtifact(
+  vault: string,
+  id: string,
+): { readonly path: string; readonly text: () => string } | null {
+  if (memoryFromStore(vault)) {
+    // The same two folders the legacy lookup reads.
+    const page = storePageInPreferenceFolders(vault, id);
+    if (page === null) return null;
+    return { path: page.path, text: () => page.text };
+  }
   const dirs = brainDirs(vault);
   const candidates = [join(dirs.preferences, `${id}.md`), join(dirs.retired, `${id}.md`)];
-  for (const c of candidates) if (existsSync(c)) return c;
+  for (const c of candidates)
+    if (existsSync(c)) return { path: c, text: () => readFileSync(c, "utf8") };
   return null;
 }
 

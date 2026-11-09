@@ -36,6 +36,9 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-hook-state-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

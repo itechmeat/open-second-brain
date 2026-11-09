@@ -24,6 +24,10 @@ export function createTempVault(prefix: string): {
   cleanup: () => void;
 } {
   const vault = mkdtempSync(join(tmpdir(), `osb-${prefix}-`));
+  // A legacy Brain/ tree: the vault of an unswitched machine, whose brain
+  // writers (search feedback, demand, telemetry) still write into it. A
+  // vault without one is a fresh install, which writes the store only.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   const dbPath = join(vault, ".open-second-brain", "brain.sqlite");
   return {
     vault,

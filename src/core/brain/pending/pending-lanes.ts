@@ -41,19 +41,17 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import {
-  atomicCreateFileSyncExclusive,
-  atomicWriteFileSync,
-  FileAlreadyExistsError,
-} from "../../fs-atomic.ts";
+import { atomicCreateFileSyncExclusive, FileAlreadyExistsError } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { appendDecisionLedger } from "../permissions/ledger.ts";
 import type { PermissionSubject } from "../permissions/resolve.ts";
 import type { BrainDirs } from "../paths.ts";
-import { BRAIN_INBOX_REL, BRAIN_SOURCES_REL, brainDirs, brainDirsForWrite } from "../paths.ts";
-import { parseSignal } from "../signal.ts";
+import { BRAIN_INBOX_REL, BRAIN_SOURCES_REL, brainDirs } from "../paths.ts";
+import { parseSignal, parseStoreSignal } from "../signal.ts";
+import { routeSignalState, signalsStoreOnly, storeSignal } from "../signal-state.ts";
+import { readStoreEntities } from "../../store/read/store-entities.ts";
 import type { BrainSignal } from "../types.ts";
 import { REVIEW_LANE, type ReviewLane } from "../write-gate.ts";
 
@@ -78,6 +76,18 @@ export {
   type WriteRefusedFields,
   type WriteSubject,
 } from "../write-disposition.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  listLaneFiles,
+  parseLanePage,
+  readLaneFile,
+  moveLanePage,
+  removeLanePage,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
+import { signalRawShape } from "../../store/dual-write-records.ts";
 
 // ----- Typed errors ---------------------------------------------------------
 
@@ -369,7 +379,8 @@ export function stageForReview(
   }
   // Write intent: the vault-identity assertion runs here, in the queue,
   // so a staged write is guarded exactly like a published one.
-  const laneDir = pendingLaneDirIn(brainDirsForWrite(vault), lane);
+  assertLaneWrite(vault);
+  const laneDir = pendingLaneDirIn(brainDirs(vault), lane);
   const suffix =
     lane === REVIEW_LANE.notes
       ? encodePendingTargetPath(stripMarkdownSuffix(publishTarget))
@@ -390,7 +401,7 @@ export function stageForReview(
   // target, so it catches the two-day case (two ids, one target) as well
   // as the same-day one (one id, silently rewritten bytes); an unreadable
   // entry names no target and so holds none.
-  for (const path of laneDirFiles(laneDir)) {
+  for (const path of laneDirFiles(vault, laneDir)) {
     const entry = readLaneEntry(vault, lane, path);
     if (entry.unreadableReason !== undefined) continue;
     if (entry.publishTarget === publishTarget) {
@@ -406,8 +417,9 @@ export function stageForReview(
       publishTarget,
     );
   }
-  mkdirSync(laneDir, { recursive: true });
-  atomicWriteFileSync(stagedPath, render(), { skipIfUnchanged: false });
+  // A staged note or ingest page is a pending-lane page: a store record
+  // on a store-only machine (task 2.10 WP6).
+  writeLaneText(vault, stagedPath, render());
   return { pendingId, path: stagedPath };
 }
 
@@ -461,7 +473,8 @@ export interface PendingLaneListing {
 }
 
 /** List one lane's `.md` files (the directory may not exist yet). */
-function laneDirFiles(dir: string): string[] {
+function laneDirFiles(vault: string, dir: string): string[] {
+  if (lanePagesInStore(vault)) return listLaneFiles(vault, dir).map((name) => join(dir, name));
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -494,7 +507,7 @@ function readLaneEntry(vault: string, lane: ReviewLane, path: string): PendingLa
     if (lane === REVIEW_LANE.signals) {
       return { ...base, ...signalFields(path), publishTarget: publishTargetForId(vault, id) };
     }
-    const [meta, body] = parseFrontmatter(path);
+    const [meta, body] = parseLanePage(vault, path);
     return {
       ...base,
       frontmatter: meta,
@@ -525,7 +538,13 @@ export function listPendingLane(vault: string, lane: ReviewLane | "all"): Pendin
   const entries: PendingLaneEntry[] = [];
   const unreadable: { path: string; reason: string }[] = [];
   for (const one of lanes) {
-    for (const path of laneDirFiles(pendingLaneDir(vault, one))) {
+    // Store-only (task 2.10): the signals lane is the staged signals of the
+    // store's signal fold; the other lanes stage notes and pages.
+    if (one === REVIEW_LANE.signals && signalsStoreOnly(vault)) {
+      entries.push(...storeStagedSignals(vault, unreadable));
+      continue;
+    }
+    for (const path of laneDirFiles(vault, pendingLaneDir(vault, one))) {
       const entry = readLaneEntry(vault, one, path);
       if (entry.unreadableReason !== undefined) {
         unreadable.push({ path, reason: entry.unreadableReason });
@@ -573,6 +592,22 @@ export interface PendingLaneRejectOptions {
   readonly via?: PermissionSubject["via"];
 }
 
+/**
+ * The staged page's frontmatter and body: none for a store-only signal
+ * (its fields are the fold's), the lane page of a staged note or ingest
+ * page, the file of a staged signal on an unswitched machine.
+ */
+function readStaged(
+  vault: string,
+  src: string,
+  storeOnly: boolean,
+  asLanePage: boolean,
+): readonly [FrontmatterMap, string] {
+  if (storeOnly) return [{}, ""];
+  if (asLanePage) return parseLanePage(vault, src);
+  return parseFrontmatter(src);
+}
+
 export interface PendingLaneRejectResult {
   readonly id: string;
   readonly path: string;
@@ -590,8 +625,10 @@ export interface PendingLaneRejectResult {
  */
 function pendingLaneFilePath(vault: string, id: string, forWrite: boolean): string {
   if (!PENDING_LANE_ID_RE.test(id)) throw new InvalidPendingIdError(id);
-  const dirs = forWrite ? brainDirsForWrite(vault) : brainDirs(vault);
-  const laneDir = pendingLaneDirIn(dirs, laneOfId(id));
+  // The write guard of the lane page store: the identity guard on an
+  // unswitched machine, the store's own checks once switched.
+  if (forWrite) assertLaneWrite(vault);
+  const laneDir = pendingLaneDirIn(brainDirs(vault), laneOfId(id));
   return ensureInsideVault(join(laneDir, `${id}.md`), vault);
 }
 
@@ -651,8 +688,9 @@ export function applyPendingLane(
   opts: PendingLaneApplyOptions = {},
 ): PendingLaneApplyResult {
   const dryRun = opts.dryRun === true;
+  if (laneOfId(id) === REVIEW_LANE.signals) return applyPendingSignal(vault, id, opts);
   const src = pendingLaneFilePath(vault, id, !dryRun);
-  if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
+  if (!lanePageExists(vault, src)) throw new PendingSignalNotFoundError(id);
   const target = publishTargetForId(vault, id);
   let dest: string;
   try {
@@ -664,20 +702,93 @@ export function applyPendingLane(
       target,
     );
   }
-  if (existsSync(dest)) throw new PendingApplyConflictError(id, dest);
+  if (lanePageExists(vault, dest)) throw new PendingApplyConflictError(id, dest);
   if (dryRun) return { id, path: dest, dryRun: true };
 
-  const contents = readFileSync(src, "utf8");
-  mkdirSync(dirname(dest), { recursive: true });
+  const contents = readLaneFile(vault, src);
   // Exclusive create: never clobber an existing target with the same
   // name. This is the real gate - the check above makes the preview
-  // honest, it does not replace the atomic one.
-  atomicCreateFileSyncExclusive(dest, contents);
-  unlinkSync(src);
+  // honest, it does not replace the atomic one. A target under `Brain/`
+  // is a lane record once switched; a note in the user's vault is a file,
+  // behind the vault adapter's guard.
+  writeLaneText(vault, dest, contents, { exclusive: true });
+  removeLanePage(vault, src);
   // The door's audit trail: one resolution row per real apply, naming
   // the decoded publish path it published into.
   recordResolutionRow(vault, id, target, "resolved", opts, `pending ${JSON.stringify(id)} applied`);
   return { id, path: dest, dryRun: false };
+}
+
+/**
+ * Apply a staged signal: move it into the inbox on an unswitched machine
+ * (with the dual write of its `approved` record), or record `approved`
+ * once switched (task 2.10). The same checks and the same resolution row
+ * either way.
+ */
+function applyPendingSignal(
+  vault: string,
+  id: string,
+  opts: PendingLaneApplyOptions,
+): PendingLaneApplyResult {
+  const dryRun = opts.dryRun === true;
+  const target = publishTargetForId(vault, id);
+  const dest = ensureInsideVault(join(vault, target), vault);
+  const storeOnly = signalsStoreOnly(vault);
+  let src = "";
+  if (storeOnly) {
+    if (!PENDING_LANE_ID_RE.test(id)) throw new InvalidPendingIdError(id);
+    if (storeSignal(id)?.state !== "staged") throw new PendingSignalNotFoundError(id);
+  } else {
+    src = pendingLaneFilePath(vault, id, !dryRun);
+    if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
+    if (existsSync(dest)) throw new PendingApplyConflictError(id, dest);
+  }
+  if (dryRun) return { id, path: dest, dryRun: true };
+  routeSignalState({
+    vault,
+    id,
+    state: "approved",
+    ...(storeOnly ? {} : { legacyFrontmatter: () => parseFrontmatter(dest)[0] }),
+    legacy: () => {
+      const contents = readFileSync(src, "utf8");
+      mkdirSync(dirname(dest), { recursive: true });
+      // Exclusive create: never clobber an existing target with the same
+      // name. This is the real gate - the check above makes the preview
+      // honest, it does not replace the atomic one.
+      atomicCreateFileSyncExclusive(dest, contents);
+      unlinkSync(src);
+    },
+  });
+  recordResolutionRow(vault, id, target, "resolved", opts, `pending ${JSON.stringify(id)} applied`);
+  return { id, path: dest, dryRun: false };
+}
+
+/** The staged signals of the store's signal fold, as queue entries. */
+function storeStagedSignals(
+  vault: string,
+  unreadable: Array<{ path: string; reason: string }>,
+): PendingLaneEntry[] {
+  const out: PendingLaneEntry[] = [];
+  for (const [id, entry] of readStoreEntities()?.signals ?? []) {
+    if (entry.state !== "staged") continue;
+    const rel = typeof entry.record.body["path"] === "string" ? entry.record.body["path"] : "";
+    const path = join(vault, ...rel.split("/"));
+    const raw = typeof entry.record.body["raw"] === "string" ? entry.record.body["raw"] : null;
+    try {
+      out.push({
+        lane: REVIEW_LANE.signals,
+        id,
+        path,
+        publishTarget: publishTargetForId(vault, id),
+        signal: parseStoreSignal(path, entry.frontmatter, raw, {
+          rawShape: signalRawShape(entry.record.body),
+        }),
+      });
+    } catch (err) {
+      unreadable.push({ path, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
 }
 
 /**
@@ -698,12 +809,27 @@ export function rejectPendingLane(
   opts: PendingLaneRejectOptions = {},
 ): PendingLaneRejectResult {
   const dryRun = opts.dryRun === true;
-  const src = pendingLaneFilePath(vault, id, !dryRun);
-  if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
   const lane = laneOfId(id);
   const now = opts.now ?? new Date();
+  const storeOnly = lane === REVIEW_LANE.signals && signalsStoreOnly(vault);
+  // The write guard runs once: inside `pendingLaneFilePath` for a staged
+  // page, here for a store-only signal (which has no page). Both are the
+  // lane page store's guard, so reject and apply refuse alike.
+  if (storeOnly && !dryRun) assertLaneWrite(vault);
+  const src = storeOnly ? "" : pendingLaneFilePath(vault, id, !dryRun);
+  // A staged note or ingest page is a lane page: a file on an unswitched
+  // machine, a lane-entry record once switched. A staged signal on an
+  // unswitched machine stays a file (its move is the signal-state legacy
+  // side, dual-written as a signal-state record).
+  const asLanePage = lane !== REVIEW_LANE.signals;
+  if (storeOnly) {
+    if (!PENDING_LANE_ID_RE.test(id)) throw new InvalidPendingIdError(id);
+    if (storeSignal(id)?.state !== "staged") throw new PendingSignalNotFoundError(id);
+  } else if (asLanePage ? !lanePageExists(vault, src) : !existsSync(src)) {
+    throw new PendingSignalNotFoundError(id);
+  }
 
-  const [meta, body] = parseFrontmatter(src);
+  const [meta, body] = readStaged(vault, src, storeOnly, asLanePage);
   const nextMeta: FrontmatterMap = {};
   for (const [k, v] of Object.entries(meta)) {
     if (k === "_status" || k === "retired_at" || k === "retired_reason") continue;
@@ -720,20 +846,49 @@ export function rejectPendingLane(
   nextMeta["retired_reason"] = reason;
   nextMeta["osb_pending_lane"] = lane;
 
-  const retiredDir = (dryRun ? brainDirs(vault) : brainDirsForWrite(vault)).retired;
-  const dest = ensureInsideVault(join(retiredDir, `${id}.md`), vault);
+  const dest = ensureInsideVault(join(brainDirs(vault).retired, `${id}.md`), vault);
   // The same occupancy refusal the real run's exclusive create raises,
   // checked in the preview too. The exclusive create below stays the
   // actual race gate - this makes the preview honest, it does not
   // replace the atomic one.
-  if (existsSync(dest)) throw new FileAlreadyExistsError(dest);
+  if (!storeOnly && (asLanePage ? lanePageExists(vault, dest) : existsSync(dest))) {
+    throw new FileAlreadyExistsError(dest);
+  }
   if (dryRun) return { id, path: dest, dryRun: true };
 
-  writeFrontmatterAtomic(dest, nextMeta, body, {
-    overwrite: false,
-    vaultForRelativePath: vault,
-  });
-  unlinkSync(src);
+  const move = (): void => {
+    writeFrontmatterAtomic(dest, nextMeta, body, {
+      overwrite: false,
+      vaultForRelativePath: vault,
+    });
+    unlinkSync(src);
+  };
+  if (lane === REVIEW_LANE.signals) {
+    // A rejected signal is a `signal-state` record (task 2.10): the file
+    // move on an unswitched machine plus the dual write, the record only
+    // once switched.
+    routeSignalState({
+      vault,
+      id,
+      state: "rejected",
+      fields: {
+        _status: "retired",
+        retired_at: now.toISOString(),
+        retired_reason: reason,
+        osb_pending_lane: lane,
+      },
+      ...(storeOnly ? {} : { legacyFrontmatter: meta }),
+      legacy: move,
+    });
+  } else {
+    // The retire copy is a lane page too: a file and its dual write on an
+    // unswitched machine, a lane-entry record once switched, so nothing
+    // lands under `Brain/`. The staged entry's tombstone and the retire
+    // copy are one store operation in one partition: a crash between two
+    // writes would leave the item both staged and retired, and the retry
+    // refused on the occupied destination.
+    moveLanePage(vault, src, dest, { frontmatter: nextMeta, body });
+  }
   // The door's audit trail, matching the apply's: one row per real
   // reject, naming the publish path the bytes will never reach and the
   // reason the resolver gave.

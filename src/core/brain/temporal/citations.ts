@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 
 import { appendLogEvent } from "../log.ts";
-import { readLogDay } from "../log-jsonl.ts";
+import { logDayReader, withLogReadPass } from "../log-days.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "../notes/note-walk.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 
@@ -210,7 +210,9 @@ class DedupIndex {
     const cached = this.byDate.get(date);
     if (cached !== undefined) return cached;
     const seen = new Set<string>();
-    const { entries } = readLogDay(this.vault, date);
+    // Read when the day is first asked, as the day file was: events this
+    // scan appended before then are part of it.
+    const { entries } = logDayReader(this.vault).day(date);
     for (const entry of entries) {
       if (entry.eventType !== BRAIN_LOG_EVENT_KIND.sourceCitation) continue;
       const name = entry.body["name"];
@@ -239,6 +241,13 @@ class DedupIndex {
  * errors are collected and reported, never silently swallowed.
  */
 export function scanCitations(vault: string, opts: ScanCitationsOptions): CitationScanResult {
+  // One log read pass: the dedup index reads one day per marker date, and
+  // a store-only machine then reads its log once, not once per date (the
+  // pass still sees what the scan appends).
+  return withLogReadPass(() => scanCitationsInPass(vault, opts));
+}
+
+function scanCitationsInPass(vault: string, opts: ScanCitationsOptions): CitationScanResult {
   const errors: CitationScanError[] = [];
   const malformedMarkers: CitationScanMalformed[] = [];
   const filesWithCitations: CitationScanFileSummary[] = [];
@@ -313,16 +322,21 @@ export function scanCitations(vault: string, opts: ScanCitationsOptions): Citati
         continue;
       }
       try {
-        appendLogEvent(vault, {
-          timestamp: `${marker.date}T00:00:00Z`,
-          eventType: BRAIN_LOG_EVENT_KIND.sourceCitation,
-          body: {
-            agent: opts.agent,
-            name: marker.name,
-            date: marker.date,
-            source: `[[${vaultRelSource}]]`,
+        appendLogEvent(
+          vault,
+          {
+            timestamp: `${marker.date}T00:00:00Z`,
+            eventType: BRAIN_LOG_EVENT_KIND.sourceCitation,
+            body: {
+              agent: opts.agent,
+              name: marker.name,
+              date: marker.date,
+              source: `[[${vaultRelSource}]]`,
+            },
           },
-        });
+          // Not a hook: a store write that does not land is this scan's
+          // error to report (below), never a citation counted as promoted.
+        );
         dedup.add(marker.name, marker.date);
         promoted++;
       } catch (err) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,9 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-failopen-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

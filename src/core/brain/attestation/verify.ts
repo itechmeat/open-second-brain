@@ -46,6 +46,15 @@
  * shards naming why. The record's own seal and signature still verify;
  * a false store digest beside nothing but `appended` shards is a store
  * that moved, not a store that was broken.
+ *
+ * ## Legacy day files only (design D14 item 10)
+ *
+ * An attestation binds the legacy log day files and the ledger files under
+ * the vault, and this kernel verifies those only; every verification says
+ * so in `covers`. A store-only machine writes its log and ledgers as brain
+ * store records, which no attestation names: their integrity is each
+ * record's checksum plus the partition state digests the doctor compares
+ * (`STORE_LOG_INTEGRITY` in `log-chain.ts`).
  */
 
 import { existsSync, lstatSync } from "node:fs";
@@ -73,7 +82,12 @@ import type { ProgressSink } from "../progress.ts";
 /** The state of one attested shard, as verification reports it. */
 export type AttestationShardState = "intact" | "appended" | "diverged" | "missing";
 
+/** What {@link verifyAttestation} covers: the legacy day files and ledger files of the vault. */
+export const ATTESTATION_VERIFY_COVERS = "legacy-day-files";
+
 export interface AttestationVerification {
+  /** Always {@link ATTESTATION_VERIFY_COVERS}: brain store records are not attested. */
+  readonly covers: typeof ATTESTATION_VERIFY_COVERS;
   readonly recordId: string;
   readonly createdAt: string;
   readonly signatureValid: boolean;
@@ -284,6 +298,7 @@ export function verifyAttestation(
   }
 
   return Object.freeze({
+    covers: ATTESTATION_VERIFY_COVERS,
     recordId: record.id,
     createdAt: record.createdAt,
     signatureValid,

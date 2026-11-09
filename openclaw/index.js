@@ -1811,6 +1811,12 @@ function dataBaseDir(source = processDirsEnv()) {
 function stateBaseDir(source = processDirsEnv()) {
   return baseDir("state", source);
 }
+function stateRootDir(source = processDirsEnv()) {
+  return join2(baseDir("state", source), APP_DIR_NAME);
+}
+function noVaultRoot() {
+  return join2(stateRootDir(processDirsEnv()), "no-vault");
+}
 var APP_DIR_NAME = "open-second-brain", XDG_VARIABLE, POSIX_DEFAULT;
 var init_platform_dirs = __esm(() => {
   XDG_VARIABLE = Object.freeze({
@@ -2401,7 +2407,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_WRITER = "view.writer", SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_KEYS, STATE_DIGEST_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_KEYS, STATE_DIGEST_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2446,7 +2452,6 @@ var init_constants = __esm(() => {
     "outdated_count"
   ]);
   SETTING_KEYS = Object.freeze([
-    SETTING_VIEW_WRITER,
     SETTING_VIEW_LANGUAGE,
     SETTING_TOPIC_MIN_RECORDS,
     SETTING_TOPIC_MIN_SESSIONS
@@ -2492,6 +2497,7 @@ __export(exports_config, {
   UNCONFIGURED_AGENT_NAME: () => UNCONFIGURED_AGENT_NAME,
   UnsupportedPlatformError: () => UnsupportedPlatformError,
   VAULT_STORE_REF_PREFIX: () => VAULT_STORE_REF_PREFIX,
+  configuredVaultKey: () => configuredVaultKey,
   defaultConfigPath: () => defaultConfigPath,
   discoverConfig: () => discoverConfig,
   installNamedSecretResolver: () => installNamedSecretResolver,
@@ -2704,6 +2710,10 @@ function resolveVault(configPath, opts = {}) {
   if (cfg)
     return expandTilde(cfg);
   return null;
+}
+function configuredVaultKey(configPath) {
+  const value = discoverConfig(configPath).data["vault"];
+  return value ? expandTilde(value) : null;
 }
 function isConfiguredAgentName(name) {
   const trimmed = name.trim();
@@ -3738,17 +3748,6 @@ var init_ledger_shards = __esm(() => {
   NAME_RE_CACHE = new Map;
 });
 
-// src/core/origin-channel.ts
-var ORIGIN_CHANNEL, ORIGIN_CHANNELS;
-var init_origin_channel = __esm(() => {
-  ORIGIN_CHANNEL = Object.freeze({
-    mcpTool: "mcp-tool",
-    cli: "cli",
-    import: "import"
-  });
-  ORIGIN_CHANNELS = Object.freeze(Object.values(ORIGIN_CHANNEL));
-});
-
 // src/core/path-safety.ts
 import { existsSync as existsSync4, realpathSync, statSync as statSync4 } from "node:fs";
 import {
@@ -3835,6 +3834,2761 @@ var init_path_safety = __esm(() => {
       this.name = "VaultEscapeError";
     }
   };
+});
+
+// src/core/store-migration/device-state-layout.ts
+var MIGRATION_LOCAL_DIR = "local", MIGRATION_BACKUP_DIR = "backup", MIGRATION_BACKUP_FILES_DIR = "files";
+
+// src/core/store/compare.ts
+function compareCodeUnits(a, b) {
+  if (a === b)
+    return 0;
+  return a < b ? -1 : 1;
+}
+
+// src/core/store/hlc.ts
+function formatHlc(clock) {
+  return `${clock.physical}.${clock.counter}`;
+}
+function parseHlc(text) {
+  const match = HLC_RE.exec(text);
+  if (match === null)
+    return null;
+  const physical = Number(match[1]);
+  const counter = Number(match[2]);
+  if (!Number.isSafeInteger(physical) || !Number.isSafeInteger(counter))
+    return null;
+  return { physical, counter };
+}
+function compareHlc(a, b) {
+  if (a.physical !== b.physical)
+    return a.physical < b.physical ? -1 : 1;
+  if (a.counter !== b.counter)
+    return a.counter < b.counter ? -1 : 1;
+  return 0;
+}
+function maxHlc(a, b) {
+  return compareHlc(a, b) >= 0 ? a : b;
+}
+function sendHlc(local, wallMs) {
+  const wall = Math.max(0, Math.floor(wallMs));
+  if (wall > local.physical)
+    return { physical: wall, counter: 0 };
+  return { physical: local.physical, counter: local.counter + 1 };
+}
+function receiveHlc(local, remote, wallMs) {
+  const wall = Math.max(0, Math.floor(wallMs));
+  const adoptable = remote.physical - wall <= HLC_MAX_DRIFT_MS;
+  const known = adoptable ? maxHlc(local, remote) : local;
+  if (wall > known.physical)
+    return { physical: wall, counter: 0 };
+  return known;
+}
+var HLC_MAX_DRIFT_MS, HLC_ZERO, HLC_RE;
+var init_hlc = __esm(() => {
+  HLC_MAX_DRIFT_MS = 24 * 60 * 60 * 1000;
+  HLC_ZERO = Object.freeze({ physical: 0, counter: 0 });
+  HLC_RE = /^(0|[1-9]\d{0,15})\.(0|[1-9]\d{0,9})$/;
+});
+
+// src/core/store/clock-floor.ts
+import { resolve as resolve5 } from "node:path";
+function noteObservedClock(storeRoot, clock) {
+  const key = resolve5(storeRoot);
+  const seen = floors.get(key);
+  if (seen === undefined || maxHlc(seen, clock) !== seen)
+    floors.set(key, clock);
+}
+function observedClockFloor(storeRoot) {
+  return floors.get(resolve5(storeRoot)) ?? null;
+}
+var floors;
+var init_clock_floor = __esm(() => {
+  init_hlc();
+  floors = new Map;
+});
+
+// src/core/brain/sync-lockfile.ts
+import {
+  closeSync as closeSync2,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  readFileSync as readFileSync5,
+  mkdirSync as mkdirSync5,
+  openSync as openSync2,
+  readdirSync,
+  unlinkSync as unlinkSync2,
+  writeSync as writeSync2
+} from "node:fs";
+function isWindowsDeletePending(e, lockPath, platform = process.platform, occupied = nameIsOccupied) {
+  if (platform !== "win32" || e.code !== "EPERM" && e.code !== "EACCES")
+    return false;
+  return occupied(lockPath);
+}
+function nameIsOccupied(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (err) {
+    return err.code !== "ENOENT";
+  }
+}
+function resolveLockWaitBudgetMs(env = process.env) {
+  const raw = env[LOCK_WAIT_BUDGET_ENV];
+  if (raw === undefined || raw.trim() === "")
+    return LOCK_WAIT_BUDGET_MS;
+  const text = raw.trim();
+  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${LOCK_WAIT_BUDGET_ENV}=${raw} is not a lock wait; set it to a whole number of ` + `milliseconds >= 0 (the default is ${LOCK_WAIT_BUDGET_MS}), or unset it`);
+  }
+  return parsed;
+}
+var heldLocks, LOCK_WAIT_BUDGET_MS = 5000, LOCK_WAIT_BUDGET_ENV = "OPEN_SECOND_BRAIN_LOCK_WAIT_MS", RETRY_SLEEP_CEILING_MS = 25, contendedReleases, HANDOFF_WINDOW_MS, AGED_WAITER_AFTER_MS, POSIX_MIN_STAMP_BYTES = 48, WIN32_MIN_STAMP_BYTES = 30, MIN_STAMP_BYTES, WAITER_MARK, MARK_OPEN_FLAGS;
+var init_sync_lockfile = __esm(() => {
+  init_path_constants();
+  heldLocks = new Map;
+  contendedReleases = new Map;
+  HANDOFF_WINDOW_MS = RETRY_SLEEP_CEILING_MS * 4;
+  AGED_WAITER_AFTER_MS = RETRY_SLEEP_CEILING_MS * 10;
+  MIN_STAMP_BYTES = process.platform === "win32" ? WIN32_MIN_STAMP_BYTES : POSIX_MIN_STAMP_BYTES;
+  WAITER_MARK = Buffer.from("w", "utf8");
+  MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
+});
+
+// src/core/store/local-lock.ts
+import { mkdirSync as mkdirSync6 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
+function isLockContention(err, lockTarget, platform = process.platform) {
+  const e = err;
+  return e.code === "ELOCKED" || isWindowsDeletePending(e, `${lockTarget}.lock`, platform);
+}
+function isWindowsRefusal(err, platform = process.platform) {
+  const code = err.code;
+  return platform === "win32" && (code === "EPERM" || code === "EACCES");
+}
+function acquireDirLock(lockTarget, options) {
+  const started = Date.now();
+  let refusalRetried = false;
+  for (let attempt = 0;; attempt++) {
+    try {
+      return import_proper_lockfile3.default.lockSync(lockTarget, { stale: options.staleMs, realpath: false });
+    } catch (err) {
+      if (!isLockContention(err, lockTarget)) {
+        if (refusalRetried || !isWindowsRefusal(err))
+          throw err;
+        refusalRetried = true;
+        continue;
+      }
+      if (Date.now() - started >= options.budgetMs) {
+        const refused = new Error(`${options.label} busy: ${lockTarget}: still held after waiting ` + `${Date.now() - started} ms; ${options.remedy}`, { cause: err });
+        refused.code = "ELOCKED";
+        refused.path = lockTarget;
+        throw refused;
+      }
+      sleepSync(1 + Math.floor(Math.random() * Math.min(RETRY_SLEEP_MAX_MS, 2 + attempt * 2)));
+    }
+  }
+}
+function withLocalLock(lockTarget, fn, budgetMs) {
+  mkdirSync6(dirname6(lockTarget), { recursive: true });
+  const release = acquireDirLock(lockTarget, {
+    staleMs: STORE_LOCK_STALE_MS,
+    budgetMs: budgetMs ?? resolveLockWaitBudgetMs(),
+    label: "store lock",
+    remedy: "retry once the other writer finishes, or allow a longer wait with " + "OPEN_SECOND_BRAIN_LOCK_WAIT_MS=<milliseconds>"
+  });
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+var import_proper_lockfile3, STORE_LOCK_STALE_MS = 60000, RETRY_SLEEP_MAX_MS = 20;
+var init_local_lock = __esm(() => {
+  init_sync_lockfile();
+  init_fs_atomic();
+  import_proper_lockfile3 = __toESM(require_proper_lockfile(), 1);
+});
+
+// src/core/store/clock-store.ts
+import { readFileSync as readFileSync6 } from "node:fs";
+import { join as join7 } from "node:path";
+function clockFilePath(deviceStateDir, device) {
+  return join7(deviceStateDir, STORE_CLOCK_DIR, `${device}.json`);
+}
+function readClock(deviceStateDir, device) {
+  let text;
+  try {
+    text = readFileSync6(clockFilePath(deviceStateDir, device), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return null;
+    throw err;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed.hlc === "string" ? parseHlc(parsed.hlc) : null;
+  } catch {
+    return null;
+  }
+}
+function update(deviceStateDir, device, step) {
+  const path = clockFilePath(deviceStateDir, device);
+  return withLocalLock(path, () => {
+    const next = step(readClock(deviceStateDir, device) ?? HLC_ZERO);
+    atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}
+`);
+    return next;
+  });
+}
+function tickClock(deviceStateDir, device, now = systemWallClock, floor = null) {
+  return update(deviceStateDir, device, (local) => {
+    const wall = now();
+    return sendHlc(floor === null ? local : receiveHlc(local, floor, wall), wall);
+  });
+}
+var systemWallClock = () => Date.now();
+var init_clock_store = __esm(() => {
+  init_fs_atomic();
+  init_constants();
+  init_hlc();
+  init_local_lock();
+});
+
+// src/core/store/ulid.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+function encodeTime(time) {
+  let out = "";
+  let rest = time;
+  for (let i = 0;i < TIME_CHARS; i++) {
+    out = ALPHABET[rest % 32] + out;
+    rest = Math.floor(rest / 32);
+  }
+  return out;
+}
+function freshRandom() {
+  const bytes = randomBytes2(RANDOM_CHARS);
+  return Array.from(bytes, (byte) => byte % 32);
+}
+function increment(digits) {
+  for (let i = digits.length - 1;i >= 0; i--) {
+    if (digits[i] < 31) {
+      digits[i] += 1;
+      return true;
+    }
+    digits[i] = 0;
+  }
+  return false;
+}
+function newUlid(nowMs = Date.now()) {
+  const time = Math.min(MAX_TIME, Math.max(0, Math.floor(nowMs)));
+  if (time === lastTime) {
+    if (!increment(lastRandom)) {
+      lastTime += 1;
+      lastRandom = freshRandom();
+    }
+  } else {
+    lastTime = time;
+    lastRandom = freshRandom();
+  }
+  return encodeTime(lastTime) + lastRandom.map((d) => ALPHABET[d]).join("");
+}
+function isUlid(value) {
+  return typeof value === "string" && ULID_RE.test(value);
+}
+var ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ", TIME_CHARS = 10, RANDOM_CHARS = 16, ULID_RE, MAX_TIME, lastTime = -1, lastRandom;
+var init_ulid = __esm(() => {
+  ULID_RE = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+  MAX_TIME = 2 ** 48 - 1;
+  lastRandom = [];
+});
+
+// src/core/store/envelope.ts
+function canonicalBodyText(body) {
+  return canonicalJson(body);
+}
+function bodyChecksum(body) {
+  return sha256Hex(canonicalBodyText(body));
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function bodyTooDeep(body) {
+  const stack = [[body, 1]];
+  while (stack.length > 0) {
+    const [value, depth] = stack.pop();
+    if (value === null || typeof value !== "object")
+      continue;
+    if (depth > STORE_BODY_MAX_DEPTH)
+      return true;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) {
+      if (child !== null && typeof child === "object")
+        stack.push([child, depth + 1]);
+    }
+  }
+  return false;
+}
+function isBlobRef(body) {
+  const bytes = body[BLOB_REF_BYTES_KEY];
+  return Object.keys(body).length === 2 && typeof body[BLOB_REF_KEY] === "string" && typeof bytes === "number" && Number.isSafeInteger(bytes) && bytes >= 0;
+}
+function labelProblem(value) {
+  if (typeof value !== "string" || value.trim() === "" || value.length > MAX_LABEL_LENGTH) {
+    return `must be a non-empty string of at most ${MAX_LABEL_LENGTH} characters`;
+  }
+  if (/[\r\n]/.test(value))
+    return "must be one line";
+  return null;
+}
+function isRecordLabel(value) {
+  return labelProblem(value) === null;
+}
+function label(name, value, nullable) {
+  if (value === null || value === undefined) {
+    if (nullable)
+      return null;
+    throw new EnvelopeError(`record ${name} is required`);
+  }
+  const problem = labelProblem(value);
+  if (problem !== null)
+    throw new EnvelopeError(`record ${name} ${problem}`);
+  return value;
+}
+function buildRecord(input) {
+  if (!isValidDeviceId(input.device)) {
+    throw new EnvelopeError(`record device "${input.device}" is not a valid device id (lowercase letters, digits and hyphens, not "sync-conflict")`);
+  }
+  if (!RECORD_KIND_RE.test(input.kind)) {
+    throw new EnvelopeError(`record kind "${input.kind}" must match ${RECORD_KIND_RE}`);
+  }
+  const agent = label("agent", input.agent, false);
+  const scope = label("scope", input.scope, true);
+  const topic = input.topic ?? null;
+  if (topic !== null && !isUlid(topic)) {
+    throw new EnvelopeError(`record topic "${topic}" must be a topic id (ULID) or null`);
+  }
+  if (!isPlainObject(input.body))
+    throw new EnvelopeError("record body must be a JSON object");
+  if (bodyTooDeep(input.body))
+    throw new EnvelopeError(`record ${BODY_TOO_DEEP_REASON}`);
+  if (BLOB_REF_KEY in input.body) {
+    throw new EnvelopeError(`record body must not use the reserved key "${BLOB_REF_KEY}"`);
+  }
+  const id = input.id ?? newUlid(input.hlc.physical);
+  if (!isUlid(id))
+    throw new EnvelopeError(`record id "${id}" must be a ULID`);
+  const body = JSON.parse(JSON.stringify(input.body));
+  return {
+    v: STORE_FORMAT_VERSION,
+    id,
+    hlc: formatHlc(input.hlc),
+    device: input.device,
+    agent,
+    kind: input.kind,
+    scope,
+    topic,
+    sum: bodyChecksum(body),
+    body
+  };
+}
+function verifyEnvelope(value) {
+  if (!isPlainObject(value))
+    return fail("line is not a JSON object");
+  for (const field of ENVELOPE_FIELDS) {
+    if (!(field in value))
+      return fail(`missing field "${field}"`);
+  }
+  const v = value["v"];
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1)
+    return fail("invalid version");
+  if (v !== STORE_FORMAT_VERSION) {
+    return { ok: false, reason: `unknown format version ${v}`, unknownVersion: v };
+  }
+  const { id, hlc, device, agent, kind, scope, topic, sum, body } = value;
+  if (!isUlid(id))
+    return fail("invalid id");
+  if (typeof hlc !== "string" || parseHlc(hlc) === null)
+    return fail("invalid hlc");
+  if (typeof device !== "string" || !isValidDeviceId(device))
+    return fail("invalid device");
+  if (labelProblem(agent) !== null)
+    return fail("invalid agent");
+  if (typeof kind !== "string" || !RECORD_KIND_RE.test(kind))
+    return fail("invalid kind");
+  if (scope !== null && labelProblem(scope) !== null)
+    return fail("invalid scope");
+  if (topic !== null && !isUlid(topic))
+    return fail("invalid topic");
+  if (typeof sum !== "string" || !SHA256_RE.test(sum))
+    return fail("invalid sum");
+  if (!isPlainObject(body))
+    return fail("invalid body");
+  if (bodyTooDeep(body))
+    return fail(BODY_TOO_DEEP_REASON);
+  if (isBlobRef(body)) {
+    if (body[BLOB_REF_KEY] !== sum)
+      return fail("checksum mismatch: blob reference does not match sum");
+  } else if (bodyChecksum(body) !== sum) {
+    return fail("checksum mismatch");
+  }
+  return { ok: true, record: value };
+}
+function compareRecords(a, b) {
+  const byClock = compareHlc(parseHlc(a.hlc), parseHlc(b.hlc));
+  if (byClock !== 0)
+    return byClock;
+  if (a.device !== b.device)
+    return a.device < b.device ? -1 : 1;
+  if (a.id !== b.id)
+    return a.id < b.id ? -1 : 1;
+  return 0;
+}
+var EnvelopeError, RECORD_KIND_RE, MAX_LABEL_LENGTH = 200, SHA256_RE, BODY_TOO_DEEP_REASON, fail = (reason) => ({ ok: false, reason });
+var init_envelope = __esm(() => {
+  init_config();
+  init_digest();
+  init_constants();
+  init_hlc();
+  init_ulid();
+  EnvelopeError = class EnvelopeError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "EnvelopeError";
+    }
+  };
+  RECORD_KIND_RE = /^[a-z][a-z0-9-]{0,63}$/;
+  SHA256_RE = /^[0-9a-f]{64}$/;
+  BODY_TOO_DEEP_REASON = `body nests deeper than ${STORE_BODY_MAX_DEPTH} levels`;
+});
+
+// src/core/store/safe-fs.ts
+import {
+  closeSync as closeSync3,
+  constants,
+  fstatSync as fstatSync2,
+  lstatSync as lstatSync2,
+  mkdirSync as mkdirSync7,
+  openSync as openSync3
+} from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute2, join as join8, relative as relative2, sep as sep3 } from "node:path";
+function errnoCode(err) {
+  return err?.code;
+}
+function lstatOrNull(path) {
+  try {
+    return lstatSync2(path);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT")
+      return null;
+    throw err;
+  }
+}
+function assertRealDirectory(path) {
+  const stat = lstatOrNull(path);
+  if (stat === null)
+    return;
+  if (stat.isSymbolicLink())
+    throw new StoreUnsafePathError(path, "is a symbolic link");
+  if (!stat.isDirectory())
+    throw new StoreUnsafePathError(path, "is not a directory");
+}
+function ensureStoreDir(partitionRoot, dir) {
+  const rel = relative2(partitionRoot, dir);
+  if (rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute2(rel)) {
+    throw new StoreUnsafePathError(dir, "is outside the partition folder");
+  }
+  mkdirSync7(partitionRoot, { recursive: true, mode: STORE_DIR_MODE });
+  let current = partitionRoot;
+  for (const part of rel === "" ? [] : rel.split(sep3)) {
+    current = join8(current, part);
+    assertRealDirectory(current);
+    try {
+      mkdirSync7(current, { mode: STORE_DIR_MODE });
+    } catch (err) {
+      if (errnoCode(err) !== "EEXIST")
+        throw err;
+    }
+    assertRealDirectory(current);
+  }
+}
+function isRealDirBelowPartition(partitionRoot, dir) {
+  const rel = relative2(partitionRoot, dir);
+  if (rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute2(rel))
+    return false;
+  let current = partitionRoot;
+  for (const part of rel === "" ? [] : rel.split(sep3)) {
+    current = join8(current, part);
+    const stat = lstatOrNull(current);
+    if (stat === null || stat.isSymbolicLink() || !stat.isDirectory())
+      return false;
+  }
+  return true;
+}
+function openRegularFileForRead(path, partitionRoot) {
+  if (!lstatSync2(path).isFile())
+    return null;
+  let fd;
+  try {
+    fd = openSync3(path, constants.O_RDONLY | NO_FOLLOW | NON_BLOCK);
+  } catch (err) {
+    if (errnoCode(err) === "ELOOP")
+      return null;
+    throw err;
+  }
+  let keep = false;
+  try {
+    const opened = fstatSync2(fd);
+    keep = opened.isFile() && (NO_FOLLOW !== 0 || nameIsOpenedFile(path, opened)) && (partitionRoot === undefined || isRealDirBelowPartition(partitionRoot, dirname7(path)));
+  } finally {
+    if (!keep)
+      closeSync3(fd);
+  }
+  return keep ? fd : null;
+}
+function nameIsOpenedFile(path, opened) {
+  const now = lstatOrNull(path);
+  return now !== null && !now.isSymbolicLink() && now.ino === opened.ino && now.dev === opened.dev;
+}
+function assertNameIsOpenedFile(path, opened) {
+  const now = lstatOrNull(path);
+  if (now === null)
+    throw new StoreUnsafePathError(path, "was removed while it was opened");
+  if (now.isSymbolicLink())
+    throw new StoreUnsafePathError(path, "is a symbolic link");
+  if (now.ino !== opened.ino || now.dev !== opened.dev) {
+    throw new StoreUnsafePathError(path, "was replaced while it was opened");
+  }
+}
+function openShardForAppend(path) {
+  const before = lstatOrNull(path);
+  if (before?.isSymbolicLink() === true)
+    throw new StoreUnsafePathError(path, "is a symbolic link");
+  let fd;
+  try {
+    fd = openSync3(path, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | NO_FOLLOW, STORE_FILE_MODE);
+  } catch (err) {
+    if (errnoCode(err) === "ELOOP")
+      throw new StoreUnsafePathError(path, "is a symbolic link");
+    throw err;
+  }
+  try {
+    const stat = fstatSync2(fd);
+    if (!stat.isFile())
+      throw new StoreUnsafePathError(path, "is not a regular file");
+    if (stat.nlink > 1)
+      throw new StoreUnsafePathError(path, `has ${stat.nlink} hard links`);
+    if (NO_FOLLOW === 0)
+      assertNameIsOpenedFile(path, stat);
+  } catch (err) {
+    closeSync3(fd);
+    throw err;
+  }
+  return fd;
+}
+var STORE_DIR_MODE = 448, STORE_FILE_MODE = 384, StoreUnsafePathError, NO_FOLLOW, NON_BLOCK;
+var init_safe_fs = __esm(() => {
+  StoreUnsafePathError = class StoreUnsafePathError extends Error {
+    path;
+    constructor(path, why) {
+      super(`refusing to write through ${path} in the brain store: it ${why}. ` + "Something other than Open Second Brain put it there (a sync peer, a restore, a manual " + "edit); remove it and let the store create the path again");
+      this.name = "StoreUnsafePathError";
+      this.path = path;
+    }
+  };
+  NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
+  NON_BLOCK = constants.O_NONBLOCK ?? 0;
+});
+
+// src/core/store/store-paths.ts
+import { realpathSync as realpathSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join9, posix as posix4, win32 as win322 } from "node:path";
+function pathsFor(platform) {
+  return platform === "win32" ? win322 : posix4;
+}
+function expandHome(value, source) {
+  const paths = pathsFor(source.platform);
+  if (value === "~")
+    return source.home;
+  if (value.startsWith("~/") || source.platform === "win32" && value.startsWith("~\\")) {
+    return paths.join(source.home, value.slice(2));
+  }
+  return value;
+}
+function resolveLinks(path, platform) {
+  if (platform !== process.platform)
+    return path;
+  const paths = pathsFor(platform);
+  let head = path;
+  const tail = [];
+  for (;; ) {
+    try {
+      return paths.join(realpathSync2(head), ...tail.toReversed());
+    } catch {
+      const parent = paths.dirname(head);
+      if (parent === head)
+        return path;
+      tail.push(paths.basename(head));
+      head = parent;
+    }
+  }
+}
+function isPathInside(child, parent, platform) {
+  const paths = pathsFor(platform);
+  const fold = (p) => CASE_INSENSITIVE_PLATFORMS.has(platform) ? p.toLowerCase() : p;
+  const rel = paths.relative(fold(paths.resolve(parent)), fold(paths.resolve(child)));
+  const escapes = rel === ".." || rel.startsWith(`..${paths.sep}`);
+  return rel === "" || !escapes && !paths.isAbsolute(rel);
+}
+function isPathInsideResolved(child, parent, platform) {
+  return isPathInside(child, parent, platform) || isPathInside(resolveLinks(child, platform), resolveLinks(parent, platform), platform);
+}
+function defaultStoreRoot(source = processDirsEnv()) {
+  return pathsFor(source.platform).join(dataBaseDir(source), APP_DIR_NAME, STORE_DEFAULT_DIR);
+}
+function resolveStoreRoot(source) {
+  const paths = pathsFor(source.platform);
+  const env = source.env[STORE_ROOT_ENV]?.trim();
+  const configured = source.config[STORE_ROOT_CONFIG_KEY]?.trim();
+  let resolved;
+  if (env) {
+    resolved = { root: paths.resolve(expandHome(env, source)), origin: "env" };
+  } else if (configured) {
+    const expanded = expandHome(configured, source);
+    const root = paths.isAbsolute(expanded) ? paths.normalize(expanded) : paths.resolve(paths.dirname(source.configPath), expanded);
+    resolved = { root, origin: "config" };
+  } else {
+    resolved = { root: defaultStoreRoot(source), origin: "default" };
+  }
+  if (source.vault !== null && source.vault.trim() !== "") {
+    const vault = expandHome(source.vault.trim(), source);
+    if (isPathInsideResolved(resolved.root, vault, source.platform))
+      throw new StoreRootInsideVaultError(resolved.root, vault, resolved.origin);
+  }
+  return resolved;
+}
+function resolveConfiguredStoreRoot(configPath) {
+  const path = configPath ?? defaultConfigPath();
+  return resolveStoreRoot({
+    platform: process.platform,
+    home: homedir3(),
+    env: process.env,
+    config: discoverConfig(path).data,
+    configPath: path,
+    vault: resolveVault(path)
+  });
+}
+function storesStateDir(source = processDirsEnv()) {
+  return pathsFor(source.platform).join(stateBaseDir(source), APP_DIR_NAME, STORE_STATE_DIR);
+}
+function deviceStateDirFor(storeId, source = processDirsEnv()) {
+  if (!isUlid(storeId))
+    throw new Error(`store id "${storeId}" is not a ULID`);
+  return pathsFor(source.platform).join(storesStateDir(source), storeId);
+}
+function dualWriteStatusPath(source = processDirsEnv()) {
+  return pathsFor(source.platform).join(storesStateDir(source), DUAL_WRITE_STATUS_FILE);
+}
+function partitionDir(root, partition) {
+  return join9(root, partition);
+}
+function shardMonth(physicalMs) {
+  return new Date(physicalMs).toISOString().slice(0, 7);
+}
+function streamSegments(ref) {
+  if (ref.stream === LEDGER_STREAM) {
+    if (ref.ledger === undefined || !LEDGER_NAME_RE.test(ref.ledger)) {
+      throw new Error(`the ${LEDGER_STREAM} stream needs a ledger name matching ${LEDGER_NAME_RE}`);
+    }
+    return [ref.stream, ref.ledger];
+  }
+  if (ref.ledger !== undefined)
+    throw new Error(`stream ${ref.stream} takes no ledger name`);
+  return [ref.stream];
+}
+function shardRelPath(ref, device, month) {
+  if (!isValidDeviceId(device))
+    throw new Error(`"${device}" is not a valid device id`);
+  if (!SHARD_MONTH_RE.test(month))
+    throw new Error(`"${month}" is not a YYYY-MM month`);
+  return posix4.join(...streamSegments(ref), device, `${month}.${STORE_SHARD_EXT}`);
+}
+function shardPath(root, partition, ref, device, month) {
+  return join9(partitionDir(root, partition), ...shardRelPath(ref, device, month).split("/"));
+}
+function blobPath(partitionRoot, sha) {
+  if (!SHA256_RE2.test(sha))
+    throw new Error(`"${sha}" is not a sha256 hex digest`);
+  return join9(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
+}
+function shardLockTarget(deviceStateDir, partition, rel) {
+  return join9(deviceStateDir, STORE_LOCKS_DIR, partition, ...rel.split("/"));
+}
+var StoreRootInsideVaultError, CASE_INSENSITIVE_PLATFORMS, LEDGER_NAME_RE, SHARD_MONTH_RE, SHA256_RE2;
+var init_store_paths = __esm(() => {
+  init_config();
+  init_platform_dirs();
+  init_constants();
+  init_ulid();
+  StoreRootInsideVaultError = class StoreRootInsideVaultError extends Error {
+    root;
+    vault;
+    setting;
+    origin;
+    constructor(root, vault, origin) {
+      const setting = origin === "env" ? `the ${STORE_ROOT_ENV} environment variable` : origin === "config" ? `\`${STORE_ROOT_CONFIG_KEY}\` in the machine config` : "the default store root";
+      const remedy = origin === "default" ? `set \`${STORE_ROOT_CONFIG_KEY}\` in the machine config to a directory outside the vault` : `change ${setting} to a directory outside the vault, or remove it to use the per-user default`;
+      super(`the brain store root ${root} (from ${setting}) is inside the vault ${vault}; ` + `the store must live outside the vault: ${remedy}.`);
+      this.name = "StoreRootInsideVaultError";
+      this.root = root;
+      this.vault = vault;
+      this.setting = setting;
+      this.origin = origin;
+    }
+  };
+  CASE_INSENSITIVE_PLATFORMS = new Set(["win32", "darwin"]);
+  LEDGER_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  SHARD_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+  SHA256_RE2 = /^[0-9a-f]{64}$/;
+});
+
+// src/core/store/blobs.ts
+import {
+  closeSync as closeSync4,
+  fstatSync as fstatSync3,
+  fsyncSync as fsyncSync2,
+  linkSync as linkSync2,
+  mkdirSync as mkdirSync8,
+  openSync as openSync4,
+  readFileSync as readFileSync7,
+  readSync,
+  statSync as statSync5,
+  unlinkSync as unlinkSync3,
+  writeSync as writeSync3
+} from "node:fs";
+import { basename as basename4, dirname as dirname8, join as join10 } from "node:path";
+function errnoCode2(err) {
+  return err?.code;
+}
+function sameFilesystem(a, b) {
+  try {
+    return statSync5(a).dev === statSync5(b).dev;
+  } catch {
+    return false;
+  }
+}
+function writeAll(fd, bytes) {
+  let written = 0;
+  while (written < bytes.length)
+    written += writeSync3(fd, bytes, written, bytes.length - written);
+  fsyncSync2(fd);
+}
+function createExclusive(path, bytes) {
+  const fd = openSync4(path, "wx", STORE_FILE_MODE);
+  try {
+    writeAll(fd, bytes);
+  } finally {
+    closeSync4(fd);
+  }
+}
+function tempPathFor(target, tempDir) {
+  const unique = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  const blobDir = dirname8(target);
+  if (tempDir !== undefined) {
+    try {
+      mkdirSync8(tempDir, { recursive: true });
+      if (sameFilesystem(tempDir, blobDir))
+        return join10(tempDir, `${basename4(target)}.${unique}`);
+    } catch {}
+  }
+  return join10(blobDir, `${BLOB_TEMP_PREFIX}${basename4(target)}.${unique}`);
+}
+function verifies(path, sha, size, attempts, sleepMs) {
+  for (let attempt = 0;attempt < attempts; attempt += 1) {
+    try {
+      const fd = openRegularFileForRead(path);
+      if (fd !== null) {
+        try {
+          if (fstatSync3(fd).size === size && sha256Hex(readFileSync7(fd)) === sha)
+            return true;
+        } finally {
+          closeSync4(fd);
+        }
+      }
+    } catch (err) {
+      if (errnoCode2(err) !== "ENOENT")
+        throw err;
+    }
+    if (attempt < attempts - 1)
+      sleepSync(sleepMs);
+  }
+  return false;
+}
+function settleExisting(path, sha, bytes, options) {
+  if (verifies(path, sha, bytes.length, VERIFY_ATTEMPTS, VERIFY_SLEEP_MS))
+    return;
+  const repair = tempPathFor(path, options.tempDir);
+  try {
+    createExclusive(repair, bytes);
+    try {
+      (options.rename ?? renameWithRetry)(repair, path);
+    } catch (err) {
+      const code = errnoCode2(err);
+      if (code === undefined || !STILL_OPEN_CODES.has(code))
+        throw err;
+      if (!verifies(path, sha, bytes.length, VERIFY_ATTEMPTS, VERIFY_SLEEP_MS * 10))
+        throw err;
+    }
+  } finally {
+    try {
+      unlinkSync3(repair);
+    } catch {}
+  }
+  if (!verifies(path, sha, bytes.length, 1, 0)) {
+    throw new Error(`blob ${path} does not hold the content its name promises, even after a rewrite`);
+  }
+}
+function createFileOnce(path, bytes, options = {}) {
+  const link = options.link ?? linkSync2;
+  mkdirSync8(dirname8(path), { recursive: true, mode: STORE_DIR_MODE });
+  const temp = tempPathFor(path, options.tempDir);
+  try {
+    createExclusive(temp, bytes);
+    try {
+      link(temp, path);
+      return true;
+    } catch (err) {
+      const code = errnoCode2(err);
+      if (code === "EEXIST")
+        return false;
+      if (code === undefined || !NO_LINK_CODES.has(code))
+        throw err;
+    }
+  } finally {
+    try {
+      unlinkSync3(temp);
+    } catch {}
+  }
+  try {
+    createExclusive(path, bytes);
+    return true;
+  } catch (err) {
+    if (errnoCode2(err) !== "EEXIST")
+      throw err;
+    return false;
+  }
+}
+function writeBlob(partitionRoot, text, options = {}) {
+  const sha = sha256Hex(text);
+  const path = blobPath(partitionRoot, sha);
+  const bytes = Buffer.from(text, "utf8");
+  ensureStoreDir(partitionRoot, dirname8(path));
+  if (createFileOnce(path, bytes, options))
+    return { sha, path, created: true };
+  settleExisting(path, sha, bytes, options);
+  return { sha, path, created: false };
+}
+function readBlob(partitionRoot, sha, bytes) {
+  const path = blobPath(partitionRoot, sha);
+  let fd;
+  try {
+    const opened = openRegularFileForRead(path, partitionRoot);
+    if (opened === null)
+      return { status: "mismatch" };
+    fd = opened;
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return { status: "missing" };
+    throw err;
+  }
+  try {
+    const stat = fstatSync3(fd);
+    if (stat.size > STORE_BLOB_MAX_BYTES)
+      return { status: "mismatch" };
+    if (bytes !== undefined && stat.size !== bytes)
+      return { status: "mismatch" };
+    const content = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < content.length) {
+      const n = readSync(fd, content, read, content.length - read, read);
+      if (n === 0)
+        break;
+      read += n;
+    }
+    const got = content.subarray(0, read);
+    if (sha256Hex(got) !== sha)
+      return { status: "mismatch" };
+    return { status: "ok", text: got.toString("utf8") };
+  } finally {
+    closeSync4(fd);
+  }
+}
+var NO_LINK_CODES, VERIFY_ATTEMPTS = 5, VERIFY_SLEEP_MS = 20, STILL_OPEN_CODES;
+var init_blobs = __esm(() => {
+  init_fs_atomic();
+  init_digest();
+  init_constants();
+  init_safe_fs();
+  init_store_paths();
+  NO_LINK_CODES = new Set([
+    "EPERM",
+    "ENOTSUP",
+    "EOPNOTSUPP",
+    "ENOSYS",
+    "EXDEV",
+    "EMLINK"
+  ]);
+  STILL_OPEN_CODES = new Set(["EPERM", "EBUSY"]);
+});
+
+// src/core/store/appender.ts
+import { closeSync as closeSync5, fstatSync as fstatSync4, fsyncSync as fsyncSync3, openSync as openSync5, readSync as readSync2, writeSync as writeSync4 } from "node:fs";
+import { dirname as dirname9, join as join11 } from "node:path";
+function lineBytes(record) {
+  return Buffer.from(`${JSON.stringify(record)}
+`, "utf8");
+}
+function fsyncDirBestEffort(dir) {
+  try {
+    const fd = openSync5(dir, "r");
+    try {
+      fsyncSync3(fd);
+    } finally {
+      closeSync5(fd);
+    }
+  } catch {}
+}
+function appendLine(partitionRoot, path, bytes) {
+  ensureStoreDir(partitionRoot, dirname9(path));
+  const fd = openShardForAppend(path);
+  let created = false;
+  try {
+    const size = fstatSync4(fd).size;
+    created = size === 0;
+    let payload = bytes;
+    if (size > 0) {
+      const last = Buffer.alloc(1);
+      readSync2(fd, last, 0, 1, size - 1);
+      if (last[0] !== NEWLINE)
+        payload = Buffer.concat([Buffer.from([NEWLINE]), bytes]);
+    }
+    let written = 0;
+    while (written < payload.length) {
+      written += writeSync4(fd, payload, written, payload.length - written);
+    }
+    fsyncSync3(fd);
+  } finally {
+    closeSync5(fd);
+  }
+  if (created)
+    fsyncDirBestEffort(dirname9(path));
+}
+function appendRecord(store, input, options = {}) {
+  if (!store.partitions.has(input.partition)) {
+    throw new PartitionUnavailableError(input.partition, store.root);
+  }
+  const ref = input.ledger === undefined ? { stream: input.stream } : { stream: input.stream, ledger: input.ledger };
+  const hlc = tickClock(store.deviceStateDir, store.device, options.now, observedClockFloor(store.root));
+  const month = shardMonth(hlc.physical);
+  const rel = shardRelPath(ref, store.device, month);
+  const record = buildRecord({
+    hlc,
+    device: store.device,
+    agent: input.agent,
+    kind: input.kind,
+    scope: input.scope ?? null,
+    topic: input.topic ?? null,
+    body: input.body
+  });
+  let bytes = lineBytes(record);
+  let spilled = false;
+  if (bytes.length > STORE_LINE_CAP_BYTES) {
+    const text = canonicalBodyText(record.body);
+    const reference = {
+      [BLOB_REF_KEY]: record.sum,
+      [BLOB_REF_BYTES_KEY]: Buffer.byteLength(text, "utf8")
+    };
+    bytes = lineBytes({ ...record, body: reference });
+    if (bytes.length > STORE_LINE_CAP_BYTES)
+      throw new RecordTooLargeError(bytes.length);
+    writeBlob(partitionDir(store.root, input.partition), text, {
+      tempDir: join11(store.deviceStateDir, STORE_TMP_DIR)
+    });
+    spilled = true;
+  }
+  const path = shardPath(store.root, input.partition, ref, store.device, month);
+  withLocalLock(shardLockTarget(store.deviceStateDir, input.partition, rel), () => appendLine(partitionDir(store.root, input.partition), path, bytes));
+  return { record, path, rel, spilled };
+}
+var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10;
+var init_appender = __esm(() => {
+  init_clock_floor();
+  init_clock_store();
+  init_constants();
+  init_envelope();
+  init_blobs();
+  init_local_lock();
+  init_safe_fs();
+  init_store_paths();
+  PartitionUnavailableError = class PartitionUnavailableError extends Error {
+    partition;
+    constructor(partition, root) {
+      super(`this machine does not hold the ${partition} partition of the brain store at ${root}; ` + "the record was not written");
+      this.name = "PartitionUnavailableError";
+      this.partition = partition;
+    }
+  };
+  RecordTooLargeError = class RecordTooLargeError extends Error {
+    constructor(bytes) {
+      super(`a store record line is ${bytes} bytes even with its body in a blob, above the ${STORE_LINE_CAP_BYTES}-byte cap; shorten its agent, scope or kind`);
+      this.name = "RecordTooLargeError";
+    }
+  };
+});
+
+// src/core/store/fold.ts
+function preferVersion(a, b) {
+  const order = compareRecords(a, b);
+  if (order !== 0)
+    return order < 0 ? a : b;
+  return canonicalJson(a) <= canonicalJson(b) ? a : b;
+}
+function prepareRecords(input) {
+  const byId = new Map;
+  const delivered = new Map;
+  let duplicates = 0;
+  for (const record of input) {
+    const seen = byId.get(record.id);
+    if (seen === undefined) {
+      byId.set(record.id, record);
+      continue;
+    }
+    let texts = delivered.get(record.id);
+    if (texts === undefined) {
+      texts = new Set([canonicalJson(seen)]);
+      delivered.set(record.id, texts);
+    }
+    const text = canonicalJson(record);
+    if (texts.has(text)) {
+      duplicates += 1;
+      continue;
+    }
+    texts.add(text);
+    byId.set(record.id, preferVersion(seen, record));
+  }
+  const records = [];
+  const pending = [];
+  for (const record of byId.values())
+    (isBlobRef(record.body) ? pending : records).push(record);
+  records.sort(compareRecords);
+  pending.sort(compareRecords);
+  const conflicts = [...delivered.entries()].filter(([, texts]) => texts.size > 1).map(([id, texts]) => ({ id, versions: texts.size })).toSorted((a, b) => compareCodeUnits(a.id, b.id));
+  return { records, duplicates, conflicts, pending };
+}
+function authorityRank(authority) {
+  return AUTHORITIES.length - AUTHORITIES.indexOf(authority);
+}
+function isAuthority(value) {
+  return typeof value === "string" && AUTHORITIES.includes(value);
+}
+function recordAuthority(record) {
+  const value = record.body[AUTHORITY_FIELD];
+  return isAuthority(value) ? value : null;
+}
+function beats(next, current) {
+  return authorityRank(next) >= authorityRank(current);
+}
+
+class RegisterSet {
+  #winners = new Map;
+  #history = new Map;
+  offer(key, entry) {
+    const current = this.#winners.get(key);
+    if (current === undefined || beats(entry.authority, current.authority)) {
+      this.#winners.set(key, entry);
+    }
+    const history = this.#history.get(key) ?? [];
+    history.push(entry);
+    this.#history.set(key, history);
+  }
+  get(key) {
+    const winner = this.#winners.get(key);
+    if (winner === undefined)
+      return;
+    const removed = winner.value === TOMBSTONE;
+    return {
+      value: removed ? null : winner.value,
+      removed,
+      winner,
+      history: this.#history.get(key)
+    };
+  }
+  keys() {
+    return [...this.#winners.keys()].toSorted();
+  }
+}
+var TOMBSTONE;
+var init_fold = __esm(() => {
+  init_digest();
+  init_constants();
+  init_envelope();
+  TOMBSTONE = Symbol("tombstone");
+});
+
+// src/core/store/fold-pinned.ts
+function rejection(record) {
+  if (recordAuthority(record) === null)
+    return "missing or invalid authority";
+  if (record.kind === PINNED_SET_KIND && typeof record.body["content"] !== "string") {
+    return "content must be a string";
+  }
+  return null;
+}
+function foldPinned(input) {
+  const { records } = prepareRecords(input);
+  const register = new RegisterSet;
+  const rejected = [];
+  for (const record of records) {
+    if (record.kind !== PINNED_SET_KIND && record.kind !== PINNED_CLEAR_KIND)
+      continue;
+    const reason = rejection(record);
+    if (reason !== null) {
+      rejected.push({ id: record.id, kind: record.kind, reason });
+      continue;
+    }
+    const authority = recordAuthority(record);
+    const value = record.kind === PINNED_CLEAR_KIND ? TOMBSTONE : record.body["content"];
+    register.offer(KEY, { record, authority, value });
+  }
+  const state = register.get(KEY);
+  return {
+    content: state?.value ?? null,
+    cleared: state?.removed ?? false,
+    winner: state?.winner.record.id ?? null,
+    history: state?.history ?? [],
+    rejected
+  };
+}
+var KEY = "pinned";
+var init_fold_pinned = __esm(() => {
+  init_constants();
+  init_fold();
+});
+
+// src/core/store/fold-preferences.ts
+function preferenceId(record) {
+  const id = record.body["preference"];
+  if (typeof id !== "string" || id.trim() === "" || id.length > MAX_ID_LENGTH)
+    return null;
+  return /[\r\n]/.test(id) ? null : id;
+}
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function rejection2(record) {
+  if (preferenceId(record) === null)
+    return "missing or invalid preference id";
+  if (record.kind === PREFERENCE_EVIDENCE_KIND) {
+    const result = record.body["result"];
+    return EVIDENCE_RESULTS.includes(result) ? null : `evidence result must be one of ${EVIDENCE_RESULTS.join(", ")}`;
+  }
+  if (recordAuthority(record) === null)
+    return "missing or invalid authority";
+  if (record.kind === PREFERENCE_REMOVE_KIND)
+    return null;
+  const fields = record.body["fields"];
+  if (!isPlainObject2(fields) || Object.keys(fields).length === 0) {
+    return "fields must be a non-empty object";
+  }
+  const bad = Object.keys(fields).find((name) => !PREFERENCE_FIELD_RE.test(name));
+  if (bad !== undefined)
+    return `invalid field name "${bad}"`;
+  return Object.keys(fields).some((name) => !COUNTERS.has(name)) ? null : "fields name only derived counters";
+}
+function zeroCounters() {
+  return Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
+}
+function foldPreferences(input) {
+  const { records } = prepareRecords(input);
+  const existence = new RegisterSet;
+  const fields = new RegisterSet;
+  const fieldNames = new Map;
+  const history = new Map;
+  const counters = new Map;
+  const rejected = [];
+  const position = new Map;
+  const removes = new Map;
+  for (const [index, record] of records.entries()) {
+    position.set(record.id, index);
+    if (!KINDS.has(record.kind))
+      continue;
+    const reason = rejection2(record);
+    if (reason !== null) {
+      rejected.push({ id: record.id, kind: record.kind, reason });
+      continue;
+    }
+    const id = preferenceId(record);
+    const own = history.get(id) ?? [];
+    own.push(record);
+    history.set(id, own);
+    if (record.kind === PREFERENCE_EVIDENCE_KIND) {
+      const count = counters.get(id) ?? zeroCounters();
+      count[COUNTER_OF[record.body["result"]]] += 1;
+      counters.set(id, count);
+      continue;
+    }
+    const authority = recordAuthority(record);
+    if (record.kind === PREFERENCE_REMOVE_KIND) {
+      existence.offer(id, { record, authority, value: TOMBSTONE });
+      removes.set(id, [...removes.get(id) ?? [], index]);
+      continue;
+    }
+    existence.offer(id, { record, authority, value: true });
+    const names = fieldNames.get(id) ?? new Set;
+    for (const [name, value] of Object.entries(record.body["fields"])) {
+      if (COUNTERS.has(name))
+        continue;
+      names.add(name);
+      fields.offer(fieldKey(id, name), { record, authority, value });
+    }
+    fieldNames.set(id, names);
+  }
+  const preferences = new Map;
+  for (const id of [...history.keys()].toSorted()) {
+    const exist = existence.get(id);
+    const values = {};
+    const winners = {};
+    const removed = exist?.removed ?? false;
+    const winnerAt = exist === undefined ? -1 : position.get(exist.winner.record.id);
+    const cut = (removes.get(id) ?? []).findLast((at) => at < winnerAt);
+    const recreated = !removed && exist !== undefined && cut !== undefined;
+    if (recreated) {
+      const after = new RegisterSet;
+      const names = new Set;
+      for (const record of history.get(id)) {
+        if (record.kind !== PREFERENCE_SET_KIND || position.get(record.id) < cut)
+          continue;
+        const authority = recordAuthority(record);
+        for (const [name, value] of Object.entries(record.body["fields"])) {
+          if (COUNTERS.has(name))
+            continue;
+          names.add(name);
+          after.offer(name, { record, authority, value });
+        }
+      }
+      for (const name of [...names].toSorted()) {
+        const state = after.get(name);
+        values[name] = state.value;
+        winners[name] = state.winner.record.id;
+      }
+    }
+    for (const name of removed || recreated ? [] : [...fieldNames.get(id) ?? []].toSorted()) {
+      const state = fields.get(fieldKey(id, name));
+      values[name] = state.value;
+      winners[name] = state.winner.record.id;
+    }
+    preferences.set(id, {
+      id,
+      exists: exist !== undefined && !exist.removed,
+      removed: exist?.removed ?? false,
+      fields: values,
+      fieldWinners: winners,
+      existenceWinner: exist?.winner.record.id ?? null,
+      counters: counters.get(id) ?? zeroCounters(),
+      history: history.get(id)
+    });
+  }
+  return { preferences, rejected };
+}
+var PREFERENCE_FIELD_RE, MAX_ID_LENGTH = 200, COUNTER_OF, COUNTERS, KINDS, fieldKey = (id, field) => `${id}\x00${field}`;
+var init_fold_preferences = __esm(() => {
+  init_constants();
+  init_fold();
+  PREFERENCE_FIELD_RE = /^[a-z][a-z0-9_]{0,63}$/;
+  COUNTER_OF = {
+    applied: "applied_count",
+    violated: "violated_count",
+    outdated: "outdated_count"
+  };
+  COUNTERS = new Set(PREFERENCE_COUNTER_FIELDS);
+  KINDS = new Set([
+    PREFERENCE_SET_KIND,
+    PREFERENCE_REMOVE_KIND,
+    PREFERENCE_EVIDENCE_KIND
+  ]);
+});
+
+// src/core/store/fold-settings.ts
+var positiveInt = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 1, LANGUAGE_RE, SETTING_RULES;
+var init_fold_settings = __esm(() => {
+  init_constants();
+  init_fold();
+  LANGUAGE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
+  SETTING_RULES = Object.freeze({
+    [SETTING_VIEW_LANGUAGE]: {
+      valid: (value) => typeof value === "string" && LANGUAGE_RE.test(value),
+      expected: "a language tag such as en or pt-BR",
+      fallback: null
+    },
+    [SETTING_TOPIC_MIN_RECORDS]: { valid: positiveInt, expected: "a positive integer", fallback: 5 },
+    [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 }
+  });
+});
+
+// src/core/store/shard-list.ts
+import { readdirSync as readdirSync2 } from "node:fs";
+import { join as join12, posix as posix5 } from "node:path";
+function isShardFileName(name) {
+  return SHARD_FILE_RE.test(name) && !name.includes(".sync-conflict");
+}
+function isReadableDeviceDir(name, platform = process.platform) {
+  return isValidDeviceId(name) && !(platform === "win32" && isWindowsReservedDeviceId(name));
+}
+function entries(dir) {
+  try {
+    return readdirSync2(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return [];
+    throw err;
+  }
+}
+function listShards(partitionRoot, ref) {
+  const segments = ref.ledger === undefined ? [ref.stream] : [ref.stream, ref.ledger];
+  if (ref.ledger !== undefined && !LEDGER_NAME_RE.test(ref.ledger))
+    return [];
+  const streamDir = join12(partitionRoot, ...segments);
+  const out = [];
+  for (const deviceEntry of entries(streamDir)) {
+    if (!deviceEntry.isDirectory() || !isReadableDeviceDir(deviceEntry.name))
+      continue;
+    for (const file of entries(join12(streamDir, deviceEntry.name))) {
+      if (!(file.isFile() || file.isSymbolicLink()) || !isShardFileName(file.name))
+        continue;
+      out.push({
+        device: deviceEntry.name,
+        rel: posix5.join(...segments, deviceEntry.name, file.name),
+        path: join12(streamDir, deviceEntry.name, file.name)
+      });
+    }
+  }
+  return out.toSorted((a, b) => compareCodeUnits(a.rel, b.rel));
+}
+var SHARD_FILE_RE;
+var init_shard_list = __esm(() => {
+  init_config();
+  init_constants();
+  init_store_paths();
+  SHARD_FILE_RE = new RegExp(`^\\d{4}-(0[1-9]|1[0-2])(\\.[a-z0-9][a-z0-9-]{0,39})?\\.${STORE_SHARD_EXT}$`);
+});
+
+// src/core/store/torn-line.ts
+function isTornObjectPrefix(text) {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("{"))
+    return false;
+  const stack = [];
+  let expect = "value";
+  let i = 0;
+  const afterValue = () => {
+    const top = stack.at(-1);
+    expect = top === undefined ? "end" : top === "o" ? "comma-or-close-object" : "comma-or-close-array";
+  };
+  while (i < trimmed.length) {
+    const c = trimmed[i];
+    if (WHITESPACE.has(c)) {
+      i += 1;
+      continue;
+    }
+    if (expect === "end")
+      return false;
+    if (expect === "colon") {
+      if (c !== ":")
+        return false;
+      expect = "value";
+      i += 1;
+      continue;
+    }
+    if (expect === "comma-or-close-object" || expect === "comma-or-close-array") {
+      const close = expect === "comma-or-close-object" ? "}" : "]";
+      if (c === ",")
+        expect = expect === "comma-or-close-object" ? "key" : "value";
+      else if (c === close) {
+        stack.pop();
+        afterValue();
+      } else
+        return false;
+      i += 1;
+      continue;
+    }
+    if (expect === "key-or-close" && c === "}") {
+      stack.pop();
+      afterValue();
+      i += 1;
+      continue;
+    }
+    if (expect === "value-or-close" && c === "]") {
+      stack.pop();
+      afterValue();
+      i += 1;
+      continue;
+    }
+    const keyPosition = expect === "key" || expect === "key-or-close";
+    if (c === '"') {
+      i += 1;
+      let closed = false;
+      while (i < trimmed.length) {
+        const s = trimmed[i];
+        if (s === '"') {
+          closed = true;
+          i += 1;
+          break;
+        }
+        if (s < " ")
+          return false;
+        if (s === "\\") {
+          const e = trimmed[i + 1];
+          if (e === undefined)
+            return true;
+          if (e === "u") {
+            for (let k = 2;k < 6; k += 1) {
+              const h = trimmed[i + k];
+              if (h === undefined)
+                return true;
+              if (!HEX.test(h))
+                return false;
+            }
+            i += 6;
+            continue;
+          }
+          if (!'"\\/bfnrt'.includes(e))
+            return false;
+          i += 2;
+          continue;
+        }
+        i += 1;
+      }
+      if (!closed)
+        return true;
+      if (keyPosition)
+        expect = "colon";
+      else
+        afterValue();
+      continue;
+    }
+    if (keyPosition)
+      return false;
+    if (c === "{") {
+      stack.push("o");
+      expect = "key-or-close";
+      i += 1;
+      continue;
+    }
+    if (c === "[") {
+      stack.push("a");
+      expect = "value-or-close";
+      i += 1;
+      continue;
+    }
+    if (c === "-" || c >= "0" && c <= "9") {
+      let j = i;
+      while (j < trimmed.length && NUMBER_CHARS.test(trimmed[j]))
+        j += 1;
+      const run = trimmed.slice(i, j);
+      if (j === trimmed.length)
+        return /^-?(\d+(\.\d*)?([eE][+-]?\d*)?)?$/.test(run);
+      if (!/^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(run))
+        return false;
+      i = j;
+      afterValue();
+      continue;
+    }
+    const literal = LITERALS.find((word) => word.startsWith(c));
+    if (literal === undefined)
+      return false;
+    const rest = trimmed.slice(i, i + literal.length);
+    if (!literal.startsWith(rest))
+      return false;
+    if (rest.length < literal.length)
+      return i + rest.length === trimmed.length;
+    i += literal.length;
+    afterValue();
+  }
+  return stack.length > 0;
+}
+var LITERALS, WHITESPACE, NUMBER_CHARS, HEX;
+var init_torn_line = __esm(() => {
+  LITERALS = ["true", "false", "null"];
+  WHITESPACE = new Set([" ", "\t", "\r", `
+`]);
+  NUMBER_CHARS = /[0-9+\-.eE]/;
+  HEX = /[0-9a-fA-F]/;
+});
+
+// src/core/store/reader.ts
+import { basename as basename5, dirname as dirname10 } from "node:path";
+import { closeSync as closeSync6, fstatSync as fstatSync5, readSync as readSync3 } from "node:fs";
+function observeRead(partitionRoot, records) {
+  let newest = null;
+  for (const { record } of records) {
+    const clock = parseHlc(record.hlc);
+    if (clock !== null && (newest === null || compareHlc(clock, newest) > 0))
+      newest = clock;
+  }
+  if (newest !== null)
+    noteObservedClock(dirname10(partitionRoot), newest);
+}
+function isPaths(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
+}
+function asCompaction(record) {
+  const { replaces, into } = record.body;
+  if (!isPaths(replaces) || !isPaths(into))
+    return null;
+  return { id: record.id, replaces, into };
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function readBlobBody(partitionRoot, sum, bytes) {
+  const blob = readBlob(partitionRoot, sum, bytes);
+  if (blob.status !== "ok")
+    return { status: "pending" };
+  let parsed;
+  try {
+    parsed = JSON.parse(blob.text);
+  } catch {
+    return { status: "invalid", reason: `blob ${sum} is not valid JSON` };
+  }
+  if (!isPlainObject3(parsed) || BLOB_REF_KEY in parsed) {
+    return { status: "invalid", reason: `blob ${sum} does not hold a record body (a JSON object)` };
+  }
+  if (bodyTooDeep(parsed))
+    return { status: "invalid", reason: `blob ${sum}: ${BODY_TOO_DEEP_REASON}` };
+  if (bodyChecksum(parsed) !== sum) {
+    return { status: "invalid", reason: `blob ${sum} does not hold the canonical JSON of a body` };
+  }
+  return { status: "ok", body: parsed };
+}
+function resolveBody(record, partitionRoot) {
+  if (!isBlobRef(record.body))
+    return "inline";
+  if (partitionRoot === undefined)
+    return "pending";
+  const read = readBlobBody(partitionRoot, record.body[BLOB_REF_KEY], record.body[BLOB_REF_BYTES_KEY]);
+  if (read.status === "ok")
+    return { body: read.body };
+  if (read.status === "invalid")
+    return { invalid: read.reason };
+  return "pending";
+}
+function shardDeviceOf(path) {
+  if (!isShardFileName(basename5(path)))
+    return null;
+  const device = basename5(dirname10(path));
+  return isValidDeviceId(device) ? device : null;
+}
+function readLine(text, lineOffset, length, isLast, shardDevice, partitionRoot) {
+  if (text.trim() === "")
+    return { kind: "skip" };
+  let check;
+  let notJson = false;
+  try {
+    check = verifyEnvelope(JSON.parse(text));
+  } catch {
+    notJson = true;
+    check = { ok: false, reason: "line is not valid JSON" };
+  }
+  const corrupt = (reason) => ({
+    kind: "diagnostic",
+    diagnostic: { kind: "corrupt-line", offset: lineOffset, reason }
+  });
+  if (notJson && !isLast && isTornObjectPrefix(text)) {
+    return {
+      kind: "diagnostic",
+      diagnostic: {
+        kind: "corrupt-line",
+        offset: lineOffset,
+        reason: "line is a record cut short by a crash (a torn write)",
+        torn: true
+      }
+    };
+  }
+  if (!check.ok) {
+    if (check.unknownVersion !== undefined) {
+      return {
+        kind: "diagnostic",
+        diagnostic: { kind: "unknown-version", offset: lineOffset, reason: check.reason }
+      };
+    }
+    return isLast ? { kind: "hold" } : corrupt(check.reason);
+  }
+  let record = check.record;
+  if (shardDevice !== null && record.device !== shardDevice) {
+    return corrupt(`record device "${record.device}" is not the device "${shardDevice}" whose shard it is in`);
+  }
+  const body = resolveBody(record, partitionRoot);
+  let bodyState;
+  if (typeof body === "string")
+    bodyState = body;
+  else if ("invalid" in body)
+    return corrupt(body.invalid);
+  else {
+    record = { ...record, body: body.body };
+    bodyState = "blob";
+  }
+  const compaction = record.kind === COMPACTED_KIND && bodyState !== "pending" ? asCompaction(record) : null;
+  return { kind: "record", record: { record, bodyState, offset: lineOffset, length }, compaction };
+}
+function readShard(path, options = {}) {
+  const start = options.offset ?? 0;
+  const records = [];
+  const diagnostics = [];
+  const compactions = [];
+  const shardDevice = shardDeviceOf(path);
+  const fd = openRegularFileForRead(path, options.partitionRoot);
+  if (fd === null) {
+    diagnostics.push({
+      kind: "not-a-file",
+      offset: start,
+      reason: "the shard is not a regular file (a symbolic link or a special file) or is reached " + "through a linked folder inside the partition; it is not read"
+    });
+    return {
+      records,
+      diagnostics,
+      compactions,
+      nextOffset: start,
+      pendingTailBytes: 0,
+      size: start
+    };
+  }
+  try {
+    const size = fstatSync5(fd).size;
+    if (start > size) {
+      diagnostics.push({
+        kind: "offset-past-end",
+        offset: start,
+        reason: `offset ${start} is past the end of the shard (${size} bytes); the shard was truncated or replaced`
+      });
+      return { records, diagnostics, compactions, nextOffset: start, pendingTailBytes: 0, size };
+    }
+    const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, Math.max(size - start, 1)));
+    let consumed = start;
+    let position = start;
+    let carry = [];
+    let carried = 0;
+    let oversized = false;
+    const overlong = () => {
+      diagnostics.push({
+        kind: "corrupt-line",
+        offset: consumed,
+        reason: `line is longer than the ${STORE_LINE_CAP_BYTES}-byte line-size cap`
+      });
+    };
+    let held = false;
+    while (!held && position < size) {
+      const n = readSync3(fd, chunk, 0, Math.min(chunk.length, size - position), position);
+      if (n === 0)
+        break;
+      const base = position;
+      position += n;
+      let cursor = 0;
+      while (cursor < n) {
+        const end = chunk.subarray(0, n).indexOf(NEWLINE2, cursor);
+        if (end === -1) {
+          if (!oversized) {
+            carry.push(Buffer.from(chunk.subarray(cursor, n)));
+            carried += n - cursor;
+            if (carried >= STORE_LINE_CAP_BYTES) {
+              oversized = true;
+              carry = [];
+              carried = 0;
+            }
+          }
+          break;
+        }
+        const lineEnd = base + end + 1;
+        if (oversized) {
+          overlong();
+          oversized = false;
+        } else if (carried + (end - cursor) + 1 > STORE_LINE_CAP_BYTES) {
+          overlong();
+        } else {
+          carry.push(chunk.subarray(cursor, end));
+          const text = Buffer.concat(carry).toString("utf8");
+          const outcome = readLine(text, consumed, lineEnd - consumed, lineEnd === size, shardDevice, options.partitionRoot);
+          if (outcome.kind === "hold") {
+            held = true;
+            break;
+          }
+          if (outcome.kind === "diagnostic")
+            diagnostics.push(outcome.diagnostic);
+          if (outcome.kind === "record") {
+            records.push(outcome.record);
+            if (outcome.compaction !== null)
+              compactions.push(outcome.compaction);
+          }
+        }
+        carry = [];
+        carried = 0;
+        consumed = lineEnd;
+        cursor = end + 1;
+      }
+    }
+    if (!held && oversized) {
+      overlong();
+      consumed = position;
+    }
+    if (options.partitionRoot !== undefined)
+      observeRead(options.partitionRoot, records);
+    return {
+      records,
+      diagnostics,
+      compactions,
+      nextOffset: consumed,
+      pendingTailBytes: size - consumed,
+      size
+    };
+  } finally {
+    closeSync6(fd);
+  }
+}
+function shardReadGap(read) {
+  const reasons = [];
+  const pending = read.records.filter((r) => r.bodyState === "pending").length;
+  if (pending > 0) {
+    reasons.push(pending === 1 ? "a record whose body is a blob that has not arrived yet" : `${pending} records whose bodies are blobs that have not arrived yet`);
+  }
+  for (const d of read.diagnostics) {
+    if (d.torn === true)
+      continue;
+    reasons.push(`${d.kind} at byte ${d.offset}: ${d.reason}`);
+  }
+  return reasons.length === 0 ? null : reasons.join("; ");
+}
+function replacedShards(compactions) {
+  const out = new Set;
+  for (const compaction of compactions)
+    for (const rel of compaction.replaces)
+      out.add(rel);
+  return out;
+}
+var NEWLINE2 = 10, READ_CHUNK_BYTES;
+var init_reader = __esm(() => {
+  init_config();
+  init_constants();
+  init_blobs();
+  init_clock_floor();
+  init_hlc();
+  init_envelope();
+  init_safe_fs();
+  init_shard_list();
+  init_torn_line();
+  READ_CHUNK_BYTES = 1024 * 1024;
+});
+
+// src/core/store/device-retirement.ts
+function isRetire(record) {
+  const device = record.body["device"];
+  return record.kind === DEVICE_RETIRE_KIND && record.body[AUTHORITY_FIELD] === "human" && typeof device === "string" && isValidDeviceId(device);
+}
+function latestRetirements(records) {
+  const out = new Map;
+  for (const record of records.filter(isRetire).toSorted(compareRecords)) {
+    out.set(record.body["device"], record);
+  }
+  return out;
+}
+var init_device_retirement = __esm(() => {
+  init_config();
+  init_constants();
+  init_envelope();
+});
+
+// src/core/store/format-doc.ts
+import { readFileSync as readFileSync8 } from "node:fs";
+import { join as join13 } from "node:path";
+import { fileURLToPath } from "node:url";
+function shippedFormatDoc() {
+  shipped ??= readFileSync8(join13(fileURLToPath(new URL(".", import.meta.url)), STORE_FORMAT_FILE), "utf8");
+  return shipped;
+}
+function formatDocVersion(text) {
+  const match = VERSION_MARKER_RE.exec(text);
+  return match === null ? null : Number(match[1]);
+}
+function writeFormatDoc(dir) {
+  const text = shippedFormatDoc();
+  const target = join13(dir, STORE_FORMAT_FILE);
+  let existing = null;
+  try {
+    existing = readFileSync8(target, "utf8");
+  } catch {
+    existing = null;
+  }
+  if (existing === text)
+    return false;
+  if (existing !== null) {
+    const onDisk = formatDocVersion(existing);
+    const ours = formatDocVersion(text);
+    if (onDisk !== null && ours !== null && onDisk >= ours)
+      return false;
+  }
+  return atomicWriteText(target, text, { mode: FORMAT_DOC_MODE });
+}
+var VERSION_MARKER_RE, FORMAT_DOC_MODE = 420, shipped;
+var init_format_doc = __esm(() => {
+  init_fs_atomic();
+  init_constants();
+  VERSION_MARKER_RE = /^<!-- open-second-brain-store-format: (\d+) -->/;
+});
+
+// src/core/store/held-ledger.ts
+import { createHash as createHash2 } from "node:crypto";
+import { existsSync as existsSync5, mkdirSync as mkdirSync9 } from "node:fs";
+import { join as join14, resolve as resolve6 } from "node:path";
+function ledgerDir(dirs = processDirsEnv()) {
+  return join14(storesStateDir(dirs), HELD_LEDGER_DIR);
+}
+function markerPath(dir, root, partition) {
+  const key = createHash2("sha256").update(resolve6(root)).digest("hex").slice(0, 32);
+  return join14(dir, `${key}.${partition}`);
+}
+function recordHeldPartitions(root, partitions, dirs) {
+  const dir = ledgerDir(dirs);
+  for (const partition of partitions) {
+    const marker = markerPath(dir, root, partition);
+    if (existsSync5(marker))
+      continue;
+    try {
+      mkdirSync9(dir, { recursive: true });
+      atomicWriteFileSync(marker, `${resolve6(root)}
+`);
+    } catch {}
+  }
+}
+function lostHeldPartitions(root, held) {
+  if (STORE_PARTITIONS.every((p) => held.has(p)))
+    return [];
+  const dir = ledgerDir();
+  return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync5(markerPath(dir, root, p)));
+}
+var HELD_LEDGER_DIR = "held-partitions";
+var init_held_ledger = __esm(() => {
+  init_fs_atomic();
+  init_platform_dirs();
+  init_constants();
+  init_store_paths();
+});
+
+// src/core/store/store-open.ts
+import { readFileSync as readFileSync9, statSync as statSync6 } from "node:fs";
+import { join as join15 } from "node:path";
+function readStoreId(dir) {
+  let text;
+  try {
+    text = readFileSync9(join15(dir, STORE_IDENTITY_FILE), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return null;
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new StoreIdentityError(`${join15(dir, STORE_IDENTITY_FILE)} is not valid JSON`);
+  }
+  if (!isUlid(parsed.store_id)) {
+    throw new StoreIdentityError(`${join15(dir, STORE_IDENTITY_FILE)} carries no valid store_id`);
+  }
+  return parsed.store_id;
+}
+function heldPartitions(root) {
+  if (statSync6(root, { throwIfNoEntry: false })?.isDirectory() === false) {
+    throw new StoreOpenError(`the brain store root ${root} is not a directory; move the file away or point ` + "the store root at a directory");
+  }
+  const ids = new Map;
+  for (const partition of STORE_PARTITIONS) {
+    const id = readStoreId(partitionDir(root, partition));
+    if (id !== null)
+      ids.set(partition, id);
+  }
+  if (new Set(ids.values()).size > 1) {
+    throw new StoreOpenError(`the partitions under ${root} belong to different stores (${[...ids].map(([p, id]) => `${p}: ${id}`).join(", ")}); keep one store per root`);
+  }
+  const first = ids.values().next();
+  return { held: new Set(ids.keys()), storeId: first.done === true ? null : first.value };
+}
+function heldPartitionsChecked(root) {
+  const found = heldPartitions(root);
+  const lost = lostHeldPartitions(root, found.held);
+  if (lost.length > 0)
+    throw new HeldPartitionLostError(root, lost);
+  return found;
+}
+function inspectStore(root) {
+  const { held, storeId } = heldPartitionsChecked(root);
+  return storeId === null ? null : { root, storeId, partitions: held };
+}
+function openStore(options) {
+  if (!isUsableLocalDeviceId(options.device)) {
+    throw new StoreOpenError(`the brain store needs a device id, got "${options.device}"; set device_id in the machine ` + `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`);
+  }
+  const { held, storeId } = heldPartitionsChecked(options.root);
+  if (storeId === null)
+    throw new NoStoreError(options.root);
+  recordHeldPartitions(options.root, held, options.dirs);
+  writeFormatDoc(options.root);
+  for (const partition of held)
+    writeFormatDoc(partitionDir(options.root, partition));
+  return {
+    root: options.root,
+    storeId,
+    device: options.device,
+    deviceStateDir: deviceStateDirFor(storeId, options.dirs ?? processDirsEnv()),
+    partitions: held
+  };
+}
+var StoreOpenError, NoStoreError, StoreIdentityError, HeldPartitionLostError;
+var init_store_open = __esm(() => {
+  init_platform_dirs();
+  init_config();
+  init_constants();
+  init_format_doc();
+  init_held_ledger();
+  init_store_paths();
+  init_ulid();
+  StoreOpenError = class StoreOpenError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "StoreOpenError";
+    }
+  };
+  NoStoreError = class NoStoreError extends StoreOpenError {
+    root;
+    constructor(root) {
+      super(`no brain store at ${root}: no partition holds ${STORE_IDENTITY_FILE}; ` + "run `o2b store init` to create one, or let sync deliver it from a machine that has it");
+      this.root = root;
+      this.name = "NoStoreError";
+    }
+  };
+  StoreIdentityError = class StoreIdentityError extends StoreOpenError {
+    constructor(message) {
+      super(message);
+      this.name = "StoreIdentityError";
+    }
+  };
+  HeldPartitionLostError = class HeldPartitionLostError extends StoreOpenError {
+    root;
+    partitions;
+    constructor(root, partitions) {
+      super(`the ${partitions.join(" and ")} partition${partitions.length > 1 ? "s" : ""} of the ` + `brain store at ${root}, which this machine has held, no longer show${partitions.length > 1 ? "" : "s"} ${STORE_IDENTITY_FILE}; its records cannot be read, so the store is not opened. ` + `Restore ${partitions.map((p) => `${p}/${STORE_IDENTITY_FILE}`).join(" and ")} ` + "from sync or a backup");
+      this.root = root;
+      this.partitions = partitions;
+      this.name = "HeldPartitionLostError";
+    }
+  };
+});
+
+// src/core/store/seen-shards.ts
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync10, statSync as statSync7 } from "node:fs";
+import { createHash as createHash3 } from "node:crypto";
+import { basename as basename6, dirname as dirname11, join as join16, resolve as resolve7 } from "node:path";
+function isPartition(value) {
+  return STORE_PARTITIONS.includes(value);
+}
+function stampOf(path) {
+  const stat = statSync7(path, { throwIfNoEntry: false });
+  return stat === undefined ? "absent" : `${stat.size}:${stat.mtimeMs}`;
+}
+function parseLedger(text) {
+  const out = new Map;
+  const parsed = JSON.parse(text);
+  for (const [partition, rels] of Object.entries(parsed.shards ?? {})) {
+    if (!isPartition(partition) || !Array.isArray(rels))
+      continue;
+    out.set(partition, new Set(rels.filter((r) => typeof r === "string")));
+  }
+  return out;
+}
+function load2(path) {
+  let stamp;
+  try {
+    stamp = stampOf(path);
+  } catch {
+    return new Map;
+  }
+  const hit = loaded.get(path);
+  if (hit !== undefined && hit.stamp === stamp)
+    return hit.ledger;
+  let ledger = new Map;
+  if (stamp !== "absent") {
+    try {
+      ledger = parseLedger(readFileSync10(path, "utf8"));
+    } catch {}
+  }
+  loaded.set(path, { stamp, ledger });
+  return ledger;
+}
+function update2(path, change) {
+  try {
+    loaded.delete(path);
+    const ledger = load2(path);
+    change(ledger);
+    const shards = {};
+    for (const [partition, rels] of [...ledger].toSorted(([a], [b]) => compareCodeUnits(a, b))) {
+      shards[partition] = [...rels].toSorted();
+    }
+    mkdirSync10(dirname11(path), { recursive: true });
+    atomicWriteText(path, `${JSON.stringify({ version: 1, shards }, null, 2)}
+`);
+    loaded.set(path, { stamp: stampOf(path), ledger });
+  } catch {
+    loaded.delete(path);
+  }
+}
+function ledgerPath(partitionRoot) {
+  const partition = basename6(partitionRoot);
+  if (!isPartition(partition))
+    return null;
+  let storeId;
+  try {
+    storeId = readStoreId(partitionRoot);
+  } catch {
+    return null;
+  }
+  if (storeId === null)
+    return null;
+  const rootKey = createHash3("sha256").update(resolve7(dirname11(partitionRoot))).digest("hex").slice(0, 16);
+  const name = SEEN_SHARDS_FILE.replace(/\.json$/, `-${rootKey}.json`);
+  return { path: join16(deviceStateDirFor(storeId, processDirsEnv()), name), partition };
+}
+function deviceOf(rel) {
+  const parts = rel.split("/");
+  return parts[parts.length - 2] ?? "";
+}
+function monthOf(rel) {
+  return rel.slice(rel.lastIndexOf("/") + 1).slice(0, 7);
+}
+function retiredDevices(storeRoot) {
+  const sharedRoot = partitionDir(storeRoot, "shared");
+  const records = [];
+  try {
+    for (const shard of listShards(sharedRoot, { stream: "settings" })) {
+      try {
+        for (const r of readShard(shard.path, { partitionRoot: sharedRoot }).records) {
+          if (r.bodyState !== "pending")
+            records.push(r.record);
+        }
+      } catch {}
+    }
+  } catch {
+    return new Set;
+  }
+  return new Set(latestRetirements(records).keys());
+}
+function trackSeenShards(partitionRoot, scope, listed, replaced = new Set) {
+  const at = ledgerPath(partitionRoot);
+  if (at === null)
+    return [];
+  const seen = load2(at.path).get(at.partition) ?? new Set;
+  const present = new Set(listed);
+  const fresh = listed.filter((rel) => !seen.has(rel));
+  let missing = [...seen].filter((rel) => rel.startsWith(scope.prefix) && !present.has(rel) && (scope.device === undefined || deviceOf(rel) === scope.device) && (scope.month === undefined || scope.month(monthOf(rel))));
+  let expected = missing.filter((rel) => replaced.has(rel));
+  missing = missing.filter((rel) => !replaced.has(rel));
+  if (missing.length > 0) {
+    const retired = retiredDevices(dirname11(partitionRoot));
+    expected = [...expected, ...missing.filter((rel) => retired.has(deviceOf(rel)))];
+    missing = missing.filter((rel) => !retired.has(deviceOf(rel)));
+  }
+  if (readOnlyDepth === 0 && (fresh.length > 0 || expected.length > 0)) {
+    update2(at.path, (ledger) => {
+      const own = ledger.get(at.partition) ?? new Set;
+      for (const rel of fresh)
+        own.add(rel);
+      for (const rel of expected)
+        own.delete(rel);
+      ledger.set(at.partition, own);
+    });
+  }
+  return missing.toSorted();
+}
+var loaded, readOnlyDepth = 0, SEEN_SHARD_MISSING_REASON;
+var init_seen_shards = __esm(() => {
+  init_fs_atomic();
+  init_platform_dirs();
+  init_constants();
+  init_device_retirement();
+  init_reader();
+  init_shard_list();
+  init_store_open();
+  init_store_paths();
+  loaded = new Map;
+  SEEN_SHARD_MISSING_REASON = "this machine read the shard before and it is gone now (the store never deletes a shard); " + "its records are unknown until sync delivers it again";
+});
+
+// src/core/store/state-digest.ts
+var init_state_digest = __esm(() => {
+  init_digest();
+  init_appender();
+  init_clock_store();
+  init_constants();
+  init_envelope();
+  init_fold_pinned();
+  init_fold_preferences();
+  init_fold_settings();
+  init_hlc();
+  init_reader();
+  init_seen_shards();
+  init_shard_list();
+  init_store_paths();
+});
+
+// src/core/record-path.ts
+var init_record_path = __esm(() => {
+  init_path_safety();
+});
+
+// src/core/store/read/stream-read.ts
+function monthOf2(rel) {
+  const name = rel.slice(rel.lastIndexOf("/") + 1);
+  return name.slice(0, 7);
+}
+function streamPrefix(ref) {
+  return ref.ledger !== undefined ? `${ref.stream}/${ref.ledger}` : ref.stream;
+}
+function readStreamRecords(root, partition, ref, options = {}) {
+  const partitionRoot = partitionDir(root, partition);
+  const records = [];
+  const unreadable = [];
+  let shards;
+  try {
+    shards = listShards(partitionRoot, ref);
+  } catch {
+    return { records, unreadable: [streamPrefix(ref)] };
+  }
+  const compactions = [];
+  for (const shard of shards) {
+    if (options.device !== undefined && shard.device !== options.device)
+      continue;
+    if (options.month !== undefined && !options.month(monthOf2(shard.rel)))
+      continue;
+    let read;
+    try {
+      read = readShard(shard.path, { partitionRoot });
+    } catch {
+      unreadable.push(shard.rel);
+      continue;
+    }
+    if (read.diagnostics.some((d) => d.kind === "not-a-file")) {
+      unreadable.push(shard.rel);
+      continue;
+    }
+    if (shardReadGap(read) !== null)
+      unreadable.push(shard.rel);
+    compactions.push(...read.compactions);
+    for (const entry of read.records) {
+      if (entry.bodyState !== "pending")
+        records.push(entry.record);
+    }
+  }
+  const gone = trackSeenShards(partitionRoot, {
+    prefix: `${streamPrefix(ref)}/`,
+    ...options.device !== undefined ? { device: options.device } : {},
+    ...options.month !== undefined ? { month: options.month } : {}
+  }, shards.map((shard) => shard.rel), replacedShards(compactions));
+  return { records, unreadable: [...unreadable, ...gone] };
+}
+var init_stream_read = __esm(() => {
+  init_reader();
+  init_seen_shards();
+  init_shard_list();
+  init_store_paths();
+});
+
+// src/core/store-migration/migration-records.ts
+function sharedSettings(store) {
+  if (!store.partitions.has("shared"))
+    return [];
+  return [...readStreamRecords(store.root, "shared", { stream: MIGRATION_STREAM }).records];
+}
+function isHuman(record) {
+  return record.body[AUTHORITY_FIELD] === "human";
+}
+function switchedDevices(records) {
+  const latest = new Map;
+  for (const record of records) {
+    if (record.kind !== DEVICE_SWITCHED_KIND && record.kind !== DEVICE_UNSWITCHED_KIND)
+      continue;
+    if (record.body["device"] !== record.device || !isHuman(record))
+      continue;
+    const seen = latest.get(record.device);
+    if (seen === undefined || compareRecords(record, seen) > 0)
+      latest.set(record.device, record);
+  }
+  const out = new Set;
+  for (const [device, record] of latest)
+    if (record.kind === DEVICE_SWITCHED_KIND)
+      out.add(device);
+  return out;
+}
+function isDeviceSwitched(store, deviceId) {
+  return switchedDevices(sharedSettings(store)).has(deviceId);
+}
+var MIGRATION_COHORT_KIND = "migration-cohort", MIGRATION_DONE_KIND = "migration-done", DEVICE_SWITCHED_KIND = "device-switched", DEVICE_UNSWITCHED_KIND = "device-unswitched", LEGACY_TREE_REMOVED_KIND = "legacy-tree-removed", MIGRATION_RECORD_KINDS, MIGRATION_STREAM = "settings";
+var init_migration_records = __esm(() => {
+  init_record_path();
+  init_constants();
+  init_device_retirement();
+  init_envelope();
+  init_state_digest();
+  init_stream_read();
+  init_store_paths();
+  MIGRATION_RECORD_KINDS = Object.freeze([
+    MIGRATION_COHORT_KIND,
+    MIGRATION_DONE_KIND,
+    DEVICE_SWITCHED_KIND,
+    DEVICE_UNSWITCHED_KIND,
+    LEGACY_TREE_REMOVED_KIND
+  ]);
+});
+
+// src/core/store-migration/journal-scope.ts
+var init_journal_scope = __esm(() => {
+  init_digest();
+  init_migration_records();
+});
+
+// src/core/store-migration/journal.ts
+var MIGRATION_STATE_DIR = "migration";
+var init_journal = __esm(() => {
+  init_fs_atomic();
+  init_state_digest();
+  init_store_paths();
+  init_journal_scope();
+  init_migration_records();
+});
+
+// src/core/store/store-only.ts
+import { existsSync as existsSync6, mkdirSync as mkdirSync11, readFileSync as readFileSync11 } from "node:fs";
+import { dirname as dirname12, join as join17 } from "node:path";
+function hasLegacyTree(vault) {
+  if (vault === null || vault.trim() === "")
+    return false;
+  return existsSync6(join17(vault, BRAIN_ROOT_REL));
+}
+function markerPath2() {
+  return join17(storesStateDir(processDirsEnv()), SWITCH_MARKER_FILE);
+}
+function markerKey(root, device) {
+  return `${root}\x00${device}`;
+}
+function readMarker() {
+  try {
+    const parsed = JSON.parse(readFileSync11(markerPath2(), "utf8"));
+    if (!Array.isArray(parsed.switched))
+      return new Set;
+    return new Set(parsed.switched.filter((e) => typeof e === "object" && e !== null && typeof e.root === "string" && typeof e.device === "string").map((e) => markerKey(e.root, e.device)));
+  } catch {
+    return new Set;
+  }
+}
+function updateMarker(change, strict = false) {
+  try {
+    mkdirSync11(dirname12(markerPath2()), { recursive: true });
+    withLocalLock(markerPath2(), () => {
+      const known = readMarker();
+      if (!change(known))
+        return;
+      const switched = [...known].map((key) => {
+        const [r, d] = key.split("\x00");
+        return { root: r, device: d };
+      });
+      atomicWriteFileSync(markerPath2(), `${JSON.stringify({ switched }, null, 2)}
+`);
+    });
+  } catch (err) {
+    if (strict)
+      throw err;
+  }
+}
+function writeMarker(root, device, strict = false) {
+  const key = markerKey(root, device);
+  updateMarker((known) => {
+    if (known.has(key))
+      return false;
+    known.add(key);
+    return true;
+  }, strict);
+}
+function vaultOf(context) {
+  if (context.vault !== undefined)
+    return context.vault;
+  try {
+    return resolveVault(context.configPath);
+  } catch {
+    return null;
+  }
+}
+function configuredSwitchKey(configPath) {
+  try {
+    const device = readDeviceId(configPath ?? null);
+    const root = resolveConfiguredStoreRoot(configPath).root;
+    return device === null ? null : { root, device };
+  } catch {
+    return null;
+  }
+}
+function markedKey(key) {
+  if (seenSwitched.has(key))
+    return true;
+  if (!readMarker().has(key))
+    return false;
+  seenSwitched.add(key);
+  return true;
+}
+function isSwitched(context, options) {
+  const at = configuredSwitchKey(context.configPath);
+  if (at === null)
+    return false;
+  const { root, device } = at;
+  const key = markerKey(root, device);
+  if (markedKey(key))
+    return true;
+  let store;
+  try {
+    store = inspectStore(root);
+  } catch {
+    return false;
+  }
+  if (store === null)
+    return false;
+  let switched;
+  try {
+    switched = (options.readSwitched ?? readSwitchRecords)(store, device);
+  } catch {
+    switched = false;
+  }
+  if (switched) {
+    seenSwitched.add(key);
+    writeMarker(root, device);
+  }
+  return switched;
+}
+function storeOnlyMode(context = {}, options = {}) {
+  const vault = vaultOf(context);
+  if (isSwitched(context, options))
+    return { storeOnly: true, reason: "device-switched", vault };
+  if (!hasLegacyTree(vault))
+    return { storeOnly: true, reason: "no-legacy-tree", vault };
+  return { storeOnly: false, reason: "legacy", vault };
+}
+function isStoreOnly(context = {}, options = {}) {
+  return storeOnlyMode(context, options).storeOnly;
+}
+var SWITCH_MARKER_FILE = "store-only.json", readSwitchRecords = (store, deviceId) => isDeviceSwitched(store, deviceId), seenSwitched;
+var init_store_only = __esm(() => {
+  init_path_constants();
+  init_config();
+  init_fs_atomic();
+  init_migration_records();
+  init_platform_dirs();
+  init_local_lock();
+  init_store_open();
+  init_store_paths();
+  seenSwitched = new Set;
+});
+
+// src/core/brain/secrets/owner-acl.ts
+import { spawnSync } from "node:child_process";
+import { resolve as resolve8, win32 as win323 } from "node:path";
+function system32Tool(name, env = process.env) {
+  const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
+  return win323.join(root, "System32", name);
+}
+function parseWhoamiUser(stdout) {
+  const m = /^\s*"([^"]+)","(S-1-\d+(?:-\d+)+)"\s*$/m.exec(stdout);
+  return m ? { name: m[1], sid: m[2] } : null;
+}
+function currentWindowsIdentity() {
+  if (cachedIdentity !== undefined)
+    return cachedIdentity;
+  try {
+    const proc = spawnSync(system32Tool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: TOOL_TIMEOUT_MS
+    });
+    cachedIdentity = proc.error === undefined && proc.status === 0 ? parseWhoamiUser(proc.stdout) : null;
+  } catch {
+    cachedIdentity = null;
+  }
+  return cachedIdentity;
+}
+function ownerOnlyAclArgv(path, sid, kind) {
+  const rights = kind === "directory" ? "(OI)(CI)F" : "F";
+  return [path, "/inheritance:r", "/grant:r", `*${sid}:${rights}`];
+}
+function restrictToOwner(path, kind, platform = process.platform, force = false) {
+  if (platform !== "win32")
+    return true;
+  const key = `${kind}:${resolve8(path).toLowerCase()}`;
+  if (!force && restricted.has(key))
+    return true;
+  let detail;
+  try {
+    const identity = currentWindowsIdentity();
+    if (identity === null) {
+      detail = "the current user's SID could not be read (whoami /user)";
+    } else {
+      let proc = spawnSync(system32Tool("icacls.exe"), [path, "/reset"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: TOOL_TIMEOUT_MS
+      });
+      if (proc.error === undefined && proc.status === 0) {
+        proc = spawnSync(system32Tool("icacls.exe"), [...ownerOnlyAclArgv(path, identity.sid, kind)], { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS });
+      }
+      if (proc.error === undefined && proc.status === 0) {
+        restricted.add(key);
+        return true;
+      }
+      detail = proc.error !== undefined ? proc.error.message : `icacls exited ${proc.status ?? proc.signal}: ${(proc.stderr || proc.stdout).trim()}`;
+    }
+  } catch (err) {
+    detail = err instanceof Error ? err.message : String(err);
+  }
+  process.stderr.write(`warning: could not restrict secrets ${kind} to the current user, ` + `it keeps its inherited ACL: ${path}: ${detail}
+`);
+  return false;
+}
+var TOOL_TIMEOUT_MS = 1e4, cachedIdentity, restricted;
+var init_owner_acl = __esm(() => {
+  restricted = new Set;
+});
+
+// src/core/state/state-moves.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+import {
+  chmodSync,
+  closeSync as closeSync7,
+  constants as constants2,
+  copyFileSync,
+  existsSync as existsSync7,
+  fsyncSync as fsyncSync4,
+  openSync as openSync6,
+  linkSync as linkSync3,
+  lstatSync as lstatSync3,
+  mkdirSync as mkdirSync12,
+  readdirSync as readdirSync3,
+  readFileSync as readFileSync12,
+  rmdirSync,
+  statSync as statSync8,
+  unlinkSync as unlinkSync4,
+  utimesSync,
+  writeFileSync,
+  writeSync as writeSync5
+} from "node:fs";
+import { basename as basename7, dirname as dirname13, join as join18, relative as relative3, sep as sep4 } from "node:path";
+function filesBelow(path) {
+  let stat;
+  try {
+    stat = lstatSync3(path);
+  } catch {
+    return [];
+  }
+  if (stat.isFile())
+    return TEMP_NAME_RE.test(basename7(path)) ? [] : [path];
+  if (!stat.isDirectory())
+    return [];
+  return readdirSync3(path).toSorted().flatMap((name) => filesBelow(join18(path, name)));
+}
+function sameBytes(a, b) {
+  try {
+    if (statSync8(a).size !== statSync8(b).size)
+      return false;
+    return readFileSync12(a).equals(readFileSync12(b));
+  } catch {
+    return false;
+  }
+}
+function mkdirOwnerOnly(dir) {
+  const created = mkdirSync12(dir, { recursive: true, mode: 448 });
+  if (created !== undefined && process.platform === "win32")
+    restrictToOwner(created, "directory");
+}
+function writeExclusive(path, bytes) {
+  const fd = openSync6(path, "wx", 384);
+  try {
+    writeSync5(fd, bytes);
+    fsyncSync4(fd);
+  } catch (err) {
+    closeSync7(fd);
+    tryUnlink(path);
+    throw err;
+  }
+  closeSync7(fd);
+}
+function tryUnlink(path) {
+  try {
+    unlinkSync4(path);
+  } catch {}
+}
+function copyNoClobber(file, target) {
+  if (existsSync7(target))
+    return false;
+  mkdirOwnerOnly(dirname13(target));
+  const temp = join18(dirname13(target), `.${basename7(target)}${TEMP_INFIX}${randomBytes3(6).toString("hex")}`);
+  const { atime, mtime } = statSync8(file);
+  try {
+    copyFileSync(file, temp, constants2.COPYFILE_EXCL);
+    if (process.platform !== "win32")
+      chmodSync(temp, 384);
+    utimesSync(temp, atime, mtime);
+    try {
+      linkSync3(temp, target);
+      return true;
+    } catch (err) {
+      if (err.code === "EEXIST")
+        return false;
+    }
+    try {
+      writeExclusive(target, readFileSync12(temp));
+    } catch (err) {
+      if (err.code === "EEXIST")
+        return false;
+      throw err;
+    }
+    utimesSync(target, atime, mtime);
+    return true;
+  } finally {
+    if (existsSync7(temp))
+      tryUnlink(temp);
+  }
+}
+function removeEmptyDirs(dir) {
+  let stat;
+  try {
+    stat = lstatSync3(dir);
+  } catch {
+    return;
+  }
+  if (!stat.isDirectory())
+    return;
+  for (const name of readdirSync3(dir))
+    removeEmptyDirs(join18(dir, name));
+  try {
+    rmdirSync(dir);
+  } catch {}
+}
+function sameLanded(file, target, aside, rel) {
+  if (sameBytes(file, target))
+    return true;
+  for (let n = 0;n < 100; n++) {
+    const kept = join18(aside, n === 0 ? rel : `${rel}.${n}`);
+    if (!existsSync7(kept))
+      return false;
+    if (sameBytes(file, kept))
+      return true;
+  }
+  return false;
+}
+function keepAside(file, aside, rel) {
+  for (let n = 0;n < 100; n++) {
+    const kept = join18(aside, n === 0 ? rel : `${rel}.${n}`);
+    if (sameBytes(file, kept))
+      return true;
+    if (!existsSync7(kept)) {
+      copyNoClobber(file, kept);
+      if (sameBytes(file, kept))
+        return true;
+    }
+  }
+  return false;
+}
+function adoptFolder(from, to) {
+  if (from === to)
+    return true;
+  if (!existsSync7(from))
+    return true;
+  let settled = true;
+  const aside = join18(dirname13(to), ADOPT_CONFLICTS_DIR, basename7(from));
+  for (const file of filesBelow(from)) {
+    const rel = relative3(from, file);
+    const target = join18(to, rel);
+    try {
+      const landed = copyNoClobber(file, target) || sameBytes(file, target) || keepAside(file, aside, rel);
+      if (!landed || !sameLanded(file, target, aside, rel)) {
+        settled = false;
+        continue;
+      }
+      unlinkSync4(file);
+    } catch {
+      settled = false;
+    }
+  }
+  removeEmptyDirs(from);
+  return settled && filesBelow(from).length === 0;
+}
+function seedFolderOnce(from, to, marker) {
+  if (existsSync7(marker) || !existsSync7(from))
+    return;
+  try {
+    const seeded = [];
+    for (const file of filesBelow(from)) {
+      const rel = relative3(from, file);
+      if (copyNoClobber(file, join18(to, rel)))
+        seeded.push(rel.split(sep4).join("/"));
+    }
+    mkdirSync12(dirname13(marker), { recursive: true });
+    writeFileSync(marker, `${JSON.stringify({ from, seeded }, null, 2)}
+`);
+  } catch {}
+}
+var ADOPT_CONFLICTS_DIR = "adopt-conflicts", TEMP_INFIX = ".adopt-", TEMP_NAME_RE;
+var init_state_moves = __esm(() => {
+  init_owner_acl();
+  TEMP_NAME_RE = /^\..+\.adopt-[0-9a-f]{12}$/;
+});
+
+// src/core/state/machine-state.ts
+import { createHash as createHash4 } from "node:crypto";
+import { cpSync, existsSync as existsSync8, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname14, join as join19, relative as relative4, resolve as resolve9, sep as sep5 } from "node:path";
+function storeIdAt(root) {
+  const known = STORE_IDS.get(root);
+  if (known !== undefined)
+    return known;
+  let id;
+  try {
+    id = heldPartitions(root).storeId;
+  } catch {
+    id = null;
+  }
+  if (id !== null)
+    STORE_IDS.set(root, id);
+  return id;
+}
+function configuredStoreId(configPath) {
+  try {
+    return storeIdAt(resolveConfiguredStoreRoot(configPath).root);
+  } catch {
+    return null;
+  }
+}
+function deviceStateDir(storeId) {
+  const source = processDirsEnv();
+  return storeId === null ? storesStateDir(source) : deviceStateDirFor(storeId, source);
+}
+function vaultKey(vault) {
+  return createHash4("sha256").update(resolve9(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
+}
+function freshVaultRel(vault) {
+  return join19(FRESH_STATE_DIR, vaultKey(vault));
+}
+function adoptOnce(from, to) {
+  if (from === to || ADOPTED.has(from) || !existsSync8(from))
+    return;
+  if (adoptFolder(from, to))
+    ADOPTED.add(from);
+}
+function seedFromVaultOnce(vault, root) {
+  const marker = join19(root, SEEDED_MARKER_DIR, `${vaultKey(vault)}.json`);
+  seedFolderOnce(join19(vault, DERIVED_STORE_DIR), join19(root, DERIVED_STORE_DIR), marker);
+}
+function restoreBackupOnce(local) {
+  if (RESTORED.has(local))
+    return;
+  const migration = dirname14(local);
+  const marker = join19(migration, BACKUP_RESTORED_MARKER);
+  if (existsSync8(marker)) {
+    RESTORED.add(local);
+    return;
+  }
+  const files = join19(migration, MIGRATION_BACKUP_DIR, MIGRATION_BACKUP_FILES_DIR);
+  if (!existsSync8(files)) {
+    RESTORED.add(local);
+    return;
+  }
+  try {
+    const restored = [];
+    for (const file of filesBelow(files)) {
+      const rel = relative4(files, file);
+      const target = join19(local, rel);
+      if (existsSync8(target))
+        continue;
+      cpSync(file, target, { preserveTimestamps: true });
+      restored.push(rel.split(sep5).join("/"));
+    }
+    writeFileSync2(marker, `${JSON.stringify({ restored }, null, 2)}
+`);
+    RESTORED.add(local);
+  } catch {}
+}
+function machineStateLocation(vault, configPath) {
+  return locate(vault, configPath, true);
+}
+function locate(vault, configPath, settle) {
+  const hasVault = vault !== null && vault.trim() !== "" && vault !== noVaultRoot();
+  if (hasVault) {
+    const mode = storeOnlyMode({ vault, ...configPath !== undefined ? { configPath } : {} });
+    if (!mode.storeOnly)
+      return { relocated: false, root: vault };
+    if (mode.reason === "no-legacy-tree") {
+      const storeId2 = configuredStoreId(configPath);
+      const root2 = join19(deviceStateDir(storeId2), freshVaultRel(vault));
+      if (!settle)
+        return { relocated: true, root: root2 };
+      if (storeId2 !== null)
+        adoptOnce(join19(deviceStateDir(null), freshVaultRel(vault)), root2);
+      seedFromVaultOnce(vault, root2);
+      return { relocated: true, root: root2 };
+    }
+  }
+  const storeId = configuredStoreId(configPath);
+  const root = join19(deviceStateDir(storeId), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR);
+  if (!settle)
+    return { relocated: true, root };
+  if (storeId !== null) {
+    adoptOnce(join19(deviceStateDir(null), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR), root);
+  }
+  if (hasVault) {
+    adoptOnce(join19(deviceStateDir(null), freshVaultRel(vault)), root);
+    if (storeId !== null)
+      adoptOnce(join19(deviceStateDir(storeId), freshVaultRel(vault)), root);
+    if (!existsSync8(join19(vault, BRAIN_ROOT_REL)))
+      seedFromVaultOnce(vault, root);
+  }
+  restoreBackupOnce(root);
+  return { relocated: true, root };
+}
+function machineStateRoot(vault, configPath) {
+  return machineStateLocation(vault, configPath).root;
+}
+function machineStatePath(vault, ...segments) {
+  return machineStatePathIn(machineStateRoot(vault), ...segments);
+}
+function machineStatePathIn(root, ...segments) {
+  return ensureInsideVault(join19(root, ...segments), root);
+}
+var FRESH_STATE_DIR = "fresh", VAULT_KEY_CHARS = 16, BACKUP_RESTORED_MARKER = "local-restored.json", STORE_IDS, ADOPTED, SEEDED_MARKER_DIR, RESTORED;
+var init_machine_state = __esm(() => {
+  init_path_constants();
+  init_path_safety();
+  init_platform_dirs();
+  init_journal();
+  init_store_open();
+  init_store_only();
+  init_store_paths();
+  init_state_moves();
+  STORE_IDS = new Map;
+  ADOPTED = new Set;
+  SEEDED_MARKER_DIR = join19(DERIVED_STORE_DIR, "seeded-from-vault");
+  RESTORED = new Set;
 });
 
 // src/core/integrity/degradation.ts
@@ -3942,16 +6696,16 @@ var init_stamp = __esm(() => {
 });
 
 // src/core/brain/freeze-marker.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5, statSync as statSync5 } from "node:fs";
-import { join as join7, resolve as resolve5 } from "node:path";
-function frozenMarkerPath(vault) {
-  return ensureInsideVault(join7(vault, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE), vault);
+import { existsSync as existsSync9, readFileSync as readFileSync13, statSync as statSync9 } from "node:fs";
+import { resolve as resolve10 } from "node:path";
+function markerPathIn(root) {
+  return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
 }
 function parseMarker(path) {
   reloadCount += 1;
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync5(path, "utf8"));
+    parsed = JSON.parse(readFileSync13(path, "utf8"));
   } catch {
     return UNREADABLE_MARKER;
   }
@@ -3968,15 +6722,17 @@ function parseMarker(path) {
   });
 }
 function readFreezeMarker(vault) {
-  const root = resolve5(vault);
+  const root = resolve10(vault);
   let path = MARKER_PATHS.get(root);
   if (path === undefined) {
-    path = frozenMarkerPath(root);
-    MARKER_PATHS.set(root, path);
+    const location = machineStateLocation(root);
+    path = markerPathIn(location.root);
+    if (location.relocated)
+      MARKER_PATHS.set(root, path);
   }
   let stat;
   try {
-    stat = statSync5(path, { throwIfNoEntry: false });
+    stat = statSync9(path, { throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -4002,7 +6758,7 @@ function vaultFrozenNotice(vault, marker) {
   return degradationNotice({
     code: DEGRADATION_CODE.vaultFrozen,
     site: SITE,
-    path: resolve5(vault),
+    path: resolve10(vault),
     detail: `refusing to write: this vault was frozen at ${marker.frozen_at} by ` + `${marker.by === "" ? "an unnamed agent" : marker.by} (${why}). ` + `Run \`${FREEZE_NEXT_COMMAND}\` to lift it`
   });
 }
@@ -4014,7 +6770,7 @@ function assertVaultNotFrozen(vault) {
 }
 var FREEZE_MARKER_SCHEMA_VERSION = 1, FROZEN_MARKER_FILE = "frozen.json", SITE = "brain.freeze", FREEZE_NEXT_COMMAND = "o2b brain unfreeze", FREEZE_MARKER_UNREADABLE_REASON = "marker-unreadable", WRITE_LANE, VaultFrozenError, UNREADABLE_MARKER, MARKER_STAMPS, MARKER_PATHS, reloadCount = 0;
 var init_freeze_marker = __esm(() => {
-  init_path_safety();
+  init_machine_state();
   init_degradation();
   init_path_constants();
   WRITE_LANE = Object.freeze({
@@ -4048,18 +6804,104 @@ var init_freeze_marker = __esm(() => {
   MARKER_PATHS = new Map;
 });
 
+// src/core/migration-gate.ts
+import { mkdirSync as mkdirSync13, readFileSync as readFileSync14, realpathSync as realpathSync3, unlinkSync as unlinkSync5 } from "node:fs";
+import { dirname as dirname15, join as join20, resolve as resolve11 } from "node:path";
+function migrationGatePath(source = processDirsEnv()) {
+  return join20(stateRootDir(source), GATE_FILE);
+}
+function canonicalVault(vault) {
+  let path;
+  try {
+    path = realpathSync3(vault);
+  } catch {
+    path = resolve11(vault);
+  }
+  return process.platform === "win32" ? path.toLowerCase() : path;
+}
+function gateNames(gate, vault) {
+  return canonicalVault(gate.vault) === canonicalVault(vault);
+}
+function readMigrationGateState(source) {
+  const path = migrationGatePath(source);
+  let text = null;
+  let code = "";
+  for (let attempt = 0;attempt < READ_ATTEMPTS && text === null; attempt++) {
+    if (attempt > 0)
+      sleepSync(READ_RETRY_MS);
+    try {
+      text = readFileSync14(path, "utf8");
+    } catch (err) {
+      code = String(err.code ?? "EIO");
+      if (code === "ENOENT")
+        return { kind: "none" };
+    }
+  }
+  if (text === null)
+    return { kind: "unreadable", code };
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed.vault === "string" && typeof parsed.run_id === "string") {
+      return {
+        kind: "held",
+        gate: {
+          vault: parsed.vault,
+          run_id: parsed.run_id,
+          since: typeof parsed.since === "string" ? parsed.since : "",
+          pid: typeof parsed.pid === "number" ? parsed.pid : 0,
+          ...typeof parsed.started === "string" ? { started: parsed.started } : {}
+        }
+      };
+    }
+  } catch {}
+  return { kind: "damaged" };
+}
+function readMigrationGate(source) {
+  const state = readMigrationGateState(source);
+  if (state.kind === "none")
+    return null;
+  return state.kind === "held" ? state.gate : UNREADABLE_GATE;
+}
+function assertNoMigrationInProgress(vault) {
+  const gate = readMigrationGate();
+  if (gate === null)
+    return;
+  if (gate.vault === "" || gateNames(gate, vault))
+    throw new MigrationInProgressError(gate);
+}
+var GATE_FILE = "migration-gate.json", MIGRATION_GATE_NEXT_COMMAND = "o2b brain migrate-store --resume", MigrationInProgressError, READ_ATTEMPTS = 3, READ_RETRY_MS = 25, UNREADABLE_GATE;
+var init_migration_gate = __esm(() => {
+  init_fs_atomic();
+  init_platform_dirs();
+  MigrationInProgressError = class MigrationInProgressError extends Error {
+    gate;
+    name = "MigrationInProgressError";
+    next_command = MIGRATION_GATE_NEXT_COMMAND;
+    constructor(gate) {
+      super(`a brain store migration of this vault is in progress on this machine (run ${gate.run_id}, ` + `since ${gate.since}); the write was refused and nothing was written. Try again when ` + "`o2b brain migrate-store` has finished, or resume an interrupted one with `--resume`");
+      this.gate = gate;
+    }
+  };
+  UNREADABLE_GATE = Object.freeze({
+    vault: "",
+    run_id: "unknown",
+    since: "",
+    pid: 0
+  });
+});
+
 // src/core/brain/vault-identity.ts
-import { existsSync as existsSync6, readFileSync as readFileSync6, statSync as statSync6 } from "node:fs";
-import { join as join8, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync10, readFileSync as readFileSync15, statSync as statSync10 } from "node:fs";
+import { join as join21, resolve as resolve12 } from "node:path";
 function vaultIdentityPath(vault) {
-  return ensureInsideVault(join8(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
+  return ensureInsideVault(join21(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
 }
 function readVaultIdentity(vault) {
   const path = vaultIdentityPath(vault);
-  if (!existsSync6(path))
+  if (!existsSync10(path))
     return null;
   try {
-    const parsed = JSON.parse(readFileSync6(path, "utf8"));
+    const parsed = JSON.parse(readFileSync15(path, "utf8"));
     if (typeof parsed.vault_id !== "string" || parsed.vault_id.length === 0)
       return null;
     return Object.freeze({
@@ -4079,7 +6921,7 @@ function currentVaultId(root) {
   }
   let stat;
   try {
-    stat = statSync6(path, { throwIfNoEntry: false });
+    stat = statSync10(path, { throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -4105,7 +6947,7 @@ function currentVaultId(root) {
   return identity.vault_id;
 }
 function vaultMarkerAbsentNotice(vault) {
-  const root = resolve6(vault);
+  const root = resolve12(vault);
   if (currentVaultId(root) !== null)
     return null;
   return degradationNotice({
@@ -4116,9 +6958,11 @@ function vaultMarkerAbsentNotice(vault) {
   });
 }
 function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
-  const root = resolve6(vault);
-  if (lane === WRITE_LANE.content)
+  const root = resolve12(vault);
+  if (lane === WRITE_LANE.content) {
     assertVaultNotFrozen(root);
+    assertNoMigrationInProgress(root);
+  }
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {
@@ -4151,6 +6995,7 @@ var init_vault_identity = __esm(() => {
   init_degradation();
   init_stamp();
   init_freeze_marker();
+  init_migration_gate();
   init_path_constants();
   VaultIdentityMismatchError = class VaultIdentityMismatchError extends Error {
     notice;
@@ -4167,1230 +7012,22 @@ var init_vault_identity = __esm(() => {
   MARKER_PATHS2 = new Map;
 });
 
-// src/core/store/hlc.ts
-function formatHlc(clock) {
-  return `${clock.physical}.${clock.counter}`;
-}
-function parseHlc(text) {
-  const match = HLC_RE.exec(text);
-  if (match === null)
-    return null;
-  const physical = Number(match[1]);
-  const counter = Number(match[2]);
-  if (!Number.isSafeInteger(physical) || !Number.isSafeInteger(counter))
-    return null;
-  return { physical, counter };
-}
-function sendHlc(local, wallMs) {
-  const wall = Math.max(0, Math.floor(wallMs));
-  if (wall > local.physical)
-    return { physical: wall, counter: 0 };
-  return { physical: local.physical, counter: local.counter + 1 };
-}
-var HLC_MAX_DRIFT_MS, HLC_ZERO, HLC_RE;
-var init_hlc = __esm(() => {
-  HLC_MAX_DRIFT_MS = 24 * 60 * 60 * 1000;
-  HLC_ZERO = Object.freeze({ physical: 0, counter: 0 });
-  HLC_RE = /^(0|[1-9]\d{0,15})\.(0|[1-9]\d{0,9})$/;
-});
-
-// src/core/brain/sync-lockfile.ts
-import {
-  closeSync as closeSync2,
-  constants as fsConstants,
-  fstatSync,
-  lstatSync,
-  readFileSync as readFileSync7,
-  mkdirSync as mkdirSync5,
-  openSync as openSync2,
-  readdirSync,
-  unlinkSync as unlinkSync2,
-  writeSync as writeSync2
-} from "node:fs";
-function isWindowsDeletePending(e, lockPath, platform = process.platform, occupied = nameIsOccupied) {
-  if (platform !== "win32" || e.code !== "EPERM" && e.code !== "EACCES")
-    return false;
-  return occupied(lockPath);
-}
-function nameIsOccupied(path) {
-  try {
-    lstatSync(path);
-    return true;
-  } catch (err) {
-    return err.code !== "ENOENT";
-  }
-}
-function resolveLockWaitBudgetMs(env = process.env) {
-  const raw = env[LOCK_WAIT_BUDGET_ENV];
-  if (raw === undefined || raw.trim() === "")
-    return LOCK_WAIT_BUDGET_MS;
-  const text = raw.trim();
-  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${LOCK_WAIT_BUDGET_ENV}=${raw} is not a lock wait; set it to a whole number of ` + `milliseconds >= 0 (the default is ${LOCK_WAIT_BUDGET_MS}), or unset it`);
-  }
-  return parsed;
-}
-var heldLocks, LOCK_WAIT_BUDGET_MS = 5000, LOCK_WAIT_BUDGET_ENV = "OPEN_SECOND_BRAIN_LOCK_WAIT_MS", RETRY_SLEEP_CEILING_MS = 25, contendedReleases, HANDOFF_WINDOW_MS, AGED_WAITER_AFTER_MS, POSIX_MIN_STAMP_BYTES = 48, WIN32_MIN_STAMP_BYTES = 30, MIN_STAMP_BYTES, WAITER_MARK, MARK_OPEN_FLAGS;
-var init_sync_lockfile = __esm(() => {
-  init_path_constants();
-  heldLocks = new Map;
-  contendedReleases = new Map;
-  HANDOFF_WINDOW_MS = RETRY_SLEEP_CEILING_MS * 4;
-  AGED_WAITER_AFTER_MS = RETRY_SLEEP_CEILING_MS * 10;
-  MIN_STAMP_BYTES = process.platform === "win32" ? WIN32_MIN_STAMP_BYTES : POSIX_MIN_STAMP_BYTES;
-  WAITER_MARK = Buffer.from("w", "utf8");
-  MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
-});
-
-// src/core/store/local-lock.ts
-import { mkdirSync as mkdirSync6 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
-function isLockContention(err, lockTarget, platform = process.platform) {
-  const e = err;
-  return e.code === "ELOCKED" || isWindowsDeletePending(e, `${lockTarget}.lock`, platform);
-}
-function isWindowsRefusal(err, platform = process.platform) {
-  const code = err.code;
-  return platform === "win32" && (code === "EPERM" || code === "EACCES");
-}
-function acquireDirLock(lockTarget, options) {
-  const started = Date.now();
-  let refusalRetried = false;
-  for (let attempt = 0;; attempt++) {
-    try {
-      return import_proper_lockfile3.default.lockSync(lockTarget, { stale: options.staleMs, realpath: false });
-    } catch (err) {
-      if (!isLockContention(err, lockTarget)) {
-        if (refusalRetried || !isWindowsRefusal(err))
-          throw err;
-        refusalRetried = true;
-        continue;
-      }
-      if (Date.now() - started >= options.budgetMs) {
-        const refused = new Error(`${options.label} busy: ${lockTarget}: still held after waiting ` + `${Date.now() - started} ms; ${options.remedy}`, { cause: err });
-        refused.code = "ELOCKED";
-        refused.path = lockTarget;
-        throw refused;
-      }
-      sleepSync(1 + Math.floor(Math.random() * Math.min(RETRY_SLEEP_MAX_MS, 2 + attempt * 2)));
-    }
-  }
-}
-function withLocalLock(lockTarget, fn, budgetMs) {
-  mkdirSync6(dirname6(lockTarget), { recursive: true });
-  const release = acquireDirLock(lockTarget, {
-    staleMs: STORE_LOCK_STALE_MS,
-    budgetMs: budgetMs ?? resolveLockWaitBudgetMs(),
-    label: "store lock",
-    remedy: "retry once the other writer finishes, or allow a longer wait with " + "OPEN_SECOND_BRAIN_LOCK_WAIT_MS=<milliseconds>"
-  });
-  try {
-    return fn();
-  } finally {
-    release();
-  }
-}
-var import_proper_lockfile3, STORE_LOCK_STALE_MS = 60000, RETRY_SLEEP_MAX_MS = 20;
-var init_local_lock = __esm(() => {
-  init_sync_lockfile();
-  init_fs_atomic();
-  import_proper_lockfile3 = __toESM(require_proper_lockfile(), 1);
-});
-
-// src/core/store/clock-store.ts
-import { readFileSync as readFileSync8 } from "node:fs";
-import { join as join9 } from "node:path";
-function clockFilePath(deviceStateDir, device) {
-  return join9(deviceStateDir, STORE_CLOCK_DIR, `${device}.json`);
-}
-function readClock(deviceStateDir, device) {
-  let text;
-  try {
-    text = readFileSync8(clockFilePath(deviceStateDir, device), "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed.hlc === "string" ? parseHlc(parsed.hlc) : null;
-  } catch {
-    return null;
-  }
-}
-function update(deviceStateDir, device, step) {
-  const path = clockFilePath(deviceStateDir, device);
-  return withLocalLock(path, () => {
-    const next = step(readClock(deviceStateDir, device) ?? HLC_ZERO);
-    atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}
-`);
-    return next;
-  });
-}
-function tickClock(deviceStateDir, device, now = systemWallClock) {
-  return update(deviceStateDir, device, (local) => sendHlc(local, now()));
-}
-var systemWallClock = () => Date.now();
-var init_clock_store = __esm(() => {
-  init_fs_atomic();
-  init_constants();
-  init_hlc();
-  init_local_lock();
-});
-
-// src/core/store/ulid.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-function encodeTime(time) {
-  let out = "";
-  let rest = time;
-  for (let i = 0;i < TIME_CHARS; i++) {
-    out = ALPHABET[rest % 32] + out;
-    rest = Math.floor(rest / 32);
-  }
-  return out;
-}
-function freshRandom() {
-  const bytes = randomBytes2(RANDOM_CHARS);
-  return Array.from(bytes, (byte) => byte % 32);
-}
-function increment(digits) {
-  for (let i = digits.length - 1;i >= 0; i--) {
-    if (digits[i] < 31) {
-      digits[i] += 1;
-      return true;
-    }
-    digits[i] = 0;
-  }
-  return false;
-}
-function newUlid(nowMs = Date.now()) {
-  const time = Math.min(MAX_TIME, Math.max(0, Math.floor(nowMs)));
-  if (time === lastTime) {
-    if (!increment(lastRandom)) {
-      lastTime += 1;
-      lastRandom = freshRandom();
-    }
-  } else {
-    lastTime = time;
-    lastRandom = freshRandom();
-  }
-  return encodeTime(lastTime) + lastRandom.map((d) => ALPHABET[d]).join("");
-}
-function isUlid(value) {
-  return typeof value === "string" && ULID_RE.test(value);
-}
-var ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ", TIME_CHARS = 10, RANDOM_CHARS = 16, ULID_RE, MAX_TIME, lastTime = -1, lastRandom;
-var init_ulid = __esm(() => {
-  ULID_RE = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
-  MAX_TIME = 2 ** 48 - 1;
-  lastRandom = [];
-});
-
-// src/core/store/envelope.ts
-function canonicalBodyText(body) {
-  return canonicalJson(body);
-}
-function bodyChecksum(body) {
-  return sha256Hex(canonicalBodyText(body));
-}
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function bodyTooDeep(body) {
-  const stack = [[body, 1]];
-  while (stack.length > 0) {
-    const [value, depth] = stack.pop();
-    if (value === null || typeof value !== "object")
-      continue;
-    if (depth > STORE_BODY_MAX_DEPTH)
-      return true;
-    for (const child of Array.isArray(value) ? value : Object.values(value)) {
-      if (child !== null && typeof child === "object")
-        stack.push([child, depth + 1]);
-    }
-  }
-  return false;
-}
-function labelProblem(value) {
-  if (typeof value !== "string" || value.trim() === "" || value.length > MAX_LABEL_LENGTH) {
-    return `must be a non-empty string of at most ${MAX_LABEL_LENGTH} characters`;
-  }
-  if (/[\r\n]/.test(value))
-    return "must be one line";
-  return null;
-}
-function isRecordLabel(value) {
-  return labelProblem(value) === null;
-}
-function label(name, value, nullable) {
-  if (value === null || value === undefined) {
-    if (nullable)
-      return null;
-    throw new EnvelopeError(`record ${name} is required`);
-  }
-  const problem = labelProblem(value);
-  if (problem !== null)
-    throw new EnvelopeError(`record ${name} ${problem}`);
-  return value;
-}
-function buildRecord(input) {
-  if (!isValidDeviceId(input.device)) {
-    throw new EnvelopeError(`record device "${input.device}" is not a valid device id (lowercase letters, digits and hyphens, not "sync-conflict")`);
-  }
-  if (!RECORD_KIND_RE.test(input.kind)) {
-    throw new EnvelopeError(`record kind "${input.kind}" must match ${RECORD_KIND_RE}`);
-  }
-  const agent = label("agent", input.agent, false);
-  const scope = label("scope", input.scope, true);
-  const topic = input.topic ?? null;
-  if (topic !== null && !isUlid(topic)) {
-    throw new EnvelopeError(`record topic "${topic}" must be a topic id (ULID) or null`);
-  }
-  if (!isPlainObject(input.body))
-    throw new EnvelopeError("record body must be a JSON object");
-  if (bodyTooDeep(input.body))
-    throw new EnvelopeError(`record ${BODY_TOO_DEEP_REASON}`);
-  if (BLOB_REF_KEY in input.body) {
-    throw new EnvelopeError(`record body must not use the reserved key "${BLOB_REF_KEY}"`);
-  }
-  const id = input.id ?? newUlid(input.hlc.physical);
-  if (!isUlid(id))
-    throw new EnvelopeError(`record id "${id}" must be a ULID`);
-  const body = JSON.parse(JSON.stringify(input.body));
-  return {
-    v: STORE_FORMAT_VERSION,
-    id,
-    hlc: formatHlc(input.hlc),
-    device: input.device,
-    agent,
-    kind: input.kind,
-    scope,
-    topic,
-    sum: bodyChecksum(body),
-    body
-  };
-}
-var EnvelopeError, RECORD_KIND_RE, MAX_LABEL_LENGTH = 200, BODY_TOO_DEEP_REASON;
-var init_envelope = __esm(() => {
-  init_config();
-  init_digest();
-  init_constants();
-  init_hlc();
-  init_ulid();
-  EnvelopeError = class EnvelopeError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = "EnvelopeError";
-    }
-  };
-  RECORD_KIND_RE = /^[a-z][a-z0-9-]{0,63}$/;
-  BODY_TOO_DEEP_REASON = `body nests deeper than ${STORE_BODY_MAX_DEPTH} levels`;
-});
-
-// src/core/store/safe-fs.ts
-import {
-  closeSync as closeSync3,
-  constants,
-  fstatSync as fstatSync2,
-  lstatSync as lstatSync2,
-  mkdirSync as mkdirSync7,
-  openSync as openSync3
-} from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute2, join as join10, relative as relative2, sep as sep3 } from "node:path";
-function errnoCode(err) {
-  return err?.code;
-}
-function lstatOrNull(path) {
-  try {
-    return lstatSync2(path);
-  } catch (err) {
-    if (errnoCode(err) === "ENOENT")
-      return null;
-    throw err;
-  }
-}
-function assertRealDirectory(path) {
-  const stat = lstatOrNull(path);
-  if (stat === null)
-    return;
-  if (stat.isSymbolicLink())
-    throw new StoreUnsafePathError(path, "is a symbolic link");
-  if (!stat.isDirectory())
-    throw new StoreUnsafePathError(path, "is not a directory");
-}
-function ensureStoreDir(partitionRoot, dir) {
-  const rel = relative2(partitionRoot, dir);
-  if (rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute2(rel)) {
-    throw new StoreUnsafePathError(dir, "is outside the partition folder");
-  }
-  mkdirSync7(partitionRoot, { recursive: true, mode: STORE_DIR_MODE });
-  let current = partitionRoot;
-  for (const part of rel === "" ? [] : rel.split(sep3)) {
-    current = join10(current, part);
-    assertRealDirectory(current);
-    try {
-      mkdirSync7(current, { mode: STORE_DIR_MODE });
-    } catch (err) {
-      if (errnoCode(err) !== "EEXIST")
-        throw err;
-    }
-    assertRealDirectory(current);
-  }
-}
-function isRealDirBelowPartition(partitionRoot, dir) {
-  const rel = relative2(partitionRoot, dir);
-  if (rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute2(rel))
-    return false;
-  let current = partitionRoot;
-  for (const part of rel === "" ? [] : rel.split(sep3)) {
-    current = join10(current, part);
-    const stat = lstatOrNull(current);
-    if (stat === null || stat.isSymbolicLink() || !stat.isDirectory())
-      return false;
-  }
-  return true;
-}
-function openRegularFileForRead(path, partitionRoot) {
-  if (!lstatSync2(path).isFile())
-    return null;
-  let fd;
-  try {
-    fd = openSync3(path, constants.O_RDONLY | NO_FOLLOW | NON_BLOCK);
-  } catch (err) {
-    if (errnoCode(err) === "ELOOP")
-      return null;
-    throw err;
-  }
-  let keep = false;
-  try {
-    const opened = fstatSync2(fd);
-    keep = opened.isFile() && (NO_FOLLOW !== 0 || nameIsOpenedFile(path, opened)) && (partitionRoot === undefined || isRealDirBelowPartition(partitionRoot, dirname7(path)));
-  } finally {
-    if (!keep)
-      closeSync3(fd);
-  }
-  return keep ? fd : null;
-}
-function nameIsOpenedFile(path, opened) {
-  const now = lstatOrNull(path);
-  return now !== null && !now.isSymbolicLink() && now.ino === opened.ino && now.dev === opened.dev;
-}
-function assertNameIsOpenedFile(path, opened) {
-  const now = lstatOrNull(path);
-  if (now === null)
-    throw new StoreUnsafePathError(path, "was removed while it was opened");
-  if (now.isSymbolicLink())
-    throw new StoreUnsafePathError(path, "is a symbolic link");
-  if (now.ino !== opened.ino || now.dev !== opened.dev) {
-    throw new StoreUnsafePathError(path, "was replaced while it was opened");
-  }
-}
-function openShardForAppend(path) {
-  const before = lstatOrNull(path);
-  if (before?.isSymbolicLink() === true)
-    throw new StoreUnsafePathError(path, "is a symbolic link");
-  let fd;
-  try {
-    fd = openSync3(path, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | NO_FOLLOW, STORE_FILE_MODE);
-  } catch (err) {
-    if (errnoCode(err) === "ELOOP")
-      throw new StoreUnsafePathError(path, "is a symbolic link");
-    throw err;
-  }
-  try {
-    const stat = fstatSync2(fd);
-    if (!stat.isFile())
-      throw new StoreUnsafePathError(path, "is not a regular file");
-    if (stat.nlink > 1)
-      throw new StoreUnsafePathError(path, `has ${stat.nlink} hard links`);
-    if (NO_FOLLOW === 0)
-      assertNameIsOpenedFile(path, stat);
-  } catch (err) {
-    closeSync3(fd);
-    throw err;
-  }
-  return fd;
-}
-var STORE_DIR_MODE = 448, STORE_FILE_MODE = 384, StoreUnsafePathError, NO_FOLLOW, NON_BLOCK;
-var init_safe_fs = __esm(() => {
-  StoreUnsafePathError = class StoreUnsafePathError extends Error {
-    path;
-    constructor(path, why) {
-      super(`refusing to write through ${path} in the brain store: it ${why}. ` + "Something other than Open Second Brain put it there (a sync peer, a restore, a manual " + "edit); remove it and let the store create the path again");
-      this.name = "StoreUnsafePathError";
-      this.path = path;
-    }
-  };
-  NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
-  NON_BLOCK = constants.O_NONBLOCK ?? 0;
-});
-
-// src/core/store/store-paths.ts
-import { realpathSync as realpathSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { join as join11, posix as posix4, win32 as win322 } from "node:path";
-function pathsFor(platform) {
-  return platform === "win32" ? win322 : posix4;
-}
-function expandHome(value, source) {
-  const paths = pathsFor(source.platform);
-  if (value === "~")
-    return source.home;
-  if (value.startsWith("~/") || source.platform === "win32" && value.startsWith("~\\")) {
-    return paths.join(source.home, value.slice(2));
-  }
-  return value;
-}
-function resolveLinks(path, platform) {
-  if (platform !== process.platform)
-    return path;
-  const paths = pathsFor(platform);
-  let head = path;
-  const tail = [];
-  for (;; ) {
-    try {
-      return paths.join(realpathSync2(head), ...tail.toReversed());
-    } catch {
-      const parent = paths.dirname(head);
-      if (parent === head)
-        return path;
-      tail.push(paths.basename(head));
-      head = parent;
-    }
-  }
-}
-function isPathInside(child, parent, platform) {
-  const paths = pathsFor(platform);
-  const fold = (p) => CASE_INSENSITIVE_PLATFORMS.has(platform) ? p.toLowerCase() : p;
-  const rel = paths.relative(fold(paths.resolve(parent)), fold(paths.resolve(child)));
-  const escapes = rel === ".." || rel.startsWith(`..${paths.sep}`);
-  return rel === "" || !escapes && !paths.isAbsolute(rel);
-}
-function isPathInsideResolved(child, parent, platform) {
-  return isPathInside(child, parent, platform) || isPathInside(resolveLinks(child, platform), resolveLinks(parent, platform), platform);
-}
-function defaultStoreRoot(source = processDirsEnv()) {
-  return pathsFor(source.platform).join(dataBaseDir(source), APP_DIR_NAME, STORE_DEFAULT_DIR);
-}
-function resolveStoreRoot(source) {
-  const paths = pathsFor(source.platform);
-  const env = source.env[STORE_ROOT_ENV]?.trim();
-  const configured = source.config[STORE_ROOT_CONFIG_KEY]?.trim();
-  let resolved;
-  if (env) {
-    resolved = { root: paths.resolve(expandHome(env, source)), origin: "env" };
-  } else if (configured) {
-    const expanded = expandHome(configured, source);
-    const root = paths.isAbsolute(expanded) ? paths.normalize(expanded) : paths.resolve(paths.dirname(source.configPath), expanded);
-    resolved = { root, origin: "config" };
-  } else {
-    resolved = { root: defaultStoreRoot(source), origin: "default" };
-  }
-  if (source.vault !== null && source.vault.trim() !== "") {
-    const vault = expandHome(source.vault.trim(), source);
-    if (isPathInsideResolved(resolved.root, vault, source.platform))
-      throw new StoreRootInsideVaultError(resolved.root, vault, resolved.origin);
-  }
-  return resolved;
-}
-function resolveConfiguredStoreRoot(configPath) {
-  const path = configPath ?? defaultConfigPath();
-  return resolveStoreRoot({
-    platform: process.platform,
-    home: homedir3(),
-    env: process.env,
-    config: discoverConfig(path).data,
-    configPath: path,
-    vault: resolveVault(path)
-  });
-}
-function storesStateDir(source = processDirsEnv()) {
-  return pathsFor(source.platform).join(stateBaseDir(source), APP_DIR_NAME, STORE_STATE_DIR);
-}
-function deviceStateDirFor(storeId, source = processDirsEnv()) {
-  if (!isUlid(storeId))
-    throw new Error(`store id "${storeId}" is not a ULID`);
-  return pathsFor(source.platform).join(storesStateDir(source), storeId);
-}
-function dualWriteStatusPath(source = processDirsEnv()) {
-  return pathsFor(source.platform).join(storesStateDir(source), DUAL_WRITE_STATUS_FILE);
-}
-function partitionDir(root, partition) {
-  return join11(root, partition);
-}
-function shardMonth(physicalMs) {
-  return new Date(physicalMs).toISOString().slice(0, 7);
-}
-function streamSegments(ref) {
-  if (ref.stream === LEDGER_STREAM) {
-    if (ref.ledger === undefined || !LEDGER_NAME_RE.test(ref.ledger)) {
-      throw new Error(`the ${LEDGER_STREAM} stream needs a ledger name matching ${LEDGER_NAME_RE}`);
-    }
-    return [ref.stream, ref.ledger];
-  }
-  if (ref.ledger !== undefined)
-    throw new Error(`stream ${ref.stream} takes no ledger name`);
-  return [ref.stream];
-}
-function shardRelPath(ref, device, month) {
-  if (!isValidDeviceId(device))
-    throw new Error(`"${device}" is not a valid device id`);
-  if (!SHARD_MONTH_RE.test(month))
-    throw new Error(`"${month}" is not a YYYY-MM month`);
-  return posix4.join(...streamSegments(ref), device, `${month}.${STORE_SHARD_EXT}`);
-}
-function shardPath(root, partition, ref, device, month) {
-  return join11(partitionDir(root, partition), ...shardRelPath(ref, device, month).split("/"));
-}
-function blobPath(partitionRoot, sha) {
-  if (!SHA256_RE.test(sha))
-    throw new Error(`"${sha}" is not a sha256 hex digest`);
-  return join11(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
-}
-function shardLockTarget(deviceStateDir, partition, rel) {
-  return join11(deviceStateDir, STORE_LOCKS_DIR, partition, ...rel.split("/"));
-}
-var StoreRootInsideVaultError, CASE_INSENSITIVE_PLATFORMS, LEDGER_NAME_RE, SHARD_MONTH_RE, SHA256_RE;
-var init_store_paths = __esm(() => {
-  init_config();
-  init_platform_dirs();
-  init_constants();
-  init_ulid();
-  StoreRootInsideVaultError = class StoreRootInsideVaultError extends Error {
-    root;
-    vault;
-    setting;
-    origin;
-    constructor(root, vault, origin) {
-      const setting = origin === "env" ? `the ${STORE_ROOT_ENV} environment variable` : origin === "config" ? `\`${STORE_ROOT_CONFIG_KEY}\` in the machine config` : "the default store root";
-      const remedy = origin === "default" ? `set \`${STORE_ROOT_CONFIG_KEY}\` in the machine config to a directory outside the vault` : `change ${setting} to a directory outside the vault, or remove it to use the per-user default`;
-      super(`the brain store root ${root} (from ${setting}) is inside the vault ${vault}; ` + `the store must live outside the vault: ${remedy}.`);
-      this.name = "StoreRootInsideVaultError";
-      this.root = root;
-      this.vault = vault;
-      this.setting = setting;
-      this.origin = origin;
-    }
-  };
-  CASE_INSENSITIVE_PLATFORMS = new Set(["win32", "darwin"]);
-  LEDGER_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-  SHARD_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-  SHA256_RE = /^[0-9a-f]{64}$/;
-});
-
-// src/core/store/blobs.ts
-import {
-  closeSync as closeSync4,
-  fstatSync as fstatSync3,
-  fsyncSync as fsyncSync2,
-  linkSync as linkSync2,
-  mkdirSync as mkdirSync8,
-  openSync as openSync4,
-  readFileSync as readFileSync9,
-  readSync,
-  statSync as statSync7,
-  unlinkSync as unlinkSync3,
-  writeSync as writeSync3
-} from "node:fs";
-import { basename as basename4, dirname as dirname8, join as join12 } from "node:path";
-function errnoCode2(err) {
-  return err?.code;
-}
-function sameFilesystem(a, b) {
-  try {
-    return statSync7(a).dev === statSync7(b).dev;
-  } catch {
-    return false;
-  }
-}
-function writeAll(fd, bytes) {
-  let written = 0;
-  while (written < bytes.length)
-    written += writeSync3(fd, bytes, written, bytes.length - written);
-  fsyncSync2(fd);
-}
-function createExclusive(path, bytes) {
-  const fd = openSync4(path, "wx", STORE_FILE_MODE);
-  try {
-    writeAll(fd, bytes);
-  } finally {
-    closeSync4(fd);
-  }
-}
-function tempPathFor(target, tempDir) {
-  const unique = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-  const blobDir = dirname8(target);
-  if (tempDir !== undefined) {
-    try {
-      mkdirSync8(tempDir, { recursive: true });
-      if (sameFilesystem(tempDir, blobDir))
-        return join12(tempDir, `${basename4(target)}.${unique}`);
-    } catch {}
-  }
-  return join12(blobDir, `${BLOB_TEMP_PREFIX}${basename4(target)}.${unique}`);
-}
-function verifies(path, sha, size, attempts, sleepMs) {
-  for (let attempt = 0;attempt < attempts; attempt += 1) {
-    try {
-      const fd = openRegularFileForRead(path);
-      if (fd !== null) {
-        try {
-          if (fstatSync3(fd).size === size && sha256Hex(readFileSync9(fd)) === sha)
-            return true;
-        } finally {
-          closeSync4(fd);
-        }
-      }
-    } catch (err) {
-      if (errnoCode2(err) !== "ENOENT")
-        throw err;
-    }
-    if (attempt < attempts - 1)
-      sleepSync(sleepMs);
-  }
-  return false;
-}
-function settleExisting(path, sha, bytes, options) {
-  if (verifies(path, sha, bytes.length, VERIFY_ATTEMPTS, VERIFY_SLEEP_MS))
-    return;
-  const repair = tempPathFor(path, options.tempDir);
-  try {
-    createExclusive(repair, bytes);
-    try {
-      (options.rename ?? renameWithRetry)(repair, path);
-    } catch (err) {
-      const code = errnoCode2(err);
-      if (code === undefined || !STILL_OPEN_CODES.has(code))
-        throw err;
-      if (!verifies(path, sha, bytes.length, VERIFY_ATTEMPTS, VERIFY_SLEEP_MS * 10))
-        throw err;
-    }
-  } finally {
-    try {
-      unlinkSync3(repair);
-    } catch {}
-  }
-  if (!verifies(path, sha, bytes.length, 1, 0)) {
-    throw new Error(`blob ${path} does not hold the content its name promises, even after a rewrite`);
-  }
-}
-function createFileOnce(path, bytes, options = {}) {
-  const link = options.link ?? linkSync2;
-  mkdirSync8(dirname8(path), { recursive: true, mode: STORE_DIR_MODE });
-  const temp = tempPathFor(path, options.tempDir);
-  try {
-    createExclusive(temp, bytes);
-    try {
-      link(temp, path);
-      return true;
-    } catch (err) {
-      const code = errnoCode2(err);
-      if (code === "EEXIST")
-        return false;
-      if (code === undefined || !NO_LINK_CODES.has(code))
-        throw err;
-    }
-  } finally {
-    try {
-      unlinkSync3(temp);
-    } catch {}
-  }
-  try {
-    createExclusive(path, bytes);
-    return true;
-  } catch (err) {
-    if (errnoCode2(err) !== "EEXIST")
-      throw err;
-    return false;
-  }
-}
-function writeBlob(partitionRoot, text, options = {}) {
-  const sha = sha256Hex(text);
-  const path = blobPath(partitionRoot, sha);
-  const bytes = Buffer.from(text, "utf8");
-  ensureStoreDir(partitionRoot, dirname8(path));
-  if (createFileOnce(path, bytes, options))
-    return { sha, path, created: true };
-  settleExisting(path, sha, bytes, options);
-  return { sha, path, created: false };
-}
-var NO_LINK_CODES, VERIFY_ATTEMPTS = 5, VERIFY_SLEEP_MS = 20, STILL_OPEN_CODES;
-var init_blobs = __esm(() => {
-  init_fs_atomic();
-  init_digest();
-  init_constants();
-  init_safe_fs();
-  init_store_paths();
-  NO_LINK_CODES = new Set([
-    "EPERM",
-    "ENOTSUP",
-    "EOPNOTSUPP",
-    "ENOSYS",
-    "EXDEV",
-    "EMLINK"
-  ]);
-  STILL_OPEN_CODES = new Set(["EPERM", "EBUSY"]);
-});
-
-// src/core/store/appender.ts
-import { closeSync as closeSync5, fstatSync as fstatSync4, fsyncSync as fsyncSync3, openSync as openSync5, readSync as readSync2, writeSync as writeSync4 } from "node:fs";
-import { dirname as dirname9, join as join13 } from "node:path";
-function lineBytes(record) {
-  return Buffer.from(`${JSON.stringify(record)}
-`, "utf8");
-}
-function fsyncDirBestEffort(dir) {
-  try {
-    const fd = openSync5(dir, "r");
-    try {
-      fsyncSync3(fd);
-    } finally {
-      closeSync5(fd);
-    }
-  } catch {}
-}
-function appendLine(partitionRoot, path, bytes) {
-  ensureStoreDir(partitionRoot, dirname9(path));
-  const fd = openShardForAppend(path);
-  let created = false;
-  try {
-    const size = fstatSync4(fd).size;
-    created = size === 0;
-    let payload = bytes;
-    if (size > 0) {
-      const last = Buffer.alloc(1);
-      readSync2(fd, last, 0, 1, size - 1);
-      if (last[0] !== NEWLINE)
-        payload = Buffer.concat([Buffer.from([NEWLINE]), bytes]);
-    }
-    let written = 0;
-    while (written < payload.length) {
-      written += writeSync4(fd, payload, written, payload.length - written);
-    }
-    fsyncSync3(fd);
-  } finally {
-    closeSync5(fd);
-  }
-  if (created)
-    fsyncDirBestEffort(dirname9(path));
-}
-function appendRecord(store, input, options = {}) {
-  if (!store.partitions.has(input.partition)) {
-    throw new PartitionUnavailableError(input.partition, store.root);
-  }
-  const ref = input.ledger === undefined ? { stream: input.stream } : { stream: input.stream, ledger: input.ledger };
-  const hlc = tickClock(store.deviceStateDir, store.device, options.now);
-  const month = shardMonth(hlc.physical);
-  const rel = shardRelPath(ref, store.device, month);
-  const record = buildRecord({
-    hlc,
-    device: store.device,
-    agent: input.agent,
-    kind: input.kind,
-    scope: input.scope ?? null,
-    topic: input.topic ?? null,
-    body: input.body
-  });
-  let bytes = lineBytes(record);
-  let spilled = false;
-  if (bytes.length > STORE_LINE_CAP_BYTES) {
-    const text = canonicalBodyText(record.body);
-    const reference = {
-      [BLOB_REF_KEY]: record.sum,
-      [BLOB_REF_BYTES_KEY]: Buffer.byteLength(text, "utf8")
-    };
-    bytes = lineBytes({ ...record, body: reference });
-    if (bytes.length > STORE_LINE_CAP_BYTES)
-      throw new RecordTooLargeError(bytes.length);
-    writeBlob(partitionDir(store.root, input.partition), text, {
-      tempDir: join13(store.deviceStateDir, STORE_TMP_DIR)
-    });
-    spilled = true;
-  }
-  const path = shardPath(store.root, input.partition, ref, store.device, month);
-  withLocalLock(shardLockTarget(store.deviceStateDir, input.partition, rel), () => appendLine(partitionDir(store.root, input.partition), path, bytes));
-  return { record, path, rel, spilled };
-}
-var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10;
-var init_appender = __esm(() => {
-  init_clock_store();
-  init_constants();
-  init_envelope();
-  init_blobs();
-  init_local_lock();
-  init_safe_fs();
-  init_store_paths();
-  PartitionUnavailableError = class PartitionUnavailableError extends Error {
-    partition;
-    constructor(partition, root) {
-      super(`this machine does not hold the ${partition} partition of the brain store at ${root}; ` + `the record was not written. Sync the ${partition} folder to this machine to write ${partition} records here.`);
-      this.name = "PartitionUnavailableError";
-      this.partition = partition;
-    }
-  };
-  RecordTooLargeError = class RecordTooLargeError extends Error {
-    constructor(bytes) {
-      super(`a store record line is ${bytes} bytes even with its body in a blob, above the ${STORE_LINE_CAP_BYTES}-byte cap; shorten its agent, scope or kind`);
-      this.name = "RecordTooLargeError";
-    }
-  };
-});
-
-// src/core/store/operation-scope.ts
-import { AsyncLocalStorage } from "node:async_hooks";
-function activeOperationPrivate() {
-  return storage.getStore()?.() ?? false;
-}
-var storage;
-var init_operation_scope = __esm(() => {
-  storage = new AsyncLocalStorage;
-});
-
-// src/core/store/private-region.ts
-function textCarriesPrivateRegion(text) {
-  return text.includes(PRIVATE_REGION_PLACEHOLDER) || privateRegionTexts(text).length > 0;
-}
-function valueCarriesPrivateRegion(value) {
-  const strings = rowStrings(value, new Set);
-  return strings === null || strings.texts.some(textCarriesPrivateRegion);
-}
-function rowStrings(row, opaque) {
-  const references = [];
-  const texts = [];
-  const stack = [[row, 0, false]];
-  while (stack.length > 0) {
-    const [value, depth, isOpaque] = stack.pop();
-    if (typeof value === "string") {
-      texts.push(value);
-      if (!isOpaque)
-        references.push(value);
-      continue;
-    }
-    if (value === null || typeof value !== "object")
-      continue;
-    if (depth >= ROW_WALK_MAX_DEPTH)
-      return null;
-    if (Array.isArray(value)) {
-      for (const child of value)
-        stack.push([child, depth + 1, isOpaque]);
-      continue;
-    }
-    for (const [field, child] of Object.entries(value)) {
-      stack.push([child, depth + 1, isOpaque || opaque.has(field)]);
-    }
-  }
-  return { texts, references };
-}
-var ROW_WALK_MAX_DEPTH = 32;
-var init_private_region = __esm(() => {
-  init_redactor();
-});
-
-// src/core/store/format-doc.ts
-import { readFileSync as readFileSync10 } from "node:fs";
-import { join as join14 } from "node:path";
-import { fileURLToPath } from "node:url";
-function shippedFormatDoc() {
-  shipped ??= readFileSync10(join14(fileURLToPath(new URL(".", import.meta.url)), STORE_FORMAT_FILE), "utf8");
-  return shipped;
-}
-function formatDocVersion(text) {
-  const match = VERSION_MARKER_RE.exec(text);
-  return match === null ? null : Number(match[1]);
-}
-function writeFormatDoc(dir) {
-  const text = shippedFormatDoc();
-  const target = join14(dir, STORE_FORMAT_FILE);
-  let existing = null;
-  try {
-    existing = readFileSync10(target, "utf8");
-  } catch {
-    existing = null;
-  }
-  if (existing === text)
-    return false;
-  if (existing !== null) {
-    const onDisk = formatDocVersion(existing);
-    const ours = formatDocVersion(text);
-    if (onDisk !== null && ours !== null && onDisk >= ours)
-      return false;
-  }
-  return atomicWriteText(target, text, { mode: FORMAT_DOC_MODE });
-}
-var VERSION_MARKER_RE, FORMAT_DOC_MODE = 420, shipped;
-var init_format_doc = __esm(() => {
-  init_fs_atomic();
-  init_constants();
-  VERSION_MARKER_RE = /^<!-- open-second-brain-store-format: (\d+) -->/;
-});
-
-// src/core/store/store-open.ts
-import { readFileSync as readFileSync11, statSync as statSync8 } from "node:fs";
-import { join as join15 } from "node:path";
-function readStoreId(dir) {
-  let text;
-  try {
-    text = readFileSync11(join15(dir, STORE_IDENTITY_FILE), "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new StoreIdentityError(`${join15(dir, STORE_IDENTITY_FILE)} is not valid JSON`);
-  }
-  if (!isUlid(parsed.store_id)) {
-    throw new StoreIdentityError(`${join15(dir, STORE_IDENTITY_FILE)} carries no valid store_id`);
-  }
-  return parsed.store_id;
-}
-function heldPartitions(root) {
-  if (statSync8(root, { throwIfNoEntry: false })?.isDirectory() === false) {
-    throw new StoreOpenError(`the brain store root ${root} is not a directory; move the file away or point ` + "the store root at a directory");
-  }
-  const ids = new Map;
-  for (const partition of STORE_PARTITIONS) {
-    const id = readStoreId(partitionDir(root, partition));
-    if (id !== null)
-      ids.set(partition, id);
-  }
-  if (new Set(ids.values()).size > 1) {
-    throw new StoreOpenError(`the partitions under ${root} belong to different stores (${[...ids].map(([p, id]) => `${p}: ${id}`).join(", ")}); keep one store per root`);
-  }
-  const first = ids.values().next();
-  return { held: new Set(ids.keys()), storeId: first.done === true ? null : first.value };
-}
-function openStore(options) {
-  if (!isUsableLocalDeviceId(options.device)) {
-    throw new StoreOpenError(`the brain store needs a device id, got "${options.device}"; set device_id in the machine ` + `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`);
-  }
-  const { held, storeId } = heldPartitions(options.root);
-  if (storeId === null)
-    throw new NoStoreError(options.root);
-  writeFormatDoc(options.root);
-  for (const partition of held)
-    writeFormatDoc(partitionDir(options.root, partition));
-  return {
-    root: options.root,
-    storeId,
-    device: options.device,
-    deviceStateDir: deviceStateDirFor(storeId, options.dirs ?? processDirsEnv()),
-    partitions: held
-  };
-}
-var StoreOpenError, NoStoreError, StoreIdentityError;
-var init_store_open = __esm(() => {
-  init_platform_dirs();
-  init_config();
-  init_constants();
-  init_format_doc();
-  init_store_paths();
-  init_ulid();
-  StoreOpenError = class StoreOpenError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = "StoreOpenError";
-    }
-  };
-  NoStoreError = class NoStoreError extends StoreOpenError {
-    root;
-    constructor(root) {
-      super(`no brain store at ${root}: no partition holds ${STORE_IDENTITY_FILE}; ` + "run `o2b store init` to create one, or let sync deliver it from a machine that has it");
-      this.root = root;
-      this.name = "NoStoreError";
-    }
-  };
-  StoreIdentityError = class StoreIdentityError extends StoreOpenError {
-    constructor(message) {
-      super(message);
-      this.name = "StoreIdentityError";
-    }
-  };
-});
-
-// src/core/store/dual-write.ts
-import { readFileSync as readFileSync12 } from "node:fs";
-function isDualWriteEnabled(configPath) {
-  try {
-    return resolveStoreDualWrite(configPath);
-  } catch {
-    return false;
-  }
-}
-function readDualWriteStatus(path = dualWriteStatusPath()) {
-  try {
-    const parsed = JSON.parse(readFileSync12(path, "utf8"));
-    return {
-      failures: typeof parsed.failures === "number" ? parsed.failures : 0,
-      skipped_no_device: typeof parsed.skipped_no_device === "number" ? parsed.skipped_no_device : 0,
-      skipped_no_store: typeof parsed.skipped_no_store === "number" ? parsed.skipped_no_store : 0,
-      last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
-      last_failure_at: typeof parsed.last_failure_at === "string" ? parsed.last_failure_at : null,
-      last_skip_at: typeof parsed.last_skip_at === "string" ? parsed.last_skip_at : null
-    };
-  } catch {
-    return EMPTY_STATUS;
-  }
-}
-function bumpStatus(update2) {
-  try {
-    const path = dualWriteStatusPath();
-    withLocalLock(path, () => {
-      const next = update2(readDualWriteStatus(path));
-      atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}
-`);
-    });
-  } catch {}
-}
-function warnOnce(kind, message) {
-  if (warned.has(kind))
-    return;
-  warned.add(kind);
-  try {
-    process.stderr.write(`Open Second Brain: ${message}
-`);
-  } catch {}
-}
-function recordFailure(err) {
-  const message = err instanceof Error ? err.message : String(err);
-  warnOnce("failure", `a brain store dual write failed (${message}); the legacy write is intact. ` + "Later failures in this process are counted, not printed; `o2b brain doctor` reports them.");
-  const at = new Date().toISOString();
-  bumpStatus((s) => ({
-    ...s,
-    failures: s.failures + 1,
-    last_error: message.slice(0, 500),
-    last_failure_at: at
-  }));
-}
-function recordNoDevice() {
-  warnOnce("device", "brain store dual writes are on but this machine has no device id (O2B_DEVICE_ID is empty " + "or device_id is unset); the dual writes are skipped and the legacy writes are intact.");
-  const at = new Date().toISOString();
-  bumpStatus((s) => ({ ...s, skipped_no_device: s.skipped_no_device + 1, last_skip_at: at }));
-}
-function recordNoStore(root) {
-  warnOnce("store", `brain store dual writes are on but there is no store at ${root}; the dual writes are ` + "skipped and the legacy writes are intact. Run `o2b store init` to create the store.");
-  const at = new Date().toISOString();
-  bumpStatus((s) => ({ ...s, skipped_no_store: s.skipped_no_store + 1, last_skip_at: at }));
-}
-function storeFor(device, context) {
-  const { root, origin } = resolveConfiguredStoreRoot(context.configPath);
-  const vault = context.vault?.trim();
-  if (vault !== undefined && vault !== "" && isPathInsideResolved(root, vault, process.platform)) {
-    throw new StoreRootInsideVaultError(root, vault, origin);
-  }
-  const key = `${root}\x00${device}`;
-  const cached = handles.get(key);
-  if (cached !== undefined && STORE_PARTITIONS.every((p) => {
-    const id = readStoreId(partitionDir(root, p));
-    return cached.partitions.has(p) ? id === cached.storeId : id === null;
-  })) {
-    return cached;
-  }
-  const handle = openStore({ root, device });
-  handles.set(key, handle);
-  return handle;
-}
-function vaultIdOf(context) {
-  const vault = context.vault?.trim();
-  if (vault === undefined || vault === "")
-    return null;
-  return readVaultIdentity(vault)?.vault_id ?? null;
-}
-function defaultAgent() {
-  try {
-    return resolveAgentName();
-  } catch {
-    return "agent";
-  }
-}
-function dualWrite(build, context = {}) {
-  if (!isDualWriteEnabled(context.configPath))
-    return;
-  try {
-    const device = resolveAppendShardId();
-    if (device === "") {
-      recordNoDevice();
-      return;
-    }
-    const built = build();
-    if (built === null)
-      return;
-    const records = Array.isArray(built) ? built : [built];
-    if (records.length === 0)
-      return;
-    let store;
-    try {
-      store = storeFor(device, context);
-    } catch (err) {
-      if (!(err instanceof NoStoreError))
-        throw err;
-      recordNoStore(err.root);
-      return;
-    }
-    const vaultId = vaultIdOf(context);
-    for (const record of records) {
-      const partition = record.private === true || activeOperationPrivate() || valueCarriesPrivateRegion(record.body) || record.privateWhenHeld === true && store.partitions.has("private") ? "private" : "shared";
-      appendRecord(store, {
-        partition,
-        stream: record.stream,
-        ...record.ledger !== undefined ? { ledger: record.ledger } : {},
-        kind: record.kind,
-        agent: record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
-        scope: record.scope ?? null,
-        body: { ...record.body, [VAULT_ID_FIELD]: vaultId }
-      });
-    }
-  } catch (err) {
-    recordFailure(err);
-  }
-}
-var EMPTY_STATUS, warned, handles;
-var init_dual_write = __esm(() => {
-  init_fs_atomic();
-  init_config();
-  init_origin_channel();
-  init_ledger_shards();
-  init_vault_identity();
-  init_appender();
-  init_constants();
-  init_local_lock();
-  init_operation_scope();
-  init_private_region();
-  init_store_open();
-  init_store_paths();
-  EMPTY_STATUS = Object.freeze({
-    failures: 0,
-    skipped_no_device: 0,
-    skipped_no_store: 0,
-    last_error: null,
-    last_failure_at: null,
-    last_skip_at: null
-  });
-  warned = new Set;
-  handles = new Map;
-});
-
 // src/core/brain/paths.ts
-import { join as join16 } from "node:path";
+import { join as join22, posix as posix6 } from "node:path";
 function brainDirs(vault) {
-  const brain = ensureInsideVault(join16(vault, BRAIN_ROOT_REL), vault);
+  const brain = ensureInsideVault(join22(vault, BRAIN_ROOT_REL), vault);
   return {
     brain,
-    inbox: ensureInsideVault(join16(vault, BRAIN_INBOX_REL), vault),
-    processed: ensureInsideVault(join16(vault, BRAIN_PROCESSED_REL), vault),
-    archived: ensureInsideVault(join16(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
-    pending: ensureInsideVault(join16(vault, BRAIN_PENDING_REL), vault),
-    preferences: ensureInsideVault(join16(vault, BRAIN_PREFERENCES_REL), vault),
-    retired: ensureInsideVault(join16(vault, BRAIN_RETIRED_REL), vault),
-    log: ensureInsideVault(join16(vault, BRAIN_LOG_REL), vault),
-    entities: ensureInsideVault(join16(vault, BRAIN_ENTITIES_REL), vault),
-    bases: ensureInsideVault(join16(vault, BRAIN_BASES_REL), vault),
-    snapshots: ensureInsideVault(join16(vault, BRAIN_SNAPSHOTS_REL), vault)
+    inbox: ensureInsideVault(join22(vault, BRAIN_INBOX_REL), vault),
+    processed: ensureInsideVault(join22(vault, BRAIN_PROCESSED_REL), vault),
+    archived: ensureInsideVault(join22(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
+    pending: ensureInsideVault(join22(vault, BRAIN_PENDING_REL), vault),
+    preferences: ensureInsideVault(join22(vault, BRAIN_PREFERENCES_REL), vault),
+    retired: ensureInsideVault(join22(vault, BRAIN_RETIRED_REL), vault),
+    log: ensureInsideVault(join22(vault, BRAIN_LOG_REL), vault),
+    entities: ensureInsideVault(join22(vault, BRAIN_ENTITIES_REL), vault),
+    bases: ensureInsideVault(join22(vault, BRAIN_BASES_REL), vault),
+    snapshots: ensureInsideVault(join22(vault, BRAIN_SNAPSHOTS_REL), vault)
   };
 }
 function brainDirsForWrite(vault, notices, lane) {
@@ -5399,11 +7036,11 @@ function brainDirsForWrite(vault, notices, lane) {
 }
 function preferencePath(vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join16(brainDirs(vault).preferences, `pref-${s}.md`), vault);
+  return ensureInsideVault(join22(brainDirs(vault).preferences, `pref-${s}.md`), vault);
 }
 function retiredPath(vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join16(brainDirs(vault).retired, `ret-${s}.md`), vault);
+  return ensureInsideVault(join22(brainDirs(vault).retired, `ret-${s}.md`), vault);
 }
 function validateSlug(slug) {
   const trimmed = slug.trim();
@@ -5430,6 +7067,7 @@ var WINDOWS_RESERVED_BASENAME_RE;
 var init_paths = __esm(() => {
   init_fs_atomic();
   init_path_safety();
+  init_machine_state();
   init_ledger_shards();
   init_path_constants();
   init_vault_identity();
@@ -5522,13 +7160,13 @@ var init_privacy_markers = __esm(() => {
 });
 
 // src/core/vault.ts
-import { mkdirSync as mkdirSync9, readFileSync as readFileSync13, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname10, join as join17, relative as relative3 } from "node:path";
+import { mkdirSync as mkdirSync14, readFileSync as readFileSync16, readdirSync as readdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname16, join as join23, relative as relative5 } from "node:path";
 function parseFrontmatterWithNotices(path, opts = {}) {
   const site = opts.site ?? FRONTMATTER_SITE;
   let text;
   try {
-    text = readFileSync13(path, "utf8");
+    text = readFileSync16(path, "utf8");
   } catch (err) {
     const notices = [];
     emitDegradationNotice(notices, {
@@ -5624,9 +7262,9 @@ function listVaultPages(vaultDir, opts) {
   return pages;
 }
 function walk(root, dir, skipDirs, skipFiles, out, notices) {
-  let entries;
+  let entries2;
   try {
-    entries = readdirSync2(dir, { withFileTypes: true });
+    entries2 = readdirSync5(dir, { withFileTypes: true });
   } catch (err) {
     if (notices.sink !== undefined) {
       emitDegradationNotice(notices.sink, {
@@ -5638,8 +7276,8 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
     }
     return;
   }
-  for (const entry of entries) {
-    const full = join17(dir, entry.name);
+  for (const entry of entries2) {
+    const full = join23(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -5652,7 +7290,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
       continue;
     if (skipFiles.has(entry.name.toLowerCase()))
       continue;
-    const rel = relative3(root, full);
+    const rel = relative5(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p)))
       continue;
@@ -5764,32 +7402,8 @@ var init_vault = __esm(() => {
     t: "\t"
   });
 });
-// src/core/store/fold.ts
-var TOMBSTONE;
-var init_fold = __esm(() => {
-  init_digest();
-  init_constants();
-  init_envelope();
-  TOMBSTONE = Symbol("tombstone");
-});
 
-// src/core/store/fold-preferences.ts
-var COUNTERS, KINDS;
-var init_fold_preferences = __esm(() => {
-  init_constants();
-  init_fold();
-  COUNTERS = new Set(PREFERENCE_COUNTER_FIELDS);
-  KINDS = new Set([
-    PREFERENCE_SET_KIND,
-    PREFERENCE_REMOVE_KIND,
-    PREFERENCE_EVIDENCE_KIND
-  ]);
-});
-
-// src/core/store/dual-write-records.ts
-function plain(value) {
-  return JSON.parse(JSON.stringify(value ?? null));
-}
+// src/core/store/private-page.ts
 function isPrivateFrontmatter(frontmatter) {
   return remoteDenyVisibilityTokens(frontmatter).includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
@@ -5798,6 +7412,330 @@ function isPrivatePageFile(path) {
   if (notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable))
     return true;
   return isPrivateFrontmatter(frontmatter);
+}
+var init_private_page = __esm(() => {
+  init_privacy_markers();
+  init_visibility();
+  init_degradation();
+  init_vault();
+});
+
+// src/core/store/fold-signals.ts
+function isPlainObject4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function lifecycleOf(state) {
+  return state === "approved" ? "active" : state;
+}
+function rejection3(record) {
+  if (recordAuthority(record) === null)
+    return "missing or invalid authority";
+  const id = record.body["signal"];
+  if (typeof id !== "string" || id === "")
+    return "signal must be a non-empty string";
+  const state = record.body["state"];
+  const fields = record.body["fields"];
+  if (state !== undefined && (typeof state !== "string" || !STATE_SET.has(state))) {
+    return `state must be one of ${SIGNAL_STATE_VALUES.join(", ")}`;
+  }
+  if (fields !== undefined && !isPlainObject4(fields))
+    return "fields must be an object";
+  if (state === undefined && fields === undefined)
+    return "a state or fields is required";
+  return null;
+}
+function building(map, id) {
+  let entry = map.get(id);
+  if (entry === undefined) {
+    entry = {
+      signal: null,
+      state: null,
+      stateRecord: null,
+      patches: new Map,
+      history: [],
+      removed: false
+    };
+    map.set(id, entry);
+  }
+  return entry;
+}
+function foldSignals(input) {
+  const { records } = prepareRecords(input);
+  const byId = new Map;
+  const rejected = [];
+  const removedCounts = new Map;
+  const voided = new Set;
+  for (const record of records) {
+    if (record.kind === SIGNAL_KIND) {
+      const id = record.body["id"];
+      if (typeof id !== "string" || id === "") {
+        rejected.push({
+          id: record.id,
+          kind: record.kind,
+          reason: "id must be a non-empty string"
+        });
+        continue;
+      }
+      const entry2 = building(byId, id);
+      if (entry2.removed) {
+        removedCounts.set(id, (removedCounts.get(id) ?? 0) + entry2.history.length);
+        for (const old of entry2.history)
+          voided.add(old.id);
+        entry2.state = null;
+        entry2.stateRecord = null;
+        entry2.patches.clear();
+        entry2.history = [];
+      }
+      entry2.signal = record;
+      entry2.removed = false;
+      entry2.history.push(record);
+      continue;
+    }
+    if (record.kind === SIGNAL_REMOVED_KIND) {
+      const id = record.body["signal"];
+      if (recordAuthority(record) === null || typeof id !== "string" || id === "") {
+        rejected.push({
+          id: record.id,
+          kind: record.kind,
+          reason: "authority and signal required"
+        });
+        continue;
+      }
+      const entry2 = building(byId, id);
+      removedCounts.set(id, (removedCounts.get(id) ?? 0) + entry2.history.length);
+      for (const old of entry2.history)
+        voided.add(old.id);
+      entry2.signal = null;
+      entry2.state = null;
+      entry2.stateRecord = null;
+      entry2.patches.clear();
+      entry2.history = [];
+      entry2.removed = true;
+      continue;
+    }
+    if (record.kind !== SIGNAL_STATE_KIND)
+      continue;
+    const reason = rejection3(record);
+    if (reason !== null) {
+      rejected.push({ id: record.id, kind: record.kind, reason });
+      continue;
+    }
+    const entry = building(byId, record.body["signal"]);
+    entry.history.push(record);
+    const state = record.body["state"];
+    if (typeof state === "string") {
+      entry.state = lifecycleOf(state);
+      entry.stateRecord = record;
+    }
+    const fields = record.body["fields"];
+    if (isPlainObject4(fields)) {
+      for (const [name, value] of Object.entries(fields))
+        entry.patches.set(name, value);
+    }
+  }
+  const signals = new Map;
+  const orphans = [];
+  const removed = new Map(removedCounts);
+  for (const [id, entry] of byId) {
+    if (entry.removed) {
+      removed.set(id, (removed.get(id) ?? 0) + entry.history.length);
+      for (const old of entry.history)
+        voided.add(old.id);
+      continue;
+    }
+    if (entry.signal === null) {
+      orphans.push(...entry.history);
+      continue;
+    }
+    const captured = entry.signal.body["frontmatter"];
+    const frontmatter = isPlainObject4(captured) ? { ...captured } : {};
+    for (const [name, value] of entry.patches) {
+      if (value === null)
+        delete frontmatter[name];
+      else
+        frontmatter[name] = value;
+    }
+    signals.set(id, {
+      id,
+      signal: entry.signal,
+      state: entry.state ?? (entry.signal.body["staged"] === true ? "staged" : "active"),
+      stateRecord: entry.stateRecord,
+      frontmatter,
+      history: entry.history
+    });
+  }
+  return { signals, removed, voided, orphans, rejected };
+}
+var SIGNAL_STATE_KIND = "signal-state", SIGNAL_REMOVED_KIND = "signal-removed", SIGNAL_STATE_VALUES, LIVE_SIGNAL_STATES, STATE_SET;
+var init_fold_signals = __esm(() => {
+  init_constants();
+  init_fold();
+  SIGNAL_STATE_VALUES = Object.freeze([
+    "consumed",
+    "archived",
+    "retired",
+    "expired",
+    "staged",
+    "approved",
+    "rejected"
+  ]);
+  LIVE_SIGNAL_STATES = new Set(["active", "staged"]);
+  STATE_SET = new Set(SIGNAL_STATE_VALUES);
+});
+
+// src/core/store/read/store-entities.ts
+import { statSync as statSync11 } from "node:fs";
+function fingerprintOf(store) {
+  const parts = [store.storeId];
+  for (const partition of [...store.partitions].toSorted()) {
+    let shards;
+    try {
+      shards = listShards(partitionDir(store.root, partition), EVENTS);
+    } catch {
+      parts.push(`${partition}=unlisted:${Date.now()}:${Math.random()}`);
+      continue;
+    }
+    for (const shard of shards) {
+      let stamp = "missing";
+      try {
+        const stat = statSync11(shard.path);
+        stamp = `${stat.size}:${stat.mtimeMs}`;
+      } catch {}
+      parts.push(`${partition}/${shard.rel}=${stamp}`);
+    }
+  }
+  return parts.join(`
+`);
+}
+function signalIsPrivate(record, partition) {
+  if (partition === "private")
+    return true;
+  const frontmatter = record.body["frontmatter"];
+  return typeof frontmatter === "object" && frontmatter !== null && !Array.isArray(frontmatter) && isPrivateFrontmatter(frontmatter);
+}
+function build(store) {
+  const all = [];
+  const unreadable = [];
+  const pinned = new Map;
+  for (const partition of store.partitions) {
+    const read = readStreamRecords(store.root, partition, EVENTS);
+    unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
+    for (const record of read.records)
+      all.push({ record, partition });
+    pinned.set(partition, foldPinned(read.records.filter((r) => r.kind === PINNED_SET_KIND || r.kind === PINNED_CLEAR_KIND)));
+  }
+  const degraded = unreadable.length > 0;
+  const privateIds = new Set(all.filter((e) => e.partition === "private").map((e) => e.record.id));
+  const fold = foldPreferences(all.map((e) => e.record));
+  const preferences = new Map;
+  for (const [id, state] of fold.preferences) {
+    const inPrivate = state.history.some((record) => privateIds.has(record.id));
+    const markedPrivate = state.removed ? state.history.some((record) => record.kind === PREFERENCE_SET_KIND && isPrivateFrontmatter(record.body["fields"] ?? {})) : isPrivateFrontmatter(state.fields);
+    preferences.set(id, { state, private: degraded || inPrivate || markedPrivate });
+  }
+  const signals = new Map;
+  const partitionOf = new Map(all.map((e) => [e.record.id, e.partition]));
+  const signalFold = foldSignals(all.filter((e) => e.record.kind === SIGNAL_KIND || e.record.kind === SIGNAL_STATE_KIND || e.record.kind === SIGNAL_REMOVED_KIND).map((e) => e.record));
+  for (const [id, entry] of signalFold.signals) {
+    const partition = partitionOf.get(entry.signal.id) ?? "shared";
+    const isPrivate = entry.history.some((record) => privateIds.has(record.id)) || entry.history.some((record) => record.kind === SIGNAL_KIND && signalIsPrivate(record, partitionOf.get(record.id) ?? "shared")) || isPrivateFrontmatter(entry.frontmatter);
+    signals.set(id, {
+      record: entry.signal,
+      partition,
+      private: degraded || isPrivate,
+      state: entry.state,
+      frontmatter: entry.frontmatter,
+      history: entry.history,
+      partitions: new Set(entry.history.map((r) => partitionOf.get(r.id) ?? "shared"))
+    });
+  }
+  return { store, preferences, signals, pinned, unreadable };
+}
+function readEntitiesOf(store) {
+  const fingerprint = fingerprintOf(store);
+  const cached = cache.get(store.root);
+  if (cached !== undefined && cached.fingerprint === fingerprint)
+    return cached.entities;
+  const entities = build(store);
+  if (entities.unreadable.length === 0)
+    cache.set(store.root, { fingerprint, entities });
+  else
+    cache.delete(store.root);
+  return entities;
+}
+function configuredStore(configPath) {
+  try {
+    return inspectStore(resolveConfiguredStoreRoot(configPath).root);
+  } catch {
+    return null;
+  }
+}
+function readStoreEntities(configPath) {
+  const store = configuredStore(configPath);
+  return store === null ? null : readEntitiesOf(store);
+}
+var cache, EVENTS;
+var init_store_entities = __esm(() => {
+  init_constants();
+  init_private_page();
+  init_fold_pinned();
+  init_fold_signals();
+  init_fold_preferences();
+  init_shard_list();
+  init_store_open();
+  init_store_paths();
+  init_stream_read();
+  cache = new Map;
+  EVENTS = { stream: "events" };
+});
+
+// src/core/store/store-privacy.ts
+import { posix as posix7 } from "node:path";
+function judgesFromStore(vault, configPath) {
+  return isStoreOnly({ vault, ...configPath !== undefined ? { configPath } : {} });
+}
+function signalIdOf(ref) {
+  const trimmed = ref.trim();
+  const target = (parseWikilink(trimmed) ?? trimmed).split("|")[0].split("#")[0].trim();
+  const base = posix7.basename(target.replaceAll("\\", "/")).replace(/\.md$/, "");
+  return SIGNAL_ID_RE2.test(base) ? base : undefined;
+}
+function storePreferenceIdIsPrivate(id, configPath) {
+  const slug = stripBrainIdPrefix(id);
+  if (slug === "")
+    return true;
+  const entities = readStoreEntities(configPath);
+  if (entities === null)
+    return true;
+  const found = entities.preferences.get(`${PREFERENCE_ID_PREFIX}${slug}`);
+  return found === undefined || found.private;
+}
+function storePreferenceIdIsKnownPrivate(id, configPath) {
+  const slug = stripBrainIdPrefix(id);
+  const entities = readStoreEntities(configPath);
+  if (entities === null)
+    return true;
+  const found = entities.preferences.get(`${PREFERENCE_ID_PREFIX}${slug}`);
+  return found?.private ?? entities.unreadable.length > 0;
+}
+function storeSignalIdIsPrivate(id, configPath) {
+  const entities = readStoreEntities(configPath);
+  if (entities === null)
+    return true;
+  const found = entities.signals.get(id);
+  return found === undefined || found.private;
+}
+var SIGNAL_ID_RE2, PREFERENCE_ID_PREFIX = "pref-";
+var init_store_privacy = __esm(() => {
+  init_wikilink();
+  init_store_entities();
+  init_store_only();
+  SIGNAL_ID_RE2 = /^sig-\d{4}-\d{2}-\d{2}-[A-Za-z0-9][A-Za-z0-9_-]*$/;
+});
+
+// src/core/store/dual-write-records.ts
+function plain(value) {
+  return JSON.parse(JSON.stringify(value ?? null));
 }
 function partitionOf(partition) {
   return {
@@ -5821,12 +7759,11 @@ function auditRowRecord(ledger, row, agent, isPrivate) {
 var COUNTERS2, DUAL_WRITE_LEDGERS;
 var init_dual_write_records = __esm(() => {
   init_paths();
-  init_privacy_markers();
-  init_visibility();
-  init_degradation();
-  init_vault();
   init_constants();
   init_fold_preferences();
+  init_private_page();
+  init_store_privacy();
+  init_private_page();
   COUNTERS2 = new Set(PREFERENCE_COUNTER_FIELDS);
   DUAL_WRITE_LEDGERS = Object.freeze({
     idempotency: "idempotency",
@@ -5847,28 +7784,108 @@ var init_dual_write_records = __esm(() => {
   });
 });
 
+// src/core/store/read/read-context.ts
+function readSource(context = {}) {
+  const mode = storeOnlyMode({
+    ...context.vault !== undefined ? { vault: context.vault } : {},
+    ...context.configPath !== undefined ? { configPath: context.configPath } : {}
+  }, context.storeOnly);
+  if (!mode.storeOnly && mode.vault !== null)
+    return { kind: "legacy", vault: mode.vault };
+  return { kind: "store", store: configuredStore(context.configPath) };
+}
+var init_read_context = __esm(() => {
+  init_store_only();
+  init_store_entities();
+});
+
+// src/core/store/read/memory-ids.ts
+import { posix as posix8 } from "node:path";
+function contextOf(vault, configPath) {
+  return { vault, ...configPath !== undefined ? { configPath } : {} };
+}
+function memoryFromStore(vault, configPath) {
+  return readSource(contextOf(vault, configPath)).kind === "store";
+}
+function memoryEntities(context) {
+  const source = readSource(context);
+  if (source.kind !== "store" || source.store === null)
+    return null;
+  return readEntitiesOf(source.store);
+}
+function preferencePageRel(slug, retired) {
+  const id = `${retired ? RETIRED_PREFIX : PREFERENCE_PREFIX}${slug}`;
+  return posix8.join(retired ? BRAIN_RETIRED_REL : BRAIN_PREFERENCES_REL, `${id}${PAGE_EXT}`);
+}
+function signalPageRel(id, state) {
+  return posix8.join(SIGNAL_FOLDER[state], `${id}${PAGE_EXT}`);
+}
+function memoryRelOf(entities, id) {
+  if (entities === null)
+    return null;
+  const signal = entities.signals.get(id);
+  if (signal !== undefined)
+    return signalPageRel(id, signal.state);
+  const retiredAsked = id.startsWith(RETIRED_PREFIX);
+  const slug = retiredAsked ? id.slice(RETIRED_PREFIX.length) : id.startsWith(PREFERENCE_PREFIX) ? id.slice(PREFERENCE_PREFIX.length) : null;
+  if (slug === null)
+    return null;
+  const preference = entities.preferences.get(`${PREFERENCE_PREFIX}${slug}`);
+  if (preference === undefined || !preference.state.exists)
+    return null;
+  const retired = preference.state.fields["status"] === RETIRED_STATUS;
+  return retired === retiredAsked ? preferencePageRel(slug, retired) : null;
+}
+var PAGE_EXT = ".md", PREFERENCE_PREFIX = "pref-", RETIRED_PREFIX = "ret-", RETIRED_STATUS = "retired", SIGNAL_FOLDER;
+var init_memory_ids = __esm(() => {
+  init_path_constants();
+  init_read_context();
+  init_store_entities();
+  SIGNAL_FOLDER = Object.freeze({
+    active: BRAIN_INBOX_REL,
+    staged: BRAIN_PENDING_REL,
+    consumed: BRAIN_PROCESSED_REL,
+    archived: BRAIN_ARCHIVED_SIGNALS_REL,
+    retired: BRAIN_RETIRED_REL,
+    rejected: BRAIN_RETIRED_REL,
+    expired: BRAIN_INBOX_REL
+  });
+});
+
 // src/core/brain/artifact-ref-resolve.ts
-import { isAbsolute as isAbsolute3, join as join18 } from "node:path";
-import { existsSync as existsSync7, statSync as statSync9 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join24 } from "node:path";
+import { existsSync as existsSync11, statSync as statSync12 } from "node:fs";
+function artifactRefScope(vault, fromStore) {
+  let store = fromStore;
+  let dirs;
+  let entities;
+  return {
+    fromStore: () => store ??= memoryFromStore(vault),
+    dirs: () => dirs ??= brainDirs(vault),
+    entities: () => (entities ??= { value: memoryEntities({ vault }) }).value
+  };
+}
 function unbracket(ref) {
   const match = ANCHORED_WIKILINK_RE.exec(ref.trim());
   return stripWikilinkDecoration(match === null ? ref : match[1]);
 }
-function artifactPath(vault, id) {
-  const dirs = brainDirs(vault);
+function artifactPath(vault, id, scope) {
+  const dirs = scope.dirs();
+  const fromStore = scope.fromStore();
+  if (fromStore) {
+    const rel = memoryRelOf(scope.entities(), id);
+    if (rel !== null)
+      return rel;
+  }
+  const memoryDirs = fromStore ? [] : [dirs.preferences, dirs.retired, dirs.inbox, dirs.processed, dirs.archived, dirs.pending];
   for (const dir of [
-    dirs.preferences,
-    dirs.retired,
-    dirs.inbox,
-    dirs.processed,
-    dirs.archived,
-    dirs.pending,
-    join18(vault, BRAIN_SOURCES_REL),
+    ...memoryDirs,
+    join24(vault, BRAIN_SOURCES_REL),
     dirs.entities,
-    join18(vault, BRAIN_DECISIONS_REL)
+    join24(vault, BRAIN_DECISIONS_REL)
   ]) {
-    const abs = join18(dir, `${id}${MARKDOWN_EXT}`);
-    if (existsSync7(abs))
+    const abs = join24(dir, `${id}${MARKDOWN_EXT}`);
+    if (existsSync11(abs))
       return vaultRelative(abs, vault);
   }
   return null;
@@ -5882,15 +7899,15 @@ function pageCandidate(vault, bare) {
   return null;
 }
 function isVaultFile(vault, rel) {
-  if (!pathIsInside(join18(vault, rel), vault))
+  if (!pathIsInside(join24(vault, rel), vault))
     return false;
   try {
-    return statSync9(join18(vault, rel)).isFile();
+    return statSync12(join24(vault, rel)).isFile();
   } catch {
     return false;
   }
 }
-function resolveArtifactRef(vault, ref) {
+function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault)) {
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0)
     return null;
@@ -5899,11 +7916,14 @@ function resolveArtifactRef(vault, ref) {
     return null;
   if (bare.endsWith(MARKDOWN_EXT))
     return bare;
-  return bare.includes("/") ? pageCandidate(vault, bare) : artifactPath(vault, bare);
+  if (bare.includes("/"))
+    return pageCandidate(vault, bare);
+  return artifactPath(vault, bare, scope);
 }
 var MARKDOWN_EXT = ".md";
 var init_artifact_ref_resolve = __esm(() => {
   init_path_safety();
+  init_memory_ids();
   init_paths();
   init_wikilink();
 });
@@ -6007,6 +8027,7 @@ var init_types = __esm(() => {
     knowledgePackUninstall: "knowledge-pack-uninstall",
     payloadGc: "payload-gc",
     receiptCompaction: "receipt-compaction",
+    storeMigration: "store-migration",
     sessionBoundary: "session-boundary",
     planBoundary: "plan-boundary",
     decisionBoundary: "decision-boundary",
@@ -6029,20 +8050,78 @@ var init_period_common = __esm(() => {
   ID_PREFIX_RE = /^(pref|ret)-[A-Za-z0-9-]+$/;
 });
 
+// src/core/store/private-region.ts
+function textCarriesPrivateRegion(text) {
+  return text.includes(PRIVATE_REGION_PLACEHOLDER) || privateRegionTexts(text).length > 0;
+}
+function valueCarriesPrivateRegion(value) {
+  const strings = rowStrings(value, new Set);
+  return strings === null || strings.texts.some(textCarriesPrivateRegion);
+}
+function rowStrings(row, opaque) {
+  const references = [];
+  const texts = [];
+  const stack = [[row, 0, false]];
+  while (stack.length > 0) {
+    const [value, depth, isOpaque] = stack.pop();
+    if (typeof value === "string") {
+      texts.push(value);
+      if (!isOpaque)
+        references.push(value);
+      continue;
+    }
+    if (value === null || typeof value !== "object")
+      continue;
+    if (depth >= ROW_WALK_MAX_DEPTH)
+      return null;
+    if (Array.isArray(value)) {
+      for (const child of value)
+        stack.push([child, depth + 1, isOpaque]);
+      continue;
+    }
+    for (const [field, child] of Object.entries(value)) {
+      stack.push([child, depth + 1, isOpaque || opaque.has(field)]);
+    }
+  }
+  return { texts, references };
+}
+var ROW_WALK_MAX_DEPTH = 32;
+var init_private_region = __esm(() => {
+  init_redactor();
+});
+
 // src/core/store/reference-privacy.ts
-import { existsSync as existsSync8, statSync as statSync10 } from "node:fs";
-import { resolve as resolve7 } from "node:path";
-function preferenceIdIsPrivate(vault, id) {
+import { existsSync as existsSync12, statSync as statSync13 } from "node:fs";
+import { resolve as resolve13 } from "node:path";
+function namesAPage(ref) {
+  const trimmed = ref.trim();
+  return ANCHORED_WIKILINK_RE.test(trimmed) || trimmed.endsWith(PAGE_EXTENSION);
+}
+function preferenceIdIsPrivate(vault, id, fromStore = vault === null || judgesFromStore(vault)) {
+  if (fromStore || vault === null)
+    return storePreferenceIdIsPrivate(id);
   let paths;
   try {
     const slug = stripBrainIdPrefix(id);
-    paths = [preferencePath(vault, slug), retiredPath(vault, slug)].filter((p) => existsSync8(p));
+    paths = [preferencePath(vault, slug), retiredPath(vault, slug)].filter((p) => existsSync12(p));
   } catch {
     return true;
   }
   return paths.length === 0 || paths.some((p) => isPrivatePageFile(p));
 }
+function preferenceIdOfPath(ref) {
+  const trimmed = ref.trim();
+  const anchored = ANCHORED_WIKILINK_RE.exec(trimmed);
+  const target = stripWikilinkDecoration(anchored !== null ? anchored[1] : trimmed).replaceAll("\\", "/").replace(/\.md$/, "");
+  const slash = target.lastIndexOf("/");
+  if (slash === -1 || !PREFERENCE_DIRS.has(target.slice(0, slash)))
+    return;
+  return extractId(target.slice(slash + 1));
+}
 function logRefsNamePrivatePage(vault, refs, guessed) {
+  return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+}
+function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
   let guessSpared = guessed === undefined;
   for (const ref of refs) {
     if (ref === undefined || ref === "")
@@ -6050,21 +8129,41 @@ function logRefsNamePrivatePage(vault, refs, guessed) {
     const isGuess = !guessSpared && ref === guessed;
     if (isGuess)
       guessSpared = true;
-    const id = extractId(ref);
-    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id))
+    const id = extractId(ref) ?? (fromStore ? preferenceIdOfPath(ref) : undefined);
+    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore))
       return true;
-    const rel = resolveArtifactRef(vault, ref);
+    if (fromStore) {
+      const signal = signalIdOf(ref);
+      if (signal !== undefined) {
+        if (storeSignalIdIsPrivate(signal))
+          return true;
+        continue;
+      }
+      if (id !== undefined) {
+        if (isGuess && storePreferenceIdIsKnownPrivate(id))
+          return true;
+        continue;
+      }
+    }
+    if (vault === null) {
+      if (namesAPage(ref))
+        return true;
+      continue;
+    }
+    const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore));
     if (rel === null)
       continue;
-    const abs = resolve7(vault, rel);
-    if (!pathIsInside(abs, vault) || existsSync8(abs) && isPrivatePageFile(abs))
+    const abs = resolve13(vault, rel);
+    if (!pathIsInside(abs, vault) || existsSync12(abs) && isPrivatePageFile(abs))
       return true;
   }
   return false;
 }
+var PAGE_EXTENSION = ".md", PREFERENCE_DIRS;
 var init_reference_privacy = __esm(() => {
   init_artifact_ref_resolve();
   init_note_path();
+  init_path_constants();
   init_paths();
   init_period_common();
   init_path_safety();
@@ -6072,33 +8171,518 @@ var init_reference_privacy = __esm(() => {
   init_wikilink();
   init_dual_write_records();
   init_private_region();
+  init_store_privacy();
+  PREFERENCE_DIRS = new Set([BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]);
+});
+
+// src/core/origin-channel.ts
+var ORIGIN_CHANNEL, ORIGIN_CHANNELS;
+var init_origin_channel = __esm(() => {
+  ORIGIN_CHANNEL = Object.freeze({
+    mcpTool: "mcp-tool",
+    cli: "cli",
+    import: "import"
+  });
+  ORIGIN_CHANNELS = Object.freeze(Object.values(ORIGIN_CHANNEL));
+});
+
+// src/core/store/operation-scope.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+function activeOperationPrivate() {
+  return storage.getStore()?.() ?? false;
+}
+var storage;
+var init_operation_scope = __esm(() => {
+  storage = new AsyncLocalStorage;
+});
+
+// src/core/store/dual-write.ts
+import { readFileSync as readFileSync17 } from "node:fs";
+function isDualWriteEnabled(configPath) {
+  try {
+    return resolveStoreDualWrite(configPath);
+  } catch {
+    return false;
+  }
+}
+function readDualWriteStatus(path = dualWriteStatusPath()) {
+  try {
+    const parsed = JSON.parse(readFileSync17(path, "utf8"));
+    return {
+      failures: typeof parsed.failures === "number" ? parsed.failures : 0,
+      skipped_no_device: typeof parsed.skipped_no_device === "number" ? parsed.skipped_no_device : 0,
+      skipped_no_store: typeof parsed.skipped_no_store === "number" ? parsed.skipped_no_store : 0,
+      last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
+      last_failure_at: typeof parsed.last_failure_at === "string" ? parsed.last_failure_at : null,
+      last_skip_at: typeof parsed.last_skip_at === "string" ? parsed.last_skip_at : null
+    };
+  } catch {
+    return EMPTY_STATUS;
+  }
+}
+function bumpStatus(update3) {
+  try {
+    const path = dualWriteStatusPath();
+    withLocalLock(path, () => {
+      const next = update3(readDualWriteStatus(path));
+      atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}
+`);
+    });
+  } catch {}
+}
+function warnOnce(kind, message) {
+  if (warned.has(kind))
+    return;
+  warned.add(kind);
+  try {
+    process.stderr.write(`Open Second Brain: ${message}
+`);
+  } catch {}
+}
+function recordFailure(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  warnOnce("failure", `a brain store dual write failed (${message}); the legacy write is intact. ` + "Later failures in this process are counted, not printed; `o2b brain doctor` reports them.");
+  const at = new Date().toISOString();
+  bumpStatus((s) => ({
+    ...s,
+    failures: s.failures + 1,
+    last_error: message.slice(0, 500),
+    last_failure_at: at
+  }));
+}
+function recordNoDevice() {
+  warnOnce("device", "brain store dual writes are on but this machine has no device id (O2B_DEVICE_ID is empty " + "or device_id is unset); the dual writes are skipped and the legacy writes are intact.");
+  const at = new Date().toISOString();
+  bumpStatus((s) => ({ ...s, skipped_no_device: s.skipped_no_device + 1, last_skip_at: at }));
+}
+function recordNoStore(root) {
+  warnOnce("store", `brain store dual writes are on but there is no store at ${root}; the dual writes are ` + "skipped and the legacy writes are intact. Run `o2b store init` to create the store.");
+  const at = new Date().toISOString();
+  bumpStatus((s) => ({ ...s, skipped_no_store: s.skipped_no_store + 1, last_skip_at: at }));
+}
+function storeFor(device, context) {
+  const { root, origin } = resolveConfiguredStoreRoot(context.configPath);
+  const vault = context.vault?.trim();
+  if (vault !== undefined && vault !== "" && isPathInsideResolved(root, vault, process.platform)) {
+    throw new StoreRootInsideVaultError(root, vault, origin);
+  }
+  const key = `${root}\x00${device}`;
+  const cached = handles.get(key);
+  if (cached !== undefined && STORE_PARTITIONS.every((p) => {
+    const id = readStoreId(partitionDir(root, p));
+    return cached.partitions.has(p) ? id === cached.storeId : id === null;
+  })) {
+    return cached;
+  }
+  const handle = openStore({ root, device });
+  handles.set(key, handle);
+  return handle;
+}
+function vaultIdOf(context) {
+  const vault = context.vault?.trim();
+  if (vault === undefined || vault === "")
+    return null;
+  return readVaultIdentity(vault)?.vault_id ?? null;
+}
+function defaultAgent() {
+  try {
+    return resolveAgentName();
+  } catch {
+    return "agent";
+  }
+}
+function builtRecords(build2) {
+  const built = build2();
+  if (built === null)
+    return [];
+  return Array.isArray(built) ? built : [built];
+}
+function appendStoreRecords(store, records, context) {
+  const vaultId = vaultIdOf(context);
+  const scoped = activeOperationPrivate();
+  const joined = records.filter((record) => record.located === undefined);
+  const isPrivate = scoped || joined.some((record) => record.private === true || valueCarriesPrivateRegion(record.body) || record.privateWhenHeld === true && store.partitions.has("private"));
+  const partition = isPrivate ? "private" : "shared";
+  const placed = [];
+  for (const record of records) {
+    const at = record.located;
+    if (at === undefined) {
+      placed.push([record, partition]);
+      continue;
+    }
+    const raised = at.content && (scoped || valueCarriesPrivateRegion(record.body)) ? "private" : at.partition;
+    if (at.onlyIfApart === true && (joined.length === 0 || raised === partition))
+      continue;
+    placed.push([record, raised]);
+  }
+  for (const [, at] of placed) {
+    if (!store.partitions.has(at))
+      throw new PartitionUnavailableError(at, store.root);
+  }
+  return placed.map(([record, at]) => appendRecord(store, {
+    partition: at,
+    stream: record.stream,
+    ...record.ledger !== undefined ? { ledger: record.ledger } : {},
+    kind: record.kind,
+    agent: record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
+    scope: record.scope ?? null,
+    body: { ...record.body, [VAULT_ID_FIELD]: vaultId }
+  }));
+}
+function dualWrite(build2, context = {}) {
+  if (!isDualWriteEnabled(context.configPath))
+    return;
+  try {
+    const device = resolveAppendShardId();
+    if (device === "") {
+      recordNoDevice();
+      return;
+    }
+    const records = builtRecords(build2);
+    if (records.length === 0)
+      return;
+    let store;
+    try {
+      store = storeFor(device, context);
+    } catch (err) {
+      if (!(err instanceof NoStoreError))
+        throw err;
+      recordNoStore(err.root);
+      return;
+    }
+    appendStoreRecords(store, records, context);
+  } catch (err) {
+    recordFailure(err);
+  }
+}
+var EMPTY_STATUS, warned, handles;
+var init_dual_write = __esm(() => {
+  init_fs_atomic();
+  init_config();
+  init_origin_channel();
+  init_ledger_shards();
+  init_vault_identity();
+  init_appender();
+  init_constants();
+  init_local_lock();
+  init_operation_scope();
+  init_private_region();
+  init_store_open();
+  init_store_paths();
+  EMPTY_STATUS = Object.freeze({
+    failures: 0,
+    skipped_no_device: 0,
+    skipped_no_store: 0,
+    last_error: null,
+    last_failure_at: null,
+    last_skip_at: null
+  });
+  warned = new Set;
+  handles = new Map;
+});
+
+// src/core/store/store-identity.ts
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync18 } from "node:fs";
+import { dirname as dirname17, join as join25 } from "node:path";
+function storeIdentityPath() {
+  return join25(storesStateDir(processDirsEnv()), STORE_IDENTITY_FILE2);
+}
+function isBinding(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const v = value;
+  return typeof v["root"] === "string" && typeof v["store_id"] === "string" && typeof v["device"] === "string" && typeof v["bound_at"] === "string";
+}
+function readBindingsStrict(path) {
+  let text;
+  try {
+    text = readFileSync18(path, "utf8");
+  } catch (err) {
+    return err.code === "ENOENT" ? [] : null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed.bindings) ? parsed.bindings.filter(isBinding) : null;
+  } catch {
+    return null;
+  }
+}
+function unreadableBindings(root, path) {
+  return new StoreIdentityMismatchError(root, `this machine's store binding file ${path} cannot be read, so the store at ${root} ` + "cannot be checked; repair or remove it, or run `o2b init` to bind this machine again");
+}
+function writeBindingLocked(path, root, storeId, device, repair) {
+  const current = readBindingsStrict(path);
+  if (current === null && !repair)
+    throw unreadableBindings(root, path);
+  const others = (current ?? []).filter((b) => b.root !== root);
+  const bindings = [
+    ...others,
+    { root, store_id: storeId, device, bound_at: new Date().toISOString() }
+  ];
+  atomicWriteFileSync(path, `${JSON.stringify({ bindings }, null, 2)}
+`);
+}
+function verifiedKey(root, storeId, device) {
+  return `${root}\x00${storeId}\x00${device}`;
+}
+function assertStoreIdentityForWrite(root, storeId, device) {
+  const pin = pinned.get(root);
+  if (pin !== undefined && pin !== storeId) {
+    throw new StoreIdentityMismatchError(root, `the store at ${root} is not the one this process opened (store id ${storeId}, ` + `opened ${pin})`);
+  }
+  const key = verifiedKey(root, storeId, device);
+  if (verified.has(key))
+    return;
+  const path = storeIdentityPath();
+  const bindings = readBindingsStrict(path);
+  if (bindings === null)
+    throw unreadableBindings(root, path);
+  let binding = bindings.find((b) => b.root === root);
+  if (binding === undefined) {
+    try {
+      mkdirSync15(dirname17(path), { recursive: true });
+      binding = withLocalLock(path, () => {
+        const again = readBindingsStrict(path);
+        if (again === null)
+          throw unreadableBindings(root, path);
+        const found = again.find((b) => b.root === root);
+        if (found !== undefined)
+          return found;
+        writeBindingLocked(path, root, storeId, device, false);
+        return;
+      });
+    } catch (err) {
+      if (err instanceof StoreIdentityMismatchError)
+        throw err;
+    }
+  }
+  if (binding !== undefined) {
+    if (binding.store_id !== storeId) {
+      throw new StoreIdentityMismatchError(root, `the store at ${root} has store id ${storeId}, and this machine is bound to ` + `${binding.store_id}`);
+    }
+    if (binding.device !== device) {
+      throw new StoreIdentityMismatchError(root, `this machine writes as device ${device}, and its device-local state is bound to ` + `device ${binding.device} (copied from another machine, or the device id changed)`);
+    }
+  }
+  pinned.set(root, storeId);
+  verified.add(key);
+}
+var STORE_IDENTITY_FILE2 = "identity.json", StoreIdentityMismatchError, pinned, verified;
+var init_store_identity = __esm(() => {
+  init_fs_atomic();
+  init_platform_dirs();
+  init_local_lock();
+  init_store_paths();
+  StoreIdentityMismatchError = class StoreIdentityMismatchError extends Error {
+    root;
+    constructor(root, detail) {
+      super(`refusing to write: ${detail}`);
+      this.root = root;
+      this.name = "StoreIdentityMismatchError";
+    }
+  };
+  pinned = new Map;
+  verified = new Set;
+});
+
+// src/core/store/store-write.ts
+import { mkdirSync as mkdirSync16, readFileSync as readFileSync19 } from "node:fs";
+import { dirname as dirname18, join as join26 } from "node:path";
+function asStoreWriteError(err) {
+  if (err instanceof StoreWriteError)
+    return err;
+  const detail = err instanceof Error ? err.message : String(err);
+  return new StoreWriteError(failureOf(err), detail, { cause: err });
+}
+function failureOf(err) {
+  if (err instanceof NoStoreError)
+    return "no-store";
+  if (err instanceof StoreRootInsideVaultError)
+    return "root-inside-vault";
+  if (err instanceof PartitionUnavailableError)
+    return "partition-unavailable";
+  if (err instanceof StoreIdentityMismatchError)
+    return "store-identity";
+  return "store-error";
+}
+function writerDevice(configPath) {
+  let device;
+  try {
+    device = resolveDeviceId(configPath);
+  } catch (err) {
+    throw new StoreWriteError("store-error", `this machine's device id cannot be resolved: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+  }
+  if (device === "") {
+    throw new StoreWriteError("no-device", "this machine has no device id (O2B_DEVICE_ID is empty)");
+  }
+  return device;
+}
+function storeWrite(build2, context = {}) {
+  try {
+    const device = writerDevice(context.configPath);
+    const records = builtRecords(build2);
+    if (records.length === 0)
+      return [];
+    const store = storeFor(device, context);
+    assertStoreIdentityForWrite(store.root, store.storeId, device);
+    return appendStoreRecords(store, records, context);
+  } catch (err) {
+    throw asStoreWriteError(err);
+  }
+}
+function routeWrite(spec) {
+  const context = spec.context ?? {};
+  const mode = storeOnlyMode({
+    ...context.vault !== undefined ? { vault: context.vault } : {},
+    ...context.configPath !== undefined ? { configPath: context.configPath } : {}
+  }, spec.storeOnly);
+  if (!mode.storeOnly) {
+    const value = spec.legacy();
+    dualWrite(spec.store, context);
+    return { mode: "legacy", value };
+  }
+  try {
+    return { mode: "store", records: storeWrite(spec.store, context) };
+  } catch (err) {
+    const error = asStoreWriteError(err);
+    if (spec.failOpen !== true)
+      throw error;
+    recordFailOpen(error);
+    try {
+      spec.onFailure?.(error);
+    } catch {}
+    return { mode: "store", records: [], failed: error };
+  }
+}
+function storeWriteStatusPath() {
+  return join26(storesStateDir(processDirsEnv()), STORE_WRITE_STATUS_FILE);
+}
+function readStoreWriteStatus(path = storeWriteStatusPath()) {
+  try {
+    const parsed = JSON.parse(readFileSync19(path, "utf8"));
+    return {
+      failures: typeof parsed.failures === "number" ? parsed.failures : 0,
+      last_reason: typeof parsed.last_reason === "string" && Object.hasOwn(REMEDIES, parsed.last_reason) ? parsed.last_reason : null,
+      last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
+      last_failure_at: typeof parsed.last_failure_at === "string" ? parsed.last_failure_at : null
+    };
+  } catch {
+    return EMPTY_STATUS2;
+  }
+}
+function recordFailOpen(error) {
+  if (!warned2) {
+    warned2 = true;
+    try {
+      process.stderr.write(`Open Second Brain: ${error.message} Later failures in this process are counted, ` + "not printed; `o2b brain doctor` reports them.\n");
+    } catch {}
+  }
+  try {
+    const path = storeWriteStatusPath();
+    mkdirSync16(dirname18(path), { recursive: true });
+    withLocalLock(path, () => {
+      const current = readStoreWriteStatus(path);
+      const next = {
+        failures: current.failures + 1,
+        last_reason: error.reason,
+        last_error: error.message.slice(0, 500),
+        last_failure_at: new Date().toISOString()
+      };
+      atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}
+`);
+    });
+  } catch {}
+}
+var REMEDIES, StoreWriteError, STORE_WRITE_STATUS_FILE = "store-write.json", EMPTY_STATUS2, warned2 = false;
+var init_store_write = __esm(() => {
+  init_config();
+  init_fs_atomic();
+  init_platform_dirs();
+  init_appender();
+  init_dual_write();
+  init_local_lock();
+  init_store_identity();
+  init_store_only();
+  init_store_open();
+  init_store_paths();
+  REMEDIES = Object.freeze({
+    "no-store": "Run `o2b store init` on this machine, or let sync deliver the store's partitions.",
+    "no-device": "Set `device_id` in the machine config, or O2B_DEVICE_ID, to lowercase letters, digits " + "and hyphens.",
+    "root-inside-vault": "Point `store_root` in the machine config (or OPEN_SECOND_BRAIN_STORE_ROOT) at a " + "directory outside the vault.",
+    "partition-unavailable": "Sync that partition's folder of the store to this machine, or make the write from a " + "machine that holds it.",
+    "store-identity": "If the store or this machine's device id was changed on purpose, run `o2b init` to bind " + "this machine to the store again; otherwise restore the store this machine was bound to.",
+    "store-error": "Run `o2b brain doctor` for the store's state, then retry."
+  });
+  StoreWriteError = class StoreWriteError extends Error {
+    reason;
+    remedy;
+    constructor(reason, detail, options) {
+      const remedy = REMEDIES[reason];
+      super(`the brain store write failed: ${detail.replace(/\.+$/, "")}. ${remedy}`, options);
+      this.name = "StoreWriteError";
+      this.reason = reason;
+      this.remedy = remedy;
+    }
+  };
+  EMPTY_STATUS2 = Object.freeze({
+    failures: 0,
+    last_reason: null,
+    last_error: null,
+    last_failure_at: null
+  });
 });
 
 // src/core/reliability/audit.ts
-import { closeSync as closeSync6, fsyncSync as fsyncSync4, mkdirSync as mkdirSync10, openSync as openSync6, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename as basename5, join as join19 } from "node:path";
-function appendAuditRecord(auditRoot, record, vault) {
+import { closeSync as closeSync8, fsyncSync as fsyncSync5, mkdirSync as mkdirSync17, openSync as openSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename8, join as join27 } from "node:path";
+function appendAuditRecord(auditRoot, record, vault, options = {}) {
   const timestamp = new Date(record.timestamp);
   if (!Number.isFinite(timestamp.getTime())) {
     throw new Error(`invalid audit timestamp: ${record.timestamp}`);
   }
-  mkdirSync10(auditRoot, { recursive: true });
-  const path = join19(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
   const line = redactRawOutput(JSON.stringify(record), {
     maxInput: Number.POSITIVE_INFINITY
   });
-  const fileDescriptor = openSync6(path, "a", 384);
-  try {
-    writeFileSync2(fileDescriptor, line + `
-`, "utf8");
-    fsyncSync4(fileDescriptor);
-  } finally {
-    closeSync6(fileDescriptor);
+  const effectiveVault = vault ?? configuredVaultOrUndefined();
+  const context = vault !== undefined ? { vault } : {};
+  if (!trailInsideVault(auditRoot, effectiveVault) && isStoreOnly(effectiveVault !== undefined ? { vault: effectiveVault } : {})) {
+    return appendLegacyAuditLine(auditRoot, timestamp, line);
   }
-  dualWrite(() => {
-    const written = JSON.parse(line);
-    return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, { audit_dir: basename5(auditRoot), record: written }, isRecordLabel(written.actor) ? written.actor : undefined, auditRowNamesPrivatePage(vault, written));
-  }, vault !== undefined ? { vault } : {});
+  const routed = routeWrite({
+    legacy: () => appendLegacyAuditLine(auditRoot, timestamp, line),
+    store: () => {
+      const written = JSON.parse(line);
+      return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, { audit_dir: basename8(auditRoot), record: written }, isRecordLabel(written.actor) ? written.actor : undefined, auditRowNamesPrivatePage(vault, written));
+    },
+    context,
+    ...options.failOpen === true || basename8(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}
+  });
+  if (routed.mode === "legacy")
+    return routed.value;
+  return routed.records.length > 0 ? AUDIT_STORE_LEDGER_NAME : "";
+}
+function configuredVaultOrUndefined() {
+  try {
+    const vault = resolveVault();
+    return vault !== null && vault.trim() !== "" ? vault : undefined;
+  } catch {
+    return;
+  }
+}
+function trailInsideVault(auditRoot, vault) {
+  return vault !== undefined && vault.trim() !== "" && isPathInsideResolved(auditRoot, vault, process.platform);
+}
+function appendLegacyAuditLine(auditRoot, timestamp, line) {
+  mkdirSync17(auditRoot, { recursive: true });
+  const path = join27(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
+  const fileDescriptor = openSync7(path, "a", 384);
+  try {
+    writeFileSync4(fileDescriptor, line + `
+`, "utf8");
+    fsyncSync5(fileDescriptor);
+  } finally {
+    closeSync8(fileDescriptor);
+  }
   return path;
 }
 function stringsIn(value, out = []) {
@@ -6127,18 +8711,22 @@ function isoWeekLabel(input) {
   const week = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
   return `${year}-W${String(week).padStart(2, "0")}`;
 }
-var AUDIT_WEEK_SHARD_GRAMMAR;
+var AUDIT_WEEK_SHARD_GRAMMAR, HOOK_AUDIT_TRAIL = "hook-audit", AUDIT_STORE_LEDGER_NAME;
 var init_audit = __esm(() => {
   init_redactor();
   init_ledger_shards();
-  init_dual_write();
   init_dual_write_records();
   init_envelope();
   init_reference_privacy();
+  init_store_only();
+  init_store_paths();
+  init_store_write();
+  init_config();
   AUDIT_WEEK_SHARD_GRAMMAR = Object.freeze({
     base: "\\d{4}-W\\d{2}",
     extensions: Object.freeze([JSONL_LEDGER_EXT])
   });
+  AUDIT_STORE_LEDGER_NAME = `store:ledgers/${DUAL_WRITE_LEDGERS.reliabilityAudit}`;
 });
 
 // src/core/brain/audit-dirs.ts
@@ -6159,9 +8747,9 @@ function isoSecond(d = new Date) {
 var init_time = () => {};
 
 // src/core/brain/secrets/value-cipher.ts
-import { createCipheriv, createDecipheriv, randomBytes as randomBytes3 } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes as randomBytes4 } from "node:crypto";
 function encryptValue(key, plaintext, aad) {
-  const iv = randomBytes3(IV_BYTES);
+  const iv = randomBytes4(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, key, iv);
   if (aad !== undefined)
     cipher.setAAD(Buffer.from(aad, "utf8"));
@@ -6186,86 +8774,18 @@ function decryptValue(key, encrypted, aad) {
 var ALGORITHM = "aes-256-gcm", IV_BYTES = 12;
 var init_value_cipher = () => {};
 
-// src/core/brain/secrets/owner-acl.ts
-import { spawnSync } from "node:child_process";
-import { resolve as resolve8, win32 as win323 } from "node:path";
-function system32Tool(name, env = process.env) {
-  const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
-  return win323.join(root, "System32", name);
-}
-function parseWhoamiUser(stdout) {
-  const m = /^\s*"([^"]+)","(S-1-\d+(?:-\d+)+)"\s*$/m.exec(stdout);
-  return m ? { name: m[1], sid: m[2] } : null;
-}
-function currentWindowsIdentity() {
-  if (cachedIdentity !== undefined)
-    return cachedIdentity;
-  try {
-    const proc = spawnSync(system32Tool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: TOOL_TIMEOUT_MS
-    });
-    cachedIdentity = proc.error === undefined && proc.status === 0 ? parseWhoamiUser(proc.stdout) : null;
-  } catch {
-    cachedIdentity = null;
-  }
-  return cachedIdentity;
-}
-function ownerOnlyAclArgv(path, sid, kind) {
-  const rights = kind === "directory" ? "(OI)(CI)F" : "F";
-  return [path, "/inheritance:r", "/grant:r", `*${sid}:${rights}`];
-}
-function restrictToOwner(path, kind, platform = process.platform, force = false) {
-  if (platform !== "win32")
-    return true;
-  const key = `${kind}:${resolve8(path).toLowerCase()}`;
-  if (!force && restricted.has(key))
-    return true;
-  let detail;
-  try {
-    const identity = currentWindowsIdentity();
-    if (identity === null) {
-      detail = "the current user's SID could not be read (whoami /user)";
-    } else {
-      let proc = spawnSync(system32Tool("icacls.exe"), [path, "/reset"], {
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: TOOL_TIMEOUT_MS
-      });
-      if (proc.error === undefined && proc.status === 0) {
-        proc = spawnSync(system32Tool("icacls.exe"), [...ownerOnlyAclArgv(path, identity.sid, kind)], { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS });
-      }
-      if (proc.error === undefined && proc.status === 0) {
-        restricted.add(key);
-        return true;
-      }
-      detail = proc.error !== undefined ? proc.error.message : `icacls exited ${proc.status ?? proc.signal}: ${(proc.stderr || proc.stdout).trim()}`;
-    }
-  } catch (err) {
-    detail = err instanceof Error ? err.message : String(err);
-  }
-  process.stderr.write(`warning: could not restrict secrets ${kind} to the current user, ` + `it keeps its inherited ACL: ${path}: ${detail}
-`);
-  return false;
-}
-var TOOL_TIMEOUT_MS = 1e4, cachedIdentity, restricted;
-var init_owner_acl = __esm(() => {
-  restricted = new Set;
-});
-
 // src/core/brain/secrets/envelope.ts
-import { randomBytes as randomBytes4, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes as randomBytes5, scryptSync, timingSafeEqual } from "node:crypto";
 import {
-  chmodSync,
-  closeSync as closeSync7,
-  fsyncSync as fsyncSync5,
-  openSync as openSync7,
-  readFileSync as readFileSync14,
-  unlinkSync as unlinkSync4,
-  writeSync as writeSync5
+  chmodSync as chmodSync2,
+  closeSync as closeSync9,
+  fsyncSync as fsyncSync6,
+  openSync as openSync8,
+  readFileSync as readFileSync20,
+  unlinkSync as unlinkSync6,
+  writeSync as writeSync6
 } from "node:fs";
-import { dirname as dirname11, resolve as resolve9 } from "node:path";
+import { dirname as dirname19, resolve as resolve14 } from "node:path";
 function kdfCostCurveRefusal(kdf) {
   if (kdf.n > SCRYPT_N_MAX) {
     return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
@@ -6286,7 +8806,7 @@ function kdfCostCurveRefusal(kdf) {
   return null;
 }
 function holderSlot(keyPath) {
-  const resolved = resolve9(keyPath);
+  const resolved = resolve14(keyPath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function heldUnlockedKey(keyPath) {
@@ -6345,7 +8865,7 @@ function hasEnvelopeShape(parsed) {
 function isEnvelopeFile(keyPath) {
   let bytes;
   try {
-    bytes = readFileSync14(keyPath);
+    bytes = readFileSync20(keyPath);
   } catch {
     return false;
   }
@@ -6361,7 +8881,7 @@ function isEnvelopeBytes(bytes) {
 function readEnvelope(keyPath) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync14(keyPath, "utf8"));
+    parsed = JSON.parse(readFileSync20(keyPath, "utf8"));
   } catch (err) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, `not parseable as an envelope: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -6386,7 +8906,7 @@ function readEnvelope(keyPath) {
 function freshWrapKdfParams() {
   return {
     algo: KDF_ALGO,
-    salt: randomBytes4(SALT_BYTES).toString("base64"),
+    salt: randomBytes5(SALT_BYTES).toString("base64"),
     n: SCRYPT_N,
     r: SCRYPT_R,
     p: SCRYPT_P,
@@ -6457,7 +8977,7 @@ function wrapKeyfile(keyPath, passphrase, dek, seams = {}) {
   restrictToOwner(keyPath, "file", process.platform, true);
   if (process.platform !== "win32") {
     try {
-      chmodSync(keyPath, 384);
+      chmodSync2(keyPath, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the wrapped keyfile: ` + `${keyPath}: ${err instanceof Error ? err.message : String(err)}
 `);
@@ -6472,32 +8992,32 @@ function writeRawKeyfileBytes(keyPath, dek) {
   const tmp = `${keyPath}.raw-tmp`;
   let fd = null;
   try {
-    fd = openSync7(tmp, "wx", 384);
+    fd = openSync8(tmp, "wx", 384);
     let written = 0;
     while (written < dek.byteLength) {
-      written += writeSync5(fd, dek, written, dek.byteLength - written);
+      written += writeSync6(fd, dek, written, dek.byteLength - written);
     }
-    fsyncSync5(fd);
-    closeSync7(fd);
+    fsyncSync6(fd);
+    closeSync9(fd);
     fd = null;
     renameWithRetry(tmp, keyPath);
   } catch (err) {
     if (fd !== null) {
       try {
-        closeSync7(fd);
+        closeSync9(fd);
       } catch {}
     }
     try {
-      unlinkSync4(tmp);
+      unlinkSync6(tmp);
     } catch {}
     throw err;
   }
   try {
-    const dfd = openSync7(dirname11(keyPath), "r");
+    const dfd = openSync8(dirname19(keyPath), "r");
     try {
-      fsyncSync5(dfd);
+      fsyncSync6(dfd);
     } finally {
-      closeSync7(dfd);
+      closeSync9(dfd);
     }
   } catch {}
 }
@@ -6566,24 +9086,24 @@ var init_envelope2 = __esm(() => {
 });
 
 // src/core/brain/secrets/crypto.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 import {
-  chmodSync as chmodSync2,
-  closeSync as closeSync8,
-  existsSync as existsSync9,
-  mkdirSync as mkdirSync11,
-  openSync as openSync8,
-  readFileSync as readFileSync15,
-  writeFileSync as writeFileSync3,
-  writeSync as writeSync6
+  chmodSync as chmodSync3,
+  closeSync as closeSync10,
+  existsSync as existsSync13,
+  mkdirSync as mkdirSync18,
+  openSync as openSync9,
+  readFileSync as readFileSync21,
+  writeFileSync as writeFileSync5,
+  writeSync as writeSync7
 } from "node:fs";
-import { dirname as dirname12, join as join20 } from "node:path";
+import { dirname as dirname20, join as join28 } from "node:path";
 function ensureSyncExclusionMarker(dir) {
-  const marker = join20(dir, ".gitignore");
-  if (existsSync9(marker))
+  const marker = join28(dir, ".gitignore");
+  if (existsSync13(marker))
     return;
   try {
-    writeFileSync3(marker, SYNC_EXCLUSION_CONTENT, { encoding: "utf8", flag: "wx", mode: 384 });
+    writeFileSync5(marker, SYNC_EXCLUSION_CONTENT, { encoding: "utf8", flag: "wx", mode: 384 });
   } catch (err) {
     if (err.code !== "EEXIST") {
       process.stderr.write(`warning: could not write the sync-exclusion marker for the secrets directory: ` + `${marker}: ${err instanceof Error ? err.message : String(err)}
@@ -6592,21 +9112,21 @@ function ensureSyncExclusionMarker(dir) {
   }
 }
 function loadOrCreateKey(keyPath) {
-  const keyDir = dirname12(keyPath);
-  if (existsSync9(keyPath)) {
+  const keyDir = dirname20(keyPath);
+  if (existsSync13(keyPath)) {
     restrictToOwner(keyDir, "directory");
     restrictToOwner(keyPath, "file");
     if (process.platform !== "win32") {
       try {
-        chmodSync2(keyDir, 448);
-        chmodSync2(keyPath, 384);
+        chmodSync3(keyDir, 448);
+        chmodSync3(keyPath, 384);
       } catch (err) {
         process.stderr.write(`warning: could not re-apply owner-only modes to the secrets keyfile: ` + `${keyPath}: ${err instanceof Error ? err.message : String(err)}
 `);
       }
     }
     ensureSyncExclusionMarker(keyDir);
-    const key2 = readFileSync15(keyPath);
+    const key2 = readFileSync21(keyPath);
     if (isEnvelopeBytes(key2))
       return heldKeyOrRefusal(keyPath);
     if (key2.length !== KEY_BYTES) {
@@ -6614,22 +9134,22 @@ function loadOrCreateKey(keyPath) {
     }
     return key2;
   }
-  mkdirSync11(keyDir, { recursive: true, mode: 448 });
+  mkdirSync18(keyDir, { recursive: true, mode: 448 });
   restrictToOwner(keyDir, "directory");
   ensureSyncExclusionMarker(keyDir);
-  const key = randomBytes5(KEY_BYTES);
+  const key = randomBytes6(KEY_BYTES);
   let fd;
   try {
-    fd = openSync8(keyPath, "wx", 384);
+    fd = openSync9(keyPath, "wx", 384);
   } catch (exc) {
     if (exc.code === "EEXIST")
       return loadOrCreateKey(keyPath);
     throw exc;
   }
   try {
-    writeSync6(fd, key);
+    writeSync7(fd, key);
   } finally {
-    closeSync8(fd);
+    closeSync10(fd);
   }
   restrictToOwner(keyPath, "file");
   return key;
@@ -6641,6 +9161,40 @@ var init_crypto = __esm(() => {
   init_envelope2();
   init_owner_acl();
   init_value_cipher();
+});
+
+// src/core/store-migration/owner-only-copy.ts
+import { chmodSync as chmodSync4, copyFileSync as copyFileSync2, mkdirSync as mkdirSync19 } from "node:fs";
+import { dirname as dirname21, relative as relative6, resolve as resolve15, sep as sep6 } from "node:path";
+function ensureOwnerOnlyRoot(root) {
+  mkdirSync19(root, { recursive: true, mode: DIR_MODE });
+  if (process.platform === "win32")
+    restrictToOwner(root, "directory");
+  else
+    chmodSync4(root, DIR_MODE);
+}
+function foldersFrom(root, dir) {
+  const rel = relative6(resolve15(root), resolve15(dir));
+  if (rel === "" || rel.startsWith(".."))
+    return [resolve15(root)];
+  const out = [resolve15(root)];
+  for (const segment of rel.split(sep6))
+    out.push(`${out.at(-1)}${sep6}${segment}`);
+  return out;
+}
+function copyOwnerOnly(source, target, root) {
+  mkdirSync19(dirname21(target), { recursive: true, mode: DIR_MODE });
+  if (process.platform !== "win32") {
+    for (const folder of foldersFrom(root, dirname21(target)))
+      chmodSync4(folder, DIR_MODE);
+  }
+  copyFileSync2(source, target);
+  if (process.platform !== "win32")
+    chmodSync4(target, FILE_MODE);
+}
+var DIR_MODE = 448, FILE_MODE = 384;
+var init_owner_only_copy = __esm(() => {
+  init_owner_acl();
 });
 
 // src/core/brain/secrets/store.ts
@@ -6667,19 +9221,52 @@ __export(exports_store, {
   withSecretsLock: () => withSecretsLock,
   writeStore: () => writeStore
 });
-import { chmodSync as chmodSync3, existsSync as existsSync10, readFileSync as readFileSync16, statSync as statSync11, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join21 } from "node:path";
+import {
+  chmodSync as chmodSync5,
+  existsSync as existsSync14,
+  readdirSync as readdirSync6,
+  readFileSync as readFileSync22,
+  renameSync as renameSync2,
+  rmSync as rmSync2,
+  statSync as statSync14,
+  writeFileSync as writeFileSync6
+} from "node:fs";
+import { join as join29 } from "node:path";
 function secretsDir(vault) {
-  return join21(vault, ".open-second-brain", "secrets");
+  const dir = machineStatePath(vault, DERIVED_STORE_DIR, "secrets");
+  adoptVaultSecrets(join29(vault, DERIVED_STORE_DIR, "secrets"), dir);
+  return dir;
+}
+function adoptVaultSecrets(legacy, dir) {
+  if (legacy === dir || existsSync14(dir) || !existsSync14(legacy))
+    return;
+  const names = readdirSync6(legacy).filter((name) => statSync14(join29(legacy, name)).isFile());
+  if (names.length === 0)
+    return;
+  const staging = `${dir}.adopt-${process.pid}`;
+  rmSync2(staging, { recursive: true, force: true });
+  try {
+    ensureOwnerOnlyRoot(staging);
+    for (const name of names)
+      copyOwnerOnly(join29(legacy, name), join29(staging, name), staging);
+    try {
+      renameSync2(staging, dir);
+    } catch (err) {
+      if (!existsSync14(dir))
+        throw err;
+    }
+  } finally {
+    rmSync2(staging, { recursive: true, force: true });
+  }
 }
 function storePath(vault) {
-  return join21(secretsDir(vault), "secrets.json");
+  return join29(secretsDir(vault), "secrets.json");
 }
 function keyPath(vault) {
-  return join21(secretsDir(vault), "keyfile");
+  return join29(secretsDir(vault), "keyfile");
 }
 function tokenStorePath(vault) {
-  return join21(secretsDir(vault), "mcp-tokens.json");
+  return join29(secretsDir(vault), "mcp-tokens.json");
 }
 function isValidSecretName(name) {
   return NAME_RE.test(name);
@@ -6810,7 +9397,7 @@ function resolveSecretReadOnly(vault, name) {
     throw new Error(`unknown secret "${normalized}"`);
   }
   const kp = keyPath(vault);
-  if (!existsSync10(kp))
+  if (!existsSync14(kp))
     throw new SecretStoreKeyfileMissingError(kp);
   const key = loadOrCreateKey(kp);
   return {
@@ -6863,9 +9450,9 @@ function custodyTargets(vault) {
     [secretsDir(vault), "directory"],
     [keyPath(vault), "file"]
   ];
-  if (existsSync10(storePath(vault)))
+  if (existsSync14(storePath(vault)))
     targets.push([storePath(vault), "file"]);
-  if (existsSync10(tokenStorePath(vault)))
+  if (existsSync14(tokenStorePath(vault)))
     targets.push([tokenStorePath(vault), "file"]);
   return targets;
 }
@@ -6880,19 +9467,19 @@ function toMetadata(name, stored) {
 }
 function readStore(vault) {
   const path = storePath(vault);
-  if (!existsSync10(path))
+  if (!existsSync14(path))
     return { version: SECRETS_SCHEMA_VERSION, secrets: {} };
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
     try {
-      if ((statSync11(path).mode & 511) !== 384)
-        chmodSync3(path, 384);
+      if ((statSync14(path).mode & 511) !== 384)
+        chmodSync5(path, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the secrets store: ` + `${path}: ${err instanceof Error ? err.message : String(err)}
 `);
     }
   }
-  const parsed = JSON.parse(readFileSync16(path, "utf8"));
+  const parsed = JSON.parse(readFileSync22(path, "utf8"));
   if (parsed === null || typeof parsed !== "object" || parsed.version !== SECRETS_SCHEMA_VERSION) {
     throw new Error(`secrets store is corrupt or from a newer version: ${path}`);
   }
@@ -6909,7 +9496,7 @@ function writeStore(vault, file) {
   loadOrCreateKey(keyPath(vault));
   const path = storePath(vault);
   const tmp = `${path}.tmp`;
-  writeFileSync4(tmp, JSON.stringify(file, null, 2) + `
+  writeFileSync6(tmp, JSON.stringify(file, null, 2) + `
 `, { mode: 384 });
   renameWithRetry(tmp, path);
 }
@@ -6926,7 +9513,7 @@ function touchLastUsed(vault, name, now) {
   });
 }
 function audit(vault, ctx, action, name, details) {
-  appendAuditRecord(join21(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
+  appendAuditRecord(join29(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action,
@@ -6946,6 +9533,9 @@ var init_store = __esm(() => {
   init_crypto();
   init_envelope2();
   init_owner_acl();
+  init_machine_state();
+  init_owner_only_copy();
+  init_path_constants();
   import_proper_lockfile4 = __toESM(require_proper_lockfile(), 1);
   NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
   ENV_VAR_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -7131,7 +9721,7 @@ function redactConfigMapping(data, policy = {}) {
 init_config();
 init_secret_ref();
 init_secret_ref();
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync15 } from "node:fs";
 var custodyStoreModule;
 function custodyStore() {
   if (custodyStoreModule === undefined) {
@@ -7147,6 +9737,8 @@ function discoverDeviceConfig() {
   return configModule.discoverConfig();
 }
 function storeValue(vault, name) {
+  if (vault === null)
+    return;
   const held = custodyStore().listSecrets(vault).some((meta) => meta.name === name);
   if (!held)
     return;
@@ -7182,7 +9774,7 @@ function resolvedSecretLiterals(vault) {
   }
   const heldNames = new Set(held.map((meta) => meta.name));
   const out = [];
-  if (held.length > 0 && existsSync11(store.keyPath(vault))) {
+  if (held.length > 0 && existsSync15(store.keyPath(vault))) {
     for (const meta of held) {
       try {
         out.push(store.resolveSecretReadOnly(vault, meta.name).value);
@@ -7237,21 +9829,21 @@ function probeVaultDirectory(vault) {
 init_config();
 init_fs_utils();
 import {
-  existsSync as existsSync13,
-  mkdirSync as mkdirSync12,
-  openSync as openSync9,
-  readFileSync as readFileSync17,
-  rmSync as rmSync2,
-  writeSync as writeSync7,
-  closeSync as closeSync9
+  existsSync as existsSync17,
+  mkdirSync as mkdirSync20,
+  openSync as openSync10,
+  readFileSync as readFileSync23,
+  rmSync as rmSync3,
+  writeSync as writeSync8,
+  closeSync as closeSync11
 } from "node:fs";
-import { dirname as dirname14, join as join23 } from "node:path";
+import { dirname as dirname23, join as join31 } from "node:path";
 
 // src/core/partner/codegraph.ts
 init_config();
 init_fs_utils();
-import { existsSync as existsSync12, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname13, join as join22, resolve as resolve10 } from "node:path";
+import { existsSync as existsSync16, readdirSync as readdirSync7, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname22, join as join30, resolve as resolve16 } from "node:path";
 
 // src/core/project-manifests.ts
 var MANIFEST_ECOSYSTEM = Object.freeze({
@@ -7354,11 +9946,11 @@ function codegraphInitCommand(projectPath) {
 }
 function isCodeProject(dir) {
   try {
-    if (!existsSync12(dir))
+    if (!existsSync16(dir))
       return false;
-    if (!isDir(join22(dir, ".git")))
+    if (!isDir(join30(dir, ".git")))
       return false;
-    return CODE_MANIFEST_FILES.some((m) => existsSync12(join22(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync16(join30(dir, m)));
   } catch {
     return false;
   }
@@ -7371,7 +9963,7 @@ function findCodeProjects(opts) {
   const consider = (raw) => {
     if (scanned >= limit)
       return;
-    const path = resolve10(raw);
+    const path = resolve16(raw);
     if (seen.has(path))
       return;
     seen.add(path);
@@ -7382,19 +9974,19 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname13(resolve10(opts.vault));
+  const vaultParent = dirname22(resolve16(opts.vault));
   if (isDir(vaultParent)) {
-    let entries = [];
+    let entries2 = [];
     try {
-      entries = readdirSync3(vaultParent);
+      entries2 = readdirSync7(vaultParent);
     } catch {
-      entries = [];
+      entries2 = [];
     }
-    entries.sort((a, b) => a.localeCompare(b));
-    for (const name of entries) {
+    entries2.sort((a, b) => a.localeCompare(b));
+    for (const name of entries2) {
       if (scanned >= limit)
         break;
-      consider(join22(vaultParent, name));
+      consider(join30(vaultParent, name));
     }
   }
   for (const extra of opts.scanExtraPaths ?? []) {
@@ -7536,7 +10128,7 @@ function codegraphDisabledResult() {
   };
 }
 function evaluateProjectStatus(project, deps) {
-  const indexDir = join22(project, ".codegraph");
+  const indexDir = join30(project, ".codegraph");
   let indexed;
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
@@ -7606,7 +10198,7 @@ function resolveRealpath(value) {
   if (!value)
     return null;
   try {
-    return realpathSync3(value);
+    return realpathSync4(value);
   } catch {
     return value;
   }
@@ -7615,7 +10207,7 @@ function resolveRealpath(value) {
 // src/core/doctor.ts
 var MANIFEST_FIX = "o2b update";
 function checkVaultWriteable(vault) {
-  if (!existsSync13(vault)) {
+  if (!existsSync17(vault)) {
     return {
       name: "vault_writeable",
       ok: false,
@@ -7623,11 +10215,11 @@ function checkVaultWriteable(vault) {
       fix: `mkdir -p "${vault}"`
     };
   }
-  const probe = join23(vault, ".open-second-brain-doctor-test");
+  const probe = join31(vault, ".open-second-brain-doctor-test");
   try {
-    const fd = openSync9(probe, "w");
-    closeSync9(fd);
-    rmSync2(probe);
+    const fd = openSync10(probe, "w");
+    closeSync11(fd);
+    rmSync3(probe);
   } catch (exc) {
     return {
       name: "vault_writeable",
@@ -7641,20 +10233,20 @@ function checkVaultWriteable(vault) {
 function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
-    mkdirSync12(dirname14(config), { recursive: true });
-    if (!existsSync13(config))
+    mkdirSync20(dirname23(config), { recursive: true });
+    if (!existsSync17(config))
       createdForCheck = true;
-    const fd = openSync9(config, "a");
-    writeSync7(fd, "");
-    closeSync9(fd);
+    const fd = openSync10(config, "a");
+    writeSync8(fd, "");
+    closeSync11(fd);
     if (createdForCheck)
-      rmSync2(config);
+      rmSync3(config);
   } catch (exc) {
     return {
       name: "config_writeable",
       ok: false,
       message: `cannot write config ${config}: ${exc.message ?? exc}`,
-      fix: `mkdir -p "${dirname14(config)}" && chmod u+rwx "${dirname14(config)}"`
+      fix: `mkdir -p "${dirname23(config)}" && chmod u+rwx "${dirname23(config)}"`
     };
   }
   return { name: "config_writeable", ok: true, message: `config writable: ${config}` };
@@ -7684,7 +10276,7 @@ function loadJsonManifest(path, name) {
   }
   let data;
   try {
-    data = JSON.parse(readFileSync17(path, "utf8"));
+    data = JSON.parse(readFileSync23(path, "utf8"));
   } catch (exc) {
     return {
       result: {
@@ -7810,7 +10402,7 @@ function checkHermesManifest(path) {
   }
   let text;
   try {
-    text = readFileSync17(path, "utf8");
+    text = readFileSync23(path, "utf8");
   } catch (exc) {
     return {
       name: "hermes_manifest",
@@ -7859,7 +10451,7 @@ function checkOpenclawManifest(path) {
 }
 function checkOpenclawInstallability(repoRoot) {
   const results = [];
-  const pkgPath = join23(repoRoot, "package.json");
+  const pkgPath = join31(repoRoot, "package.json");
   const { result, data } = loadJsonManifest(pkgPath, "openclaw_package_json");
   results.push(result);
   if (!data)
@@ -7890,7 +10482,7 @@ function checkOpenclawInstallability(repoRoot) {
       });
       continue;
     }
-    const entryPath = join23(repoRoot, entry);
+    const entryPath = join31(repoRoot, entry);
     const problem = manifestFileProblem(entryPath);
     if (problem === null) {
       results.push({
@@ -7926,10 +10518,10 @@ function doctor(opts) {
     results.push(checkConfigWriteable(opts.config));
   if (opts.repoRoot) {
     const root = opts.repoRoot;
-    results.push(checkClaudeManifest(join23(root, ".claude-plugin", "plugin.json")));
-    results.push(checkCodexManifest(join23(root, ".codex-plugin", "plugin.json")));
-    results.push(checkHermesManifest(join23(root, "plugins", "hermes", "plugin.yaml")));
-    results.push(checkOpenclawManifest(join23(root, "openclaw.plugin.json")));
+    results.push(checkClaudeManifest(join31(root, ".claude-plugin", "plugin.json")));
+    results.push(checkCodexManifest(join31(root, ".codex-plugin", "plugin.json")));
+    results.push(checkHermesManifest(join31(root, "plugins", "hermes", "plugin.yaml")));
+    results.push(checkOpenclawManifest(join31(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
   const cg = checkCodegraph({
@@ -7944,10 +10536,10 @@ function doctor(opts) {
 }
 
 // src/core/identity-reminder.ts
-import { readFileSync as readFileSync18 } from "node:fs";
-import { dirname as dirname15, resolve as resolve11 } from "node:path";
+import { readFileSync as readFileSync24 } from "node:fs";
+import { dirname as dirname24, resolve as resolve17 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var TEMPLATE_PATH = resolve11(dirname15(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve17(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var RUNTIME_TARGET = Object.freeze({
   hermes: "hermes",
   openclaw: "openclaw"
@@ -7964,7 +10556,7 @@ function loadReminderTemplate() {
   if (commonTemplateCache !== undefined)
     return commonTemplateCache;
   try {
-    commonTemplateCache = readFileSync18(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync24(TEMPLATE_PATH, "utf8").trimEnd();
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -7973,8 +10565,8 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve11(dirname15(fileURLToPath2(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve11(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
+var TEMPLATES_DIR = resolve17(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve17(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);
@@ -7982,7 +10574,7 @@ function tryReadTargetTemplate(target) {
     return cached;
   let body;
   try {
-    body = readFileSync18(PER_TARGET_PATHS[target], "utf8").trimEnd();
+    body = readFileSync24(PER_TARGET_PATHS[target], "utf8").trimEnd();
   } catch (err) {
     if (err.code !== "ENOENT")
       throw err;
@@ -8131,6 +10723,8 @@ function hostPathReference(path, source) {
   }
 }
 function vaultPathField(ctx) {
+  if (ctx.vaultOrNull === null)
+    return null;
   return hostPathReference(ctx.vault, ctx);
 }
 

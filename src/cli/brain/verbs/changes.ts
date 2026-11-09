@@ -26,7 +26,8 @@ export async function cmdBrainChanges(argv: string[]): Promise<number> {
     limit: { type: "string" },
     json: { type: "boolean" },
   });
-  const { vault, config } = brainVerbContext(flags);
+  // `null` with no vault configured: the changes come from the store alone (D14).
+  const { config, vault } = brainVerbContext(flags, { vault: "optional" });
   const rawLimit = flags["limit"] as string | undefined;
   const limit = parseLimit(rawLimit);
   if (!Number.isInteger(limit) || limit < 1 || limit > CHANGES_MAX_LIMIT) {

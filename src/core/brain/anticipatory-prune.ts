@@ -27,7 +27,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { BRAIN_ANTICIPATORY_REL } from "./path-constants.ts";
-import { ensureInsideVault } from "./paths.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 /**
  * How long an entry outlives its last write. Deliberately much longer
@@ -108,7 +108,7 @@ export function pruneAnticipatoryCache(
   options: PruneAnticipatoryCacheOptions = {},
 ): PruneAnticipatoryCacheResult {
   try {
-    const dir = ensureInsideVault(join(vault, BRAIN_ANTICIPATORY_REL), vault);
+    const dir = machineStatePath(vault, BRAIN_ANTICIPATORY_REL);
     const markerPath = join(dir, PRUNE_MARKER);
     const nowMs = Date.now();
     if (!dueForPrune(markerPath, nowMs)) {

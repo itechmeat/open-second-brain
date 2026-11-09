@@ -19,6 +19,10 @@ import { appendBrainNote } from "../../src/core/brain/note.ts";
 import { mirrorSignal } from "../../src/core/brain/shared-namespace.ts";
 import { parseLogDay } from "../../src/core/brain/log.ts";
 import { parseSignal } from "../../src/core/brain/signal.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let tmp: string;
 let vault: string;

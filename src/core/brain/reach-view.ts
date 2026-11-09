@@ -19,6 +19,11 @@
 import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { isPathReadableAtReach } from "../search/result-filters.ts";
 import {
+  isStoreRecordReadableAtReach,
+  storeRecordLookup,
+  storeRecordRefView,
+} from "./store-record-visibility.ts";
+import {
   UNFILTERED_ARTIFACT_REFS,
   artifactRefView,
   type ArtifactRefView,
@@ -37,12 +42,25 @@ export interface ReachView extends ArtifactRefView {
  * transports that establish local access pay one comparison per call and
  * read nothing - the same shape `ownerScopeView` uses for an unset scope.
  */
-export function reachView(vault: string, reach: TransportReach): ReachView {
+export function reachView(vault: string | null, reach: TransportReach): ReachView {
   if (reach === TRANSPORT_REACH.local) {
     return Object.freeze({ reach, ...UNFILTERED_ARTIFACT_REFS });
   }
+  // No vault (design D14): every page a reference can name is a record.
+  if (vault === null) {
+    return Object.freeze({
+      reach,
+      ...storeRecordRefView((page) => isStoreRecordReadableAtReach(page, reach)),
+    });
+  }
+  // Store-only (task 2.10): a preference or signal is judged by its record.
+  const record = storeRecordLookup(vault);
   return Object.freeze({
     reach,
-    ...artifactRefView(vault, (rel, cache) => isPathReadableAtReach(vault, rel, reach, cache)),
+    ...artifactRefView(vault, (rel, cache) => {
+      const page = record?.(rel);
+      if (page !== undefined) return isStoreRecordReadableAtReach(page, reach);
+      return isPathReadableAtReach(vault, rel, reach, cache);
+    }),
   });
 }

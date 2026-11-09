@@ -33,6 +33,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainDirs } from "./paths.ts";
+import { memoryFromStore } from "./memory-pages.ts";
+import { storePreferenceRecords } from "./memory-page-records.ts";
 import { parsePreference } from "./preference.ts";
 import { computeSemanticHealth } from "./doctor.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
@@ -68,6 +70,12 @@ function round2(n: number): number {
 
 /** Confirmed preferences only — mirrors `checkLowEvidenceConfirmed`'s scope. */
 function readConfirmedPreferences(vault: string): BrainPreference[] {
+  if (memoryFromStore(vault)) {
+    // Store-only (task 2.10): the preference fold, by the page's rules.
+    return storePreferenceRecords(vault)
+      .records.map((r) => r.pref)
+      .filter((pref) => pref.status === BRAIN_PREFERENCE_STATUS.confirmed);
+  }
   const dir = brainDirs(vault).preferences;
   if (!existsSync(dir)) return [];
   const out: BrainPreference[] = [];

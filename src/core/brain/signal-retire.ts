@@ -18,6 +18,10 @@
  * IS the exclusion mechanism - a retired signal stops being dream intake
  * yet stays readable in `Brain/retired/`.
  *
+ * On a store-only machine (task 2.10) the retire is a `signal-state`
+ * record (state `retired`, the retire metadata as its fields) and no file
+ * moves; an unswitched machine moves the file and dual-writes the record.
+ *
  * Signals have no per-signal audit file (only preferences do, via
  * `appendPrefAudit`), so the retire is recorded as a dedicated
  * `signal-retire` brain log event instead.
@@ -30,6 +34,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendLogEvent } from "./log.ts";
+import { routeSignalState, signalsStoreOnly, storeSignal } from "./signal-state.ts";
 import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { isoSecond } from "./time.ts";
@@ -116,61 +121,117 @@ export function retireSignal(
   const dirs = brainDirsForWrite(vault);
   const srcPath = ensureInsideVault(join(dirs.inbox, `${trimmed}.md`), vault);
   const destPath = ensureInsideVault(join(dirs.retired, `${trimmed}.md`), vault);
+  const now = opts.now ?? new Date();
+  const fields = retireFields(opts, now);
 
-  if (!existsSync(srcPath)) {
-    // Already moved into retired/ -> already retired; otherwise genuinely
-    // missing. Both are typed errors, never a silent no-op.
-    if (existsSync(destPath)) {
+  // Store-only (task 2.10): the signal is found in the signal fold and the
+  // retire is a `signal-state` record; nothing under `Brain/` moves.
+  const storeOnly = signalsStoreOnly(vault);
+  let legacyMeta: FrontmatterMap | undefined;
+  let legacyBody = "";
+  if (storeOnly) {
+    const found = storeSignal(trimmed);
+    if (found === undefined) throw new SignalNotFoundError(trimmed);
+    if (found.state === "retired" || found.frontmatter["_status"] === "retired") {
       throw new SignalAlreadyRetiredError(trimmed);
     }
-    throw new SignalNotFoundError(trimmed);
+    if (found.state !== "active") throw new SignalNotFoundError(trimmed);
+  } else {
+    if (!existsSync(srcPath)) {
+      // Already moved into retired/ -> already retired; otherwise genuinely
+      // missing. Both are typed errors, never a silent no-op.
+      if (existsSync(destPath)) {
+        throw new SignalAlreadyRetiredError(trimmed);
+      }
+      throw new SignalNotFoundError(trimmed);
+    }
+    const [meta, body] = parseFrontmatter(srcPath);
+    if (meta["kind"] !== "brain-signal") {
+      throw new InvalidSignalIdError(trimmed);
+    }
+    // Defensive: an inbox file already carrying retire metadata is retired.
+    if (meta["_status"] === "retired") {
+      throw new SignalAlreadyRetiredError(trimmed);
+    }
+    legacyMeta = meta;
+    legacyBody = body;
   }
 
-  const [meta, body] = parseFrontmatter(srcPath);
-  if (meta["kind"] !== "brain-signal") {
-    throw new InvalidSignalIdError(trimmed);
-  }
-  // Defensive: an inbox file already carrying retire metadata is retired.
-  if (meta["_status"] === "retired") {
-    throw new SignalAlreadyRetiredError(trimmed);
-  }
-
-  const now = opts.now ?? new Date();
-  const nextMeta = rewriteToRetired(meta, trimmed, opts, now);
-
-  // Write-then-unlink: the retired copy must land before the inbox copy is
-  // removed, so a failed write leaves the source untouched. Exclusive
-  // create (overwrite: false) never clobbers an existing retired file.
-  writeFrontmatterAtomic(destPath, nextMeta, body, {
-    overwrite: false,
-    existsErrorKind: "retired",
-    vaultForRelativePath: vault,
+  routeSignalState({
+    vault,
+    id: trimmed,
+    state: "retired",
+    fields,
+    ...(opts.agent ? { agent: opts.agent } : {}),
+    ...(legacyMeta !== undefined ? { legacyFrontmatter: legacyMeta } : {}),
+    legacy: () => {
+      // The route decides again: when it takes the legacy side after this
+      // call read the store (the switch went away in between), there is
+      // no page read to rewrite, and that is a named refusal, not a
+      // TypeError deep in the rewrite.
+      if (legacyMeta === undefined) {
+        throw new Error(
+          `signal retire of '${trimmed}' changed sides mid-call: it read the store, but the ` +
+            "write routes to the legacy tree; nothing was written, retry the retire",
+        );
+      }
+      const nextMeta = rewriteToRetired(legacyMeta, trimmed, opts, now);
+      // Write-then-unlink: the retired copy must land before the inbox copy
+      // is removed, so a failed write leaves the source untouched. Exclusive
+      // create (overwrite: false) never clobbers an existing retired file.
+      writeFrontmatterAtomic(destPath, nextMeta, legacyBody, {
+        overwrite: false,
+        existsErrorKind: "retired",
+        vaultForRelativePath: vault,
+      });
+      if (!existsSync(destPath)) {
+        throw new Error(`retireSignal: write of ${destPath} reported success but file is absent`);
+      }
+      unlinkSync(srcPath);
+    },
+    // Audit: signals have no per-signal audit file, so the retire lands as a
+    // dedicated brain log event. Fail-soft - a log failure must not undo the
+    // completed move.
+    after: () => {
+      try {
+        appendLogEvent(
+          vault,
+          {
+            timestamp: isoSecond(now),
+            eventType: BRAIN_LOG_EVENT_KIND.signalRetire,
+            ...(opts.agent ? { agent: opts.agent } : {}),
+            body: {
+              signal: `[[${trimmed}]]`,
+              reason: opts.reason,
+              ...(opts.superseded_by?.trim() ? { superseded_by: opts.superseded_by.trim() } : {}),
+              ...(opts.agent ? { agent: opts.agent } : {}),
+            },
+          },
+          { failOpen: true },
+        );
+      } catch (err) {
+        process.stderr.write(
+          `warning: append signal-retire log failed: ${(err as Error).message}\n`,
+        );
+      }
+    },
   });
-  if (!existsSync(destPath)) {
-    throw new Error(`retireSignal: write of ${destPath} reported success but file is absent`);
-  }
-  unlinkSync(srcPath);
-
-  // Audit: signals have no per-signal audit file, so the retire lands as a
-  // dedicated brain log event. Fail-soft - a log failure must not undo the
-  // completed move.
-  try {
-    appendLogEvent(vault, {
-      timestamp: isoSecond(now),
-      eventType: BRAIN_LOG_EVENT_KIND.signalRetire,
-      ...(opts.agent ? { agent: opts.agent } : {}),
-      body: {
-        signal: `[[${trimmed}]]`,
-        reason: opts.reason,
-        ...(opts.superseded_by?.trim() ? { superseded_by: opts.superseded_by.trim() } : {}),
-        ...(opts.agent ? { agent: opts.agent } : {}),
-      },
-    });
-  } catch (err) {
-    process.stderr.write(`warning: append signal-retire log failed: ${(err as Error).message}\n`);
-  }
 
   return { id: trimmed, path: destPath };
+}
+
+/**
+ * The retire metadata a retire stamps on the signal, as the fields of its
+ * `signal-state` record: the same keys and values the retired page carries.
+ */
+function retireFields(opts: RetireSignalOptions, now: Date): Record<string, string> {
+  return {
+    _status: "retired",
+    retired_at: now.toISOString(),
+    retired_reason: opts.reason,
+    ...(opts.agent?.trim() ? { retired_by: opts.agent.trim() } : {}),
+    ...(opts.superseded_by?.trim() ? { superseded_by: opts.superseded_by.trim() } : {}),
+  };
 }
 
 /**

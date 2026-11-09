@@ -24,7 +24,8 @@ import { coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
-import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
+import { wrapToolErrors } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 
 const TOOL = "brain_extract_signals";
 
@@ -147,7 +148,7 @@ async function toolBrainExtractSignals(
       // not this surface's to hand out.
       written: res.written.map((w) => ({
         id: w.id,
-        path: vaultRelativeSafe(ctx.vault, w.path),
+        path: toolPath(ctx, w.path),
         topic: w.topic,
       })),
       staged: res.staged,

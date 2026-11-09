@@ -9,11 +9,25 @@
 
 import { join } from "node:path";
 
+import {
+  INBOX_FOLDER_STATES,
+  memoryFromStore,
+  type MemoryPageKind,
+  signalPageRaw,
+  type StoreMemoryPage,
+  storeRecordPages,
+} from "../memory-pages.ts";
 import { extractWikilinks } from "../../vault.ts";
 import { BrainParseError } from "../parse-error.ts";
 import { brainDirs } from "../paths.ts";
-import { BrainStatusFolderMismatchError, parsePreference, parseRetired } from "../preference.ts";
-import { parseSignal } from "../signal.ts";
+import {
+  BrainStatusFolderMismatchError,
+  parsePreference,
+  parsePreferenceMeta,
+  parseRetired,
+  parseRetiredMeta,
+} from "../preference.ts";
+import { parseSignal, parseStoreSignal } from "../signal.ts";
 import { principleNeedsRepair } from "../text/sanitize-principle.ts";
 import type { DoctorIssue } from "../types.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
@@ -28,10 +42,15 @@ export const signalCheck: DoctorCheck = {
   run({ vault, idIndex }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
     const swept = recordSweep("signal", uncertain);
-    for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
-      forEachBrainFile(dir, "sig-", swept, (path, filename) => {
+    const fromStore = memoryFromStore(vault);
+    const pages = fromStore ? memoryPagesOf(vault, "signal") : null;
+    for (const dir of fromStore ? [dirs.inbox] : [dirs.inbox, dirs.processed, dirs.archived]) {
+      forEachRecord(pages, dir, "sig-", swept, (path, filename, page) => {
         try {
-          const sig = parseSignal(path);
+          const sig =
+            page === null
+              ? parseSignal(path)
+              : parseStoreSignal(path, page.meta, signalPageRaw(page));
           registerId(idIndex, sig.id, path);
           checkIso(path, "created_at", sig.created_at, issues);
           const expectedId = filename.slice(0, -".md".length);
@@ -62,9 +81,11 @@ export const preferenceCheck: DoctorCheck = {
   failSoft: false,
   run({ vault, idIndex, knownBasenames }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
-    forEachBrainFile(dirs.preferences, "pref-", recordSweep("preference", uncertain), (path) => {
+    const pages = memoryFromStore(vault) ? memoryPagesOf(vault, "preference") : null;
+    const swept = recordSweep("preference", uncertain);
+    forEachRecord(pages, dirs.preferences, "pref-", swept, (path, _filename, page) => {
       try {
-        const pref = parsePreference(path);
+        const pref = page === null ? parsePreference(path) : parsePreferenceMeta(page.meta, path);
         registerId(idIndex, pref.id, path);
         checkIso(path, "created_at", pref.created_at, issues);
         checkIso(path, "unconfirmed_until", pref.unconfirmed_until, issues);
@@ -108,9 +129,11 @@ export const retiredCheck: DoctorCheck = {
   failSoft: false,
   run({ vault, idIndex, knownBasenames }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
-    forEachBrainFile(dirs.retired, "ret-", recordSweep("retired", uncertain), (path) => {
+    const pages = memoryFromStore(vault) ? memoryPagesOf(vault, "retired") : null;
+    const swept = recordSweep("retired", uncertain);
+    forEachRecord(pages, dirs.retired, "ret-", swept, (path, _filename, page) => {
       try {
-        const ret = parseRetired(path);
+        const ret = page === null ? parseRetired(path) : parseRetiredMeta(page.meta, path);
         registerId(idIndex, ret.id, path);
         checkIso(path, "created_at", ret.created_at, issues);
         checkIso(path, "retired_at", ret.retired_at, issues);
@@ -196,6 +219,37 @@ function forEachBrainFile(
     if (!entry.name.startsWith(prefix)) continue;
     cb(join(dir, entry.name), entry.name);
   }
+}
+
+/**
+ * The records of one kind a check validates: the legacy folder's files on
+ * an unswitched machine (`pages` is `null`), the fold's records seen as
+ * pages on a store-only one (task 2.10), where the legacy folder is not
+ * read and its absence is no finding.
+ */
+function forEachRecord(
+  pages: ReadonlyArray<StoreMemoryPage> | null,
+  dir: string,
+  prefix: string,
+  swept: SweptPath,
+  cb: (path: string, filename: string, page: StoreMemoryPage | null) => void,
+): void {
+  if (pages === null) {
+    forEachBrainFile(dir, prefix, swept, (path, filename) => cb(path, filename, null));
+    return;
+  }
+  for (const page of pages) cb(page.path, `${page.id}.md`, page);
+}
+
+const KIND_SETS: Readonly<Record<MemoryPageKind, ReadonlySet<MemoryPageKind>>> = Object.freeze({
+  preference: new Set<MemoryPageKind>(["preference"]),
+  retired: new Set<MemoryPageKind>(["retired"]),
+  signal: new Set<MemoryPageKind>(["signal"]),
+});
+
+/** The fold's records of `kind` as pages; signals in the states the inbox folders held. */
+function memoryPagesOf(vault: string, kind: MemoryPageKind): ReadonlyArray<StoreMemoryPage> {
+  return storeRecordPages(vault, { kinds: KIND_SETS[kind], signalStates: INBOX_FOLDER_STATES });
 }
 
 /** Record kinds whose parse failures this module classifies. */

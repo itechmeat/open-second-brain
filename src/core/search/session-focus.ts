@@ -98,6 +98,8 @@ export function sessionFocusPath(config: ResolvedSearchConfig, sessionScope?: st
 function focusDirIsSymlinked(config: ResolvedSearchConfig, sessionScope?: string): boolean {
   const storeDir = dirname(resolveIndexPath(config.vault, config.dbPath));
   const scopeSegments = sessionScope === undefined ? [] : [FOCUS_DIR];
+  // No vault: the index lives in the device-local state, outside any vault.
+  if (config.vault === null) return derivedDirIsSymlinked(storeDir, ...scopeSegments);
   const rel = relative(config.vault, storeDir);
   if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
     return derivedDirIsSymlinked(config.vault, ...rel.split(sep), ...scopeSegments);

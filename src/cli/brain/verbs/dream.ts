@@ -65,6 +65,7 @@ import {
   okJson,
   parse,
   parseOptionalIsoDate,
+  requireBrainVaultFor,
 } from "../helpers.ts";
 
 // The runnable set is read from the step registry, never retyped: a
@@ -226,7 +227,13 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     }
   }
 
-  const { config, vault } = brainVerbContext(flags);
+  // With no vault configured (`null`) the inline pass runs over the
+  // store's folds alone (design D14). A single step and the staged
+  // lifecycle work on vault files (user notes, the staging lane), so they
+  // still need a vault and say so.
+  const verbContext = brainVerbContext(flags, { vault: "optional" });
+  const { config, vault } = verbContext;
+  const vaultFor = (what: string): string => requireBrainVaultFor(verbContext, what);
 
   const agentFlag = flags["agent"];
   let agent: string;
@@ -274,7 +281,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     reportProgressRefusal(stepObservation);
     let result: DreamStepResult;
     try {
-      result = runDreamStep(vault, stepRequest, {
+      result = runDreamStep(vaultFor("dream --step"), stepRequest, {
         safeguard: guard(),
         ...(stepObservation?.sink !== undefined ? { onProgress: stepObservation.sink } : {}),
       });
@@ -335,7 +342,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     stagedObservation?.sink !== undefined ? { onProgress: stagedObservation.sink } : {};
   try {
     if (action === "stage") {
-      const bundle = stageDream(vault, {
+      const bundle = stageDream(vaultFor(`dream ${action}`), {
         now: now ?? new Date(),
         safeguard: guard(),
         ...stagedProgress,
@@ -364,7 +371,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
         ...(agent ? { agentName: agent } : {}),
       };
       if (action === "validate") {
-        const verdict = validateDreamBundle(vault, runId, stageOpts);
+        const verdict = validateDreamBundle(vaultFor(`dream ${action}`), runId, stageOpts);
         if (asJson) okJson({ run_id: runId, valid: verdict.valid, drift: verdict.drift });
         else if (verdict.valid) ok(`validate ${runId}: clean`);
         else {
@@ -373,7 +380,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
         }
         return verdict.valid ? 0 : 1;
       }
-      const outcome = applyDreamBundle(vault, runId, stageOpts);
+      const outcome = applyDreamBundle(vaultFor(`dream ${action}`), runId, stageOpts);
       if (asJson) {
         okJson({
           run_id: runId,
@@ -398,7 +405,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
 
     if (action === "retriage") {
       const runId = positional[1]!;
-      const outcome = retriageDreamBundle(vault, runId, {
+      const outcome = retriageDreamBundle(vaultFor(`dream ${action}`), runId, {
         now: now ?? new Date(),
         safeguard: guard(),
         ...(agent ? { agentName: agent } : {}),
@@ -431,14 +438,14 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
 
     if (action === "discard") {
       const runId = positional[1]!;
-      const removed = discardDreamBundle(vault, runId);
+      const removed = discardDreamBundle(vaultFor(`dream ${action}`), runId);
       if (asJson) okJson({ run_id: runId, removed });
       else ok(removed ? `discarded ${runId}` : `no staged bundle named ${runId}`);
       return 0;
     }
 
     if (action === "list") {
-      const bundles = listDreamBundles(vault);
+      const bundles = listDreamBundles(vaultFor(`dream ${action}`));
       if (asJson) {
         okJson({
           bundles: bundles.map((b) => ({
@@ -577,5 +584,6 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     ok(`moved_to_processed: ${summary.moved_to_processed.length}`);
   const archived = summary.archived_signals?.length ?? 0;
   if (archived > 0) ok(`archived_signals: ${archived}`);
+  if (summary.view !== undefined) ok(`view: ${summary.view.summary}`);
   return 0;
 }

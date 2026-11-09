@@ -55,9 +55,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveRegroundPartsEnabled, resolveVault } from "../src/core/config.ts";
+import { resolveRegroundPartsEnabled } from "../src/core/config.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 const HOOK_NAME = "reground-deliver";
 
@@ -172,8 +173,10 @@ async function main(): Promise<void> {
     const { isRealSessionId, takeRegroundPart } = await import("./lib/injection-ledger.ts");
     if (!isRealSessionId(payload.session_id)) return;
 
-    const vault = resolveVault();
-    if (vault === null) return;
+    // With no vault the hook does its store-side part (design D14, task 2.10).
+    const target = resolveHookTarget();
+    if (target === null) return;
+    const vault = target.vault;
     audit = await loadAuditor(vault);
 
     const take = takeRegroundPart(vault, payload.session_id);

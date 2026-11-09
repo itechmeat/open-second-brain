@@ -10,8 +10,9 @@
  * query-cache key.
  */
 
+import { join } from "node:path";
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 
 import {
   computeLearnedWeights,
@@ -39,6 +40,8 @@ let cleanup: () => void;
 
 beforeEach(() => {
   ({ vault, dbPath, cleanup } = createTempVault("feedback"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => cleanup());
 

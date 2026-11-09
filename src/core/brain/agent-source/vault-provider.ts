@@ -1,12 +1,9 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
 import type { BrainLogEntry } from "../log.ts";
 import { readAllLogEntries } from "../query.ts";
-import { brainDirs } from "../paths.ts";
 import { preferenceOwner } from "../owner-scoped-facts.ts";
-import { parsePreference, parseRetired } from "../preference.ts";
-import { parseSignal } from "../signal.ts";
+import { memoryFolderPages, type MemoryFolder } from "../memory-pages.ts";
+import { parsePreferenceMeta, parseRetiredMeta } from "../preference.ts";
+import { parseSignalPage } from "../signal.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
   type BrainPreference,
@@ -28,15 +25,14 @@ export const vaultAgentSourceProvider: AgentSourceProvider = Object.freeze({
 });
 
 function collectVaultContributions(vault: string): ReadonlyArray<AgentSourceContribution> {
-  const dirs = brainDirs(vault);
-  const signals = collectSignals(dirs.inbox, dirs.processed, dirs.archived);
+  const signals = collectSignals(vault, "inbox", "processed", "archived");
   const signalAgentById = new Map(signals.map((signal) => [signal.id, signal.agent]));
 
   const contributions: AgentSourceContribution[] = [];
   for (const signal of signals) {
     contributions.push(signalContribution(signal));
   }
-  for (const owned of collectPreferences(dirs.preferences, dirs.retired)) {
+  for (const owned of collectPreferences(vault)) {
     contributions.push(preferenceContribution(owned, signalAgentById));
   }
   for (const entry of readAllLogEntries(vault)) {
@@ -53,19 +49,20 @@ function collectVaultContributions(vault: string): ReadonlyArray<AgentSourceCont
   return deepFreeze(contributions);
 }
 
-function collectSignals(...dirs: string[]): BrainSignal[] {
+/** The signal pages of the folders: files when unswitched, the signal fold once switched. */
+function collectSignals(vault: string, ...folders: MemoryFolder[]): BrainSignal[] {
   const signals: BrainSignal[] = [];
-  for (const dir of dirs) {
-    if (!existsSync(dir)) continue;
-    const entries = readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
+  for (const folder of folders) {
+    const entries = memoryFolderPages(vault, folder, { regularFilesOnly: true }).toSorted((a, b) =>
       a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.startsWith("sig-") || !entry.name.endsWith(".md")) {
+      if (!entry.name.startsWith("sig-") || !entry.name.endsWith(".md")) {
         continue;
       }
       try {
-        signals.push(parseSignal(join(dir, entry.name)));
+        const [meta, body] = entry.read();
+        signals.push(parseSignalPage(meta, body, entry.path));
       } catch {
         continue;
       }
@@ -86,26 +83,31 @@ interface OwnedRecord {
   readonly owner: string | null;
 }
 
-function collectPreferences(preferencesDir: string, retiredDir: string): OwnedRecord[] {
+function collectPreferences(vault: string): OwnedRecord[] {
   return [
-    ...collectPreferenceDir(preferencesDir, "pref-"),
-    ...collectPreferenceDir(retiredDir, "ret-"),
+    ...collectPreferenceDir(vault, "preferences", "pref-"),
+    ...collectPreferenceDir(vault, "retired", "ret-"),
   ];
 }
 
-function collectPreferenceDir(dir: string, prefix: "pref-" | "ret-"): OwnedRecord[] {
-  if (!existsSync(dir)) return [];
+function collectPreferenceDir(
+  vault: string,
+  folder: "preferences" | "retired",
+  prefix: "pref-" | "ret-",
+): OwnedRecord[] {
   const out: OwnedRecord[] = [];
-  const entries = readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
+  const entries = memoryFolderPages(vault, folder, { regularFilesOnly: true }).toSorted((a, b) =>
     a.name.localeCompare(b.name),
   );
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
+    if (!entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
       continue;
     }
-    const path = join(dir, entry.name);
+    const path = entry.path;
     try {
-      const record = prefix === "pref-" ? parsePreference(path) : parseRetired(path);
+      const [meta] = entry.read();
+      const record =
+        prefix === "pref-" ? parsePreferenceMeta(meta, path) : parseRetiredMeta(meta, path);
       out.push({ record, owner: preferenceOwner(record) });
     } catch {
       continue;

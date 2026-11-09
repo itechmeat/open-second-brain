@@ -33,6 +33,12 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
 import { BRAIN_ROOT_REL, vaultRelative } from "../paths.ts";
+import {
+  MEMORY_FOLDERS,
+  memoryFolderRel,
+  memoryFromStore,
+  storeMemoryPages,
+} from "../memory-pages.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_TOMBSTONE_STATUS } from "../types.ts";
@@ -400,11 +406,43 @@ export function resolveChainTip(
  * path `readable` refuses is not indexed at all, so it reads exactly as
  * an unknown basename; absent, every page is indexed.
  */
-export function buildChainLookup(vault: string, readable?: (rel: string) => boolean): ChainLookup {
+export function buildChainLookup(
+  vault: string | null,
+  readable?: (rel: string) => boolean,
+): ChainLookup {
   const index = new Map<string, ChainLookupEntry>();
-  const root = join(vault, BRAIN_ROOT_REL);
-  if (existsSync(root)) walk(vault, root, index, readable);
+  // No vault: no pages on disk, only the store's.
+  if (vault !== null) {
+    const root = join(vault, BRAIN_ROOT_REL);
+    // Once switched the memory pages are the store's: the frozen legacy
+    // copies of those folders are not walked, so a page the store no
+    // longer holds cannot keep resolving from a stale file.
+    const skip = memoryFromStore(vault)
+      ? new Set(MEMORY_FOLDERS.map((f) => join(vault, ...memoryFolderRel(f).split("/"))))
+      : new Set<string>();
+    if (existsSync(root)) walk(vault, root, index, readable, skip);
+  }
+  addStoredMemoryPages(vault, index, readable);
   return (link: string): ChainLookupEntry | null => index.get(normalizeChainLink(link)) ?? null;
+}
+
+/**
+ * On a store-only machine the memory pages are records, not files (task
+ * 2.10): index the pages the store's folds rebuild, under the same rules
+ * as a file of the walk.
+ */
+function addStoredMemoryPages(
+  vault: string | null,
+  index: Map<string, ChainLookupEntry>,
+  readable: ((rel: string) => boolean) | undefined,
+): void {
+  for (const folder of MEMORY_FOLDERS) {
+    for (const page of storeMemoryPages(vault, folder) ?? []) {
+      if (readable !== undefined && !readable(page.rel)) continue;
+      const supersededBy = scalar(page.read()[0], SUPERSEDED_BY_KEY);
+      index.set(normalizeChainLink(page.name), { supersededBy });
+    }
+  }
 }
 
 function walk(
@@ -412,6 +450,7 @@ function walk(
   dir: string,
   index: Map<string, ChainLookupEntry>,
   readable: ((rel: string) => boolean) | undefined,
+  skip: ReadonlySet<string>,
 ): void {
   let entries;
   try {
@@ -422,8 +461,8 @@ function walk(
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name.startsWith(".")) continue;
-      walk(vault, full, index, readable);
+      if (entry.name.startsWith(".") || skip.has(full)) continue;
+      walk(vault, full, index, readable, skip);
       continue;
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;

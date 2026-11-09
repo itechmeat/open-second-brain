@@ -23,7 +23,7 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { DERIVED_STORE_DIR } from "../../src/core/brain/path-constants.ts";
 import {
@@ -31,6 +31,11 @@ import {
   readRegularFileNoFollow,
 } from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
+import {
+  machineStatePath,
+  machineStatePathIn,
+  machineStateRoot,
+} from "../../src/core/state/machine-state.ts";
 
 /** The single state file name, directly under {@link DERIVED_STORE_DIR}. */
 export const BACKLOG_NUDGE_COUNT_FILENAME = "backlog-nudge.count";
@@ -40,7 +45,9 @@ const COUNT_LINE_RE = /^\d+$/;
 
 /** Absolute path of the state file for one vault. */
 export function backlogNudgeStatePath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, BACKLOG_NUDGE_COUNT_FILENAME);
+  // Machine state: in the vault on an unswitched machine, device-local once
+  // switched or with no vault (`machineStatePath`, design D14 item 6).
+  return machineStatePath(vault, DERIVED_STORE_DIR, BACKLOG_NUDGE_COUNT_FILENAME);
 }
 
 /**
@@ -75,8 +82,10 @@ export function backlogNudgeCountMatches(vault: string, count: number): boolean 
 export function writeBacklogNudgeCount(vault: string, count: number): boolean {
   try {
     if (!Number.isSafeInteger(count) || count < 0) return false;
-    if (derivedDirIsSymlinked(vault, DERIVED_STORE_DIR)) return false;
-    const path = backlogNudgeStatePath(vault);
+    // One root for the check and the write (resolved once).
+    const root = machineStateRoot(vault);
+    if (derivedDirIsSymlinked(root, DERIVED_STORE_DIR)) return false;
+    const path = machineStatePathIn(root, DERIVED_STORE_DIR, BACKLOG_NUDGE_COUNT_FILENAME);
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteText(path, `${count}\n`);
     return true;

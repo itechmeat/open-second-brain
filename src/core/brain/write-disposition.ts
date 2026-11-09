@@ -23,8 +23,8 @@
  */
 
 import { discoverConfig, resolveAgentName } from "../config.ts";
+import { loadPermissionsDocumentFor } from "./permissions/document-source.ts";
 import type { PermissionAction } from "./permissions/document.ts";
-import { loadPermissionsDocument } from "./permissions/document.ts";
 import { appendDecisionLedger } from "./permissions/ledger.ts";
 import type { PermissionDecision, PermissionSubject } from "./permissions/resolve.ts";
 import { resolvePermission } from "./permissions/resolve.ts";
@@ -249,7 +249,7 @@ function documentActionFor(lane: ReviewLane): PermissionAction {
  * every later audit, exactly like a write nobody ruled on.
  */
 function recordDispositionRow(
-  vault: string,
+  vault: string | null,
   subject: WriteSubject,
   action: PermissionAction,
   opts: ResolveWriteDispositionOptions,
@@ -290,12 +290,15 @@ function recordDispositionRow(
  * unreadable document fails closed through the loader's own error.
  */
 export function resolveWriteDisposition(
-  vault: string,
+  vault: string | null,
   lane: ReviewLane,
   subject?: WriteSubject,
   opts: ResolveWriteDispositionOptions = {},
 ): WriteDisposition {
-  const { document } = loadPermissionsDocument(vault);
+  // The permissions document is the operator's shared setting (or the
+  // legacy file on an unswitched machine); with none, the lane's toggle
+  // decides. A machine with no vault still reads the setting.
+  const { document } = loadPermissionsDocumentFor(vault, opts.configPath);
   if (document === null) {
     const on = resolveWriteApprovalLane(lane);
     return Object.freeze({
@@ -364,7 +367,7 @@ export function refuseDocumentDeny(
   subject?: WriteSubject,
   opts: ResolveWriteDispositionOptions = {},
 ): void {
-  const { document } = loadPermissionsDocument(vault);
+  const { document } = loadPermissionsDocumentFor(vault, opts.configPath);
   if (document === null) return;
   const effectiveSubject: WriteSubject = subject ?? {
     agent: resolveAgentName(opts.configPath),

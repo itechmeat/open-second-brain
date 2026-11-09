@@ -17,16 +17,15 @@
  * frontmatter keys the operator may have added by hand.
  */
 
-import { dirname, join } from "node:path";
-import { mkdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { statSync } from "node:fs";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../../vault.ts";
+import { slugify } from "../../vault.ts";
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { isoSecond } from "../time.ts";
 import { entityPath } from "../paths.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   assertValidEntityLabel,
   entityIdentityKey,
@@ -79,6 +78,14 @@ import {
   type BrainEntityStatus,
   type EntityRef,
 } from "./types.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  laneStoreStamp,
+  parseLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 
 export interface UpsertEntityInput {
   readonly category: string;
@@ -334,6 +341,11 @@ let unstableSignatureCounter = 0;
  * file is never cached - the read path keeps surfacing the fault.
  */
 function personNicknameFileSignature(vault: string): string {
+  if (lanePagesInStore(vault)) {
+    return lanePageExists(vault, join(vault, PERSON_NICKNAMES_ARTIFACT_REL))
+      ? `store\0${laneStoreStamp(vault)}`
+      : "missing";
+  }
   try {
     const st = statSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), { bigint: true });
     return `${st.mtimeNs}\0${st.size}`;
@@ -583,6 +595,7 @@ const ENTITY_OWN_FIELDS: ReadonlySet<string> = new Set(ENTITY_FIELD_ORDER);
  * operator's extra frontmatter keys (relations among them) verbatim.
  */
 function writeEntityFile(
+  vault: string,
   path: string,
   fields: FrontmatterMap,
   extras: FrontmatterMap,
@@ -597,8 +610,7 @@ function writeEntityFile(
   for (const [key, value] of Object.entries(extras)) {
     if (!ENTITY_OWN_FIELDS.has(key)) meta[key] = value;
   }
-  mkdirSync(dirname(path), { recursive: true });
-  writeFrontmatterAtomic(path, meta, body, {
+  writeLanePage(vault, path, meta, body, {
     overwrite: opts.overwrite,
     existsErrorKind: "entity",
   });
@@ -747,7 +759,7 @@ function hasPriorStoredOccurrence(index: EntityIndex, name: string): boolean {
 
 export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEntityResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const category = validateEntityCategory(input.category);
   // Label quality gate (A1): strip Markdown/punctuation decoration BEFORE
   // normalisation and reject structurally-junk or denylisted names with a
@@ -802,7 +814,7 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   );
 
   if (target !== null) {
-    const [meta, existingBody] = parseFrontmatter(target.path);
+    const [meta, existingBody] = parseLanePage(vault, target.path);
     const mergedAliases = [...target.aliases];
     for (const alias of aliases) {
       if (!mergedAliases.some((a) => normalizeEntityName(a) === normalizeEntityName(alias))) {
@@ -836,8 +848,10 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
       ...meta,
       ...(untrusted ? untrustedSourceFrontmatter(INTAKE_TRUST.untrusted) : {}),
     };
-    writeEntityFile(target.path, fields, extras, input.body ?? existingBody, { overwrite: true });
-    const entity = parseEntityFile(target.path);
+    writeEntityFile(vault, target.path, fields, extras, input.body ?? existingBody, {
+      overwrite: true,
+    });
+    const entity = parseEntityFile(target.path, vault);
     if (entity === null) throw new Error(`entity file unreadable after write: ${target.path}`);
     return { entity, created: false };
   }
@@ -868,10 +882,17 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
     ...untrustedSourceFrontmatter(untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted),
     ...sourceContentHashFrontmatter(input.sourceContentHash),
   };
-  writeEntityFile(path, fields, extrasOnCreate, input.body ?? input.bodyOnCreate ?? `# ${name}`, {
-    overwrite: false,
-  });
-  const entity = parseEntityFile(path);
+  writeEntityFile(
+    vault,
+    path,
+    fields,
+    extrasOnCreate,
+    input.body ?? input.bodyOnCreate ?? `# ${name}`,
+    {
+      overwrite: false,
+    },
+  );
+  const entity = parseEntityFile(path, vault);
   if (entity === null) throw new Error(`entity file unreadable after write: ${path}`);
   return { entity, created: true };
 }
@@ -895,7 +916,7 @@ function missingEndpoint(index: EntityIndex, ref: EntityRef, untrustedOrigin: bo
 
 export function relateEntities(vault: string, input: RelateEntitiesInput): BrainEntity {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const relation = normalizeRelation(input.relation);
   if (!isKnownRelation(relation)) {
     throw new Error(
@@ -915,7 +936,7 @@ export function relateEntities(vault: string, input: RelateEntitiesInput): Brain
   if (to === null) throw new Error(missingEndpoint(index, input.to, untrusted));
   if (from.id === to.id) throw new Error("an entity cannot relate to itself");
 
-  const [meta, body] = parseFrontmatter(from.path);
+  const [meta, body] = parseLanePage(vault, from.path);
   const existingRaw = meta[relation];
   const targets: string[] = Array.isArray(existingRaw)
     ? [...existingRaw]
@@ -939,8 +960,8 @@ export function relateEntities(vault: string, input: RelateEntitiesInput): Brain
     tags: ["brain", "brain/entity"],
   };
   const extras: FrontmatterMap = { ...meta, [relation]: targets };
-  writeEntityFile(from.path, fields, extras, body, { overwrite: true });
-  const entity = parseEntityFile(from.path);
+  writeEntityFile(vault, from.path, fields, extras, body, { overwrite: true });
+  const entity = parseEntityFile(from.path, vault);
   if (entity === null) throw new Error(`entity file unreadable after write: ${from.path}`);
   return entity;
 }
@@ -951,7 +972,7 @@ export function archiveEntity(
   opts: ArchiveEntityOptions,
 ): BrainEntity {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const index = buildEntityIndex(vault);
   let target: BrainEntity | null;
   if (opts.restore) {
@@ -1008,7 +1029,7 @@ export function archiveEntity(
     }
   }
 
-  const [meta, body] = parseFrontmatter(target.path);
+  const [meta, body] = parseLanePage(vault, target.path);
   const stamp = isoSecond(opts.now);
   const fields: FrontmatterMap = {
     kind: BRAIN_ENTITY_KIND,
@@ -1031,8 +1052,8 @@ export function archiveEntity(
   // excluded would be a restore that reads as success without being one.
   const extras: FrontmatterMap = { ...meta };
   if (opts.restore) delete extras[UNTRUSTED_SOURCE_FRONTMATTER_KEY];
-  writeEntityFile(target.path, fields, extras, body, { overwrite: true });
-  const entity = parseEntityFile(target.path);
+  writeEntityFile(vault, target.path, fields, extras, body, { overwrite: true });
+  const entity = parseEntityFile(target.path, vault);
   if (entity === null) throw new Error(`entity file unreadable after write: ${target.path}`);
   return entity;
 }

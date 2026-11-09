@@ -92,7 +92,8 @@ describe("captureSessionLifecycleEvent interrupted close", () => {
     );
 
     // Audit honesty.
-    const details = readAuditDetails(result.audit_path);
+    expect(result.audit_path).toBeDefined();
+    const details = readAuditDetails(result.audit_path!);
     expect(details["interrupted"]).toBe(true);
     expect(details["transcript_consumed"]).toBe(true);
   });
@@ -150,7 +151,8 @@ describe("captureSessionLifecycleEvent interrupted close", () => {
     expect(result.interrupted).toBe(true);
     expect(result.transcript_consumed).toBe(false);
     expect(result.signals_created).toBe(0);
-    const details = readAuditDetails(result.audit_path);
+    expect(result.audit_path).toBeDefined();
+    const details = readAuditDetails(result.audit_path!);
     expect(details["interrupted"]).toBe(true);
     expect(details["transcript_consumed"]).toBe(false);
   });
@@ -165,7 +167,8 @@ describe("captureSessionLifecycleEvent interrupted close", () => {
     expect(result.event).toBe("SessionEnd");
     expect(result.interrupted).toBeUndefined();
     expect(result.transcript_consumed).toBeUndefined();
-    const details = readAuditDetails(result.audit_path);
+    expect(result.audit_path).toBeDefined();
+    const details = readAuditDetails(result.audit_path!);
     expect("interrupted" in details).toBe(false);
     expect("transcript_consumed" in details).toBe(false);
   });

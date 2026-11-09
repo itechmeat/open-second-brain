@@ -1,13 +1,36 @@
-import { setPrimaryAgent } from "../../../core/brain/set-primary.ts";
-import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { brainSettingsFromStore } from "../../../core/brain/policy/load.ts";
+import { setBrainSetting, unsetBrainSetting } from "../../../core/brain/policy/settings-write.ts";
+import { setPrimaryAgent, type SetPrimaryAgentResult } from "../../../core/brain/set-primary.ts";
+import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
+
+/**
+ * On a store-only machine (or with no vault) `primary_agent` is a shared
+ * settings record with human authority, written by the shared settings
+ * writer; nothing under `Brain/` changes.
+ */
+function setPrimaryInStore(
+  vault: string | null,
+  config: string,
+  agent: string,
+  name: string | null,
+): SetPrimaryAgentResult {
+  const ctx = { vault, configPath: config, authority: "human" as const, agent };
+  const result =
+    name === null
+      ? unsetBrainSetting(ctx, "primary_agent")
+      : setBrainSetting(ctx, "primary_agent", name);
+  const asName = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return { previous: asName(result.previous), next: asName(result.value), changed: result.changed };
+}
 
 export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     clear: { type: "boolean" },
     json: { type: "boolean" },
+    agent: { type: "string" },
   });
-  const { vault } = brainVerbContext(flags);
+  const { vault, config } = brainVerbContext(flags, { vault: "optional" });
 
   let name: string | null;
   if (flags["clear"]) {
@@ -25,7 +48,10 @@ export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = setPrimaryAgent(vault, name);
+    result =
+      vault === null || brainSettingsFromStore(vault)
+        ? setPrimaryInStore(vault, config, resolveBrainAgent(flags, config), name)
+        : setPrimaryAgent(vault, name);
   } catch (exc) {
     return fail(`set-primary failed: ${(exc as Error).message ?? exc}`);
   }

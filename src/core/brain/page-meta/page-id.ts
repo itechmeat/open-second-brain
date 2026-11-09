@@ -23,7 +23,12 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatter } from "../../vault.ts";
+import { authorityFromOrigin, type DualWriteRecord } from "../../store/dual-write.ts";
+import { isPrivatePageFile, preferenceSetRecord } from "../../store/dual-write-records.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
+import { routeWrite, storeWrite } from "../../store/store-write.ts";
 import { brainDirs } from "../paths.ts";
+import { isRetiredEntry, preferencesStoreOnly, storePreferenceEntry } from "../preference-store.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const MERGE_CHAIN_MAX_DEPTH = 5;
@@ -146,7 +151,9 @@ export function pageIdToPath(vault: string, id: string): string | null {
  * at the id that named them, which is what lets the caller say what is
  * wrong with THAT id rather than with the chain as a whole.
  */
-function filePointerLookup(vault: string): MergePointerLookup {
+function filePointerLookup(vault: string, configPath?: string): MergePointerLookup {
+  // Store-only (task 2.10): the pointers are fields of the store's fold.
+  if (preferencesStoreOnly(vault, configPath)) return storePointerLookup(configPath);
   return (id) => {
     const path = pageIdToPath(vault, id);
     if (path === null || !existsSync(path)) return null;
@@ -273,14 +280,27 @@ export interface MergeChainReport {
  * The dangling verdict is the file test, not the pointer graph: a
  * terminal whose frontmatter will not parse still counts as resolved,
  * because its file is there and the parse failure is the record
- * checks' finding to report.
+ * checks' finding to report. `configPath` names the machine config the
+ * mode and the store come from (the doctor's own, when it has one).
  */
-export function reportMergeChain(vault: string, startId: string): MergeChainReport {
-  const walk = walkMergeChain(startId, filePointerLookup(vault));
+export function reportMergeChain(
+  vault: string,
+  startId: string,
+  configPath?: string,
+): MergeChainReport {
+  const walk = walkMergeChain(startId, filePointerLookup(vault, configPath));
   if (walk.outcome === "cycle" || walk.outcome === "depth") {
     return { visited: walk.visited, outcome: walk.outcome, at: walk.at };
   }
   if (!isValidPageId(walk.at)) return { ...walk, outcome: "malformed" };
+  if (preferencesStoreOnly(vault, configPath)) {
+    // Once switched there are no page files: the terminal exists when the
+    // fold holds it in the life its prefix names (`pref-` active, `ret-`
+    // retired), as the file of that name exists in the legacy tree.
+    const entry = storeEntryOf(walk.at, configPath);
+    const exists = entry !== undefined && isRetiredEntry(entry) === walk.at.startsWith("ret-");
+    return { ...walk, outcome: exists ? "resolved" : "dangling" };
+  }
   const path = pageIdToPath(vault, walk.at);
   if (path === null || !existsSync(path)) return { ...walk, outcome: "dangling" };
   return { ...walk, outcome: "resolved" };
@@ -362,6 +382,20 @@ export function setMergedInto(
     );
   }
   const secondaryPath = pageIdToPath(vault, secondaryId);
+  // Store-only (task 2.10): the merge graph is the `merged_into` field of
+  // the preferences the store's fold holds, and the write is one record.
+  if (preferencesStoreOnly(vault)) {
+    // `pref-x` and `ret-x` are one fold entry: pointing one at the other
+    // would point the entry at itself.
+    if (secondaryId.replace(/^(pref|ret)-/, "") === canonicalId.replace(/^(pref|ret)-/, "")) {
+      throw new MergeChainError(
+        "CYCLE",
+        secondaryId,
+        `cannot point a page at itself: ${secondaryId} and ${canonicalId} are one preference`,
+      );
+    }
+    return setStoreMergedInto(vault, secondaryId, canonicalId, opts);
+  }
   if (secondaryPath === null || !existsSync(secondaryPath)) {
     throw new MergeChainError("MALFORMED", secondaryId, `secondary page not found: ${secondaryId}`);
   }
@@ -396,7 +430,35 @@ export function setMergedInto(
       changed: false,
     });
   }
-  if (walkMergeChain(canonicalId, filePointerLookup(vault)).visited.includes(secondaryId)) {
+  checkMergeWrite(secondaryId, canonicalId, previous, opts, filePointerLookup(vault));
+
+  const nextHead =
+    previous === null
+      ? `${head}\nmerged_into: ${canonicalId}`
+      : head.replace(EXISTING_POINTER_RE, `merged_into: ${canonicalId}`);
+  routeWrite({
+    legacy: () => atomicWriteFileSync(secondaryPath, `${nextHead}${tail}`),
+    // Brain store dual write (task 1.11): the one field this write sets.
+    store: () => mergedIntoRecord(secondaryId, canonicalId, isPrivatePageFile(secondaryPath)),
+    context: { vault },
+  });
+  return Object.freeze({
+    secondary: secondaryId,
+    canonical: canonicalId,
+    previous,
+    changed: true,
+  });
+}
+
+/** Refuse a pointer write that would close a cycle, or repoint a merged page unasked. */
+function checkMergeWrite(
+  secondaryId: string,
+  canonicalId: string,
+  previous: string | null,
+  opts: SetMergedIntoOptions,
+  lookup: MergePointerLookup,
+): void {
+  if (walkMergeChain(canonicalId, lookup).visited.includes(secondaryId)) {
     throw new MergeChainError(
       "CYCLE",
       secondaryId,
@@ -412,18 +474,60 @@ export function setMergedInto(
         `${canonicalId} without an explicit repoint`,
     );
   }
+}
 
-  const nextHead =
-    previous === null
-      ? `${head}\nmerged_into: ${canonicalId}`
-      : head.replace(EXISTING_POINTER_RE, `merged_into: ${canonicalId}`);
-  atomicWriteFileSync(secondaryPath, `${nextHead}${tail}`);
-  return Object.freeze({
-    secondary: secondaryId,
-    canonical: canonicalId,
-    previous,
-    changed: true,
+/** The `preference-set` record of a `merged_into` pointer. */
+function mergedIntoRecord(
+  secondaryId: string,
+  canonicalId: string,
+  isPrivate: boolean,
+): DualWriteRecord | null {
+  return preferenceSetRecord({
+    id: `pref-${secondaryId.replace(/^(pref|ret)-/, "")}`,
+    frontmatter: { merged_into: canonicalId },
+    authority: authorityFromOrigin(),
+    private: isPrivate,
   });
+}
+
+/** The preference a page id names, as the store's fold holds it. */
+function storeEntryOf(id: string, configPath?: string) {
+  return storePreferenceEntry(id.replace(/^(pref|ret)-/, ""), configPath);
+}
+
+/** {@link MergePointerLookup} over the store's preference fold. */
+function storePointerLookup(configPath?: string): MergePointerLookup {
+  return (id) => {
+    if (!isValidPageId(id)) return null;
+    const entry = storeEntryOf(id, configPath);
+    return entry === undefined ? null : readMergedInto(entry.state.fields);
+  };
+}
+
+function setStoreMergedInto(
+  vault: string,
+  secondaryId: string,
+  canonicalId: string,
+  opts: SetMergedIntoOptions,
+): SetMergedIntoResult {
+  const entry = storeEntryOf(secondaryId);
+  if (entry === undefined) {
+    throw new MergeChainError("MALFORMED", secondaryId, `secondary page not found: ${secondaryId}`);
+  }
+  const previous = readMergedInto(entry.state.fields);
+  if (previous === canonicalId) {
+    return Object.freeze({
+      secondary: secondaryId,
+      canonical: canonicalId,
+      previous,
+      changed: false,
+    });
+  }
+  checkMergeWrite(secondaryId, canonicalId, previous, opts, storePointerLookup());
+  withOperationPrivacy(entry.private, () =>
+    storeWrite(() => mergedIntoRecord(secondaryId, canonicalId, entry.private), { vault }),
+  );
+  return Object.freeze({ secondary: secondaryId, canonical: canonicalId, previous, changed: true });
 }
 
 /** The `merged_into:` line already in a page's frontmatter, if any. */

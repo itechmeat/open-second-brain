@@ -89,6 +89,9 @@ beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-incremental-extract-"));
   vault = join(tmp, "vault");
   mkdirSync(join(vault, "imports"), { recursive: true });
+  // A legacy tree: these tests pin the watermark stamping of an unswitched
+  // machine (a vault with no `Brain/` is store-only, design D14 item 1).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

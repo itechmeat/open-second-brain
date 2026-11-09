@@ -45,6 +45,13 @@ const DOCUMENT_BASENAME = "_permissions.yaml";
 /** Vault-relative location of the permissions document. */
 export const PERMISSIONS_DOCUMENT_REL = `${DOCUMENT_DIRECTORY}/${DOCUMENT_BASENAME}`;
 
+/**
+ * The shared setting that holds the document's text once a machine writes
+ * the store only (design D14 item 3): an operator-only store-native setting
+ * the migration imports `_permissions.yaml` into.
+ */
+export const PERMISSIONS_DOCUMENT_SETTING = "permissions.document";
+
 /** The only schema version this build reads. Anything else hard-refuses. */
 export const PERMISSIONS_SCHEMA_VERSION = 1;
 
@@ -532,6 +539,16 @@ export function loadPermissionsDocument(vault: string): {
       `${path}: could not be read: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  return { document: parsePermissionsDocumentText(text, path), path };
+}
+
+/**
+ * Parse and validate a permissions document from its text, with the same
+ * strict rules as the file. `path` names where the text came from in every
+ * refusal and warning (the file, or the shared setting a store-only
+ * machine reads it from).
+ */
+export function parsePermissionsDocumentText(text: string, path: string): PermissionsDocument {
   let raw: YamlMapping;
   try {
     raw = parseDocumentYaml(text);
@@ -611,14 +628,11 @@ export function loadPermissionsDocument(vault: string): {
   }
 
   return {
-    document: {
-      version: 1,
-      default_action,
-      roles,
-      agents,
-      entries,
-      ...(ledger !== undefined ? { ledger } : {}),
-    },
-    path,
+    version: 1,
+    default_action,
+    roles,
+    agents,
+    entries,
+    ...(ledger !== undefined ? { ledger } : {}),
   };
 }

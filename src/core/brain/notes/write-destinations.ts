@@ -28,7 +28,6 @@
  * complete one. Underclaiming is acceptable; overclaiming is not.
  */
 
-import { listLogDates, listLogShardFiles, readLogDay } from "../log-jsonl.ts";
 import type { BrainLogEntry, BrainLogParseWarning } from "../log.ts";
 import type { WriteSessionStatus } from "../write-session/types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
@@ -39,6 +38,7 @@ import {
   parseWindowBound,
   timestampInWindow,
 } from "./log-window.ts";
+import { logDaysWithDevices } from "../log-days.ts";
 
 /** Which recorded write kinds a destination's rows cover. */
 export const WRITE_DESTINATION_KIND = Object.freeze({
@@ -240,14 +240,16 @@ export function listWriteDestinations(
   const effectiveSince =
     since ??
     `${defaultSinceDate(DEFAULT_WRITE_DESTINATION_WINDOW_DAYS, windowAnchor)}${DAY_START_SUFFIX}`;
-  const shards = listLogShardFiles(vault);
   const warnings: BrainLogParseWarning[] = [];
   const byTarget = new Map<string, DestinationAccumulator>();
 
-  for (const date of listLogDates(vault)) {
-    if (date < effectiveSince.slice(0, DATE_LENGTH)) continue;
-    if (until !== null && date > until.slice(0, DATE_LENGTH)) continue;
-    const day = readLogDay(vault, date, shards);
+  // The day files and their shard ids, or the store's log events and
+  // their devices once switched.
+  for (const day of logDaysWithDevices(
+    vault,
+    effectiveSince.slice(0, DATE_LENGTH),
+    until === null ? null : until.slice(0, DATE_LENGTH),
+  )) {
     warnings.push(...day.warnings);
     day.entries.forEach((entry, index) => {
       const device = day.entryShardIds[index] ?? "";

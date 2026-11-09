@@ -57,13 +57,11 @@
  * verbatim.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
+import { formatFrontmatter, slugify } from "../../vault.ts";
 import {
   UNTRUSTED_ORIGIN,
   isSourceHidden,
@@ -82,7 +80,6 @@ import {
   untrustedSourceFrontmatter,
   type IntakeTrust,
 } from "../trust/untrusted-provenance.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   renderProvenanceSection,
   sourceIdentityHash,
@@ -117,6 +114,13 @@ import {
   QuoteCheckError,
   type QuoteCheckReport,
 } from "./quote-verdict.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  parseLanePage,
+  readLaneText,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 /** Frontmatter `kind:` marker of a distillation page (defined in the claim leaf). */
 export { BRAIN_DISTILLATION_KIND };
@@ -321,7 +325,7 @@ export function distillSource(
   opts: DistillSourceOptions,
 ): DistillSourceResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   // The write-time markdown neutralization gate (t_c2ac4fc8, review M4),
   // resolved BEFORE ANY WRITE like every seam: a misconfigured mode is a
   // misconfiguration of the process, not a verdict about this source, and
@@ -373,10 +377,10 @@ export function distillSource(
 
   const idHash = sourceIdentityHash([canonicalSource]);
   const absPath = distillationPagePath(vault, `${slugify(canonicalSource)}-${idHash.slice(0, 12)}`);
-  const existed = existsSync(absPath);
+  const existed = lanePageExists(vault, absPath);
   const stamp = isoSecond(opts.now);
-  const createdAt = existed ? readCreatedAt(absPath, stamp) : stamp;
-  const priorUpdatedAt = existed ? readUpdatedAt(absPath, stamp) : stamp;
+  const createdAt = existed ? readCreatedAt(vault, absPath, stamp) : stamp;
+  const priorUpdatedAt = existed ? readUpdatedAt(vault, absPath, stamp) : stamp;
 
   // Claim-text neutralization (t_c2ac4fc8, review M4): the claims are the
   // caller's text ABOUT the source, and an untrusted source makes them
@@ -453,10 +457,9 @@ export function distillSource(
   // Idempotent no-op: if the page would be byte-identical with its EXISTING
   // updated_at preserved, nothing meaningful changed - skip the write and leave
   // updated_at (and the mtime) alone. A real content change bumps updated_at.
-  const onDisk = existed ? readFileSync(absPath, "utf8") : null;
+  const onDisk = existed ? (readLaneText(vault, absPath) ?? "") : null;
   if (onDisk === null || onDisk !== buildContents(priorUpdatedAt)) {
-    mkdirSync(dirname(absPath), { recursive: true });
-    atomicWriteFileSync(absPath, buildContents(stamp));
+    writeLaneText(vault, absPath, buildContents(stamp));
   }
 
   return {
@@ -471,17 +474,18 @@ export function distillSource(
 }
 
 /** Read a stable `created_at` from an existing distillation page, else fall back. */
-function readCreatedAt(absPath: string, fallback: string): string {
-  return readStampField(absPath, "created_at", fallback);
+function readCreatedAt(vault: string, absPath: string, fallback: string): string {
+  return readStampField(vault, absPath, "created_at", fallback);
 }
 
 /** Read the existing `updated_at` so an unchanged re-run preserves it. */
-function readUpdatedAt(absPath: string, fallback: string): string {
-  return readStampField(absPath, "updated_at", fallback);
+function readUpdatedAt(vault: string, absPath: string, fallback: string): string {
+  return readStampField(vault, absPath, "updated_at", fallback);
 }
 
-function readStampField(absPath: string, field: string, fallback: string): string {
-  const [meta] = parseFrontmatter(absPath);
+/** A stamp of the page, read under the distillation's own vault (never one parsed from the path). */
+function readStampField(vault: string, absPath: string, field: string, fallback: string): string {
+  const [meta] = parseLanePage(vault, absPath);
   const value = meta[field];
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }

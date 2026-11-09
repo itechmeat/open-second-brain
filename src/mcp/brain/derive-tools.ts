@@ -33,7 +33,8 @@ async function toolBrainDeriveFact(
     if (!loadGuardrailsConfigSafe(ctx.vault).derived_fact_synthesis) {
       throw new MCPError(
         INVALID_PARAMS,
-        `${TOOL}: derived-fact synthesis is off; enable guardrails.derived_fact_synthesis in _brain.yaml`,
+        `${TOOL}: derived-fact synthesis is off; the operator enables it with ` +
+          "`o2b brain settings set guardrails.derived_fact_synthesis true`",
       );
     }
 

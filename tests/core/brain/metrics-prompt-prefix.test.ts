@@ -23,6 +23,10 @@ import { DEFAULT_PERSONAS } from "../../../src/core/brain/write-session/personas
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 import { listMetrics, METRICS_SCHEMA_VERSION } from "../../../src/core/brain/metrics.ts";
 import { PROMPT_PREFIX_SURFACE } from "../../../src/core/brain/prompt-prefix.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW = "2026-06-04T10:00:00.000Z";
 const TOPIC = "Adopt the new sync engine";

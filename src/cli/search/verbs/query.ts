@@ -29,6 +29,7 @@ import {
   resolveConfig,
   resolveConfigPath,
   VAULT_FLAGS,
+  requireSearchVault,
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts-match-mode.ts";
@@ -136,6 +137,10 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   const source = sourceRaw;
 
   const cfg = resolveConfig(flags);
+  // `--global` needs the vault: refused before the refresh or any search.
+  const globalVault = flagBoolean(flags, "global")
+    ? requireSearchVault(cfg, "search query --global")
+    : null;
 
   if (flagBoolean(flags, "auto-refresh")) {
     try {
@@ -209,9 +214,10 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   };
   // Cross-vault union (t_72a22658): explicit per-call opt-in fans the
   // query out over profiles and read-only sources with origin labels.
-  const outcome = isGlobal
-    ? await searchAcrossVaults(resolveConfigPath(flags), cfg.vault, searchOpts, cfg)
-    : await search(cfg, searchOpts);
+  const outcome =
+    globalVault !== null
+      ? await searchAcrossVaults(resolveConfigPath(flags), globalVault, searchOpts, cfg)
+      : await search(cfg, searchOpts);
 
   // Retrieval receipts (what-the-index-already-knew, task F): --explain
   // appends the decision trace and the trust assessment the search

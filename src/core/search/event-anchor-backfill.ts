@@ -98,6 +98,9 @@ export async function planEventAnchorBackfill(
       for (const path of pending) {
         let content: string;
         try {
+          // No vault: the document is a store record with no file, read
+          // as a missing one (it stays pending, as on a vault).
+          if (config.vault === null) throw new Error(`no vault: ${path} has no file`);
           content = readFileSync(join(config.vault, path), "utf8");
         } catch (err) {
           unreadable.push(

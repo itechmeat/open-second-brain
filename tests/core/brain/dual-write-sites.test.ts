@@ -38,6 +38,8 @@ import type { StoreRecord } from "../../../src/core/store/envelope.ts";
 import { foldPreferences } from "../../../src/core/store/fold-preferences.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { ensureStore } from "../store/fixtures/temp-store.ts";
+import { makeTestVault } from "../../helpers/test-vault.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
@@ -426,7 +428,7 @@ describe("the vault and config a dual write is checked against", () => {
 
 /** This machine holds only `shared`, as after `o2b store init --partitions shared`. */
 function dropPrivatePartition(): void {
-  rmSync(join(storeRoot, "private"), { recursive: true, force: true });
+  neverHeld(storeRoot);
 }
 
 function auditTrailRow(
@@ -716,9 +718,16 @@ describe("audit rows go to private when this machine holds it, else shared", () 
   );
 
   test("a reliability-audit row written without its vault cannot be judged and is private only", () => {
-    dropPrivatePartition();
-    auditTrailRow("hygiene", {}, null);
-    expect(ledgerRows("reliability-audit", "shared")).toEqual([]);
-    expect(readDualWriteStatus().failures).toBe(1);
+    // Without a vault argument the machine's configured vault decides the
+    // mode: configure a legacy one, so the machine is unswitched.
+    const configured = makeTestVault();
+    try {
+      dropPrivatePartition();
+      auditTrailRow("hygiene", {}, null);
+      expect(ledgerRows("reliability-audit", "shared")).toEqual([]);
+      expect(readDualWriteStatus().failures).toBe(1);
+    } finally {
+      configured.cleanup();
+    }
   });
 });

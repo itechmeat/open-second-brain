@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
-
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { proceduralHintsPath } from "./paths.ts";
 import { readProceduralGraph, type ProceduralGraphProjection } from "./procedural-graph.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  readLaneFile,
+  lanePageExists,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 export interface ProceduralHintEntry {
   readonly node_id: string;
@@ -22,7 +23,7 @@ export function rebuildProceduralHints(
   opts: { now?: Date; graph?: ProceduralGraphProjection } = {},
 ): ProceduralHintsProjection {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const graph = opts.graph ?? readProceduralGraph(vault);
   const now = opts.now ?? new Date();
   const entries: ProceduralHintEntry[] = [];
@@ -59,16 +60,15 @@ export function rebuildProceduralHints(
   };
 
   const path = proceduralHintsPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, `${JSON.stringify(projection, null, 2)}\n`);
+  writeLaneText(vault, path, `${JSON.stringify(projection, null, 2)}\n`);
   return projection;
 }
 
 export function readProceduralHints(vault: string): ProceduralHintsProjection | null {
   const path = proceduralHintsPath(vault);
-  if (!existsSync(path)) return null;
+  if (!lanePageExists(vault, path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as ProceduralHintsProjection;
+    const parsed = JSON.parse(readLaneFile(vault, path)) as ProceduralHintsProjection;
     if (parsed.schema_version !== 1) return null;
     if (!Array.isArray(parsed.entries)) return null;
     return parsed;

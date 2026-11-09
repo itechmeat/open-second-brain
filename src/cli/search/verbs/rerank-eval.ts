@@ -49,6 +49,7 @@ import {
   resolveConfig,
   resolveConfigPath,
   VAULT_FLAGS,
+  requireSearchVault,
 } from "../helpers.ts";
 
 const KINDS: ReadonlyArray<ResolvedRerankConfig["kind"]> = [
@@ -223,6 +224,10 @@ export async function cmdSearchRerankEval(argv: ReadonlyArray<string>): Promise<
   }
   const dataset = parseRecallBenchmarkDataset(raw);
   const cfg = resolveConfig(flags);
+  // The decision-model arm reports from the vault's call records: refused
+  // before any query is sent to the model, not after.
+  const reportVault =
+    kindFlag === "decision-model" ? requireSearchVault(cfg, "search rerank-eval") : null;
   const decisionModel =
     kindFlag === "decision-model"
       ? (cfg.rerank.decisionModel ??
@@ -245,9 +250,9 @@ export async function cmdSearchRerankEval(argv: ReadonlyArray<string>): Promise<
 
   // The decision-model arm's own records: every call this run made.
   const calls =
-    kindFlag === "decision-model"
+    reportVault !== null
       ? callsOf(
-          buildDecisionModelReport(cfg.vault, {
+          buildDecisionModelReport(reportVault, {
             since: started,
             use: "rerank",
             origin: "eval",

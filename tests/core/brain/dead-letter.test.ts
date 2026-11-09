@@ -28,7 +28,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import {
@@ -62,7 +62,11 @@ const ENVELOPE: DeadLetterEnvelopeIdentity = Object.freeze({
 });
 
 function vault(): string {
-  return mkTemp("o2b-dead-letter-");
+  const v = mkTemp("o2b-dead-letter-");
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(v, "Brain"), { recursive: true });
+  return v;
 }
 
 function report(missing: ReadonlyArray<string>, found = 1) {
@@ -247,12 +251,12 @@ describe("what a dead letter refuses to be", () => {
 
 describe("the recorder used inside a catch block cannot throw", () => {
   test("a write it cannot perform is reported, not raised", () => {
-    // A vault path that is a FILE, not a directory: the write has nowhere
-    // to land, and the caller is mid-catch holding the real error.
-    const parent = mkTemp("o2b-dead-letter-");
-    const notAVault = join(parent, "file-not-a-dir");
-    writeFileSync(notAVault, "");
-    const outcome = tryRecordDeadLetter(notAVault, {
+    // A legacy vault whose machine-state directory is a FILE: the write
+    // has nowhere to land, and the caller is mid-catch holding the real
+    // error.
+    const v = vault();
+    writeFileSync(join(v, DERIVED_STORE_DIR), "");
+    const outcome = tryRecordDeadLetter(v, {
       envelope: ENVELOPE,
       report: report(["items[1]:x"]),
       firstError: "boom",
@@ -260,6 +264,29 @@ describe("the recorder used inside a catch block cannot throw", () => {
     });
     expect(outcome.recorded).toBe(false);
     if (!outcome.recorded) expect(outcome.reason.length).toBeGreaterThan(0);
+  });
+
+  test("a store-only vault: an unwritable device-local target is reported, not raised", () => {
+    // No `Brain/`: the dead letters live in the device-local machine state,
+    // outside the vault. A FILE where their directory belongs blocks it.
+    const v = mkTemp("o2b-dead-letter-store-only-");
+    const dir = deadLetterDir(v);
+    expect(dir.startsWith(v)).toBe(false);
+    mkdirSync(dirname(dir), { recursive: true });
+    writeFileSync(dir, "");
+    try {
+      const outcome = tryRecordDeadLetter(v, {
+        envelope: ENVELOPE,
+        report: report(["items[1]:x"]),
+        firstError: "boom",
+        now: NOW,
+      });
+      expect(outcome.recorded).toBe(false);
+      if (!outcome.recorded) expect(outcome.reason.length).toBeGreaterThan(0);
+      expect(existsSync(join(v, "Brain"))).toBe(false);
+    } finally {
+      rmSync(dir, { force: true });
+    }
   });
 
   test("a write it can perform reports where the record landed", () => {

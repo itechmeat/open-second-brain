@@ -50,6 +50,8 @@ let configPath: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-hook-counterparty-vault-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-hook-counterparty-cfg-"));
   configPath = join(configHome, "config.yaml");
   writeFileSync(configPath, `counterparty_brief_triggers: meet, call\n`);

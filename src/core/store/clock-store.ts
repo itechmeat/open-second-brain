@@ -17,6 +17,15 @@
  * right now (EBUSY, EPERM, EACCES from an antivirus or indexer handle on
  * Windows) is an error instead: the write fails rather than the saved
  * clock, and the remote stamps it absorbed, being reset.
+ *
+ * Reading is receiving. Every shard read raises an in-process floor for
+ * its store (`clock-floor.ts`, called by `reader.ts`), and the next tick
+ * for that store takes the receive rule over the floor first.
+ * So a write that replaces, removes or raises a record it (or anything
+ * before it in the process) read orders after that record in every fold,
+ * even when the record's device stamped it ahead of this machine's wall
+ * clock. A stamp more than `HLC_MAX_DRIFT_MS` ahead is still ignored by
+ * the receive rule.
  */
 
 import { readFileSync } from "node:fs";
@@ -66,13 +75,21 @@ function update(deviceStateDir: string, device: string, step: (local: Hlc) => Hl
   });
 }
 
-/** Send rule, persisted: the stamp for one new local record. */
+/**
+ * Send rule, persisted: the stamp for one new local record. With a
+ * `floor` (the newest stamp read from the store, `clock-floor.ts`)
+ * the receive rule takes it in first, so the stamp orders after it.
+ */
 export function tickClock(
   deviceStateDir: string,
   device: string,
   now: WallClock = systemWallClock,
+  floor: Hlc | null = null,
 ): Hlc {
-  return update(deviceStateDir, device, (local) => sendHlc(local, now()));
+  return update(deviceStateDir, device, (local) => {
+    const wall = now();
+    return sendHlc(floor === null ? local : receiveHlc(local, floor, wall), wall);
+  });
 }
 
 /** Receive rule, persisted: raise the local clock after ingesting `remote`. */

@@ -44,7 +44,8 @@ import { foldPinned, pinnedFingerprint } from "./fold-pinned.ts";
 import { foldPreferences, preferencesFingerprint } from "./fold-preferences.ts";
 import { foldSettings, settingsFingerprint } from "./fold-settings.ts";
 import { parseHlc } from "./hlc.ts";
-import { readShard } from "./reader.ts";
+import { readShard, replacedShards, shardReadGap, type Compaction } from "./reader.ts";
+import { SEEN_SHARD_MISSING_REASON, trackSeenShards } from "./seen-shards.ts";
 import { listShards } from "./shard-list.ts";
 import type { StoreHandle } from "./store-open.ts";
 import { LEDGER_NAME_RE, partitionDir, type StreamRef } from "./store-paths.ts";
@@ -74,13 +75,25 @@ export interface UnreadableShard {
   readonly rel: string;
   readonly path: string;
   readonly error: unknown;
+  /**
+   * The shard was read, but only in part (`shardReadGap`: a pending blob,
+   * a bad line in the middle, a newer format): it is still in the read,
+   * with the records that could be read. Absent when nothing of it was.
+   */
+  readonly incomplete?: true;
 }
 
 export interface ReadPartitionOptions {
   /**
    * Called for a shard that cannot be read (a sync client's lock, a
-   * permission). The shard is then left out and the others are still
-   * read. Without it the first such error is thrown.
+   * permission), and for a shard this machine read before that is gone
+   * now (`seen-shards.ts`). The shard is then left out and the others are
+   * still read. Without it the first read error is thrown, and a shard
+   * gone since it was seen is left out unnamed.
+   *
+   * Also called, with `incomplete`, for a shard read only in part; that
+   * shard stays in the read. A caller that decides a protection treats it
+   * as unread; a caller that only needs the cut may skip it.
    */
   readonly onUnreadable?: (shard: UnreadableShard) => void;
 }
@@ -138,8 +151,11 @@ export function readPartition(
   options: ReadPartitionOptions = {},
 ): PartitionShard[] {
   const out: PartitionShard[] = [];
+  const listed: string[] = [];
+  const compactions: Compaction[] = [];
   for (const ref of streamRefs(partitionRoot)) {
     for (const shard of listShards(partitionRoot, ref)) {
+      listed.push(shard.rel);
       let read: ReturnType<typeof readShard>;
       try {
         read = readShard(shard.path, { partitionRoot });
@@ -159,6 +175,16 @@ export function readPartition(
         });
         continue;
       }
+      const gap = shardReadGap(read);
+      if (gap !== null) {
+        options.onUnreadable?.({
+          rel: shard.rel,
+          path: shard.path,
+          error: new Error(`the shard was read only in part: ${gap}`),
+          incomplete: true,
+        });
+      }
+      compactions.push(...read.compactions);
       const all = read.records.map((r) => r.record);
       out.push({
         rel: shard.rel,
@@ -170,6 +196,18 @@ export function readPartition(
         heldTailBytes: read.pendingTailBytes,
       });
     }
+  }
+  for (const rel of trackSeenShards(
+    partitionRoot,
+    { prefix: "" },
+    listed,
+    replacedShards(compactions),
+  )) {
+    options.onUnreadable?.({
+      rel,
+      path: join(partitionRoot, ...rel.split("/")),
+      error: new Error(SEEN_SHARD_MISSING_REASON),
+    });
   }
   return out.toSorted((a, b) => compareCodeUnits(a.rel, b.rel));
 }

@@ -11,7 +11,7 @@
 import { BAND_RANK, computeConfidence, rebandConfidence } from "./confidence.ts";
 import type { PlanState, ScanResult } from "./dream-plan.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
+import { logDayReader } from "./log-days.ts";
 import { isPinned } from "./pin.ts";
 import { wouldRewritePreference } from "./preference.ts";
 import { classifyFreshnessTrend } from "./temporal/freshness-trend.ts";
@@ -133,12 +133,13 @@ export interface ApplyEvidenceEntry {
   readonly outcome?: "success" | "failure";
 }
 
-export function scanApplyEvidence(vault: string): ApplyEvidenceEntry[] {
+export function scanApplyEvidence(vault: string | null): ApplyEvidenceEntry[] {
   const out: ApplyEvidenceEntry[] = [];
   const mergeAliases = new Map<string, string>();
   // Shard-aware (Memory Integrity Suite): merged per-day reads.
-  for (const date of listLogDates(vault)) {
-    const { entries } = readLogDay(vault, date);
+  const log = logDayReader(vault);
+  for (const date of log.dates) {
+    const { entries } = log.day(date);
     for (const e of entries) {
       if (e.eventType === BRAIN_LOG_EVENT_KIND.merge) {
         const keep = parseWikilinkFromBodyValue(e.body["keep"]);
@@ -201,7 +202,7 @@ function resolveMergeAlias(slug: string, aliases: ReadonlyMap<string, string>): 
 }
 
 export function planRefresh(
-  vault: string,
+  vault: string | null,
   scan: ScanResult,
   evidence: ApplyEvidenceEntry[],
   cfg: BrainConfig,

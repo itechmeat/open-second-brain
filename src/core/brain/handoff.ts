@@ -12,11 +12,11 @@
 import { join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
-import { formatFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { formatFrontmatter } from "../vault.ts";
+import { assertLaneWrite, writeLanePage } from "../store/lane-pages.ts";
 import { computeSourceStamp } from "./freshness.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { resolveSessionScope } from "./session-scope.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 
 export interface HandoffNoteOptions {
@@ -139,8 +139,9 @@ export function buildHandoffNote(
 
 /** Build and persist the note at `Brain/handoffs/<date>-<scope>.md`. */
 export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): HandoffNoteResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Vault-identity write guard (context-integrity-gates, Unit J) on an
+  // unswitched machine; a store-only one writes a lane-entry record.
+  assertLaneWrite(vault);
   const now = input.now ?? new Date();
   const scope = resolveSessionScope(input.sessionId);
   const dir = join(vault, "Brain", "handoffs");
@@ -170,6 +171,6 @@ export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): H
   // refreshes an existing one by path. The atomic writer creates the
   // parent directory, so the note is never observed half-written and no
   // `mkdirSync` is needed ahead of it.
-  writeFrontmatterAtomic(path, metadata, body, { overwrite: true });
+  writeLanePage(vault, path, metadata, body, { overwrite: true });
   return Object.freeze({ path, scope, content: formatFrontmatter(metadata, body) });
 }

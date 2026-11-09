@@ -18,7 +18,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 
-import { readerNarrowsActive, renderActiveForReader, type ActiveReaderOptions } from "./active.ts";
+import {
+  activeDigestPathForRead,
+  readerNarrowsActive,
+  renderActiveForReader,
+  type ActiveReaderOptions,
+} from "./active.ts";
 import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { brainConfigUnreadableReport } from "./policy.ts";
@@ -190,7 +195,9 @@ function deliveredHead(text: string): ActiveHead {
  * same predicate the loader splits on, and the head is withheld with the
  * reason named. It is not a `catch`: any other failure inside
  * the reader render still propagates, and a `catch` here would re-absorb
- * exactly the silence the split removed.
+ * exactly the silence the split removed. The one `catch` is around the
+ * store-only on-demand render of the digest (no reader scoping yet): its
+ * failure withholds the head with a fixed reason and the error's code.
  *
  * Withheld, never substituted. The file's bytes are not a fallback for a
  * scoped render - serving them under an enforcing gate is the leak A3
@@ -207,7 +214,24 @@ function readActiveHead(
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     ...(opts.restricted === true ? { restricted: true } : {}),
   };
-  const path = brainActivePath(vault);
+  // `Brain/active.md` on an unswitched machine; on a store-only one the
+  // digest rendered on demand into the device-local cache (D14 item 7).
+  let path: string;
+  try {
+    path = activeDigestPathForRead(vault);
+  } catch (err) {
+    // The on-demand render failed (an unreadable store, a store identity
+    // refusal, a cache that cannot be written): withheld with the reason
+    // named, like the unreadable-config branch below, never in silence.
+    // The pack reaches remote callers, and a render error's message names
+    // the device-local cache or store path, so only its code is reported.
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    const named = typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? ` (${code})` : "";
+    return Object.freeze({
+      text: null,
+      warning: `the active digest could not be rendered${named}`,
+    });
+  }
   // A vault whose digest was never generated has no head for an unscoped
   // reader, whatever its reach and whatever is withheld from it.
   if (enforcedScope === null && !existsSync(path)) return NO_ACTIVE_HEAD;

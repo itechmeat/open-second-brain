@@ -20,9 +20,11 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { SearchError } from "../types.ts";
+import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 /** A registered OpenAI-compatible rerank provider profile. */
 export interface RerankProviderProfile {
@@ -35,8 +37,8 @@ export interface RerankProviderProfile {
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-export function rerankRegistryPath(vault: string): string {
-  return join(vault, "Brain", "search", "rerank-providers.json");
+export function rerankRegistryPath(vault: string | null): string {
+  return machineStatePath(vault, BRAIN_ROOT_REL, "search", "rerank-providers.json");
 }
 
 function isProfile(value: unknown): value is RerankProviderProfile {
@@ -51,7 +53,7 @@ function isProfile(value: unknown): value is RerankProviderProfile {
 }
 
 /** Load the registry, fail-soft: absent or malformed file -> empty list. */
-export function loadRerankRegistry(vault: string): RerankProviderProfile[] {
+export function loadRerankRegistry(vault: string | null): RerankProviderProfile[] {
   let text: string;
   try {
     text = readFileSync(rerankRegistryPath(vault), "utf8");
@@ -68,7 +70,10 @@ export function loadRerankRegistry(vault: string): RerankProviderProfile[] {
   return parsed.filter(isProfile).map((p) => Object.freeze({ ...p }));
 }
 
-function writeRerankRegistry(vault: string, registry: ReadonlyArray<RerankProviderProfile>): void {
+function writeRerankRegistry(
+  vault: string | null,
+  registry: ReadonlyArray<RerankProviderProfile>,
+): void {
   const path = rerankRegistryPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   // Sort by name so the on-disk file is deterministic across edits.
@@ -100,7 +105,7 @@ function validateProfile(profile: RerankProviderProfile): void {
  * the full registry after the change.
  */
 export function addRerankProviderProfile(
-  vault: string,
+  vault: string | null,
   profile: RerankProviderProfile,
 ): RerankProviderProfile[] {
   validateProfile(profile);
@@ -118,7 +123,7 @@ export function addRerankProviderProfile(
 
 /** Remove a profile by name; reports whether one was present. */
 export function removeRerankProviderProfile(
-  vault: string,
+  vault: string | null,
   name: string,
 ): { removed: boolean; registry: RerankProviderProfile[] } {
   const current = loadRerankRegistry(vault);
@@ -129,7 +134,7 @@ export function removeRerankProviderProfile(
 }
 
 export function getRerankProviderProfile(
-  vault: string,
+  vault: string | null,
   name: string,
 ): RerankProviderProfile | null {
   return loadRerankRegistry(vault).find((p) => p.name === name) ?? null;

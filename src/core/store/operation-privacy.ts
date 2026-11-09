@@ -39,6 +39,9 @@
  * vault-relative paths it derived); none of them is caller text, so none
  * can carry a region.
  *
+ * `vault` is `null` on a machine with no vault (design D14): references
+ * are then judged from the store's folds (`reference-privacy.ts`).
+ *
  * The verdict is lazy and memoised: nothing is judged unless a record is
  * actually written (dual writes off judges nothing), and once judged it
  * never changes for the rest of the operation. A judge that throws counts
@@ -140,7 +143,7 @@ function holds(verdict: PrivacyVerdict | undefined): boolean {
   return typeof verdict === "function" ? verdict() : verdict === true;
 }
 
-function judge(vault: string, parts: OperationPrivacyParts): boolean {
+function judge(vault: string | null, parts: OperationPrivacyParts): boolean {
   if (holds(parts.target)) return true;
   if ((parts.inherit ?? []).some(holds)) return true;
   // The row judge checks every string, opaque or not, for a region, and
@@ -151,7 +154,10 @@ function judge(vault: string, parts: OperationPrivacyParts): boolean {
 }
 
 /** The single, memoised privacy verdict of one writer operation. */
-export function operationPrivacy(vault: string, parts: OperationPrivacyParts): OperationPrivacy {
+export function operationPrivacy(
+  vault: string | null,
+  parts: OperationPrivacyParts,
+): OperationPrivacy {
   let verdict: boolean | undefined;
   return () => {
     if (verdict === undefined) {

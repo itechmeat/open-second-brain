@@ -65,6 +65,7 @@ import {
   type RepairCandidate,
   type RepairDecision,
 } from "./repair-lane.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 /** Filename of the staged store, inside {@link BRAIN_INTERNAL_STATE_REL}. */
 export const REPAIR_CANDIDATES_STORE_FILE = "repair-candidates.jsonl";
@@ -260,7 +261,7 @@ function refusalRecord(refusal: HubRefusal): RefusalRecord {
 
 /** Absolute path of the staged store; the state-surface catalogue binds to it. */
 export function repairCandidatesStorePath(vault: string): string {
-  return join(vault, BRAIN_INTERNAL_STATE_REL, REPAIR_CANDIDATES_STORE_FILE);
+  return machineStatePath(vault, BRAIN_INTERNAL_STATE_REL, REPAIR_CANDIDATES_STORE_FILE);
 }
 
 function requireField(record: Record<string, unknown>, field: string, where: string): string {

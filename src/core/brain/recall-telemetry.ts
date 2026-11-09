@@ -436,7 +436,10 @@ export interface RecallTelemetrySummary {
   readonly gap_counts: Record<string, number>;
 }
 
-export function emitRecallTelemetry(vault: string, input: RecallTelemetryInput): ContinuityRecord {
+export function emitRecallTelemetry(
+  vault: string | null,
+  input: RecallTelemetryInput,
+): ContinuityRecord {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const topArtifacts = [...(input.topArtifacts ?? [])];
   const gaps = [...new Set((input.gaps ?? []).map((gap) => gap.trim()).filter(Boolean))];
@@ -469,7 +472,7 @@ export function emitRecallTelemetry(vault: string, input: RecallTelemetryInput):
 }
 
 export function listRecallTelemetry(
-  vault: string,
+  vault: string | null,
   filter: RecallTelemetryFilter = {},
 ): ReadonlyArray<ContinuityRecord> {
   let records = listContinuityRecords(vault, {
@@ -483,7 +486,7 @@ export function listRecallTelemetry(
 }
 
 export function summarizeRecallTelemetry(
-  vault: string,
+  vault: string | null,
   filter: RecallTelemetryFilter = {},
 ): RecallTelemetrySummary {
   const records = listRecallTelemetry(vault, filter);

@@ -14,7 +14,14 @@ import { indexVault } from "../../../core/search/index.ts";
 import { IndexWatchPlanner } from "../../../core/search/index-watch.ts";
 import { IndexWatchRunner } from "../../../core/search/watch-runner.ts";
 import { canonicalNotePath } from "../../../core/path-safety.ts";
-import { CliError, flagBoolean, parseFlags, resolveConfig, VAULT_FLAGS } from "../helpers.ts";
+import {
+  CliError,
+  flagBoolean,
+  parseFlags,
+  requireSearchVault,
+  resolveConfig,
+  VAULT_FLAGS,
+} from "../helpers.ts";
 
 /** Floor on the flush timer so a zero debounce still yields to the loop. */
 const MIN_FLUSH_INTERVAL_MS = 50;
@@ -32,14 +39,17 @@ export async function cmdSearchWatch(argv: ReadonlyArray<string>): Promise<numbe
   }
   const planner = new IndexWatchPlanner({ debounceMs });
 
+  // Resolved ahead of the watch: a missing vault is its own refusal, not a
+  // failed watch.
+  const vault = requireSearchVault(cfg, "search watch");
   let watcher: FSWatcher;
   try {
-    watcher = watch(cfg.vault, { recursive: true, persistent: true });
+    watcher = watch(vault, { recursive: true, persistent: true });
   } catch (e) {
     // Fail loudly, not as a silent no-op: recursive fs.watch is not
     // available on every platform/filesystem.
     throw new CliError(
-      `cannot start a recursive watch on ${cfg.vault}: ${e instanceof Error ? e.message : String(e)}. ` +
+      `cannot start a recursive watch on ${vault}: ${e instanceof Error ? e.message : String(e)}. ` +
         "Recursive fs.watch is unsupported here; schedule `o2b search index` on a timer instead.",
     );
   }
@@ -105,7 +115,7 @@ export async function cmdSearchWatch(argv: ReadonlyArray<string>): Promise<numbe
     process.once("SIGINT", () => void shutdown());
     process.once("SIGTERM", () => void shutdown());
     process.stderr.write(
-      `watching ${cfg.vault} for .md changes (debounce ${debounceMs}ms); Ctrl-C to stop\n`,
+      `watching ${vault} for .md changes (debounce ${debounceMs}ms); Ctrl-C to stop\n`,
     );
   });
 }

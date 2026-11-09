@@ -166,7 +166,7 @@ import { retargetWikilinks, type WikilinkRetarget } from "../page-dedup.ts";
 import { minimalSpellingFor } from "../link-graph/minimal-spelling.ts";
 import { withDestructiveSnapshot } from "../snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../types.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
 import { resolveNoteTarget, type ResolvedNoteTarget } from "./create-note.ts";
 
 // ----- What a caller may ask for --------------------------------------------
@@ -872,7 +872,9 @@ export async function noteLifecycle(
   // on the planning path too: a plan names real vault paths, and computing
   // one against a vault this process was not pointed at is already the
   // confusion the guard exists to refuse.
-  assertVaultIdentityForWrite(vault);
+  // Through the vault adapter (design D14 items 8, 13): a vault is
+  // required, and the vault identity guard holds.
+  assertNoteVaultForWrite(vault, "the note lifecycle");
 
   const action = input.action;
   if (

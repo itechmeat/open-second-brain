@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { resolveVaultScope, walkVaultScope } from "../../vault-scope/index.ts";
 import { buildCaptureBoundary } from "../capture-boundary.ts";
 import { brainConfigPath } from "../paths.ts";
+import { brainSettingsFromStore } from "../policy/load.ts";
+import { STORE_SETTINGS_SOURCE } from "../policy/settings-source.ts";
 import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BrainConfigError,
@@ -26,8 +28,12 @@ import type { DoctorIssue } from "../types.ts";
 
 export const configCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault }, { issues }) {
-    const cfgPath = brainConfigPath(vault);
+  run({ vault, configPath }, { issues }) {
+    // On a store-only machine the settings come from the store, so there
+    // is no `_brain.yaml` to miss (design D14 item 3): the folded settings
+    // are validated under the store reader's label instead.
+    const fromStore = brainSettingsFromStore(vault, configPath);
+    const cfgPath = fromStore ? STORE_SETTINGS_SOURCE : brainConfigPath(vault);
     // Not `existsSync`: it answers false for a permission denial on the
     // file or on any parent component exactly as it does for a config
     // nobody has written, and this branch advises `o2b brain init` -
@@ -35,7 +41,7 @@ export const configCheck: DoctorCheck = {
     // advice to bootstrap over it. A read failure is the same finding
     // the catch arm below reports for a file that opens and does not
     // parse: the declaration could not be honoured, for a stated reason.
-    const absence = configAbsence(cfgPath);
+    const absence = fromStore ? null : configAbsence(cfgPath);
     if (absence !== null) {
       issues.push(absence);
       return;

@@ -1,20 +1,52 @@
 /**
  * Global bun:test preload (registered in bunfig.toml).
  *
- * Makes the whole suite hermetic: unless a test or the environment already
- * points `OPEN_SECOND_BRAIN_CONFIG` somewhere explicit, every test resolves an
- * isolated throwaway vault + config instead of the developer's real
- * `~/.config/open-second-brain/config.yaml`.
+ * Makes the whole suite hermetic: no test reads or writes the developer's
+ * real config, vault, store or per-user directories, and no test sees what
+ * an earlier file left behind in process-wide state.
  *
- * Two problems this fixes:
- *   1. On a bare CI runner there is no `o2b init` config, so any test that
- *      resolved the config threw "plugin config not found" - ~136 failures
- *      that only passed on a machine with a pre-initialised config.
- *   2. On a configured machine those same tests read (and could write) the
- *      operator's REAL vault. A throwaway default keeps tests off it.
+ * What every test process gets (design D14 items 1 and 16, task 2.10):
  *
- * Tests that need their own vault still set `OPEN_SECOND_BRAIN_CONFIG` /
- * `XDG_CONFIG_HOME` themselves; this only provides a safe default.
+ *  - **No vault.** The default config (`OPEN_SECOND_BRAIN_CONFIG`) is an
+ *    empty throwaway file, as on a machine with no vault configured, and
+ *    an exported `VAULT_DIR` (or `OPEN_SECOND_BRAIN_VAULT`) is dropped. A test
+ *    that needs a vault makes one with `makeTestVault()`
+ *    (`tests/helpers/test-vault.ts`) or points the variable at its own
+ *    config. A vault without `Brain/` is store-only (D14.1); a test of the
+ *    legacy layout creates `Brain/` in its vault.
+ *  - **A device id.** `O2B_DEVICE_ID` is `test-device`, so every brain
+ *    store write has a device to name its shards by, and the legacy
+ *    per-device ledgers are sharded the way a real machine shards them. A
+ *    test that needs "no device id" (or the un-sharded legacy file names)
+ *    sets `O2B_DEVICE_ID=""` itself (`tests/helpers/device-id.ts`).
+ *  - **No store, at a root of this run.** `OPEN_SECOND_BRAIN_STORE_ROOT`
+ *    names a directory of this run that does not exist. The preload does
+ *    NOT create a store: one store shared by every file of the process
+ *    would carry one test's records into the next test's reads, and a
+ *    store found at the root also moves the search index into the store's
+ *    device-local state for every search test. A test whose writes go to
+ *    the store makes a store of its own with `makeTestStore()`
+ *    (`tests/helpers/test-store.ts`): one `o2b store init` at a temp root,
+ *    a few milliseconds, paid only by the tests that need it. A test that
+ *    needs "no store" needs nothing.
+ *  - **Sandboxed per-user directories.** `XDG_STATE_HOME`, `XDG_DATA_HOME`
+ *    (POSIX) and `LOCALAPPDATA`/`APPDATA` (Windows) are roots of this run,
+ *    so device-local state (store identity, the store-only marker, the
+ *    machine state of a bare vault) never reaches `~/.local/state`,
+ *    `~/.local/share` or `%LOCALAPPDATA%`.
+ *  - **Per-test resets** of process-wide memos: the origin channel and
+ *    the machine-state cache, and of the device-local fail-open counter
+ *    of store writes, which every test of the process would otherwise
+ *    share (a telemetry write that did not land in one test is a doctor
+ *    finding in the next).
+ *
+ * Every override reaches this process and children spawned with an
+ * explicit `env: { ...process.env }`. A test that needs another value sets
+ * the variable itself. The roots that hold user data (the config file, the
+ * device-local state and data dirs, the Windows app-data roots and the
+ * dedup cache) are replaced even when the run exports them: an exported
+ * `XDG_STATE_HOME` on a developer machine names the real one, and the
+ * suite must never write there. Other variables a run exports are kept.
  */
 import { afterAll, beforeEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -23,6 +55,10 @@ import { join } from "node:path";
 
 import { clearOriginChannel } from "../src/core/origin-channel.ts";
 import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../src/core/brain/text/neutralize-markdown.ts";
+import { forgetMachineStateCache } from "../src/core/state/machine-state.ts";
+import { storeWriteStatusPath } from "../src/core/store/store-write.ts";
+import { DEFAULT_STORE_ROOT_ENV } from "./helpers/test-store.ts";
+import { TEST_DEVICE_ID } from "./helpers/test-vault.ts";
 
 // The origin channel (`src/core/origin-channel.ts`) is process-scoped by
 // design: an entry point claims it once and every record written under
@@ -36,16 +72,23 @@ import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../src/core/brain/text/neutralize-
 // pinning a real channel that would hide the difference. A test that
 // wants a channel claims it, exactly as the entry point does. Registered
 // here rather than in each suite for the same reason `O2B_DEVICE_ID` is
-// pinned above: a hermeticity rule every file needs is not a rule every
+// pinned below: a hermeticity rule every file needs is not a rule every
 // file should have to remember.
+//
+// The machine-state module caches store ids and the state it adopted or
+// restored (`state/machine-state.ts`), keyed by paths a test removes in
+// its teardown, so a memo outliving its test can only answer for a store
+// that no longer exists; forgetting it per test keeps a file's answer
+// independent of the files before it. The store-only predicate's memo of
+// seen switches needs no reset: it only remembers positives, keyed by a
+// store root no later test reuses, and a test of what a new process
+// answers asks one (`tests/helpers/fresh-process.ts`).
 beforeEach(() => {
   clearOriginChannel();
+  forgetMachineStateCache();
+  rmSync(storeWriteStatusPath(), { force: true });
 });
 
-// Per-device log sharding (Memory Integrity Suite): pin the device id
-// to the empty string so the suite writes the legacy un-sharded log
-// pair deterministically. Shard-specific tests clear / override
-// O2B_DEVICE_ID themselves.
 /**
  * Recursive removal that rides out a transient Windows refusal (EBUSY,
  * EPERM, ENOTEMPTY while a handle is still closing) instead of failing on
@@ -53,8 +96,11 @@ beforeEach(() => {
  */
 const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
 
+// The suite runs under a real device id (see the header): a store write
+// needs one, and an empty id is the explicit "no device id" a test opts
+// into.
 if (process.env["O2B_DEVICE_ID"] === undefined) {
-  process.env["O2B_DEVICE_ID"] = "";
+  process.env["O2B_DEVICE_ID"] = TEST_DEVICE_ID;
 }
 
 // Freshen-on-read starts a detached `o2b search index` whenever a search
@@ -65,16 +111,22 @@ if (process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] === undefined) {
   process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "0";
 }
 
-if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
+{
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
   // A preload's afterAll runs once, after the last file: the throwaway
   // default must not outlive the run that minted it.
   afterAll(() => rmSync(root, REMOVE_TREE));
-  const vault = join(root, "vault");
-  mkdirSync(join(vault, "Brain"), { recursive: true });
+  // No vault (design D14 item 16): a test that needs one makes it.
   const configPath = join(root, "config.yaml");
-  writeFileSync(configPath, `vault: ${vault}\n`);
+  writeFileSync(configPath, "");
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+  // The vault resolves from `VAULT_DIR` before the config
+  // (`src/core/config.ts` `resolveVault`), and the host-backup hook also
+  // reads `OPEN_SECOND_BRAIN_VAULT`: a developer shell that exports either
+  // would hand every in-process call the real vault. A test that needs one
+  // sets it itself.
+  delete process.env["VAULT_DIR"];
+  delete process.env["OPEN_SECOND_BRAIN_VAULT"];
 }
 
 // The brain store root defaults to a per-user data directory, and a store
@@ -89,6 +141,41 @@ if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
   const storeParent = mkdtempSync(join(tmpdir(), "osb-test-store-root-"));
   afterAll(() => rmSync(storeParent, REMOVE_TREE));
   process.env["OPEN_SECOND_BRAIN_STORE_ROOT"] = join(storeParent, "store");
+  // `o2b init --vault` creates the store (design D14 item 1). The CLI
+  // harness gives every run that still names this default root a store
+  // root of its own (`tests/helpers/run-cli.ts`), so a store one test's
+  // init creates is never seen by the next test.
+  process.env[DEFAULT_STORE_ROOT_ENV] = join(storeParent, "store");
+}
+
+// The device-local state base (`src/core/platform-dirs.ts`) holds the
+// brain store's per-store state, the store-only switch marker and the
+// store-write counters. A test that writes the store without pointing
+// XDG_STATE_HOME at a temp dir would otherwise put them in the developer's
+// real `~/.local/state/open-second-brain/`, and a later doctor run (in a
+// test or for real) would report another test's failures. Windows keeps
+// that base under %LOCALAPPDATA%, redirected below.
+//
+// Always replaced, never kept from the run's environment (an exported
+// value names the developer's real state).
+{
+  const stateRoot = mkdtempSync(join(tmpdir(), "osb-test-state-"));
+  afterAll(() => rmSync(stateRoot, REMOVE_TREE));
+  process.env["XDG_STATE_HOME"] = stateRoot;
+}
+
+// The per-user data base (`src/core/platform-dirs.ts`) is where the brain
+// store root and the OpenCode session spool default to. The store root is
+// pinned above, but a test that clears the variable (an empty export falls
+// back to the default root) or a spool writer would otherwise reach the
+// developer's real `~/.local/share/open-second-brain/`. Windows keeps it
+// under %LOCALAPPDATA%, redirected below.
+//
+// Always replaced, like the state root above.
+{
+  const dataRoot = mkdtempSync(join(tmpdir(), "osb-test-data-"));
+  afterAll(() => rmSync(dataRoot, REMOVE_TREE));
+  process.env["XDG_DATA_HOME"] = dataRoot;
 }
 
 // Windows keeps the per-user config/state/cache roots under
@@ -120,7 +207,8 @@ if (process.platform === "win32") {
 // directory (`src/core/brain/dedup-index-cache.ts`). Every capture test
 // would otherwise leave one file per throwaway vault in the developer's
 // real cache, so the suite points it at a root of its own.
-if (process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] === undefined) {
+// Always replaced, like the state root above.
+{
   const cacheRoot = mkdtempSync(join(tmpdir(), "osb-test-dedup-cache-"));
   afterAll(() => rmSync(cacheRoot, REMOVE_TREE));
   process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] = cacheRoot;

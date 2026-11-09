@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,9 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-session-recall-private-"));
+  // A legacy vault: it keeps its machine state. A vault with no `Brain/`
+  // is store-only and keeps that state device-local instead.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

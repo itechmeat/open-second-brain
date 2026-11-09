@@ -43,9 +43,15 @@ import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import { adviseOnIncoming, type PreferenceForContradiction } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
 import { nextCommandField, requireNextStep, type NextCommandField } from "./next-step.ts";
-import { brainDirs } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
-import { parseSignal } from "./signal.ts";
+import { brainDirsOf } from "./paths.ts";
+import {
+  memoryFromStore,
+  signalPageRaw,
+  type StoreMemoryPage,
+  storePagesIn,
+} from "./memory-pages.ts";
+import { parsePreference, parsePreferenceMeta } from "./preference.ts";
+import { parseSignal, parseStoreSignal } from "./signal.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
@@ -114,20 +120,41 @@ function readableMarkdownNames(
 }
 
 /**
+ * The Markdown documents of `dir` the caller may read, each with its page
+ * when it comes from the store: on a store-only machine (task 2.10) the
+ * fold's records whose page sat in `dir`, on an unswitched one the files.
+ */
+function readableMemoryFiles(
+  vault: string | null,
+  dir: string,
+  readable: ReadablePath | undefined,
+): ReadonlyArray<{ readonly path: string; readonly page: StoreMemoryPage | null }> {
+  if (vault === null || memoryFromStore(vault)) {
+    return storePagesIn(vault, dir)
+      .filter((page) => readable === undefined || readable(page.rel))
+      .map((page) => ({ path: page.path, page }));
+  }
+  return readableMarkdownNames(vault, dir, readable).map((name) => ({
+    path: join(dir, name),
+    page: null,
+  }));
+}
+
+/**
  * Every confirmed preference in the vault. A corrupt / mis-foldered
  * preference file is skipped (that is the doctor's concern, not the write
  * path's).
  */
 function loadConfirmedPrefs(
-  vault: string,
+  vault: string | null,
   readable: ReadablePath | undefined,
 ): PreferenceForContradiction[] {
-  const dir = brainDirs(vault).preferences;
+  const dir = brainDirsOf(vault).preferences;
   const out: PreferenceForContradiction[] = [];
-  for (const name of readableMarkdownNames(vault, dir, readable)) {
+  for (const { path, page } of readableMemoryFiles(vault, dir, readable)) {
     let pref;
     try {
-      pref = parsePreference(join(dir, name));
+      pref = page === null ? parsePreference(path) : parsePreferenceMeta(page.meta, path);
     } catch {
       continue;
     }
@@ -143,7 +170,7 @@ function loadConfirmedPrefs(
  * non-confirmed preference) are dropped here rather than compared.
  */
 function loadConfirmedScopePrefs(
-  vault: string,
+  vault: string | null,
   scope: string | undefined,
   readable: ReadablePath | undefined,
 ): PreferenceForContradiction[] {
@@ -162,7 +189,7 @@ function loadConfirmedScopePrefs(
  * `null`, so the surrounding feedback write is never affected.
  */
 export function adviseIncomingFeedback(
-  vault: string,
+  vault: string | null,
   params: AdviseIncomingFeedbackParams,
 ): WriteConflictAdvisory | null {
   try {
@@ -183,20 +210,24 @@ export function adviseIncomingFeedback(
     };
 
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(params.now ?? new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.writeConflictAdvisory,
-        agent: params.agent,
-        body: {
-          scope: advisory.scope ?? "(unscoped)",
-          // One bullet per resembling preference: wikilink + similarity, so
-          // the audit row is both human-readable and grep-friendly.
-          conflicts: result.conflicts.map(
-            (c) => `[[${c.pref_id}]] jaccard=${c.jaccard.toFixed(3)}`,
-          ),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(params.now ?? new Date()),
+          eventType: BRAIN_LOG_EVENT_KIND.writeConflictAdvisory,
           agent: params.agent,
+          body: {
+            scope: advisory.scope ?? "(unscoped)",
+            // One bullet per resembling preference: wikilink + similarity, so
+            // the audit row is both human-readable and grep-friendly.
+            conflicts: result.conflicts.map(
+              (c) => `[[${c.pref_id}]] jaccard=${c.jaccard.toFixed(3)}`,
+            ),
+            agent: params.agent,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append write-conflict-advisory log failed: ${(err as Error).message}\n`,
@@ -321,7 +352,7 @@ export interface AdviseUnroutableCaptureParams {
  * would change a ranking the operator reads with nothing to explain why.
  */
 function countScopeDocuments(
-  vault: string,
+  vault: string | null,
   readable: ReadablePath | undefined,
 ): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
@@ -331,11 +362,13 @@ function countScopeDocuments(
     counts.set(slug, (counts.get(slug) ?? 0) + 1);
   };
   for (const pref of loadConfirmedPrefs(vault, readable)) tally(pref.scope);
-  const inbox = brainDirs(vault).inbox;
-  for (const name of readableMarkdownNames(vault, inbox, readable)) {
-    const path = join(inbox, name);
+  const inbox = brainDirsOf(vault).inbox;
+  for (const { path, page } of readableMemoryFiles(vault, inbox, readable)) {
     try {
-      tally(parseSignal(path).scope);
+      tally(
+        (page === null ? parseSignal(path) : parseStoreSignal(path, page.meta, signalPageRaw(page)))
+          .scope,
+      );
     } catch (err) {
       process.stderr.write(
         `warning: capture routing hint skipped unreadable signal ${path}: ${
@@ -357,7 +390,7 @@ function countScopeDocuments(
  * `null`, so the surrounding feedback write is never affected.
  */
 export function adviseUnroutableCapture(
-  vault: string,
+  vault: string | null,
   params: AdviseUnroutableCaptureParams,
 ): CaptureRoutingHint | null {
   if (params.scope?.trim()) return null;
@@ -374,19 +407,23 @@ export function adviseUnroutableCapture(
     });
 
     try {
-      appendLogEvent(vault, {
-        timestamp: isoSecond(params.now ?? new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.captureRoutingHint,
-        agent: params.agent,
-        body: {
-          missing_signal: result.missing_signal,
-          // One bullet per eligible scope: slug + the document frequency
-          // that ranked it, so the rate of unrouted captures AND what
-          // they could have been routed to are both countable later.
-          candidates: result.candidates.map((c) => `${c.scope} documents=${c.documents}`),
+      appendLogEvent(
+        vault,
+        {
+          timestamp: isoSecond(params.now ?? new Date()),
+          eventType: BRAIN_LOG_EVENT_KIND.captureRoutingHint,
           agent: params.agent,
+          body: {
+            missing_signal: result.missing_signal,
+            // One bullet per eligible scope: slug + the document frequency
+            // that ranked it, so the rate of unrouted captures AND what
+            // they could have been routed to are both countable later.
+            candidates: result.candidates.map((c) => `${c.scope} documents=${c.documents}`),
+            agent: params.agent,
+          },
         },
-      });
+        { failOpen: true },
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append capture-routing-hint log failed: ${(err as Error).message}\n`,

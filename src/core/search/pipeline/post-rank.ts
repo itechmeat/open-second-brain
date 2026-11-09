@@ -52,6 +52,7 @@ import {
   isPathReadableAtReach,
   readCachedFrontmatter,
   readCachedFrontmatterEntry,
+  storedMemoryPageText,
   supersedeFadeAdjuster,
   type FrontmatterCache,
 } from "../result-filters.ts";
@@ -214,7 +215,7 @@ function resolveChainTipDocumentId(
  */
 function correctionReadableAtCaller(
   path: string,
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
   store: PostRankInput["store"],
   filters: PoolFilters,
@@ -292,7 +293,7 @@ function correctionSurvivesPoolFilters(
  */
 function chainTipVerdict(
   store: PostRankInput["store"],
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
   filters: PoolFilters,
   filterCtx: FilterContext,
@@ -333,7 +334,7 @@ function chainTipVerdict(
 function applyCorrectionCoupling(
   pool: ReadonlyArray<BrainSearchResult>,
   store: PostRankInput["store"],
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
   filters: PoolFilters,
 ): CouplingOutcome {
@@ -567,7 +568,13 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
         if (regionsByPath.has(path)) return regionsByPath.get(path)!;
         let regions: ReadonlyArray<string> | null;
         try {
-          regions = privateRegionTexts(readFileSync(join(config.vault, path), "utf8"));
+          // A memory page the store rebuilds (store-only, or no vault) is
+          // read from the store; any other page from its file. No vault and
+          // no stored page: no page file, read as an unreadable one.
+          const stored = storedMemoryPageText(frontmatterCache, config.vault, path);
+          if (stored !== null) regions = privateRegionTexts(stored);
+          else if (config.vault === null) regions = null;
+          else regions = privateRegionTexts(readFileSync(join(config.vault, path), "utf8"));
         } catch {
           regions = null;
         }

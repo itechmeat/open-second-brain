@@ -113,7 +113,7 @@ import {
 import { readScopedRules } from "../src/core/brain/scoped-rules.ts";
 import { resolveHostScope, resolveProjectScope } from "../src/core/brain/scope-identity.ts";
 import { readStandingRules } from "../src/core/brain/standing-rules.ts";
-import { resolveVault } from "../src/core/config.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /**
  * The primary channel: registered in hooks/hooks.json for SubagentStart,
@@ -295,8 +295,10 @@ async function main(): Promise<void> {
   // would repeat on every call; silence is the only safe answer.
   if (!isRealSessionId(payload.session_id)) return;
 
-  const vault = resolveVault();
-  if (vault === null) return;
+  // With no vault the hook does its store-side part (design D14, task 2.10).
+  const target = resolveHookTarget();
+  if (target === null) return;
+  const vault = target.vault;
 
   // The ledger suppresses only the fallback: PostToolUse fires on every
   // write-shaped call, so a recorded id there means this sub-agent

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -10,6 +10,7 @@ import {
 import { shippedFormatDoc } from "../../../src/core/store/format-doc.ts";
 import { NoStoreError, openStore, StoreOpenError } from "../../../src/core/store/store-open.ts";
 import { makeTempStore, type TempStore } from "./fixtures/temp-store.ts";
+import { neverHeld } from "../../helpers/held-partitions.ts";
 
 describe("opening a brain store", () => {
   let tmp: TempStore;
@@ -31,7 +32,7 @@ describe("opening a brain store", () => {
 
   test("a machine that holds only the shared partition does not grow a private one", () => {
     tmp.open("dev-a");
-    rmSync(join(tmp.root, "private"), { recursive: true, force: true });
+    neverHeld(tmp.root);
     const store = tmp.open("dev-b");
     expect([...store.partitions]).toEqual(["shared"]);
     expect(existsSync(join(tmp.root, "private"))).toBe(false);

@@ -18,7 +18,8 @@ let config: string;
 beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-search-fb-cli-"));
   vault = join(tmp, "vault");
-  mkdirSync(vault, { recursive: true });
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   config = join(tmp, "config.yaml");
   writeFileSync(config, `vault: "${vault}"\n`);
   writeFileSync(join(vault, "note.md"), "# Note\n\nthe quarterly ledger reconciliation runbook\n");

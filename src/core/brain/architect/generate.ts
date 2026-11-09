@@ -70,10 +70,9 @@
  * and how far the run got.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { summarizeGraphHealth } from "../../partner/codegraph-health.ts";
 import { buildCodegraphReport } from "../../partner/codegraph-report.ts";
 import type { CodegraphReport, CodegraphReportOptions } from "../../partner/codegraph-report.ts";
@@ -98,7 +97,14 @@ import {
   scanProject,
 } from "./scan.ts";
 import type { ModuleDependency, ModuleFact, ProjectFacts } from "./scan.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import {
+  acquireLaneLock,
+  assertLaneWrite,
+  lanePageExists,
+  lanePagesInStore,
+  readLaneFile,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 export interface GenerateArchDocsOptions {
   /** Where a caller watches the run. Absence means nobody asked. */
@@ -794,19 +800,22 @@ interface PlannedNote {
  * to repair one note found the rest of the tree already half-refreshed.
  */
 function planNote(
+  vault: string,
   path: string,
   head: string,
   regions: ReadonlyArray<Region>,
   owned?: OwnedKey,
 ): PlannedNote {
-  if (!existsSync(path)) {
+  // The run's own vault, never one parsed back out of the note path (a
+  // repo key or module named `Brain` would split it at the wrong place).
+  if (!lanePageExists(vault, path)) {
     return {
       path,
       text: `${head}\n${buildRegionDocument(regions)}`,
       disposition: NOTE_DISPOSITION.created,
     };
   }
-  const existing = readFileSync(path, "utf8");
+  const existing = readLaneFile(vault, path);
   const regionsMerged = mergeRegions(existing, regions);
   let merged = regionsMerged;
   if (owned !== undefined) {
@@ -892,6 +901,7 @@ function decisionsPath(dir: string): string {
  * instead of implying it got nowhere: see {@link ArchWriteError}.
  */
 function renderNotes(
+  vault: string,
   dir: string,
   key: string,
   facts: ProjectFacts,
@@ -904,6 +914,7 @@ function renderNotes(
   opts.safeguard?.checkpoint();
   plans.push(
     planNote(
+      vault,
       join(dir, "overview.md"),
       frontmatter("arch-overview", key, [`repo_path: ${facts.root}`]),
       overviewRegions(facts, key, codegraph),
@@ -911,9 +922,12 @@ function renderNotes(
   );
   opts.safeguard?.checkpoint();
   plans.push(
-    planNote(decisionsPath(dir), frontmatter("arch-decisions", key, [`repo_path: ${facts.root}`]), [
-      { id: "decisions", body: decisionsRegionBody(candidates) },
-    ]),
+    planNote(
+      vault,
+      decisionsPath(dir),
+      frontmatter("arch-decisions", key, [`repo_path: ${facts.root}`]),
+      [{ id: "decisions", body: decisionsRegionBody(candidates) }],
+    ),
   );
   for (const module of facts.modules) {
     opts.safeguard?.checkpoint();
@@ -921,6 +935,7 @@ function renderNotes(
     const owned = { key: DEPENDS_ON_KEY, lines: dependsOnLines(key, targets) };
     plans.push(
       planNote(
+        vault,
         modulePath(dir, module),
         frontmatter("arch-module", key, [`module: ${yamlName(module.name)}`, ...owned.lines]),
         moduleRegions(key, module, targets, notLinkedTargets(facts, module)),
@@ -934,7 +949,7 @@ function renderNotes(
   for (const plan of plans) {
     if (plan.text !== null) {
       try {
-        atomicWriteFileSync(plan.path, plan.text);
+        writeLaneText(vault, plan.path, plan.text);
       } catch (error) {
         throw new ArchWriteError(plan.path, written, toWrite - written, error);
       }
@@ -1009,7 +1024,7 @@ function generateRun(
   progressFaults: ReadonlyArray<string>,
 ): GenerateArchDocsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   // The scan opens the `walk` stage on its own counter over the same
   // sink; this counter opens `render` and is the one that terminates.
   const facts = scanProject(projectRoot, {
@@ -1032,7 +1047,10 @@ function generateRun(
   const codegraph = readReport({ cwd: facts.root, vault, limit: 1 });
 
   const dir = join(vault, "Brain", "projects", "arch", key);
-  mkdirSync(join(dir, "modules"), { recursive: true });
+  // A store-only machine keeps the notes as lane records and its lock
+  // device-local; the folder exists only on an unswitched machine.
+  const inStore = lanePagesInStore(vault);
+  if (!inStore) mkdirSync(join(dir, "modules"), { recursive: true });
 
   // Every note's path is a function of the FACTS, not of the order the
   // writes happen to complete in - `module_paths` is a documented part of
@@ -1077,10 +1095,12 @@ function generateRun(
   // run; a second architect run over the same repo is not that workload.
   // One second absorbs a genuine brief overlap and refuses the rest by
   // name, rather than parking a watched terminal for five.
-  const handle = acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS);
+  const handle = inStore
+    ? acquireLaneLock(vault, dir, { budgetMs: LOCK_WAIT_INTERACTIVE_MS })
+    : acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS);
   let plans: ReadonlyArray<PlannedNote>;
   try {
-    plans = renderNotes(dir, key, facts, codegraph, candidates, opts, progress);
+    plans = renderNotes(vault, dir, key, facts, codegraph, candidates, opts, progress);
   } finally {
     handle.release();
   }

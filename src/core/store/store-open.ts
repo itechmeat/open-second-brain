@@ -12,6 +12,12 @@
  * refreshed (never downgraded).
  *
  * Partitions of two different stores under one root are refused by name.
+ *
+ * The held partitions are sticky per machine (`held-ledger.ts`): the
+ * writing open records them, and a partition this machine has held whose
+ * identity file is now missing makes both opens refuse with
+ * {@link HeldPartitionLostError}, so a protection reader fails closed
+ * instead of reading a shared-only store.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -21,6 +27,7 @@ import { processDirsEnv, type PlatformDirsEnv } from "../platform-dirs.ts";
 import { isUsableLocalDeviceId } from "../config.ts";
 import { STORE_IDENTITY_FILE, STORE_PARTITIONS, type StorePartition } from "./constants.ts";
 import { writeFormatDoc } from "./format-doc.ts";
+import { lostHeldPartitions, recordHeldPartitions } from "./held-ledger.ts";
 import { deviceStateDirFor, partitionDir } from "./store-paths.ts";
 import { isUlid } from "./ulid.ts";
 
@@ -69,6 +76,28 @@ export class StoreIdentityError extends StoreOpenError {
   constructor(message: string) {
     super(message);
     this.name = "StoreIdentityError";
+  }
+}
+
+/**
+ * A partition this machine has held lost its identity file: the store as it
+ * shows now would read without that partition's records, so it is not
+ * opened at all (design D14, fail closed).
+ */
+export class HeldPartitionLostError extends StoreOpenError {
+  constructor(
+    readonly root: string,
+    readonly partitions: ReadonlyArray<StorePartition>,
+  ) {
+    super(
+      `the ${partitions.join(" and ")} partition${partitions.length > 1 ? "s" : ""} of the ` +
+        `brain store at ${root}, which this machine has held, no longer show${
+          partitions.length > 1 ? "" : "s"
+        } ${STORE_IDENTITY_FILE}; its records cannot be read, so the store is not opened. ` +
+        `Restore ${partitions.map((p) => `${p}/${STORE_IDENTITY_FILE}`).join(" and ")} ` +
+        "from sync or a backup",
+    );
+    this.name = "HeldPartitionLostError";
   }
 }
 
@@ -129,6 +158,17 @@ export function heldPartitions(root: string): {
   return { held: new Set(ids.keys()), storeId: first.done === true ? null : first.value };
 }
 
+/**
+ * {@link heldPartitions}, refused with {@link HeldPartitionLostError} when a
+ * partition this machine has held no longer shows its identity file.
+ */
+function heldPartitionsChecked(root: string): ReturnType<typeof heldPartitions> {
+  const found = heldPartitions(root);
+  const lost = lostHeldPartitions(root, found.held);
+  if (lost.length > 0) throw new HeldPartitionLostError(root, lost);
+  return found;
+}
+
 /** What a read-only look at a store root finds. */
 export interface StoreInspection {
   readonly root: string;
@@ -139,11 +179,12 @@ export interface StoreInspection {
 /**
  * Look at the store at `root` without creating or refreshing anything:
  * `null` when no partition holds an identity file. Throws
- * {@link StoreOpenError} when the partitions belong to different stores.
- * For read-only callers (doctor); writers use {@link openStore}.
+ * {@link StoreOpenError} when the partitions belong to different stores,
+ * or a partition this machine has held lost its identity file. For
+ * read-only callers (doctor); writers use {@link openStore}.
  */
 export function inspectStore(root: string): StoreInspection | null {
-  const { held, storeId } = heldPartitions(root);
+  const { held, storeId } = heldPartitionsChecked(root);
   return storeId === null ? null : { root, storeId, partitions: held };
 }
 
@@ -155,8 +196,9 @@ export function openStore(options: OpenStoreOptions): StoreHandle {
         `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`,
     );
   }
-  const { held, storeId } = heldPartitions(options.root);
+  const { held, storeId } = heldPartitionsChecked(options.root);
   if (storeId === null) throw new NoStoreError(options.root);
+  recordHeldPartitions(options.root, held, options.dirs);
   // The root copy is device-local (the root is never synced), so it is
   // refreshed like every partition copy.
   writeFormatDoc(options.root);

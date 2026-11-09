@@ -48,6 +48,7 @@ import { TENSION_TOOLS } from "./brain/tension-tools.ts";
 import { STORAGE_TOOLS } from "./brain/storage-tools.ts";
 import { RECEIPT_TOOLS } from "./brain/receipt-tools.ts";
 import { CHANGES_TOOLS } from "./brain/changes-tools.ts";
+import { SETTINGS_TOOLS } from "./brain/settings-tools.ts";
 import type { ToolDefinition } from "./tool-contract.ts";
 
 export { vaultRelativeSafe } from "./brain/shared.ts";
@@ -96,4 +97,6 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...RECEIPT_TOOLS,
   // Brain store change probe (design D5): new record ids since a watermark.
   ...CHANGES_TOOLS,
+  // Shared brain settings (design D4, D14 item 3): get, list, set, unset.
+  ...SETTINGS_TOOLS,
 ]);

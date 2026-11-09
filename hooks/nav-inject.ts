@@ -24,7 +24,6 @@ import {
   defaultConfigPath,
   resolveNavTierCadenceMinutes,
   resolveNavTierEnabled,
-  resolveVault,
 } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
@@ -39,6 +38,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { readHookStamp, writeHookStamp } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
+import { resolveHookVault } from "./lib/hook-vault.ts";
 
 /** Namespaced cadence stamp key (binding D1 convention). */
 const NAV_TIER_STAMP_KEY = "osb.nav_tier.last_injected";
@@ -86,7 +86,7 @@ async function main(): Promise<void> {
     // Default-closed: only an additionalContext-eligible event may emit.
     if (!isContextEventName(hookEventName)) return;
 
-    const vault = resolveVault();
+    const vault = resolveHookVault();
     if (vault === null) return;
     const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;
 

@@ -9,11 +9,10 @@
  * works out of the box and stays operator-curatable.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../../vault.ts";
 import type { WriteSessionPersona } from "./types.ts";
+import { lanePageExists, listLaneFiles, parseLanePage } from "../../store/lane-pages.ts";
 
 /** Default lens set, in deliberation order. */
 export const DEFAULT_PERSONAS: ReadonlyArray<WriteSessionPersona> = Object.freeze([
@@ -56,14 +55,14 @@ export function personasDir(vault: string): string {
  */
 export function loadPersonas(vault: string): ReadonlyArray<WriteSessionPersona> {
   const dir = personasDir(vault);
-  if (!existsSync(dir)) return DEFAULT_PERSONAS;
+  if (!lanePageExists(vault, dir)) return DEFAULT_PERSONAS;
   const personas: WriteSessionPersona[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
+  for (const name of listLaneFiles(vault, dir, "").toSorted()) {
     if (!name.endsWith(".md")) continue;
     let meta: Readonly<Record<string, unknown>>;
     let body: string;
     try {
-      [meta, body] = parseFrontmatter(join(dir, name));
+      [meta, body] = parseLanePage(vault, join(dir, name));
     } catch {
       continue;
     }

@@ -43,6 +43,10 @@ import { computeTruthStateWithConflicts } from "../../../../src/core/brain/truth
 import { readDecisionChangeReceipts } from "../../../../src/core/brain/decisions/receipts.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { useUnshardedLegacyLog } from "../../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 let configHome: string;

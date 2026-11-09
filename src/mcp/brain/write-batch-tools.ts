@@ -36,7 +36,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
 import { refuseAgentClaim } from "./agent-claim.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
-import { vaultRelativeSafe } from "./shared.ts";
+import { toolPath } from "./device-path.ts";
 import { unknownOperationError } from "../coerce.ts";
 import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
@@ -174,7 +174,7 @@ function serializeResult(
     return {
       kind: result.kind,
       logged_at: result.logged_at,
-      log_path: vaultRelativeSafe(ctx.vault, result.log_path),
+      log_path: toolPath(ctx, result.log_path),
     };
   }
   if (result.kind === "create_note" && result.created === false) {

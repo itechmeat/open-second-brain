@@ -59,6 +59,8 @@ import { join } from "node:path";
 import { continuityLogDir, listContinuityRecords } from "../continuity/store.ts";
 import { CONTINUITY_SESSION_ID_KEY } from "../continuity/types.ts";
 import type { BrainLogEntry } from "../log.ts";
+import { readLogEventsReport } from "../../store/read/log-events.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
 import { parseSignal } from "../signal.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorIssue } from "../types.ts";
@@ -188,7 +190,13 @@ export function collectKnownSessionIds(
   // and a denial read as "no continuity records" would name every
   // observation an orphan.
   const before = uncertain.length;
-  const continuityEntries = readSweptDir(continuityLogDir(vault), swept, SWEEP_ORIGIN.root);
+  // A store-only machine (design D14 item 1) holds its continuity records
+  // and lifecycle events in the store, so the legacy directory says
+  // nothing about which sessions exist; both are read through the store.
+  const storeOnly = isStoreOnly({ vault });
+  const continuityEntries = storeOnly
+    ? []
+    : readSweptDir(continuityLogDir(vault), swept, SWEEP_ORIGIN.root);
   if (continuityEntries !== null) {
     try {
       for (const record of listContinuityRecords(vault)) {
@@ -213,13 +221,40 @@ export function collectKnownSessionIds(
       swept,
     );
   }
-  for (const entry of log.entries) {
+  const storeEntries = storeOnly ? readStoreLifecycleEvents(vault, swept) : [];
+  for (const entry of [...log.entries, ...storeEntries]) {
     if (entry.eventType !== BRAIN_LOG_EVENT_KIND.sessionLifecycle) continue;
     const sid = entry.body["session_id"];
     if (typeof sid === "string" && sid.trim().length > 0) ids.add(sid.trim());
   }
   if (uncertain.length > before) complete = false;
   return { ids, complete, uncertain };
+}
+
+/** Every log event of the store, for a store-only machine; a failed read is reported, not silent. */
+function readStoreLifecycleEvents(vault: string, swept: SweptPath): ReadonlyArray<BrainLogEntry> {
+  try {
+    const read = readLogEventsReport({ from: STORE_LOG_EPOCH, to: isoDate(new Date()) }, { vault });
+    // A shard that could not be read may hold the lifecycle event that
+    // closes a session: report the gap rather than call a live one orphaned.
+    if (read.unreadable.length > 0) {
+      throw new Error(`store log shards could not be read: ${read.unreadable.join(", ")}`);
+    }
+    return read.entries;
+  } catch (err) {
+    reportSweptFailure(STORE_LOG_SITE, "store log read failed", err, swept, SWEEP_ORIGIN.root);
+    return [];
+  }
+}
+
+/** The first day a store log read covers: the whole stream. */
+const STORE_LOG_EPOCH = "1970-01-01";
+
+/** The name a failed store log read is reported under. */
+const STORE_LOG_SITE = "store:log";
+
+function isoDate(at: Date): string {
+  return at.toISOString().slice(0, 10);
 }
 
 function readLogEntries(vault: string, swept: SweptPath): SessionLogSnapshot {

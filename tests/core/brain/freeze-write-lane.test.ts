@@ -153,6 +153,10 @@ describe("the audit lane's blast radius", () => {
     "src/core/brain/freeze.ts",
     "src/core/brain/attestation/record.ts",
     "src/core/brain/attestation/signing.ts",
+    // The migration snapshot (design D11) is taken after the migration has
+    // frozen the legacy writers, so it takes the audit lane the migration
+    // gate lets through on purpose: the archive is of a tree at rest.
+    "src/core/store-migration/backup.ts",
   ]);
 
   function sourceFiles(dir: string): string[] {

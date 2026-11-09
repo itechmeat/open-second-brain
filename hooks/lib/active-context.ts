@@ -30,7 +30,8 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { parseFrontmatterText } from "../../src/core/vault.ts";
-import { brainActivePath, brainLessonsPath } from "../../src/core/brain/paths.ts";
+import { activeDigestPathForRead } from "../../src/core/brain/active.ts";
+import { lessonsDigestPathForRead } from "../../src/core/brain/lessons.ts";
 import { budgetActiveBody, isTruncationNoticeOnly } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
@@ -261,7 +262,9 @@ export function assembleActiveContext(
     });
   }
 
-  const activePath = brainActivePath(vault);
+  // `Brain/active.md` on an unswitched machine; on a store-only one the
+  // digest rendered on demand into the device-local cache (D14 item 7).
+  const activePath = activeDigestPathForRead(vault);
   const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, budget, meter) : "";
 
   return joinBlocks([noticesBlock, activeBody]);
@@ -312,7 +315,7 @@ function readActiveBody(
   // on the same SessionStart surface. Fail-soft and budgeted separately:
   // a missing / unreadable / oversized lessons file must never disturb
   // the active-preferences injection above.
-  const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
+  const lessonsBody = readLessonsBody(vault, budget);
 
   // Untrusted vault content: neutralize (control/bidi/zero-width strip,
   // delimiter escape) BEFORE budgeting, and set under the light
@@ -364,9 +367,12 @@ function readActiveBody(
  * neutralized and framed like the active body, with the same
  * budget-charged header overhead.
  */
-function readLessonsBody(lessonsPath: string, budget: number): string | null {
-  if (!existsSync(lessonsPath)) return null;
+function readLessonsBody(vault: string, budget: number): string | null {
   try {
+    // Rendered on demand on a store-only machine; a failure is the same
+    // fail-soft skip as an unreadable file.
+    const lessonsPath = lessonsDigestPathForRead(vault);
+    if (!existsSync(lessonsPath)) return null;
     const raw = readFileSync(lessonsPath, "utf8");
     const [, body] = parseFrontmatterText(raw);
     const trimmed = body.trim();

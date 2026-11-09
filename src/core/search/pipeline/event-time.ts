@@ -102,7 +102,7 @@ export function resolveDocumentEventTimeWindow(
 }
 
 export function createEventTimeResolver(
-  vault: string,
+  vault: string | null,
   frontmatterCache: FrontmatterCache,
   eventAnchorFor: EventAnchorLookup,
 ): EventTimeResolver {

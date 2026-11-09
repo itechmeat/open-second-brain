@@ -349,8 +349,9 @@ describe("the capability report states the ceiling it runs under", () => {
     // added brain_pledge and brain_intake_pledges (120); the delivery-trust
     // wave added brain_attestations (121); the agent-presence wave added
     // brain_skill_rewrite_status (122); the brain-store wave added
-    // brain_changes (123).
-    expect(evaluated.available_tool_count).toBe(123);
+    // brain_changes (123); the shared-settings change added brain_settings
+    // (124).
+    expect(evaluated.available_tool_count).toBe(124);
     expect(evaluated.advertised_tool_count).toBe(7);
   });
 });

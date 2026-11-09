@@ -22,18 +22,14 @@
  * similarity / vault helpers, never the reverse.
  */
 
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { parseFrontmatter, slugify } from "../../vault.ts";
+import { slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { addObligation } from "../obligations.ts";
 import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainCommitmentTier } from "../types.ts";
@@ -44,6 +40,13 @@ import {
   RECEIPT_ABSENT_STATE,
   type AppendReceiptInput,
 } from "./receipts.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -315,9 +318,9 @@ function parsePage(
   readable: DecisionReadOptions["readable"],
 ): DecisionRecord | null {
   const path = decisionPath(vault, slug);
-  if (!existsSync(path)) return null;
+  if (!lanePageExists(vault, path)) return null;
   if (readable !== undefined && !readable(decisionRel(slug))) return null;
-  const [meta, body] = parseFrontmatter(path);
+  const [meta, body] = parseLanePage(vault, path);
   if (meta["type"] !== DECISION_TYPE) return null;
   const reviewRaw = typeof meta["review_date"] === "string" ? meta["review_date"].trim() : "";
   let reviewDate: string | null = null;
@@ -371,10 +374,10 @@ export function ensureReviewObligation(
   input: { title: string; reviewDate: string; agent: string; now?: Date },
 ): { slug: string; created: boolean } {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const obligationTitle = reviewObligationTitle(input.title);
   const slug = slugify(obligationTitle);
-  if (existsSync(obligationPath(vault, slug))) {
+  if (lanePageExists(vault, obligationPath(vault, slug))) {
     return { slug, created: false };
   }
   const page = addObligation(vault, {
@@ -396,7 +399,7 @@ export function ensureReviewObligation(
  */
 export function recordDecision(vault: string, input: RecordDecisionInput): RecordDecisionResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const title = requireField(input.title, "title");
   const chosen = requireField(input.chosen, "chosen");
   const assumption = requireField(input.assumption, "assumption");
@@ -411,7 +414,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   const now = input.now ?? new Date();
   const slug = slugify(title);
 
-  if (existsSync(decisionPath(vault, slug))) {
+  if (lanePageExists(vault, decisionPath(vault, slug))) {
     throw new DecisionError(`decision already exists: ${slug} (backfill or remove it first)`);
   }
 
@@ -436,9 +439,8 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     notes: (input.notes ?? "").trim(),
   };
 
-  mkdirSync(decisionsDir(vault), { recursive: true });
   const path = decisionPath(vault, slug);
-  atomicWriteFileSync(path, render(record));
+  writeLaneText(vault, path, render(record));
 
   const review = ensureReviewObligation(vault, { title, reviewDate, agent, now });
 
@@ -483,7 +485,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
  */
 export function backfillOutcome(vault: string, input: BackfillOutcomeInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
@@ -499,7 +501,7 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
 
   const { path: _path, ...rest } = prior;
   const next: Omit<DecisionRecord, "path"> = { ...rest, outcome };
-  atomicWriteFileSync(prior.path, render(next));
+  writeLaneText(vault, prior.path, render(next));
 
   appendLogEvent(vault, {
     timestamp: isoSecond(now),
@@ -535,7 +537,7 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
  */
 export function updateRating(vault: string, input: UpdateRatingInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
@@ -551,7 +553,7 @@ export function updateRating(vault: string, input: UpdateRatingInput): DecisionR
 
   const { path: _path, ...rest } = prior;
   const next: Omit<DecisionRecord, "path"> = { ...rest, rating, rationale };
-  atomicWriteFileSync(prior.path, render(next));
+  writeLaneText(vault, prior.path, render(next));
 
   appendLogEvent(vault, {
     timestamp: isoSecond(now),
@@ -625,9 +627,9 @@ export function showDecision(
 /** Every decision, sorted by slug. */
 export function listDecisions(vault: string, opts: DecisionReadOptions = {}): DecisionRecord[] {
   const dir = decisionsDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   const out: DecisionRecord[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of listLaneFiles(vault, dir, "")) {
     if (!name.endsWith(".md") || !name.startsWith("decision-")) continue;
     const slug = name.replace(/^decision-/u, "").replace(/\.md$/u, "");
     const page = parsePage(vault, slug, opts.readable);

@@ -1,4 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -17,6 +19,10 @@ beforeEach(() => {
   vault = v.vault;
   dbPath = v.dbPath;
   cleanup = v.cleanup;
+  // A legacy vault: the barrier guards the `Brain/state/` lane files, which
+  // only an unswitched machine writes (a store-only one keeps the lane in
+  // the store).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {

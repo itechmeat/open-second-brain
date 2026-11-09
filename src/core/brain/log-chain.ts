@@ -49,6 +49,16 @@
  * Three break reasons, first one per shard reported ({@link
  * LOG_CHAIN_BREAK_REASON}). The walk continues past a break so the
  * counts describe the whole file rather than its head.
+ *
+ * ## Legacy day files only (design D14 item 10)
+ *
+ * The chain is a property of the legacy day files, and this verifier
+ * walks those only. A store-only machine writes its log events as store
+ * records, which carry no per-record chain: the store's integrity is each
+ * record's checksum plus the partition state digests over explicit cuts
+ * that the doctor compares across machines ({@link STORE_LOG_INTEGRITY}).
+ * The legacy day files that remain on such a machine stay verifiable
+ * here until the legacy tree leaves the vault.
  */
 
 import {
@@ -128,7 +138,21 @@ export interface LogChainShardVerification {
   readonly firstBreak: LogChainBreak | null;
 }
 
+/** What {@link verifyLogChain} covers: the legacy JSONL day files of the vault. */
+export const LOG_CHAIN_COVERS = "legacy-day-files";
+
+/**
+ * How the integrity of store log events is checked instead, for the
+ * surfaces that report this verifier's scope (design D14 item 10).
+ */
+export const STORE_LOG_INTEGRITY =
+  "log events written to the brain store carry no hash chain; each record carries the " +
+  "checksum of its body, and the state digests over explicit cuts compare the partitions " +
+  "across machines (`o2b brain doctor` reports both). This verifies the legacy day files only.";
+
 export interface LogChainVerification {
+  /** Always {@link LOG_CHAIN_COVERS}: store records are not chained. */
+  readonly covers: typeof LOG_CHAIN_COVERS;
   /** Per-shard verdicts, in file-name order. Empty when the log holds no shard. */
   readonly shards: ReadonlyArray<LogChainShardVerification>;
   /** Every finding. Empty on a clean log. */
@@ -167,7 +191,12 @@ export function verifyLogChain(vault: string): LogChainVerification {
         "the Brain log directory could not be listed, so no shard in it was verified: " +
         `${(err as NodeJS.ErrnoException).message ?? String(err)}`,
     });
-    return Object.freeze({ shards: Object.freeze([]), notices: Object.freeze(notices), ok: false });
+    return Object.freeze({
+      covers: LOG_CHAIN_COVERS,
+      shards: Object.freeze([]),
+      notices: Object.freeze(notices),
+      ok: false,
+    });
   }
 
   const shards = files
@@ -202,6 +231,7 @@ export function verifyLogChain(vault: string): LogChainVerification {
   }
 
   return Object.freeze({
+    covers: LOG_CHAIN_COVERS,
     shards: Object.freeze(shards),
     notices: Object.freeze(notices),
     ok: notices.length === 0,

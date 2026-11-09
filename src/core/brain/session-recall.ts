@@ -257,12 +257,14 @@ export function importSessionRecall(
     maxInlineChars: policy.max_inline_chars,
     maxTextChars: policy.max_text_chars,
   });
+  const dedupe = new DedupeIndex(vault);
   const rawTurns = input.turns.map((turn) =>
-    importRawTurn(vault, input.sessionId, turn, createdAt, lineage, registry),
+    importRawTurn(vault, input.sessionId, turn, createdAt, lineage, registry, dedupe),
   );
   const summaryNodes = [
     ...importSummaryDepth(
       vault,
+      dedupe,
       input.sessionId,
       rawTurns,
       1,
@@ -274,6 +276,7 @@ export function importSessionRecall(
   summaryNodes.push(
     ...importSummaryDepth(
       vault,
+      dedupe,
       input.sessionId,
       summaryNodes,
       2,
@@ -1208,6 +1211,7 @@ function importRawTurn(
   createdAt: string,
   lineage: SessionLineage | undefined,
   registry: PayloadRegistry,
+  dedupe: DedupeIndex,
 ): ContinuityRecord {
   const original = turn.text ?? "";
   // Keyed on the ORIGINAL text, so a re-import of the same transcript
@@ -1215,15 +1219,17 @@ function importRawTurn(
   // after it, and a threshold change never duplicates a turn.
   const textHash = hash(original);
   const dedupeKey = ["session_turn", sessionId, turn.turnId, textHash].join(":");
-  const existing = findByDedupeKey(vault, dedupeKey);
+  const existing = dedupe.find(dedupeKey);
   if (existing !== null) return existing;
   // Externalize BEFORE the row is written: the ledger, recall search and
   // every summary node built from this row only ever see placeholders.
   // Both halves run under the payload store lock, so a gc cannot remove a
   // payload between its write and the row that names it.
   const row = { sessionId, turn, createdAt, lineage, original, textHash, dedupeKey };
-  if (!registry.mayExternalize(original)) return appendTurnRow(vault, registry, row);
-  return withPayloadStoreLock(vault, () => appendTurnRow(vault, registry, row));
+  const written = registry.mayExternalize(original)
+    ? withPayloadStoreLock(vault, () => appendTurnRow(vault, registry, row))
+    : appendTurnRow(vault, registry, row);
+  return dedupe.add(written);
 }
 
 interface TurnRowInput {
@@ -1292,6 +1298,7 @@ function delegationPayloadFields(turn: SessionTurn): Record<string, unknown> {
 
 function importSummaryDepth(
   vault: string,
+  dedupe: DedupeIndex,
   sessionId: string,
   sources: ReadonlyArray<ContinuityRecord>,
   depth: number,
@@ -1315,27 +1322,29 @@ function importSummaryDepth(
       hash(sourceIds.join("\n")),
       hash(summary),
     ].join(":");
-    const existing = findByDedupeKey(vault, dedupeKey);
+    const existing = dedupe.find(dedupeKey);
     if (existing !== null) {
       nodes.push(existing);
       continue;
     }
     nodes.push(
-      appendContinuityRecord(vault, {
-        kind: "session_summary_node",
-        createdAt,
-        sourceRefs: sourceIds.map((id) => Object.freeze({ id, kind: "continuity_record" })),
-        payload: {
-          session_id: sessionId,
-          depth,
-          summary,
-          source_record_ids: sourceIds,
-          source_turn_ids: sourceTurnIds,
-          text_hash: hash(summary),
-          dedupe_key: dedupeKey,
-          ...lineagePayloadFields(lineage),
-        },
-      }),
+      dedupe.add(
+        appendContinuityRecord(vault, {
+          kind: "session_summary_node",
+          createdAt,
+          sourceRefs: sourceIds.map((id) => Object.freeze({ id, kind: "continuity_record" })),
+          payload: {
+            session_id: sessionId,
+            depth,
+            summary,
+            source_record_ids: sourceIds,
+            source_turn_ids: sourceTurnIds,
+            text_hash: hash(summary),
+            dedupe_key: dedupeKey,
+            ...lineagePayloadFields(lineage),
+          },
+        }),
+      ),
     );
   }
   return nodes;
@@ -1567,11 +1576,34 @@ function collectTurnIds(records: ReadonlyArray<ContinuityRecord>): ReadonlyArray
   );
 }
 
-function findByDedupeKey(vault: string, dedupeKey: string): ContinuityRecord | null {
-  return (
-    listContinuityRecords(vault).find((record) => record.payload["dedupe_key"] === dedupeKey) ??
-    null
-  );
+/**
+ * The continuity records of one import by `dedupe_key`: the store is read
+ * once, when the import starts, and every row the import writes is added
+ * as it is written. A lookup per turn that re-read the whole log made an
+ * import quadratic in its turns, and on a store-only machine, where every
+ * read verifies every envelope, a few hundred turns cost seconds of a
+ * capture hook. The first record of a key in log order wins, as the
+ * per-turn search returned it. A capture holds the per-vault worker lock
+ * for the whole import, so no other capture appends the same keys
+ * meanwhile.
+ */
+class DedupeIndex {
+  private readonly byKey = new Map<string, ContinuityRecord>();
+
+  constructor(vault: string) {
+    for (const record of listContinuityRecords(vault)) this.add(record);
+  }
+
+  find(dedupeKey: string): ContinuityRecord | null {
+    return this.byKey.get(dedupeKey) ?? null;
+  }
+
+  /** Remember a record under the `dedupe_key` it carries; returns it. */
+  add(record: ContinuityRecord): ContinuityRecord {
+    const key = record.payload["dedupe_key"];
+    if (typeof key === "string" && !this.byKey.has(key)) this.byKey.set(key, record);
+    return record;
+  }
 }
 
 function oneLine(text: string, maxChars: number): string {

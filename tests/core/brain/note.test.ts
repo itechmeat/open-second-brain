@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { appendBrainNote } from "../../../src/core/brain/note.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 function bootstrap(vault: string): void {
   mkdirSync(join(vault, "Brain", "log"), { recursive: true });

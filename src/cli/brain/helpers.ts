@@ -35,7 +35,13 @@ import { isoSecond } from "../../core/brain/time.ts";
 import type { UpgradePlan } from "../../core/brain/upgrade.ts";
 
 import { CliError, parseFlags, type FlagsSchema } from "../argparse.ts";
-import { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
+import {
+  NO_VAULT_ERROR,
+  NoVaultConfiguredError,
+  normalizeFlagString,
+  resolveOptionalVault,
+  vaultRequiredMessage,
+} from "../helpers.ts";
 import { renderUpgradePlanJson as renderUpgradePlanJsonRows } from "./upgrade-render.ts";
 
 // ── Vault resolution ────────────────────────────────────────────────────────
@@ -65,6 +71,22 @@ export interface BrainVerbContext {
 }
 
 /**
+ * The verb context of a verb that also works with no vault (design D14):
+ * `vault` is `null` when none is configured. A verb that needs one after
+ * all (a vault-adapter step) asks {@link requireBrainVaultFor}.
+ */
+export interface OptionalVaultBrainVerbContext {
+  readonly config: string;
+  readonly vault: string | null;
+}
+
+/** Options of {@link brainVerbContext}. */
+export interface BrainVerbContextOptions {
+  /** `optional`: answer `vault: null` instead of refusing when none is configured. */
+  readonly vault: "optional";
+}
+
+/**
  * Resolve the (config, vault) pair every Brain verb needs.
  *
  * Call it exactly where the verb used to resolve the vault — flag
@@ -73,9 +95,38 @@ export interface BrainVerbContext {
  * Throws `CliError` for a missing or explicitly empty vault, same as
  * {@link resolveBrainVault}.
  */
-export function brainVerbContext(flags: BrainVerbFlags): BrainVerbContext {
+export function brainVerbContext(flags: BrainVerbFlags): BrainVerbContext;
+export function brainVerbContext(
+  flags: BrainVerbFlags,
+  options: BrainVerbContextOptions,
+): OptionalVaultBrainVerbContext;
+export function brainVerbContext(
+  flags: BrainVerbFlags,
+  options?: BrainVerbContextOptions,
+): BrainVerbContext | OptionalVaultBrainVerbContext {
   const config = defaultConfigPath();
-  return { config, vault: resolveBrainVault(flags["vault"] as string | undefined, config) };
+  const flag = flags["vault"] as string | undefined;
+  if (options?.vault !== "optional") return { config, vault: resolveBrainVault(flag, config) };
+  // The shared rule (an explicit empty `--vault` is a user error), with
+  // the brain dispatcher's error type.
+  try {
+    return { config, vault: resolveOptionalVault(flag, config) };
+  } catch (err) {
+    if (err instanceof NoVaultConfiguredError) throw new CliError(NO_VAULT_ERROR);
+    throw err;
+  }
+}
+
+/**
+ * The vault of an optional-vault context, or a `CliError` that names the
+ * verb when there is none: `o2b brain <verb>` needs a vault here. The
+ * brain dispatcher (`handleBrainSubcommand`) answers every `CliError` with
+ * exit 1, the code the no-vault error always had inside `o2b brain`; it is
+ * not the exit-2 usage error of the top-level commands.
+ */
+export function requireBrainVaultFor(context: OptionalVaultBrainVerbContext, verb: string): string {
+  if (context.vault === null) throw new CliError(vaultRequiredMessage(`o2b brain ${verb}`));
+  return context.vault;
 }
 
 /** Acting agent name: an explicit `--agent` flag wins over the config. */
@@ -111,7 +162,7 @@ export function usageError(message: string): number {
   return 2;
 }
 export { ISO_8601_RE, parseOptionalIsoDate } from "../coerce.ts";
-export { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
+export { NO_VAULT_ERROR, normalizeFlagString, resolveOptionalVault } from "../helpers.ts";
 
 export { BRAIN_HELP, MAINTENANCE_USAGE, VERB_HELP } from "./help-text.ts";
 export { printUpgradePlanText, renderUnifiedDiff } from "./upgrade-render.ts";

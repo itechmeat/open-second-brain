@@ -61,6 +61,13 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "fix is to remove that cause, which differs per failure and is named in the finding",
   },
   {
+    code: "store-write-fail-open",
+    reason:
+      "a fail-open store write (a hook, telemetry) names a cause outside the store itself (no " +
+      "store yet, no device id, a partition this machine does not hold), and its caller went on; " +
+      "the fix is to remove that cause, which differs per failure and is named in the finding",
+  },
+  {
     code: "store-dual-write-skipped",
     reason:
       "the store needs a device id this machine has not been given; choosing one is a decision " +
@@ -71,6 +78,13 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
     reason:
       "the configured store root cannot be used (inside the vault, or holding partitions of two " +
       "stores); where the store should live, and which store is the real one, is the user's choice",
+  },
+  {
+    code: "store-partition-lost",
+    reason:
+      "a partition this machine has held lost its identity file while its records may still be " +
+      "there; the store id it must carry comes only from sync or a backup of that file, and " +
+      "writing a guessed one could join the records to the wrong store",
   },
   {
     code: "store-digest-divergent",
@@ -84,6 +98,19 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
     reason:
       "a device that stopped publishing digests is either offline, waiting for sync, or gone for " +
       "good; only the user knows which, and only a human device-retire record takes it off the roster",
+  },
+  {
+    code: "store-device-retired-returned",
+    reason:
+      "a retired device wrote again, which is either a machine brought back on purpose or a " +
+      "device id reused by mistake; only the user knows which, and retiring it again would " +
+      "hide a machine that is alive",
+  },
+  {
+    code: "store-removed-awaiting-compaction",
+    reason:
+      "removed content stays in the append-only shards until store compaction exists, a later " +
+      "phase; no command shrinks it today, and the finding only says how many lines still wait",
   },
   {
     code: "store-record-id-conflict",
@@ -136,6 +163,21 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
     reason:
       "a shard file this machine holds could not be read (permissions, a disk error, a sync " +
       "client holding a lock); the cause is named in the finding and differs per machine",
+  },
+  // --- The store migration (task 2.12) -------------------------------------
+  {
+    code: "machine-state-adopt-conflicts",
+    reason:
+      "a switch kept a fresh vault's file aside because the live folder held another copy; " +
+      "which of the two is still needed only the user can tell, so the remedy is to compare, " +
+      "copy over and delete the folder by hand",
+  },
+  {
+    code: "store-device-state-foreign",
+    reason:
+      "another machine's clock and locks reached this machine's device-local state because a " +
+      "sync tool was pointed at it; the fix is that tool's folder list, which is outside Open " +
+      "Second Brain, and which entries to delete afterwards depends on what the sync copied",
   },
   {
     code: "store-partition-unreadable",
@@ -577,6 +619,24 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "a managed block still carries a lesson whose approval went stale; the refresh drops it " +
       "until the operator approves the moved text again, which the finding names - the decision " +
       "is the operator's own re-approval, not a command the doctor can carry",
+  },
+  {
+    code: "legacy-devices-pending",
+    reason:
+      "the remedy is on the other machines: each one upgrades and runs its own migration, or the " +
+      "user retires the ones that are gone; nothing this machine runs moves another machine",
+  },
+  {
+    code: "migration-done-twice",
+    reason:
+      "two first migrations already ran; the store keeps both imports and no command undoes one " +
+      "without losing the other, so the finding names the machines and the rule that prevents it",
+  },
+  {
+    code: "legacy-tree-reappeared",
+    reason:
+      "the directory is evidence of a writer that still follows the legacy layout; the user stops " +
+      "that writer and moves the directory out, and nothing here can tell what in it they want kept",
   },
   {
     code: "lessons-approvals-unreadable",

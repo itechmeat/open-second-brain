@@ -54,6 +54,7 @@ import { canonicalNotePath } from "../../path-safety.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { computeExtractionContractFingerprint } from "./contract.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 /** The schema version this module writes. Earlier versions are read, not written. */
 const SCHEMA_VERSION = 3 as const;
@@ -213,7 +214,7 @@ export interface PathClassification {
 
 /** Absolute path of the content-hash manifest for a vault. */
 export function manifestPath(vault: string): string {
-  return join(vault, MACHINE_ARTIFACT_DIR, MANIFEST_FILE);
+  return machineStatePath(vault, MACHINE_ARTIFACT_DIR, MANIFEST_FILE);
 }
 
 /**

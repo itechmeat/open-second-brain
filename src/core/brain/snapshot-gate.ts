@@ -60,6 +60,7 @@ import {
   type RestoreSnapshotOptions,
   type RestoreSnapshotResult,
 } from "./snapshot.ts";
+import type { WriteLane } from "./freeze-marker.ts";
 import { compactRunStamp } from "./time.ts";
 import { BRAIN_SNAPSHOT_REASON, type BrainSnapshotReason } from "./types.ts";
 
@@ -100,6 +101,8 @@ export interface WithDestructiveSnapshotResult<T> {
 
 /** Options of both entry points here, since both mint one run id. */
 export interface WithDestructiveSnapshotOptions {
+  /** The write lane the snapshot's guards check (`CreateSnapshotOptions.lane`). */
+  readonly lane?: WriteLane;
   /**
    * Injected clock. It decides the run-id stamp AND the `snapshot` audit
    * line's timestamp, so a caller whose output is byte-reproducible given
@@ -296,7 +299,8 @@ export function takeSnapshot(
   const snapshot = createUniqueSnapshot(
     vault,
     baseRunId,
-    (runId) => createSnapshot(vault, runId, { reason, now }).path,
+    (runId) =>
+      createSnapshot(vault, runId, { reason, now, ...(opts.lane ? { lane: opts.lane } : {}) }).path,
     MAX_SNAPSHOT_ID_ATTEMPTS,
     opts.available,
   );
@@ -308,6 +312,7 @@ export function takeSnapshot(
       // rollback is mid-restore and still reading the archive it is
       // restoring out of the same directory.
       protectRunIds: [snapshot.runId, ...(opts.protectRunIds ?? [])],
+      ...(opts.lane ? { lane: opts.lane } : {}),
     });
     if (prune.refusal !== null) {
       process.stderr.write(

@@ -22,6 +22,10 @@ import { brainConfigPath, brainDirs, logPath } from "../../../src/core/brain/pat
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 const NOW_1 = new Date("2026-06-30T12:00:00Z");
 const NOW_2 = new Date("2026-07-03T12:00:00Z");

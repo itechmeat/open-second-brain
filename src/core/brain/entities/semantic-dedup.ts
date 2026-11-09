@@ -20,7 +20,6 @@
  */
 
 import { discoverConfig } from "../../config.ts";
-import { parseFrontmatter } from "../../vault.ts";
 import { envOrConfig, parseBool, parseFloat01 } from "../../validate.ts";
 import { resolveConfiguredEmbeddingProvider } from "../../search/embeddings/configured-provider.ts";
 import type { EmbeddingProvider } from "../../search/embeddings/contract.ts";
@@ -30,6 +29,7 @@ import { normalizeEntityName } from "./canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./status-scope.ts";
 import { providerProducesVectors } from "../../search/embeddings/contract.ts";
 import type { BrainEntity } from "./types.ts";
+import { parseLanePage, vaultOfBrainPath } from "../../store/lane-pages.ts";
 
 /**
  * Cosine threshold for the embedding layer. Default deliberately high so
@@ -141,7 +141,7 @@ export function resolveEntitySemanticDedupConfig(configPath?: string): EntitySem
 export function deriveIdentityType(entity: BrainEntity): string | undefined {
   let raw: unknown;
   try {
-    raw = parseFrontmatter(entity.path)[0]["identity_type"];
+    raw = parseLanePage(vaultOfBrainPath(entity.path), entity.path)[0]["identity_type"];
   } catch {
     return undefined;
   }

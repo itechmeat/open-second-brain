@@ -40,6 +40,10 @@ import {
   buildContinuityRecord,
 } from "../../../src/core/brain/continuity/store.ts";
 import { createNote, resolveNoteTarget } from "../../../src/core/brain/notes/create-note.ts";
+import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 

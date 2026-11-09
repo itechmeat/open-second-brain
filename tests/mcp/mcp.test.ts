@@ -262,6 +262,8 @@ describe("tool listing", () => {
         "brain_storage",
         // The brain store change probe (brain store and topics, phase 1).
         "brain_changes",
+        // Shared brain settings writer (brain store and topics, task 2.11).
+        "brain_settings",
         // Observed-use verdict feeding recall ranking (Retrieval & Ranking Quality).
         "brain_observed_use",
         "brain_knowledge_gaps",

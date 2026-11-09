@@ -14,15 +14,19 @@
  * unlink.
  */
 
-import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join, relative, posix, sep } from "node:path";
 
 import type { FrontmatterMap, FrontmatterValue } from "../../types.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
-import { parseFrontmatter } from "../../vault.ts";
 import { BRAIN_SOURCES_REL } from "../paths.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  removeLanePage,
+} from "../../store/lane-pages.ts";
 
 export interface IngestedSource {
   /** Vault-relative POSIX path of the summary page - the id for get/delete. */
@@ -81,10 +85,10 @@ function resolveSourceAbs(vault: string, id: string): string | null {
 /** List every ingested-source summary page, sorted by path. Read-only. */
 export function listIngestedSources(vault: string): ReadonlyArray<IngestedSource> {
   const dir = sourcesDir(vault);
-  if (!existsSync(dir)) return [];
+  if (!lanePageExists(vault, dir)) return [];
   let entries: ReadonlyArray<string>;
   try {
-    entries = readdirSync(dir);
+    entries = listLaneFiles(vault, dir, "");
   } catch {
     return [];
   }
@@ -94,7 +98,7 @@ export function listIngestedSources(vault: string): ReadonlyArray<IngestedSource
     const abs = join(dir, name);
     let meta: FrontmatterMap;
     try {
-      [meta] = parseFrontmatter(abs);
+      [meta] = parseLanePage(vault, abs);
     } catch {
       continue;
     }
@@ -112,11 +116,11 @@ export function listIngestedSources(vault: string): ReadonlyArray<IngestedSource
  */
 export function getIngestedSource(vault: string, id: string): IngestedSourceDetail | null {
   const abs = resolveSourceAbs(vault, id);
-  if (abs === null || !existsSync(abs)) return null;
+  if (abs === null || !lanePageExists(vault, abs)) return null;
   let meta: FrontmatterMap;
   let body: string;
   try {
-    [meta, body] = parseFrontmatter(abs);
+    [meta, body] = parseLanePage(vault, abs);
   } catch {
     return null;
   }
@@ -131,24 +135,17 @@ export function getIngestedSource(vault: string, id: string): IngestedSourceDeta
  */
 export function deleteIngestedSource(vault: string, id: string): boolean {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const abs = resolveSourceAbs(vault, id);
-  if (abs === null || !existsSync(abs)) return false;
+  if (abs === null || !lanePageExists(vault, abs)) return false;
   let meta: FrontmatterMap;
   try {
-    [meta] = parseFrontmatter(abs);
+    [meta] = parseLanePage(vault, abs);
   } catch {
     return false;
   }
   if (meta["kind"] !== BRAIN_SOURCE_KIND) return false;
-  try {
-    rmSync(abs);
-  } catch (err) {
-    // A concurrent delete (ENOENT after the existence check) means the page
-    // is already gone - honestly report "not removed by us". Any other error
-    // (permissions, I/O) is a real fault and must surface, not be hidden.
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return false;
-    throw err;
-  }
-  return true;
+  // A concurrent delete (the page gone after the existence check) is
+  // "not removed by us"; any other error (permissions, I/O) surfaces.
+  return removeLanePage(vault, abs);
 }

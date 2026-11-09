@@ -1934,7 +1934,7 @@ export interface ResolvedFreshenConfig {
 }
 
 export interface ResolvedSearchConfig {
-  readonly vault: string;
+  readonly vault: string | null;
   readonly dbPath: string;
   /**
    * The brain store this index catches up from before every read (design

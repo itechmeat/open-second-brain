@@ -70,6 +70,7 @@ import { OPERATION, type Safeguard } from "../safeguard.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { machineStatePath } from "../../state/machine-state.ts";
 
 /** Only ledger schema this build understands. Anything else is refused. */
 export const SESSION_LEDGER_SCHEMA_VERSION = 1 as const;
@@ -86,7 +87,7 @@ const HASH_STAGE = "hash";
 
 /** Absolute path of the session import ledger for a vault. */
 export function sessionLedgerPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, SESSION_LEDGER_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, SESSION_LEDGER_FILE);
 }
 
 /** What was recorded about one imported session log. */

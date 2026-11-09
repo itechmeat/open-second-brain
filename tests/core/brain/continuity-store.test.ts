@@ -28,6 +28,8 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-continuity-store-"));
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -403,6 +405,13 @@ describe("continuity per-device shards", () => {
    * that silently drops it reports a shorter history as if it were the
    * whole one.
    */
+  test("a line that parses but is no record is skipped, not read as one", () => {
+    writeShard("2026-06", "testdev1", ["1-mine"]);
+    const path = continuityLogPath(vault, "2026-06", "testdev1");
+    writeFileSync(path, 'null\n42\n"text"\n{"kind":"session_turn"}\n', { flag: "a" });
+    expect(listContinuityRecords(vault, {}).map((r) => r.payload["snippet"])).toEqual(["1-mine"]);
+  });
+
   // chmod cannot deny access on Windows (read-only attribute only) or to root.
   test.skipIf(CHMOD_CANNOT_DENY)("an unreadable shard is refused, not listed as absent", () => {
     writeShard("2026-06", "testdev1", ["1-mine"]);

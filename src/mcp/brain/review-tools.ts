@@ -306,7 +306,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_stale_scan",
     kind: "read",
     description:
-      "Structural staleness report: preferences, signals, and Brain/log files inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
+      "Structural staleness report: preferences, signals, and log days inactive longer than the configured `temporal:` thresholds (stale_pref_days / stale_signal_days / stale_log_days). Read-only.",
     inputSchema: {
       type: "object",
       properties: {},

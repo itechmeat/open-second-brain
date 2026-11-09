@@ -12,6 +12,8 @@ let vault: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-tension-tool-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });

@@ -84,6 +84,7 @@ import {
 } from "../brain/paths.ts";
 import { requireNextStep } from "../brain/next-step.ts";
 import { loadBrainConfig } from "../brain/policy.ts";
+import { brainSettingsFromStore } from "../brain/policy/load.ts";
 import { realVaultRelative, toPosix } from "../path-safety.ts";
 import { normaliseWriteBindingPrefix, writeBindingPrefixCovers } from "./prefix.ts";
 
@@ -210,18 +211,26 @@ function brainConfigIdentity(path: string): string | null {
  * as an untyped fault.
  */
 export function resolveWriteBinding(vault: string): WriteBinding | null {
+  // On a store-only machine `write_binding` is a shared setting (design
+  // D14 item 3): the store reader keeps its own cache, so none here.
+  if (brainSettingsFromStore(vault)) return bindingOf(loadBrainConfig(vault).write_binding);
   const configPath = brainConfigPath(vault);
   const identity = brainConfigIdentity(configPath);
   if (identity === null) return null;
   const hit = cachedBinding;
   if (hit !== null && hit.vault === vault && hit.identity === identity) return hit.binding;
-  const declared = loadBrainConfig(vault).write_binding?.path_prefixes;
-  const binding =
-    declared === undefined || declared.length === 0
-      ? null
-      : Object.freeze({ pathPrefixes: Object.freeze([...declared]) });
+  const binding = bindingOf(loadBrainConfig(vault).write_binding);
   cachedBinding = Object.freeze({ vault, identity, binding });
   return binding;
+}
+
+function bindingOf(
+  block: { readonly path_prefixes?: ReadonlyArray<string> } | undefined,
+): WriteBinding | null {
+  const declared = block?.path_prefixes;
+  return declared === undefined || declared.length === 0
+    ? null
+    : Object.freeze({ pathPrefixes: Object.freeze([...declared]) });
 }
 
 /** Whether `binding` admits the vault-relative `relPath`. */

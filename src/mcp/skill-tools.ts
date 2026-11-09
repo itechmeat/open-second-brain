@@ -40,7 +40,7 @@ import {
 import { coerceInt, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
-import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
+import { contextVault, type ServerContext, type ToolDefinition } from "./tool-contract.ts";
 import { TOOL_ERROR_CODE, type ToolErrorCode } from "./tool-error-codes.ts";
 
 /**
@@ -56,7 +56,7 @@ const SKILL_ERROR_WIRE_CODE: Readonly<Record<SkillErrorCode, ToolErrorCode>> = O
 
 function rootsFor(ctx: ServerContext): string[] {
   const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);
-  return skillRoots({ repoRoot: ctx.repoRoot, vault: ctx.vault, skillsDir });
+  return skillRoots({ repoRoot: ctx.repoRoot, vault: contextVault(ctx), skillsDir });
 }
 
 function toolListSkills(ctx: ServerContext): Record<string, unknown> {
@@ -132,7 +132,9 @@ function skillsDecisionConfig(ctx: ServerContext): ResolvedDecisionModelConfig |
   try {
     const cfg = resolveDecisionModelConfig({
       config: discoverConfig(ctx.configPath ?? undefined).data,
-      vault: ctx.vault,
+      // With no vault there is no vault opt-out to read; `ctx.vault` would
+      // refuse there and the catch below would turn the use off.
+      vault: contextVault(ctx),
     });
     return decisionModelModeFor(cfg, "skills") === "off" ? null : cfg;
   } catch {
@@ -183,14 +185,18 @@ function toolSkillsAttach(
   // used skills frequency was invisible and the name tie-break decided. One
   // pinned clock feeds both derivations, so the counts and the recency half
   // of the weight never disagree about what "now" is.
+  // With no vault there is no continuity store to read: the offers keep
+  // the deterministic order.
   const nowMs = Date.now();
-  const usageWeight = resolveSkillsAttachUsageOrdering(ctx.configPath ?? undefined)
-    ? skillUsageRankingWeights(
-        deriveSkillUsage(ctx.vault, { nowMs }),
-        new Set(skills.map((s) => s.name)),
-        { nowMs },
-      )
-    : undefined;
+  const usageVault = contextVault(ctx);
+  const usageWeight =
+    usageVault !== null && resolveSkillsAttachUsageOrdering(ctx.configPath ?? undefined)
+      ? skillUsageRankingWeights(
+          deriveSkillUsage(usageVault, { nowMs }),
+          new Set(skills.map((s) => s.name)),
+          { nowMs },
+        )
+      : undefined;
   const attachmentOpts = {
     query,
     skills,

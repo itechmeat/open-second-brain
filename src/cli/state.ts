@@ -92,6 +92,7 @@ async function cmdStateStatus(argv: ReadonlyArray<string>): Promise<number> {
     vault,
     env: process.env,
     config: discoverConfig(configPath).data,
+    configPath,
   });
   process.stdout.write(
     flags["json"]

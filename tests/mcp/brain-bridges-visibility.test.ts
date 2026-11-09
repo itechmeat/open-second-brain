@@ -19,7 +19,7 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,8 @@ let configPath: string;
 
 beforeEach(async () => {
   vault = mkdtempSync(join(tmpdir(), "o2b-bridges-vis-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "o2b-bridges-cfg-"));
   configPath = join(configHome, "config.yaml");
   atomicWriteFileSync(

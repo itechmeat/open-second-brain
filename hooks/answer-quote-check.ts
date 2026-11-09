@@ -79,7 +79,6 @@ import {
   resolveAnswerQuoteCheckSubagent,
   resolveAgentName,
   resolveRecallInjectEnabled,
-  resolveVault,
   type AnswerQuoteCheckMode,
   type AnswerQuoteCheckPhase,
   ANSWER_QUOTE_CHECK_PHASES,
@@ -113,6 +112,7 @@ import {
   readSubagentDeliveredPaths,
 } from "./lib/injection-ledger.ts";
 import { readHookStamp } from "./lib/session-state.ts";
+import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /**
  * The last assistant messages of the turn the check reads. Everything
@@ -993,8 +993,10 @@ async function main(): Promise<void> {
   // A transcript the host has not created yet is a fresh session, not an
   // error: silence, like every other empty-handed arm.
   if (!existsSync(transcriptPath)) return;
-  const vault = resolveVault();
-  if (vault === null) return;
+  // With no vault the hook does its store-side part (design D14, task 2.10).
+  const target = resolveHookTarget();
+  if (target === null) return;
+  const vault = target.vault;
   const sessionId = isRealSessionId(payload.session_id) ? payload.session_id : null;
   const started = Date.now();
   const deadline = started + ANSWER_QUOTE_BUDGET_MS;

@@ -22,6 +22,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { toPosix } from "../../path-safety.ts";
+import { memoryFromStore, storePagesIn } from "../memory-pages.ts";
 
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
@@ -333,6 +334,17 @@ function countMarkdownFiles(
   dir: string,
   readable: BuildOperatorSummaryOptions["readable"],
 ): number {
+  if (memoryFromStore(vault)) {
+    // Store-only (task 2.10): the fold's records whose page sat in `dir`.
+    // Best effort like the folder count below: a fold that cannot be built
+    // counts 0 rather than failing the whole summary.
+    try {
+      return storePagesIn(vault, dir).filter((p) => readable === undefined || readable(p.rel))
+        .length;
+    } catch {
+      return 0;
+    }
+  }
   if (!existsSync(dir)) return 0;
   try {
     let n = 0;

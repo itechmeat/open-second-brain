@@ -10,12 +10,12 @@
  * a `skip-corrupted-frontmatter` log event.
  */
 
+import { legacyVaultOf } from "./no-vault.ts";
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { parseFrontmatter } from "../vault.ts";
 import type {
   CorruptedEntry,
   PreferenceRecord,
@@ -30,9 +30,15 @@ import {
   resolveChainTip,
 } from "./lifecycle/tombstone.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
-import { brainDirs } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
-import { parseSignal } from "./signal.ts";
+import { brainDirs, brainDirsOf } from "./paths.ts";
+import {
+  legacyMemoryPage,
+  storeMemoryPages,
+  type MemoryFolder,
+  type MemoryPage,
+} from "./memory-pages.ts";
+import { parsePreferenceMeta } from "./preference.ts";
+import { parseSignalPage } from "./signal.ts";
 import {
   OPERATION,
   progressCounter,
@@ -105,6 +111,21 @@ function markdownFilesIn(dir: string): string[] {
 }
 
 /**
+ * The pages of one memory folder in the order {@link markdownFilesIn}
+ * lists them: the files on an unswitched machine, the pages rebuilt from
+ * the store's folds on a store-only one (task 2.10), already sorted by
+ * name the same way.
+ */
+function memoryPagesIn(vault: string | null, folder: MemoryFolder): MemoryPage[] {
+  return (
+    storeMemoryPages(vault, folder) ??
+    markdownFilesIn(brainDirs(legacyVaultOf(vault, "memoryPagesIn"))[folder]).map((full) =>
+      legacyMemoryPage(legacyVaultOf(vault, "memoryPagesIn"), folder, basename(full)),
+    )
+  );
+}
+
+/**
  * A record's `visibility:` tokens plus any informal privacy marker's
  * reservation (`remoteDenyVisibilityTokens`), as a spreadable slice: `{}`
  * for default visibility, so a record from an untagged page keeps its
@@ -127,23 +148,24 @@ function visibilitySlice(meta: FrontmatterMap): { visibility?: ReadonlyArray<str
  * only in the flags they stamp on each record, so they share this walk.
  */
 function collectSignals(
-  files: ReadonlyArray<string>,
+  files: ReadonlyArray<MemoryPage>,
   active: boolean,
   signals: SignalRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
   archived = false,
 ): void {
-  for (const full of files) {
+  for (const page of files) {
     walk.step();
+    const full = page.path;
     try {
       // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
       // excluded from the dream pass so it is never re-clustered.
-      const meta = parseFrontmatter(full)[0];
+      const [meta, body] = page.read();
       if (isTombstoned(meta)) continue;
       signals.push({
         path: full,
-        signal: parseSignal(full),
+        signal: parseSignalPage(meta, body, full),
         active,
         ...(archived ? { archived: true as const } : {}),
         ...visibilitySlice(meta),
@@ -155,15 +177,16 @@ function collectSignals(
 }
 
 function collectPreferences(
-  files: ReadonlyArray<string>,
+  files: ReadonlyArray<MemoryPage>,
   preferences: PreferenceRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
   tombstoned: CorruptedEntry[],
 ): void {
-  for (const full of files) {
+  for (const page of files) {
     walk.step();
-    const rawMeta = parseFrontmatter(full)[0];
+    const full = page.path;
+    const rawMeta = page.read()[0];
     // The tombstoned file stays on disk for audit; the pass never plans
     // over it, but its path is still recorded (finding 64): the cross-
     // topic slug check must see a `pref-cross-*` filename it would
@@ -182,7 +205,7 @@ function collectPreferences(
     try {
       preferences.push({
         path: full,
-        pref: parsePreference(full),
+        pref: parsePreferenceMeta(rawMeta, full),
         supersededBy,
         ...visibilitySlice(rawMeta),
       });
@@ -193,8 +216,8 @@ function collectPreferences(
 }
 
 function collectRetired(
-  vault: string,
-  files: ReadonlyArray<string>,
+  vault: string | null,
+  files: ReadonlyArray<MemoryPage>,
   retired: RetiredRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
@@ -206,15 +229,16 @@ function collectRetired(
   // resolution here asks only whether the chain terminates, not who may
   // read it.
   let chainLookup: ReturnType<typeof buildChainLookup> | null = null;
-  for (const full of files) {
+  for (const page of files) {
     walk.step();
+    const full = page.path;
     // Retired files we only need for topic + id (for supersede
     // bookkeeping) plus the optional `user_rejected_reason` that
     // drives signal-suppression (v0.10.1, _summary §6). We do a
     // lightweight frontmatter parse to avoid the strict folder
     // invariant check failing on permissive setups.
     try {
-      const [meta] = parseFrontmatter(full);
+      const [meta] = page.read();
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const id = typeof meta["id"] === "string" ? meta["id"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
@@ -258,31 +282,31 @@ function collectRetired(
  * no clock and touches nothing on disk, which is why it is the one part of
  * the pass that is provably runnable on its own (see `dream-step.ts`).
  */
-export function scanBrain(vault: string, opts: ScanBrainOptions = {}): ScanResult {
+export function scanBrain(vault: string | null, opts: ScanBrainOptions = {}): ScanResult {
   const progress = progressCounter(OPERATION.dream, opts.onProgress);
   return withProgress(progress, () => scanBrainRun(vault, opts, progress));
 }
 
 function scanBrainRun(
-  vault: string,
+  vault: string | null,
   opts: ScanBrainOptions,
   progress: ProgressCounter,
 ): ScanResult {
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsOf(vault);
   // The four listings are `readdirSync` with no parse, so front-loading
   // them costs a directory read each and buys the stage its denominator:
   // the file count IS the unit this stage ticks in, and a reader watching
   // a bare counter cannot tell a scan a tenth of the way through from one
   // about to finish. The stage still opens before the first checkpoint,
   // so an already-elapsed guard leaves a stream that spoke once.
-  const inbox = markdownFilesIn(dirs.inbox);
-  const processed = markdownFilesIn(dirs.processed);
+  const inbox = memoryPagesIn(vault, "inbox");
+  const processed = memoryPagesIn(vault, "processed");
   // Archived signals are read as inactive history: the plan never counts
   // them, but a preference whose evidence link resolves to one still
   // derives its sign from it (see `deriveActiveSign`).
-  const archived = markdownFilesIn(dirs.archived);
-  const preferenceFiles = markdownFilesIn(dirs.preferences);
-  const retiredFiles = markdownFilesIn(dirs.retired);
+  const archived = memoryPagesIn(vault, "archived");
+  const preferenceFiles = memoryPagesIn(vault, "preferences");
+  const retiredFiles = memoryPagesIn(vault, "retired");
   progress.start(
     SCAN_STAGE,
     inbox.length +
@@ -332,8 +356,14 @@ function scanBrainRun(
     retired,
     corrupted,
     tombstonedPreferences,
-    archivedNames: entryNamesIn(dirs.archived),
+    archivedNames: archivedNamesOf(vault, dirs.archived),
   };
+}
+
+/** The archived folder's entry names; the rebuilt pages' names on a store-only machine. */
+function archivedNamesOf(vault: string | null, dir: string): ReadonlySet<string> {
+  const stored = storeMemoryPages(vault, "archived");
+  return stored === null ? entryNamesIn(dir) : new Set(stored.map((page) => page.name));
 }
 
 /** Every entry name directly inside `dir`, or none when it does not exist. */
@@ -357,10 +387,14 @@ export interface InboxArchiveScan {
  * check: the same walk and the same per-file skips, so the check selects
  * from exactly the records the pass would.
  */
-export function scanInboxForArchive(vault: string): InboxArchiveScan {
-  const dirs = brainDirs(vault);
-  const inbox = markdownFilesIn(dirs.inbox);
+export function scanInboxForArchive(vault: string | null): InboxArchiveScan {
+  const dirs = brainDirsOf(vault);
+  const inbox = memoryPagesIn(vault, "inbox");
   const signals: SignalRecord[] = [];
   collectSignals(inbox, true, signals, [], { step: () => {} });
-  return { inboxFiles: inbox.length, signals, archivedNames: entryNamesIn(dirs.archived) };
+  return {
+    inboxFiles: inbox.length,
+    signals,
+    archivedNames: archivedNamesOf(vault, dirs.archived),
+  };
 }

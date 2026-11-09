@@ -103,6 +103,11 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // 32 -> 33: the lessons-block readiness check
 // (`src/core/brain/doctor/lessons-block-check.ts`, t_1e952e43) joins with
 // the same wave, answered by the `lesson_approvals` row's `sources`.
+// 33 -> 32: the readiness check names the ledger through
+// `lessonsApprovalsPath` (device-local once switched) instead of joining
+// the directory itself.
+// 32 -> 33: machine-state joins, excused: it copies a bare vault's own
+// `.open-second-brain/` once into the device-local root (task 2.10 review).
 const SWEPT_POPULATION_SIZE = 33;
 
 /** Declared surfaces today. Pinned for the same reason. */
@@ -125,7 +130,10 @@ const SWEPT_POPULATION_SIZE = 33;
 // audited against, the same vault-content join the skills tree made.
 // 57 -> 58: the lesson_approvals row joins the catalogue with the lessons lane's final
 // commit (t_1e952e43), the same join the session-mining ledger made.
-const DECLARED_SURFACE_COUNT = 58;
+// 58 -> 61: the embedding and rerank provider registries and the search
+// activation history join the catalogue as device-local rows, so the
+// migration moves them (task 2.10 review).
+const DECLARED_SURFACE_COUNT = 61;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

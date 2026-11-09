@@ -188,6 +188,21 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        code: "view-writer-silent",
+        issueClass: "the human view writer has published nothing for days",
+        nextCommand: "o2b view writer --here",
+        autoRepairable: false,
+      },
+      {
+        // The dry run is the first step whether or not the store exists:
+        // it reads the legacy tree alone. The finding names `o2b store
+        // init` before it when no store exists yet.
+        code: "migration-available",
+        issueClass: "brain store migration available",
+        nextCommand: "o2b brain migrate-store --dry-run",
+        autoRepairable: false,
+      },
+      {
         code: "config-invalid",
         issueClass: "invalid Brain config",
         nextCommand: "o2b brain doctor",
@@ -677,6 +692,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // definition.
         code: "permissions-agent-denied",
         issueClass: "permissions document denies the locally configured agent's write",
+        nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
+        autoRepairable: false,
+      },
+      {
+        // Review finding F461. A store-only machine reads its permissions
+        // document from the `permissions.document` shared setting; a
+        // legacy file with deny rules the setting does not hold is a
+        // policy the operator believes in force and is not. The exit is the
+        // same `show` loop: it names the document the gates read now.
+        code: "permissions-legacy-only",
+        issueClass: "deny rules in a legacy permissions file no reader sees once switched",
         nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
         autoRepairable: false,
       },
@@ -1726,7 +1752,7 @@ export interface DoctorIssueNaming {
  * `pref-x` names the reserved `ret-x` it became.
  */
 export function doctorIssueRefs(
-  vault: string,
+  vault: string | null,
   issue: DoctorIssueNaming,
 ): ReadonlyArray<ArtifactRef> {
   return [
@@ -1740,8 +1766,8 @@ export function doctorIssueRefs(
 }
 
 /** The in-vault form of a path, or the path itself when it lies outside. */
-function vaultRelativeOrSelf(vault: string, path: string): string {
-  return pathIsInside(path, vault) ? vaultRelative(path, vault) : path;
+function vaultRelativeOrSelf(vault: string | null, path: string): string {
+  return vault !== null && pathIsInside(path, vault) ? vaultRelative(path, vault) : path;
 }
 
 /**

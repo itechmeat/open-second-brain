@@ -45,6 +45,8 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStrList, unknownOperationError } from "../coerce.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
+// Record-lane tools: with no vault their pages are store records (task 2.10 WP6).
+import { laneVault } from "./lane-vault.ts";
 
 async function toolBrainSkillProposals(
   ctx: ServerContext,
@@ -59,24 +61,24 @@ async function toolBrainSkillProposals(
     );
     const result =
       minSupport !== undefined
-        ? learnSkillProposals(ctx.vault, { minSupport })
-        : learnSkillProposals(ctx.vault);
+        ? learnSkillProposals(laneVault(ctx), { minSupport })
+        : learnSkillProposals(laneVault(ctx));
     return { ...result };
   }
   if (operation === "list") {
-    const proposals = listPendingSkillProposals(ctx.vault);
+    const proposals = listPendingSkillProposals(laneVault(ctx));
     return { total: proposals.length, proposals };
   }
   if (operation === "accept") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
-    refuseScoredRewriteAccept(ctx.vault, slug);
+    refuseScoredRewriteAccept(laneVault(ctx), slug);
     const note = optionalStringArg("brain_skill_proposals", args, "note");
     const contract = readSkillContract(args);
     // Resolved from THIS server's config chain: a `mature_page` accept
     // materializes a SKILL.md into whichever skills root it names, and the
     // core cannot know which chain the server was started with.
     const skillsRoot = resolveSkillsDir(ctx.configPath ?? undefined);
-    const reviewed = acceptSkillProposal(ctx.vault, slug, {
+    const reviewed = acceptSkillProposal(laneVault(ctx), slug, {
       ...(note ? { note } : {}),
       ...(contract ? { contract } : {}),
       ...(skillsRoot !== null ? { skillsRoot } : {}),
@@ -88,7 +90,7 @@ async function toolBrainSkillProposals(
     // own needs-llm-step envelope, plus every page the gate turned down
     // with the reason it did.
     const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);
-    const report = planSkillPageDrafts(ctx.vault, {
+    const report = planSkillPageDrafts(laneVault(ctx), {
       now: new Date(),
       ...(ctx.repoRoot ? { repoRoot: ctx.repoRoot } : {}),
       ...(skillsDir !== null ? { skillsDir } : {}),
@@ -102,7 +104,7 @@ async function toolBrainSkillProposals(
     // `pages_scanned` is recomputed from the visible lists for the same
     // reason `brain_hygiene` recomputes its counts: a corpus size taken
     // before the filter states how many pages were withheld.
-    const view = reachView(ctx.vault, contextReach(ctx));
+    const view = reachView(laneVault(ctx), contextReach(ctx));
     const admitted = report.admitted.filter((c) => view.visible(c.path));
     const skipped = report.skipped.filter((s) => view.visible(s.path));
     return {
@@ -128,17 +130,17 @@ async function toolBrainSkillProposals(
   }
   if (operation === "page_draft") {
     const page = requiredStringArg("brain_skill_proposals", args, "page");
-    const result = commitSkillPageDraft(ctx.vault, page, args["draft"], { now: new Date() });
+    const result = commitSkillPageDraft(laneVault(ctx), page, args["draft"], { now: new Date() });
     return { ...result };
   }
   if (operation === "evidence") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
-    return { ...resolveSkillProposalEvidence(ctx.vault, slug) };
+    return { ...resolveSkillProposalEvidence(laneVault(ctx), slug) };
   }
   if (operation === "reject") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
     const note = requiredStringArg("brain_skill_proposals", args, "note");
-    const reviewed = rejectSkillProposal(ctx.vault, slug, { note });
+    const reviewed = rejectSkillProposal(laneVault(ctx), slug, { note });
     return { ...reviewed };
   }
   if (operation === "recover") {
@@ -149,8 +151,10 @@ async function toolBrainSkillProposals(
     // rather than as a result field, because neither is a state this
     // operation completed.
     const discarded =
-      args["discard_unreadable"] === true ? discardUnreadableSkillAcceptJournals(ctx.vault) : [];
-    const recovered = recoverSkillProposalAccepts(ctx.vault);
+      args["discard_unreadable"] === true
+        ? discardUnreadableSkillAcceptJournals(laneVault(ctx))
+        : [];
+    const recovered = recoverSkillProposalAccepts(laneVault(ctx));
     return { discarded, recovered, total: recovered.length };
   }
   if (operation === "usage") {
@@ -161,7 +165,7 @@ async function toolBrainSkillProposals(
     // those invocations cited the offer they came from. The command-line
     // surface prints the same figure as `from_offer=`. The remainder are not
     // unattributed-by-error: most runtimes' skill calls follow no offer.
-    const usage = deriveSkillUsage(ctx.vault);
+    const usage = deriveSkillUsage(laneVault(ctx));
     return { total: usage.length, usage };
   }
   throw unknownOperationError(
@@ -224,7 +228,7 @@ async function toolBrainProceduralMemory(
   // operations, refused before anything is written.
   const readable = readableAtContextReach(ctx);
   const unknownId = (id: string): boolean => {
-    const entry = listProceduralMemory(ctx.vault).find((e) => e.id === id);
+    const entry = listProceduralMemory(laneVault(ctx)).find((e) => e.id === id);
     return entry === undefined || !readable(entry.sourcePath);
   };
   if (operation === "reconcile") {
@@ -233,23 +237,23 @@ async function toolBrainProceduralMemory(
       roots.length > 0
         ? roots
         : [
-            join(ctx.vault, "Brain", "procedures"),
-            join(ctx.vault, "skills"),
-            join(ctx.vault, "runbooks"),
+            join(laneVault(ctx), "Brain", "procedures"),
+            join(laneVault(ctx), "skills"),
+            join(laneVault(ctx), "runbooks"),
           ];
     return {
-      ...reconcileProceduralMemory(ctx.vault, { roots: effectiveRoots, include: readable }),
+      ...reconcileProceduralMemory(laneVault(ctx), { roots: effectiveRoots, include: readable }),
     };
   }
   if (operation === "list") {
-    const entries = listProceduralMemory(ctx.vault).filter((e) => readable(e.sourcePath));
+    const entries = listProceduralMemory(laneVault(ctx)).filter((e) => readable(e.sourcePath));
     // Opt-in success-rate ranking (t_703f7b18); default order unchanged.
     const ordered = args["ranked"] === true ? rankProceduralMemory(entries) : entries;
     return { total: ordered.length, entries: ordered };
   }
   if (operation === "mark_used") {
     const id = requiredStringArg("brain_procedural_memory", args, "id");
-    const updated = unknownId(id) ? null : markProceduralMemoryUsed(ctx.vault, id);
+    const updated = unknownId(id) ? null : markProceduralMemoryUsed(laneVault(ctx), id);
     if (!updated) {
       throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
     }
@@ -264,7 +268,7 @@ async function toolBrainProceduralMemory(
         "brain_procedural_memory: outcome must be 'success' or 'failure'",
       );
     }
-    const updated = unknownId(id) ? null : recordProceduralOutcome(ctx.vault, id, outcome);
+    const updated = unknownId(id) ? null : recordProceduralOutcome(laneVault(ctx), id, outcome);
     if (!updated) {
       throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
     }
@@ -281,12 +285,12 @@ async function toolBrainRecurrence(
 ): Promise<Record<string, unknown>> {
   const operation = requiredStringArg("brain_recurrence", args, "operation");
   if (operation === "list") {
-    const entries = listRecurrenceEntries(ctx.vault);
+    const entries = listRecurrenceEntries(laneVault(ctx));
     return { total: entries.length, entries };
   }
   if (operation === "show") {
     const contentHash = requiredStringArg("brain_recurrence", args, "content_hash");
-    const entry = getRecurrenceEntry(ctx.vault, contentHash);
+    const entry = getRecurrenceEntry(laneVault(ctx), contentHash);
     if (!entry) {
       throw new MCPError(INVALID_PARAMS, `brain_recurrence: unknown content hash: ${contentHash}`);
     }
@@ -296,7 +300,7 @@ async function toolBrainRecurrence(
     const contentHash = requiredStringArg("brain_recurrence", args, "content_hash");
     const scope = requiredStringArg("brain_recurrence", args, "scope");
     const sourceId = requiredStringArg("brain_recurrence", args, "source_id");
-    const entry = applyRecurrenceEvidence(ctx.vault, {
+    const entry = applyRecurrenceEvidence(laneVault(ctx), {
       contentHash,
       scope,
       sourceId,
@@ -306,7 +310,7 @@ async function toolBrainRecurrence(
   }
   if (operation === "purge_source") {
     const sourceId = requiredStringArg("brain_recurrence", args, "source_id");
-    purgeRecurrenceSource(ctx.vault, sourceId);
+    purgeRecurrenceSource(laneVault(ctx), sourceId);
     return { ok: true, source_id: sourceId };
   }
   throw unknownOperationError(
@@ -319,7 +323,7 @@ async function toolBrainSkillRewriteStatus(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const skillName = requiredStringArg("brain_skill_rewrite_status", args, "skill_name");
-  const status = readSkillRewriteStatus(ctx.vault, skillName);
+  const status = readSkillRewriteStatus(laneVault(ctx), skillName);
   return {
     skill: status.skill,
     receipt: status.receipt,
@@ -335,8 +339,8 @@ async function toolBrainProceduralGraph(
 ): Promise<Record<string, unknown>> {
   const operation = requiredStringArg("brain_procedural_graph", args, "operation");
   if (operation === "rebuild") {
-    const graph = rebuildProceduralGraph(ctx.vault);
-    const hints = rebuildProceduralHints(ctx.vault, { graph });
+    const graph = rebuildProceduralGraph(laneVault(ctx));
+    const hints = rebuildProceduralHints(laneVault(ctx), { graph });
     return {
       operation,
       graph: {
@@ -351,14 +355,14 @@ async function toolBrainProceduralGraph(
     };
   }
   if (operation === "show") {
-    const graph = readProceduralGraph(ctx.vault);
+    const graph = readProceduralGraph(laneVault(ctx));
     if (!graph) {
       throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: graph projection not found");
     }
     return { ...graph };
   }
   if (operation === "hints") {
-    const hints = readProceduralHints(ctx.vault);
+    const hints = readProceduralHints(laneVault(ctx));
     if (!hints) {
       throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: hints projection not found");
     }

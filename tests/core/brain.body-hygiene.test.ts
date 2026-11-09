@@ -25,6 +25,10 @@ import { dream } from "../../src/core/brain/dream.ts";
 import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { brainDirs, preferencePath, retiredPath, signalPath } from "../../src/core/brain/paths.ts";
+import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+
+// The legacy day log and ledgers are read under their un-sharded names.
+useUnshardedLegacyLog();
 
 let vault: string;
 

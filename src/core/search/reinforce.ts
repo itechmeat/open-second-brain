@@ -17,12 +17,24 @@
  * The boost is bounded ({@link REINFORCE_BOOST_CAP}) and applied before
  * the top_k cut, so a reinforced memory is lifted into the window without
  * ever floating an irrelevant chunk.
+ *
+ * A store-only machine (design D14 item 1) appends each event as a
+ * `search-reinforce` ledger row instead of a file; the store is
+ * append-only, so a reset there is a row too, and the fold counts only
+ * the events after the newest reset.
  */
 
+import { legacyVaultOf } from "../brain/no-vault.ts";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { fnv1aHex } from "./feedback.ts";
+import { canonicalJson } from "../integrity/digest.ts";
+import { ledgerRowRecord } from "../store/dual-write-records.ts";
+import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { storeWrite } from "../store/store-write.ts";
+import { dedupeIdentical, fnv1aHex } from "./feedback.ts";
 import type { BrainSearchResult } from "./types.ts";
 
 /** Maximum additive boost a fully-reinforced path receives. */
@@ -42,8 +54,8 @@ export interface RecordReinforceOptions {
   readonly nowMs?: number;
 }
 
-export function reinforceDir(vault: string): string {
-  return join(vault, "Brain", "search", "reinforce");
+export function reinforceDir(vault: string | null): string {
+  return join(legacyVaultOf(vault, "reinforceDir"), "Brain", "search", "reinforce");
 }
 
 /**
@@ -53,23 +65,90 @@ export function reinforceDir(vault: string): string {
  * no-op.
  */
 export function recordReinforce(
-  vault: string,
+  vault: string | null,
   paths: ReadonlyArray<string>,
   opts: RecordReinforceOptions = {},
 ): string | null {
   const cleaned = [...new Set(paths.filter((p) => p.length > 0))].toSorted();
   if (cleaned.length === 0) return null;
+  const event: ReinforceEvent = Object.freeze({ ts: opts.nowMs ?? Date.now(), paths: cleaned });
+  // One `search-reinforce` ledger row on a store-only machine (design D14
+  // item 1); an unswitched machine keeps its event file, with no dual write
+  // (format version 1 has none for this ledger; the migration imports the
+  // files).
+  if (isStoreOnly({ vault })) {
+    return storeWrite(() => reinforceRowRecord(vault, event), { vault })[0]?.path ?? "";
+  }
   const dir = reinforceDir(vault);
   mkdirSync(dir, { recursive: true });
-  const event: ReinforceEvent = Object.freeze({ ts: opts.nowMs ?? Date.now(), paths: cleaned });
   const body = JSON.stringify(event, null, 2) + "\n";
   const file = join(dir, `${event.ts}-${fnv1aHex(body)}.json`);
   writeFileSync(file, body);
   return file;
 }
 
+/** The store ledger of reinforce events (FORMAT.md, the migration's ledgers). */
+export const SEARCH_REINFORCE_LEDGER = "search-reinforce";
+
+/**
+ * A store row that resets the ledger: the store is append-only, so a
+ * reset on a store-only machine is a row, and every event before the
+ * newest reset row (in fold order) no longer counts.
+ */
+interface ReinforceResetRow {
+  readonly ts: number;
+  readonly reset: true;
+}
+
+function isResetRow(row: unknown): row is ReinforceResetRow {
+  return (
+    row !== null &&
+    typeof row === "object" &&
+    (row as { reset?: unknown }).reset === true &&
+    typeof (row as { ts?: unknown }).ts === "number"
+  );
+}
+
+/**
+ * The store row of one event: `private` when a reinforced path names a
+ * private page or one that cannot be judged, else `private` when this
+ * machine holds it (what proved useful says what the user worked on).
+ */
+function reinforceRowRecord(vault: string | null, row: ReinforceEvent | ReinforceResetRow) {
+  return ledgerRowRecord(
+    SEARCH_REINFORCE_LEDGER,
+    row,
+    rowNamesPrivatePage(vault, row) ? "private" : "private-when-held",
+  );
+}
+
+function isReinforceEvent(parsed: unknown): parsed is ReinforceEvent {
+  if (parsed === null || typeof parsed !== "object") return false;
+  const e = parsed as Partial<ReinforceEvent>;
+  return (
+    typeof e.ts === "number" &&
+    Array.isArray(e.paths) &&
+    e.paths.every((p) => typeof p === "string")
+  );
+}
+
+/** The store rows after the newest reset row, in fold order. */
+function storeRowsSinceReset(vault: string | null): unknown[] {
+  const rows = readLedgerRows<unknown>(SEARCH_REINFORCE_LEDGER, () => [], { vault });
+  const lastReset = rows.findLastIndex(isResetRow);
+  return rows.slice(lastReset + 1);
+}
+
 /** Load all reinforce events, sorted by timestamp (stable). */
-export function loadReinforceEvents(vault: string): ReinforceEvent[] {
+export function loadReinforceEvents(vault: string | null): ReinforceEvent[] {
+  // A store-only machine reads the `search-reinforce` rows after the
+  // newest reset; an identical row is counted once, as the event's file
+  // name made it one file.
+  if (isStoreOnly({ vault })) {
+    return dedupeIdentical(storeRowsSinceReset(vault).filter(isReinforceEvent)).toSorted(
+      (a, b) => a.ts - b.ts,
+    );
+  }
   let files: string[];
   try {
     files = readdirSync(reinforceDir(vault)).filter((f) => f.endsWith(".json"));
@@ -79,16 +158,8 @@ export function loadReinforceEvents(vault: string): ReinforceEvent[] {
   const out: ReinforceEvent[] = [];
   for (const f of files.toSorted()) {
     try {
-      const parsed = JSON.parse(
-        readFileSync(join(reinforceDir(vault), f), "utf8"),
-      ) as ReinforceEvent;
-      if (
-        typeof parsed.ts === "number" &&
-        Array.isArray(parsed.paths) &&
-        parsed.paths.every((p) => typeof p === "string")
-      ) {
-        out.push(parsed);
-      }
+      const parsed: unknown = JSON.parse(readFileSync(join(reinforceDir(vault), f), "utf8"));
+      if (isReinforceEvent(parsed)) out.push(parsed);
     } catch {
       // One malformed file never breaks the fold.
     }
@@ -102,7 +173,7 @@ export function loadReinforceEvents(vault: string): ReinforceEvent[] {
  * naming the path normalized by {@link REINFORCE_SATURATION} and capped
  * at 1. Order-insensitive by construction.
  */
-export function loadReinforceStrengths(vault: string): Map<string, number> {
+export function loadReinforceStrengths(vault: string | null): Map<string, number> {
   const counts = new Map<string, number>();
   for (const event of loadReinforceEvents(vault)) {
     for (const path of new Set(event.paths)) {
@@ -117,7 +188,17 @@ export function loadReinforceStrengths(vault: string): Map<string, number> {
 }
 
 /** Delete the reinforce ledger. The fold replays as empty afterwards. */
-export function resetReinforce(vault: string): void {
+export function resetReinforce(vault: string | null, opts: RecordReinforceOptions = {}): void {
+  // The store is append-only: a store-only machine records the reset as a
+  // row (design D14 item 1) and removes nothing.
+  if (isStoreOnly({ vault })) {
+    // The reset names no page and carries no user text: it goes to
+    // `shared`, so every device, one without the private partition
+    // included, applies the same cutoff to the events before it.
+    const reset: ReinforceResetRow = { ts: opts.nowMs ?? Date.now(), reset: true };
+    storeWrite(() => ledgerRowRecord(SEARCH_REINFORCE_LEDGER, reset, "shared"), { vault });
+    return;
+  }
   rmSync(reinforceDir(vault), { recursive: true, force: true });
 }
 
@@ -127,7 +208,11 @@ export function resetReinforce(vault: string): void {
  * filenames already encode ts + content hash, so they change iff the
  * ledger does).
  */
-export function reinforceFingerprint(vault: string): string {
+export function reinforceFingerprint(vault: string | null): string {
+  if (isStoreOnly({ vault })) {
+    const rows = storeRowsSinceReset(vault).filter(isReinforceEvent);
+    return rows.length === 0 ? "off" : fnv1aHex(rows.map((row) => canonicalJson(row)).join("|"));
+  }
   const dir = reinforceDir(vault);
   if (!existsSync(dir)) return "off";
   try {

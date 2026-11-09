@@ -16,6 +16,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import type { FrontmatterValue } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { firstLine } from "./descriptor.ts";
+import { defaultSkillsDir } from "./skills-dir.ts";
 
 export type SkillErrorCode = "NOT_FOUND" | "INVALID_PATH";
 
@@ -66,13 +67,19 @@ export interface DiscoveredSkill extends SkillEntry {
 export interface SkillRootsOptions {
   /** Plugin checkout root containing `skills/`. */
   readonly repoRoot?: string | null;
-  /** Vault root; vault-local skills live at `Brain/skills/`. */
+  /**
+   * Vault root. With no `skillsDir`, the default skills root is
+   * `defaultSkillsDir(vault)`: `Brain/skills/` on an unswitched machine,
+   * `<vault>/skills/` on a store-only one (a vault with no `Brain/` tree
+   * included), the device-local skills folder with no vault (that folder
+   * is searched even when `vault` is omitted).
+   */
   readonly vault?: string | null;
   /**
    * Explicit skills directory override. When set, takes precedence over
-   * the vault-local `Brain/skills/` path, letting operators point the
-   * skill surface at an external directory (e.g. `~/.hermes/skills/`)
-   * without symlinks. Supports ~ expansion via the caller.
+   * the default skills root above, letting operators point the skill
+   * surface at an external directory (e.g. `~/.hermes/skills/`) without
+   * symlinks. Supports ~ expansion via the caller.
    */
   readonly skillsDir?: string | null;
 }
@@ -85,8 +92,9 @@ export function skillRoots(opts: SkillRootsOptions): string[] {
   if (opts.repoRoot) candidates.push(join(opts.repoRoot, "skills"));
   if (opts.skillsDir) {
     candidates.push(opts.skillsDir);
-  } else if (opts.vault) {
-    candidates.push(join(opts.vault, "Brain", "skills"));
+  } else {
+    // The vault-local skills, or a no-vault machine's device-local ones.
+    candidates.push(defaultSkillsDir(opts.vault ?? null));
   }
   return candidates.filter((root) => {
     try {

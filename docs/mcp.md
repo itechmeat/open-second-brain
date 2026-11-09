@@ -78,8 +78,42 @@ a server running natively on Windows: `Brain/inbox/sig-x.md`, never
 file on the host, so it takes the vault's own Obsidian-style form. That
 keeps the answer portable: an agent can feed it straight back into a tool,
 match it against a wikilink, and compare it with the answer another device
-sharing the same vault gives, whatever OS each device runs. A path outside
-the vault is returned unchanged in its host form.
+sharing the same vault gives, whatever OS each device runs.
+
+A path outside the vault is returned unchanged in its host form to a
+caller at local reach (stdio, the CLI, a loopback HTTP bind). A caller at
+remote reach never receives an absolute path of the host: a path in the
+brain store is named `store:<partition>/<path>` (for example
+`store:shared/streams/events/...`), a path in this machine's device-local
+state is named `local:<path>` (snapshots, artifacts, attestation files and
+other machine state of a store-only machine), and any other host path is
+`<device-path>`. The `store` block of `second_brain_status` follows the
+same rule for the store root, its partitions and the device state
+directory. The server applies the rule to every tool result on its way
+out, and to resource bodies and refusals, so a field whose value is a
+host path (`absolute_path`, `absolute_log_path`, `config_path`, the state
+surface list of `vault_health`) and a path a longer message mentions (a
+check message, a warning, error prose) are named the same way at remote
+reach: a path in the vault becomes vault-relative, the vault root itself
+`<vault>`. Only this machine's own roots are matched (home, vault, store,
+device state, temp and config folders), each as a whole path segment, so
+text that only looks like a path, such as another user's home quoted in a
+note, is left as written. `expose_host_paths: true` keeps every path raw.
+
+### Running with no vault
+
+A server started with no vault configured keeps the memory contract on
+the brain store alone. `brain_feedback`, `brain_apply_evidence`,
+`brain_note`, `brain_pinned_context`, `brain_context`, `brain_search`,
+`brain_changes`, `brain_dream`, `brain_doctor`, `brain_settings` and
+`second_brain_status` answer from store records: a written record is named
+`store:<id>` (a pinned register `store:<partition>/pinned`), the search
+index is keyed by the store id, the dream pass runs over the store's folds
+with no pre-run snapshot, and the doctor runs its store-side checks. A
+second machine sharing the store finds the same records once its own index
+catches up. A tool that works on notes, and the vault-file modes of these
+tools (a doctor repair, a single dream step, the staged dream lifecycle, a
+cross-vault search), refuse with `vault_required`.
 
 ### Progress notifications
 
@@ -302,6 +336,7 @@ generic tokens:
 | `brain_artifact_unparseable` | a Brain artifact file (a preference or a retired rule, for example) could not be parsed |
 | `argument_forbidden` | `brain_scaffold_stub` was given an argument that belongs to its other action |
 | `quote_unverified` | `brain_distill_source` with `strict_quotes: true` refused the write because a quoted span in a claim did not verify against its source (see "Source distillation" below) |
+| `store_write_failed` | a write on a machine that writes the brain store only did not land; the payload (`_meta` on a tool result, `error.data` on a JSON-RPC error) also carries `reason` (`no-store`, `no-device`, `root-inside-vault`, `partition-unavailable`, `store-identity` or `store-error`) and `remedy`, one sentence naming the fix |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:
@@ -311,9 +346,14 @@ through unchanged:
   messages already carried stays in the text;
 - response-shape and semantic response violations
   (`SHAPE_VIOLATION_CODES`, `SEMANTIC_VIOLATION_CODES`);
-- the frozen-vault refusal `vault_frozen`, the write-binding refusal
+- the frozen-vault refusal `vault_frozen`, the store-migration refusal
+  `migration_in_progress`, the write-binding refusal
   `write-binding-refused`, the reach refusal `caller-supplied-reach`, and
   the owner-scope refusals `foreign-owner` and `unresolved-identity`;
+- the vault adapter's refusals: `vault_required` (a note feature called
+  on a machine with no vault) and `vault_binding_mismatch` (a note write
+  to a vault that is not the one bound to this machine's brain store; the
+  message names no other vault's path);
 - the permissions-document write refusals (since 1.79.0): `write-refused`
   (a document rule denied the write) and
   `force-confirmed-requires-allow` (`force_confirmed` skipped the dream
@@ -387,7 +427,7 @@ flags for a narrower per-process full server.
 | Tool                        | Purpose                                                                                                                                        | Required arguments                             |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | `second_brain_capabilities` | Report the tools available to this MCP process and the withheld-tool reasons after runtime capability filtering.                               | —                                              |
-| `second_brain_status`       | Report config and vault status, with secrets redacted.                                                                                         | —                                              |
+| `second_brain_status`       | Report config and vault status, with secrets redacted, and where the brain store is (the `store` block, see below).                                                                                         | —                                              |
 | `second_brain_query`        | List vault pages with an optional case-insensitive title substring.                                                                            | —                                              |
 | `second_brain_wiring`       | Report what this install is wired into. `view=projects` lists every registered project link with its pointer state and whether the vault it names still exists; `view=hosts` verifies every registered install target through the same `verify()` call `o2b install --check` makes. See "Installation wiring" below for the path policy and the probe cost. | `view` |
 | `vault_health`              | Run vault, config, and plugin manifest health checks. Since v1.50.0 the response also carries `state_surfaces`: the same inventory `o2b state status` renders (every declared in-vault state surface with its resolved path, tier, reachability verdict and the configuration layer that placed it), as a sibling FIELD rather than a contribution to `ok` — an absent surface is normal on a young vault and an unchecked one carries its own reason. An unreadable machine config resolves to no overrides here rather than failing the report; the `checks` array already names that fault. | —                                              |
@@ -404,6 +444,7 @@ flags for a narrower per-process full server.
 | `brain_analytics`           | Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=attention_flows` seeds its default flow recipe when the vault lacks one; `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
 | `brain_search`              | Vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), an FTS `match_mode` (`all` \| `any`), a pushed `kind` filter (`page` \| `section`) plus SQL pushdown for the promoted `properties` keys (since v1.80.0), and since v1.82.0 an opt-in iterative recall loop (`iterative`, `iterative_token`, `iterative_payload`) whose surviving coverage gaps pause with a plan the caller answers. Write-classified: it persists activation access events by default and the opt-in reinforce, recall-telemetry and query-demand ledgers under `Brain/search/` - ranking state later searches read back. | `query`                                        |
 | `brain_changes`             | Change probe over the brain store (phase 1 trial, active only when a store is in use): returns the record ids added since an optional watermark (`since`; absent starts from the first record), grouped by partition, stream, scope and topic, plus the watermark to pass next (`truncated: true` when `limit` cut the page, `reset: true` when the watermark came from a replaced index, `warnings` when a catch-up failed), so an agent or hook can see what other agents saved without running a search. Read-only; local reach only. | none (`since`, `limit` optional) |
+| `brain_settings`            | Shared brain settings, the ones every machine agrees on, named `<block>.<field>` (`dream.candidate_threshold`, `decision_model.enabled`, `guardrails.derived_fact_synthesis`) or by a scalar key (`primary_agent`): `action: get \| list \| set \| unset`. `view.language` (`en`, `ru`, or a regional tag of one) names the language of the human view; it is a store record on every machine, switched or not. A `set` value is a scalar or a list of scalars and goes through the same validator the settings file goes through. Once the machine is switched to the brain store, a write is a `setting-set` or `setting-unset` record with agent authority; a value the operator set (`o2b brain settings set`, human authority) is refused with `human_value_in_force`, never written and outvoted, and while a shared settings shard cannot be read (or is gone since this machine read it) an agent's write is refused with `settings_unreadable`. Before the switch it edits the vault's settings file, where a value that differs from the shipped default counts as the operator's and is refused the same way. A setting that holds a safety or privacy boundary (every `integrity` gate, `notes.read_paths`, `vault.ignore_paths` and `vault.include_paths`, `write_binding.path_prefixes`, the `sessions` capture patterns, the promotion thresholds, the instruction-file ceiling and the trust and owner-scope toggles of `guardrails`, the decision-model opt-out `decision_model.enabled`, the permissions document `permissions.document`) is the operator's alone: an agent's write is refused with `operator_only_setting` in both modes, whether or not the operator set it. A setting of one machine (snapshots, storage, embeddings, decision-model endpoints) is refused with `device_setting` and the machine-config key to set instead. Works on a server with no vault. | `action` (`name` for get/set/unset, `value` for set) |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`. Since v1.82.0 a measured call also returns the shared graded surfacing key (`key`, `tier`) beside the binary decision.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`. Takes the same adequacy pair as `brain_recall_gate` under its own spelling, `recall_scores` AND `match_quality`: both or neither, an incomplete pair is refused, and the schema states it as `dependentRequired` keyed on this tool's own scores name. Since v1.91.0 an opt-in `entity_facts_context_pack` config key (default off, env `OPEN_SECOND_BRAIN_ENTITY_FACTS_CONTEXT_PACK`) adds a conditional `entity_facts` section: the canonical-scope entities anchored from the query, at most three, each listing only ids the pack already kept whose bodies anchor it; the key is absent when off, so the default pack stays byte-identical. Since v1.95.0 an opt-in `tail_trim_context_pack` config key (default off, env `OPEN_SECOND_BRAIN_TAIL_TRIM_CONTEXT_PACK`) adds a score-aware tail trim whenever the call carries a query: the top three delivered items are immune, an item whose query-term overlap nearly matches the top delivered score is kept, the rest drop whole with a `tail-trim` skip reason, and the freed budget is offered back to `over-budget` candidates in priority order; the response carries a conditional `tail_trim` block (`dropped`, `kept_by_query_terms`, `rescued`, `tokens_saved`) only when the trim ran, and with the key off the pack is byte-identical. | `max_tokens`                                   |
@@ -437,7 +478,7 @@ flags for a narrower per-process full server.
 | `brain_idea_lineage`        | Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A `ctn_` id walks the sourceRefs graph; a `pref-`/`ret-` id adapts belief-evolution. Cycle-guarded, depth-bounded; unknown id errors. | `id`                                           |
 | `brain_note_history`        | Decompose a note's git history into recallable episodic phases split on a deterministic commit-time gap (default 72h, language-agnostic). Each phase carries subjects/dates/authors. Missing repo → `available: false`; no commits → zero phases. Read-only. | `path`                                         |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
-| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`. `dry_run: true` previews instead: the pack that would result plus its leaf-level `diff`, no config write, no audit record. The preview runs the same pack validator the apply runs, so a batch that validator rejects raises identically in both. It does NOT cover the two checks that exist only because the apply writes: the vault-identity write guard, and the atomic writer's re-parse of the rendered YAML. A batch that renders to unparseable YAML therefore previews clean and fails on apply. | `mutations` (`dry_run` to preview)             |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to the active schema pack: `Brain/_brain.yaml` before the machine is switched to the brain store, the shared `brain.schema.*` settings records after (audited to the store, nothing under `Brain/`). `dry_run: true` previews instead: the pack that would result plus its leaf-level `diff`, no config write, no audit record. The preview runs the same pack validator the apply runs, so a batch that validator rejects raises identically in both. It does NOT cover the two checks that exist only because the apply writes: the vault-identity write guard, and the atomic writer's re-parse of the rendered YAML. A batch that renders to unparseable YAML therefore previews clean and fails on apply. | `mutations` (`dry_run` to preview)             |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
 
@@ -793,6 +834,33 @@ path-safe: it does not name the config file either, because the file lives
 under the operator's home and this is the field that exists to keep host paths
 out of model context. `second_brain_status` and `vault_health` name it, from
 fields whose contract is to name it.
+
+**The brain store in `second_brain_status`.** The tool's fields keep their
+order (`config_path`, `config_exists`, `config_keys`, `config`, `vault_path`,
+`vault_exists`, then the `vault`, `brain` and `search` blocks when present),
+and a `store` object always comes last. It answers where the brain store is
+and how far this machine has got with it, so no agent needs a store path by
+heart:
+
+| Field | Meaning |
+| --- | --- |
+| `root` | `{ path, origin, exists }`: the store root and the setting that put it there (`env`, `config` or `default`). |
+| `initialized` | Whether a partition carries the store identity, so the store exists. |
+| `store_id` | The store id, or `null` before `o2b store init`. |
+| `partitions` | One `{ name, path, held, exists }` per partition (`shared`, `private`). |
+| `partitions_held` | The names of the partitions this machine holds. |
+| `device_state_dir` | `{ scope, path, origin, exists }`: the device-local state directory of this store (`scope: "store"`), or the directory that will hold it before the store exists (`scope: "all-stores"`). |
+| `device_id` | The device id this machine writes its shards under, or `null` when none is set. |
+| `dual_write_enabled` | Whether the `store_dual_write` trial is on. |
+| `index` | `{ exists, records_indexed, shards_read, last_catch_up_at }`: how far the vault's search index has caught up with the store; `last_catch_up_at` is the last catch-up that read new records. `null` when the vault is not there. |
+| `migration` | `{ available, legacy_tree_present, store_exists, switched, next_commands, error? }`: a migration is available while the vault still holds the legacy `Brain/` tree and the store holds no `device-switched` record of this device. `next_commands` names what to run, in order (`o2b store init` first when no store exists, then `o2b brain migrate-store --dry-run`); `store_exists` is `null` and `error` says why when the store cannot be read. `o2b brain doctor` reports the same answer. |
+| `error` | Why the store cannot be used as configured (a root inside the vault, a corrupt `store.json`, partitions of two stores), or `null`. |
+
+The paths are reported as they resolve, like `config_path` and
+`search.index_path` in the same tool. A machine config that cannot be read
+turns the whole block into `{ "error": "..." }`; the call itself still
+answers. `o2b store path` prints the same locations on the command line, and
+`o2b status --json` carries the same `store` object.
 
 ## Resources
 
@@ -1185,8 +1253,11 @@ reported per-name without failing the batch.
 ## Skill surface (since v0.37.0)
 
 `list_skills` returns the agent skills shipped in the plugin's
-`skills/` directory plus vault-local `Brain/skills/` (vault entries
-shadow shipped ones by name). `get_skill` fetches a skill's SKILL.md by
+`skills/` directory plus the machine's own skills folder (its entries
+shadow shipped ones by name): `Brain/skills/` on a machine that keeps the
+legacy tree, `<vault>/skills/` once it uses the brain store, and a
+device-local `skills/` folder with no vault. Skills are always files, never
+store records; the migration moves `Brain/skills/` to `<vault>/skills/`. `get_skill` fetches a skill's SKILL.md by
 name; an optional `file_path` reads an auxiliary file and is
 path-traversal-guarded to the skill directory. `skills_attach` scores
 skills against the current turn text with a deterministic BM25-style
@@ -1256,7 +1327,7 @@ tune the surface; each is off/unset by default, so behaviour is
 unchanged unless an operator opts in:
 
 - `skills_dir` (`OPEN_SECOND_BRAIN_SKILLS_DIR`) overrides the skill
-  discovery root, replacing vault-local `Brain/skills/` with an arbitrary
+  discovery root, replacing the default skills folder with an arbitrary
   path (e.g. an external `~/.hermes/skills/`) without symlinks. `~` is
   expanded; a relative value is anchored to the directory of the resolved
   config file so the root is the same regardless of the process working
@@ -2187,6 +2258,13 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `transport-reach` are one argument rather than three. `disclosure` is
   deliberately not reserved - it is the unrelated result-depth mode on the
   recall surfaces.
+- A write attempted while `o2b brain migrate-store` migrates this vault on
+  this machine (the device-local migration gate is held) is refused the
+  same way: `-32602`, the refusal token `migration_in_progress`, and
+  structured `data`: `code`, `tool`, `run_id`, `since` and
+  `next_command: "o2b brain migrate-store --resume"` (for a migration that
+  was interrupted). Other machines are not gated; nothing is appended to
+  the Brain log for this refusal.
 - Since v1.55.0 a write attempted while the vault is FROZEN
   (`o2b brain freeze`, marker `Brain/.state/frozen.json`) is refused with
   `-32602`, the refusal token `vault_frozen`, and structured `data`:

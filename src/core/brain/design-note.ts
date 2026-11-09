@@ -38,10 +38,9 @@
  * check, which states the count it found.
  */
 
-import { mkdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import { slugify, writeFrontmatterAtomic } from "../vault.ts";
+import { slugify } from "../vault.ts";
 import {
   DECISION_SIMILARITY_THRESHOLD,
   findSimilarDecisions,
@@ -73,7 +72,7 @@ import { isoDate } from "./time.ts";
 import { listTensions, TENSION_UNRESOLVED_STATUSES, type TensionRecord } from "./tensions.ts";
 import { readTruthState } from "./truth/store.ts";
 import type { ClaimSlot, TruthConflict } from "./truth/types.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { assertLaneWrite, writeLanePage } from "../store/lane-pages.ts";
 
 /** Vault-relative directory a committed design note lands in. */
 export const DESIGN_NOTE_DIR_REL = "Brain/decisions";
@@ -452,7 +451,7 @@ export function commitDesignNote(
   // Vault-identity write guard (context-integrity-gates, Unit J): this is
   // the module's only write, and `tests/core/brain/vault-guard-census.test.ts`
   // counts every write-capable module in this tree.
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const trimmed = requireTopic(topic);
   // Structure first, then the cardinality rule. Nothing is written until
   // both pass.
@@ -467,10 +466,10 @@ export function commitDesignNote(
   const recommended = note.alternatives.find((a) => a.recommended)!;
   const slug = slugify(trimmed);
   const dir = decisionsDir(vault);
-  mkdirSync(dir, { recursive: true });
   const path = join(dir, noteBasename(slug, opts.now));
 
-  writeFrontmatterAtomic(
+  writeLanePage(
+    vault,
     path,
     {
       schema_version: 1,

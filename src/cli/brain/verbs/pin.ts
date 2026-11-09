@@ -16,7 +16,8 @@ async function pinOrUnpin(argv: string[], value: boolean): Promise<number> {
   if (id === null) {
     return fail(`brain ${value ? "pin" : "unpin"} missing required flag: --id`);
   }
-  const { config, vault } = brainVerbContext(flags);
+  // `null` with no vault configured: the flip is a store record (D14).
+  const { config, vault } = brainVerbContext(flags, { vault: "optional" });
   const agent = resolveAgentName(config);
 
   try {

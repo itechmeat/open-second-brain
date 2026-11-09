@@ -68,6 +68,7 @@ import {
 } from "./rules-block.ts";
 import type { InstallEnv } from "./types.ts";
 import type { InstallTargetId } from "../runtime/host-facts.ts";
+import { machineStatePath } from "../state/machine-state.ts";
 
 // ----- Target mapping -------------------------------------------------------
 
@@ -417,7 +418,7 @@ export interface InstructionBlockLock {
 
 /** The lock's path in `vault`'s derived store. */
 export function instructionBlockLockPath(vault: string): string {
-  return join(vault, DERIVED_STORE_DIR, INSTRUCTION_BLOCK_LOCK_FILE);
+  return machineStatePath(vault, DERIVED_STORE_DIR, INSTRUCTION_BLOCK_LOCK_FILE);
 }
 
 /**

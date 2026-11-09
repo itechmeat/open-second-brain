@@ -31,20 +31,25 @@
  * bodies; the write is idempotent and atomic (mirrors `active.ts`).
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { legacyVaultOf } from "./no-vault.ts";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { readGeneratedAt } from "./active.ts";
-import { readerRefView } from "./artifact-ref-view.ts";
+import { readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
+import { storeRecordRefView } from "./store-record-visibility.ts";
+import { laneVaultRoot } from "../store/lane-pages.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
 import { listDeadEnds, type DeadEndEntry } from "./dead-ends.ts";
 import { logEntryAtReach } from "./log-events-at-reach.ts";
-import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import type { BrainLogEntry } from "./log.ts";
-import { brainDirs, brainDirsForWrite, brainLessonsPath, vaultRelative } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
+import { brainDirsForWrite, brainDirsOf, brainLessonsPath, vaultRelative } from "./paths.ts";
+import { compiledDigestPath, digestsRenderedOnDemand } from "./compiled-digest-path.ts";
+import { legacyMemoryPage, type MemoryPage, storeMemoryPages } from "./memory-pages.ts";
+import { logDayReader, withLogReadPass } from "./log-days.ts";
+import { parsePreferenceMeta } from "./preference.ts";
 import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
   LESSONS_HALF_LIFE_DAYS_DEFAULT,
@@ -153,7 +158,7 @@ function eventWeight(eventMs: number, nowMs: number, halfLifeDays: number): numb
  * apply-evidence outcomes are harvested from `Brain/log/`.
  */
 export function computeLessons(
-  vault: string,
+  vault: string | null,
   preferences: ReadonlyArray<BrainPreference>,
   deadEnds: ReadonlyArray<DeadEndEntry>,
   opts: ComputeLessonsOptions = {},
@@ -254,20 +259,21 @@ export function computeLessons(
 
 /** Walk the log once, accumulating signed apply-evidence per pref. */
 function scoreApplyEvidence(
-  vault: string,
+  vault: string | null,
   prefByKey: ReadonlyMap<string, BrainPreference>,
   accFor: (key: string) => Accumulator,
   nowMs: number,
   halfLifeDays: number,
   keepEvent: ((entry: BrainLogEntry) => boolean) | undefined,
 ): void {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.log)) return;
+  const dirs = brainDirsOf(vault);
+  const log = logDayReader(vault);
+  if (!log.stored && !existsSync(dirs.log)) return;
 
-  for (const datePrefix of listLogDates(vault)) {
+  for (const datePrefix of log.dates) {
     let parsed;
     try {
-      parsed = readLogDay(vault, datePrefix);
+      parsed = log.day(datePrefix);
     } catch (err) {
       process.stderr.write(
         `warning: lessons: failed to read ${datePrefix}: ${(err as Error).message}\n`,
@@ -400,13 +406,28 @@ export interface LessonsRender {
   readonly counts: LessonCounts;
 }
 
-function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender {
-  const refs = readerRefView(vault, opts.readable);
-  const preferences = readActivePreferences(vault).filter(({ path }) =>
-    refs.visible(vaultRelative(path, vault)),
-  );
-  const deadEnds = listDeadEnds(vault).entries.filter((de) =>
-    refs.visible(vaultRelative(de.path, vault)),
+function renderLessons(vault: string | null, opts: RenderLessonsOptions): LessonsRender {
+  // With no vault every memory path is vault-relative already, and the
+  // events are judged against the store's records (design D14): a reader
+  // with a scope never scores an event it could not see.
+  let refs: ArtifactRefView | null = null;
+  if (vault !== null) refs = readerRefView(vault, opts.readable);
+  else if (opts.readable !== undefined) {
+    const readable = opts.readable;
+    refs = storeRecordRefView((page) => readable(page.rel));
+  }
+  const visible = (path: string): boolean =>
+    vault === null || refs === null
+      ? (opts.readable?.(path) ?? true)
+      : refs.visible(vaultRelative(path, vault));
+  const preferences = readActivePreferences(vault).filter(({ path }) => visible(path));
+  // The dead-end lane works in every mode: with no vault it lives under
+  // its stand-in root, and its paths are judged relative to that root.
+  const deadEndRoot = laneVaultRoot(vault);
+  const deadEnds = listDeadEnds(deadEndRoot).entries.filter((de) =>
+    vault === null
+      ? (opts.readable?.(vaultRelative(de.path, deadEndRoot)) ?? true)
+      : visible(de.path),
   );
 
   // Tunables from `_brain.yaml:lessons.*`. A malformed config never
@@ -434,7 +455,7 @@ function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender
       halfLifeDays,
       corroborationMin,
       limit,
-      ...(refs.filtersNothing
+      ...(refs === null || refs.filtersNothing
         ? {}
         : { keepEvent: (e: BrainLogEntry) => logEntryAtReach(refs, e) !== null }),
     },
@@ -468,15 +489,17 @@ function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender
  * {@link renderLessonsForReader}, which writes nothing.
  */
 export function regenerateLessons(
-  vault: string,
+  vault: string | null,
   opts: RegenerateLessonsOptions = {},
 ): RegenerateLessonsResult {
   const now = opts.now ?? new Date();
-  const path = brainLessonsPath(vault);
+  const path = compiledDigestPath(vault, "lessons");
   const rendered = renderLessons(vault, { now, generatedAt: isoSecond(now) });
   const existingBody = readExistingBody(path);
   const changed = existingBody === null || existingBody !== rendered.body.trim();
   if (changed) {
+    // The device-local cache directory of a store-only machine may not exist yet.
+    if (digestsRenderedOnDemand(vault)) mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, rendered.document);
   }
   return { path, changed, counts: rendered.counts };
@@ -489,8 +512,11 @@ export function regenerateLessons(
  * Nothing is written. The file must exist; the caller regenerates it
  * first.
  */
-export function renderLessonsForReader(vault: string, opts: LessonsReaderOptions): LessonsRender {
-  const generatedAt = readGeneratedAt(brainLessonsPath(vault));
+export function renderLessonsForReader(
+  vault: string | null,
+  opts: LessonsReaderOptions,
+): LessonsRender {
+  const generatedAt = readGeneratedAt(compiledDigestPath(vault, "lessons"));
   const stampMs = generatedAt === null ? Number.NaN : Date.parse(generatedAt);
   const now = Number.isNaN(stampMs) ? new Date() : new Date(stampMs);
   return renderLessons(vault, {
@@ -501,12 +527,40 @@ export function renderLessonsForReader(vault: string, opts: LessonsReaderOptions
 }
 
 /**
+ * The file a reader of the shared lessons digest reads:
+ * `Brain/lessons.md` on an unswitched machine, as it is; on a store-only
+ * machine the device-local cache, rendered first (D14 item 7).
+ */
+export function lessonsDigestPathForRead(
+  vault: string | null,
+  opts: RegenerateLessonsOptions = {},
+): string {
+  if (vault !== null && !digestsRenderedOnDemand(vault)) return brainLessonsPath(vault);
+  // The cached generation stands while a render at its own instant still
+  // gives its body (see `activeDigestPathForRead`).
+  const path = compiledDigestPath(vault, "lessons");
+  const stamp = readGeneratedAt(path);
+  const stampMs = stamp === null ? Number.NaN : Date.parse(stamp);
+  // One read pass: the check render and a regeneration share one log read.
+  return withLogReadPass(() => {
+    if (stamp !== null && !Number.isNaN(stampMs)) {
+      const atStamp = renderLessons(vault, { now: new Date(stampMs), generatedAt: stamp });
+      if (readExistingBody(path) === atStamp.body.trim()) return path;
+    }
+    return regenerateLessons(vault, opts).path;
+  });
+}
+
+/**
  * Fire-and-warn wrapper around {@link regenerateLessons}, matching
  * `regenerateActiveQuiet`. The lessons digest is a derived view: a
  * failed write (disk full, permissions) must not mask the success of
  * the `dream` pass that triggered it. The next pass retries.
  */
-export function regenerateLessonsQuiet(vault: string, opts: RegenerateLessonsOptions = {}): void {
+export function regenerateLessonsQuiet(
+  vault: string | null,
+  opts: RegenerateLessonsOptions = {},
+): void {
   try {
     regenerateLessons(vault, opts);
   } catch (err) {
@@ -521,17 +575,27 @@ interface PreferenceAtPath {
   readonly path: string;
 }
 
-function readActivePreferences(vault: string): PreferenceAtPath[] {
+function legacyPreferencesPages(vault: string | null): MemoryPage[] {
+  const root = legacyVaultOf(vault, "readActivePreferences");
+  const dir = brainDirsForWrite(root).preferences;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((name) => legacyMemoryPage(root, "preferences", name));
+}
+
+function readActivePreferences(vault: string | null): PreferenceAtPath[] {
   // Reached from the shared write and from the per-reader render; both
   // read the directory the write resolves, so they score the same set.
-  const dirs = brainDirsForWrite(vault);
-  if (!existsSync(dirs.preferences)) return [];
+  // Store pages on a store-only machine; only an unswitched machine
+  // resolves (and guards) the legacy folder, so a read never trips the
+  // write guard (frozen vault, migration in progress) for a folder it
+  // does not read.
+  const pages = storeMemoryPages(vault, "preferences") ?? legacyPreferencesPages(vault);
   const out: PreferenceAtPath[] = [];
-  for (const name of readdirSync(dirs.preferences)) {
-    if (!name.endsWith(".md")) continue;
-    const path = join(dirs.preferences, name);
+  for (const page of pages) {
+    if (!page.name.endsWith(".md")) continue;
+    const path = page.path;
     try {
-      out.push({ pref: parsePreference(path), path });
+      out.push({ pref: parsePreferenceMeta(page.read()[0], path), path });
     } catch {
       // Corrupted / status-folder-mismatched — omit; doctor flags it.
     }

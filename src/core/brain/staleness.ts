@@ -206,6 +206,12 @@ export interface EvaluateStalenessOptions {
    * no default here.
    */
   readonly maxAgeMs?: number;
+  /**
+   * How an output path is stamped. Defaults to its file mtime; a
+   * store-only machine stamps a lane-record output by its record clock
+   * (`laneEntryClockMs`), so the gate compares like with like.
+   */
+  readonly outputStampMs?: (path: string) => number | null;
 }
 
 /** File mtime in ms, or null when the path is missing or unreadable. */
@@ -255,7 +261,9 @@ export function evaluateStaleness(
 ): StalenessResult {
   const nowMs = options.nowMs ?? Date.now();
   const readableInputs = inputs.map(mtimeMs).filter((m): m is number => m !== null);
-  const readableOutputs = outputs.map(mtimeMs).filter((m): m is number => m !== null);
+  const readableOutputs = outputs
+    .map(options.outputStampMs ?? mtimeMs)
+    .filter((m): m is number => m !== null);
 
   const newestInputMs = readableInputs.length > 0 ? Math.max(...readableInputs) : null;
   const oldestOutputMs = readableOutputs.length > 0 ? Math.min(...readableOutputs) : null;

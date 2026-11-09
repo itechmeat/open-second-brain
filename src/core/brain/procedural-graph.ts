@@ -1,9 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
-import { parseFrontmatter } from "../vault.ts";
 import {
   proceduralGraphPath,
   proceduralMemoryIndexPath,
@@ -12,7 +9,14 @@ import {
   skillProposalRejectedPath,
 } from "./paths.ts";
 import type { ProceduralMemoryEntry } from "./types.ts";
-import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import {
+  assertLaneWrite,
+  readLaneFile,
+  lanePageExists,
+  listLaneFiles,
+  parseLanePage,
+  writeLaneText,
+} from "../store/lane-pages.ts";
 
 export type ProceduralGraphNodeKind = "procedure" | "skill" | "runbook" | "proposal" | "entity";
 export type ProceduralGraphEdgeKind =
@@ -52,7 +56,7 @@ export function rebuildProceduralGraph(
   opts: ProceduralGraphBuildOptions = {},
 ): ProceduralGraphProjection {
   // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  assertLaneWrite(vault);
   const now = opts.now ?? new Date();
   const nodes: ProceduralGraphNode[] = [];
   const edges: ProceduralGraphEdge[] = [];
@@ -140,16 +144,15 @@ export function rebuildProceduralGraph(
   };
 
   const path = proceduralGraphPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, `${JSON.stringify(projection, null, 2)}\n`);
+  writeLaneText(vault, path, `${JSON.stringify(projection, null, 2)}\n`);
   return projection;
 }
 
 export function readProceduralGraph(vault: string): ProceduralGraphProjection | null {
   const path = proceduralGraphPath(vault);
-  if (!existsSync(path)) return null;
+  if (!lanePageExists(vault, path)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as ProceduralGraphProjection;
+    const parsed = JSON.parse(readLaneFile(vault, path)) as ProceduralGraphProjection;
     if (parsed.schema_version !== 1) return null;
     if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
     return parsed;
@@ -160,9 +163,9 @@ export function readProceduralGraph(vault: string): ProceduralGraphProjection | 
 
 function readProceduralIndex(vault: string): ProceduralMemoryEntry[] {
   const path = proceduralMemoryIndexPath(vault);
-  if (!existsSync(path)) return [];
+  if (!lanePageExists(vault, path)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+    const parsed = JSON.parse(readLaneFile(vault, path)) as {
       schema_version?: unknown;
       entries?: ProceduralMemoryEntry[];
     };
@@ -182,14 +185,14 @@ function detectProcedureSourceProposal(vault: string, sourcePath: string): strin
   } catch {
     return null;
   }
-  if (!existsSync(absPath)) return null;
+  if (!lanePageExists(vault, absPath)) return null;
   // Unit F: `parseFrontmatter` cannot throw (it reads inside its own try;
   // everything after is string work), so the `catch { return null }` that
   // stood here was unreachable - and redundant, since a failed read
   // yields an empty map and falls through to the same `return null`.
   // Dropped lines are reported centrally; see the "Why most readers keep
   // the two-tuple form" section in src/core/vault.ts.
-  const [fm] = parseFrontmatter(absPath);
+  const [fm] = parseLanePage(vault, absPath);
   if (typeof fm["source_proposal"] === "string" && fm["source_proposal"].trim()) {
     return fm["source_proposal"].trim();
   }
@@ -205,8 +208,8 @@ function listProposals(vault: string): ProceduralGraphNode[] {
   ] as const) {
     const [status, builder] = tuple;
     const dir = dirname(builder(vault, "sample"));
-    if (!existsSync(dir)) continue;
-    for (const name of readDirSorted(dir)) {
+    if (!lanePageExists(vault, dir)) continue;
+    for (const name of readDirSorted(vault, dir)) {
       if (!name.endsWith(".md")) continue;
       const absPath = join(dir, name);
       // Unit F: unreachable `catch { continue }` removed - nothing in this
@@ -216,7 +219,7 @@ function listProposals(vault: string): ProceduralGraphNode[] {
       // the next line, and is skipped exactly as the dead branch intended.
       // See the "Why most readers keep the two-tuple form" section in
       // src/core/vault.ts for where the condition IS reported.
-      const [fm] = parseFrontmatter(absPath);
+      const [fm] = parseLanePage(vault, absPath);
       if (fm["kind"] !== "brain-skill-proposal") continue;
       const id = typeof fm["id"] === "string" ? fm["id"] : `proposal-${basename(name, ".md")}`;
       out.push({
@@ -237,9 +240,9 @@ function listProposals(vault: string): ProceduralGraphNode[] {
   return out;
 }
 
-function readDirSorted(dir: string): string[] {
+function readDirSorted(vault: string, dir: string): string[] {
   try {
-    return readdirSync(dir).toSorted();
+    return listLaneFiles(vault, dir, "").toSorted();
   } catch {
     return [];
   }

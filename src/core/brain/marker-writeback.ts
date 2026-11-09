@@ -435,31 +435,37 @@ export async function applyMarkerWritebacks(
       // the record silently or aborting the remaining markers.
       let auditError: string | null = null;
       try {
-        appendLogEvent(vault, {
-          timestamp: nowIso,
-          eventType: BRAIN_LOG_EVENT_KIND.attributeWrite,
-          agent: opts.agent,
-          body: {
-            note: resolvedPath,
-            field: normalizedField,
-            // Sanitised for the LOG surface only (best-effort secret
-            // redaction, matching apply-evidence's use of
-            // `sanitiseTextField`); the frontmatter mutation above already
-            // wrote `normalizedValue` verbatim, so redaction here never
-            // touches the actual data write.
-            prior_value: sanitiseTextField(priorValue ?? "null", {
-              maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
-              singleLine: true,
-            }),
-            new_value: sanitiseTextField(normalizedValue, {
-              maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
-              singleLine: true,
-            }),
-            source_path: file,
-            source_line: String(marker.originLine),
+        appendLogEvent(
+          vault,
+          {
+            timestamp: nowIso,
+            eventType: BRAIN_LOG_EVENT_KIND.attributeWrite,
             agent: opts.agent,
+            body: {
+              note: resolvedPath,
+              field: normalizedField,
+              // Sanitised for the LOG surface only (best-effort secret
+              // redaction, matching apply-evidence's use of
+              // `sanitiseTextField`); the frontmatter mutation above already
+              // wrote `normalizedValue` verbatim, so redaction here never
+              // touches the actual data write.
+              prior_value: sanitiseTextField(priorValue ?? "null", {
+                maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+                singleLine: true,
+              }),
+              new_value: sanitiseTextField(normalizedValue, {
+                maxLen: ATTRIBUTE_LOG_VALUE_MAX_LEN,
+                singleLine: true,
+              }),
+              source_path: file,
+              source_line: String(marker.originLine),
+              agent: opts.agent,
+            },
           },
-        });
+          // Not fail-open: this audit row is what lets the marker be
+          // consumed, so a store write that does not land throws and the
+          // row reports `applied-unconsumed` (the marker stays for a retry).
+        );
       } catch (err) {
         auditError = (err as Error).message ?? String(err);
       }

@@ -261,6 +261,8 @@ export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
       target: err.target,
     });
   }
+  // An answer already shaped for the wire keeps its code.
+  if (err instanceof MCPError) return err;
   return new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
 }
 
@@ -396,6 +398,9 @@ async function toolBrainCreateNote(
       });
     }
     rethrowVaultFrozen(err);
+    // An answer already shaped for the wire (the `vault_required` refusal
+    // of a server with no vault) keeps its code.
+    if (err instanceof MCPError) throw err;
     throw new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
   }
 }

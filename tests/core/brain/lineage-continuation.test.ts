@@ -57,6 +57,8 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = mkTemp("o2b-continuation-");
+  // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
@@ -640,7 +642,8 @@ describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-fr
 
   beforeEach(() => {
     vault = join(tmp, "vault");
-    mkdirSync(vault, { recursive: true });
+    // A legacy Brain/ tree: an unswitched machine (a vault without one is store-only).
+    mkdirSync(join(vault, "Brain"), { recursive: true });
     bootstrapBrain(vault);
     repo = initRepo(join(tmp, "repo"), { remote: SECRET_REMOTE });
   });
@@ -723,7 +726,7 @@ describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-fr
     );
     expect("lineage" in result).toBe(false);
     // The refusal is not merely silent-and-flat: it is on the record.
-    const audit = readFileSync(result.audit_path, "utf8");
+    const audit = readFileSync(result.audit_path!, "utf8");
     expect(audit).toContain(DEGRADATION_CODE.sessionLinkAbstained);
     expect(audit).toContain(CRUTCH_ABSTENTION.ambiguous);
   });
@@ -744,7 +747,7 @@ describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-fr
       handle.release();
     }
     const audit = JSON.parse(
-      readFileSync(result.audit_path, "utf8").trim().split("\n").at(-1)!,
+      readFileSync(result.audit_path!, "utf8").trim().split("\n").at(-1)!,
     ) as { details: Record<string, unknown> };
     const dropped = audit.details["lineage_dropped"] as string[];
     expect(dropped).toBeDefined();
@@ -758,6 +761,6 @@ describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-fr
       { hook_event_name: "UserPromptSubmit", session_id: "d-2", cwd: repo, prompt: "hi" },
       { agent: "tester", now: new Date(T0) },
     );
-    expect(readFileSync(result.audit_path, "utf8")).not.toContain("lineage_dropped");
+    expect(readFileSync(result.audit_path!, "utf8")).not.toContain("lineage_dropped");
   });
 });

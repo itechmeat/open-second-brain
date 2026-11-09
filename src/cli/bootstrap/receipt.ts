@@ -1,8 +1,10 @@
 /**
  * The bootstrap receipt (write-side-trust, Task 14).
  *
- * `<vault>/.open-second-brain/bootstrap.lock.json` records what one
- * bootstrap actually established: the target, its install model, the
+ * `.open-second-brain/bootstrap.lock.json` under the machine state root
+ * (`<vault>/` on an unswitched machine, the device-local state on a
+ * store-only one, `state/machine-state.ts`) records what one bootstrap
+ * actually established: the target, its install model, the
  * owned entries the adapter reported, the provisioned token's NAME and
  * non-secret prefix, and `applied_at`. Modeled on `install.lock.json`
  * and `protect.lock.json` - the receipt is the durable, credential-free
@@ -28,11 +30,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../core/fs-atomic.ts";
 import { assertVaultIdentityForWrite } from "../../core/brain/vault-identity.ts";
 import type { BootstrapMode } from "./targets.ts";
+import { machineStatePath } from "../../core/state/machine-state.ts";
+import { DERIVED_STORE_DIR } from "../../core/brain/path-constants.ts";
 
 export const BOOTSTRAP_SCHEMA_VERSION = 1;
 
@@ -69,7 +73,7 @@ export class BootstrapReceiptError extends Error {
 const EMPTY_RECEIPT: BootstrapReceipt = { schema_version: BOOTSTRAP_SCHEMA_VERSION, entries: {} };
 
 export function bootstrapReceiptPath(vault: string): string {
-  return join(vault, ".open-second-brain", "bootstrap.lock.json");
+  return machineStatePath(vault, DERIVED_STORE_DIR, "bootstrap.lock.json");
 }
 
 export function readBootstrapReceipt(vault: string): BootstrapReceipt {

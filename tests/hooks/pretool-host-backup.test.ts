@@ -43,6 +43,8 @@ let home: string;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-hook-hb-vault-"));
+  // An unswitched vault: its Brain/ tree is the legacy layout under test.
+  mkdirSync(join(vault, "Brain"), { recursive: true });
   configHome = mkdtempSync(join(tmpdir(), "osb-hook-hb-cfg-"));
   home = mkdtempSync(join(tmpdir(), "osb-hook-hb-home-"));
   mkdirSync(join(home, ".claude"), { recursive: true });
@@ -195,6 +197,8 @@ describe("pretool-host-backup hook", () => {
 
   test("flag on: a '#' inside a quoted config value does not truncate the receipt vault", async () => {
     const configVault = mkdtempSync(join(tmpdir(), "osb-hook-hb-cfgvault-"));
+    // An unswitched vault: its Brain/ tree is the legacy layout under test.
+    mkdirSync(join(configVault, "brain#main", "Brain"), { recursive: true });
     writeFileSync(
       join(configHome, "config.yaml"),
       `host_settings_backup: true\nvault: "${join(configVault, "brain#main")}"\n`,

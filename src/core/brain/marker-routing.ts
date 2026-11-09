@@ -24,8 +24,6 @@
  * vocabulary, nothing touched.
  */
 
-import { existsSync } from "node:fs";
-
 import { slugify } from "../vault.ts";
 import {
   DeriveFactError,
@@ -41,7 +39,8 @@ import {
   type ParsedMarker,
   type SkillMarker,
 } from "./inline.ts";
-import { preferencePath } from "./paths.ts";
+import { memoryPageExists } from "./memory-pages.ts";
+import { preferencePath, vaultRelative } from "./paths.ts";
 import {
   draftDeclaredSkillProposal,
   previewDeclaredSkillProposal,
@@ -205,11 +204,11 @@ function previewFactMarker(vault: string, marker: FactMarker): CaptureRouteResul
   for (const premise of input.premises) {
     const slug = premiseSlug(premise);
     if (!slug) throw new DeriveFactError("premise id must not be empty");
-    if (!existsSync(preferencePath(vault, slug))) {
+    if (!memoryPageExists(vault, vaultRelative(preferencePath(vault, slug), vault))) {
       throw new DeriveFactError(`premise preference not found: ${JSON.stringify(premise)}`);
     }
   }
-  if (existsSync(preferencePath(vault, input.slug))) {
+  if (memoryPageExists(vault, vaultRelative(preferencePath(vault, input.slug), vault))) {
     throw new DeriveFactError(`a preference already exists for slug: ${input.slug}`);
   }
   return { id: `pref-${input.slug}`, outcome: "created" };

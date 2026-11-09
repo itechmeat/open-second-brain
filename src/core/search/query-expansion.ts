@@ -50,7 +50,7 @@ export interface ExpandQueryOptions {
  * Deterministic; reads only the entity registry under `vault`.
  */
 export function expandQuery(
-  vault: string,
+  vault: string | null,
   query: string,
   opts: ExpandQueryOptions = {},
 ): StructuredRecallQueryDocument {
@@ -108,7 +108,9 @@ export function expandQuery(
  * machine read path taking it would re-implement the filter it is meant
  * to defer to.
  */
-function matchEntities(vault: string, queryTokens: ReadonlyArray<string>): string[] {
+function matchEntities(vault: string | null, queryTokens: ReadonlyArray<string>): string[] {
+  // No vault: no entity registry to match against (design D14).
+  if (vault === null) return [];
   if (queryTokens.length === 0) return [];
   const wanted = new Set(queryTokens);
   let names: string[];

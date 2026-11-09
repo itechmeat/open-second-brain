@@ -26,6 +26,7 @@ import {
   advisoryUseActive,
   pageEgressFacts,
   type AdvisoryDecisionOptions,
+  type PageEgressFacts,
 } from "../../decision-model/advisory.ts";
 import {
   orderByVerdicts,
@@ -34,8 +35,12 @@ import {
   type VerdictPairInput,
 } from "../../decision-model/pair-verdict.ts";
 import { DEDUP_QUESTIONS } from "../../decision-model/questions.ts";
+import { remoteDenyVisibilityTokens } from "../../graph/privacy-markers.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
+import { privateRegionTexts } from "../../redactor.ts";
+import { memoryFromStore, type StoreMemoryPage, storePagesIn } from "../memory-pages.ts";
 import { brainDirs } from "../paths.ts";
-import { parsePreference } from "../preference.ts";
+import { parsePreference, parsePreferenceMeta } from "../preference.ts";
 import type { HygieneFinding } from "./types.ts";
 
 /** Path of a preference page by id, or null when the id is not a page name. */
@@ -44,7 +49,38 @@ function preferencePagePath(vault: string, id: string): string | null {
   return join(brainDirs(vault).preferences, `${id}.md`);
 }
 
+/**
+ * {@link pageEgressFacts} of a preference the store holds (task 2.10): the
+ * same tokens and regions read from the page the fold rebuilds, and a
+ * record of the `private` partition reserved like a private page.
+ */
+function storeEgressFacts(page: StoreMemoryPage): PageEgressFacts {
+  const visibility = [...remoteDenyVisibilityTokens(page.meta)];
+  if (page.private && !visibility.includes(REMOTE_DENY_VISIBILITY_TOKEN)) {
+    visibility.push(REMOTE_DENY_VISIBILITY_TOKEN);
+  }
+  return { visibility, privateRegions: privateRegionTexts(page.text) };
+}
+
+function storePreferenceSide(vault: string, id: string): VerdictPairInput["sideA"] {
+  const path = preferencePagePath(vault, id);
+  const page =
+    path === null
+      ? undefined
+      : storePagesIn(vault, brainDirs(vault).preferences).find((p) => p.id === id);
+  if (path === null || page === undefined) {
+    return { text: "", visibility: null, privateRegions: null };
+  }
+  const facts = storeEgressFacts(page);
+  try {
+    return { text: parsePreferenceMeta(page.meta, path).principle, ...facts };
+  } catch {
+    return { text: "", visibility: null, privateRegions: null };
+  }
+}
+
 function preferenceSide(vault: string, id: string): VerdictPairInput["sideA"] {
+  if (memoryFromStore(vault)) return storePreferenceSide(vault, id);
   const path = preferencePagePath(vault, id);
   const facts = pageEgressFacts(path);
   let principle = "";

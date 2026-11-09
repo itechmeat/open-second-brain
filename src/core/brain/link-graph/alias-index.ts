@@ -29,8 +29,10 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { memoryFromStore, storePagesIn } from "../memory-pages.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "../paths.ts";
+import { requireVaultAdapter, WIKILINK_AUDIT } from "../../vault-adapter/index.ts";
 
 /**
  * Frozen `aliasLowerNFC → canonicalId` map. Keys are pre-normalised
@@ -46,7 +48,8 @@ export type AliasIndex = ReadonlyMap<string, string>;
  * The returned map is frozen. Re-call to refresh; there is no
  * incremental update path on purpose.
  */
-export function buildAliasIndex(vault: string): AliasIndex {
+export function buildAliasIndex(vaultOrNull: string | null): AliasIndex {
+  const vault = requireVaultAdapter(vaultOrNull, WIKILINK_AUDIT.aliasIndex);
   const map = new Map<string, string>();
   // First-wins: only set when the key isn't taken yet.
   forEachAliasClaim(vault, (key, canonicalId) => {
@@ -67,7 +70,8 @@ export type AliasClaims = ReadonlyMap<string, ReadonlyArray<string>>;
  * Every claimant of every alias, under the same normalisation and
  * shadowing rules as `buildAliasIndex`, without resolving collisions.
  */
-export function listAliasClaims(vault: string): AliasClaims {
+export function listAliasClaims(vaultOrNull: string | null): AliasClaims {
+  const vault = requireVaultAdapter(vaultOrNull, WIKILINK_AUDIT.aliasIndex);
   const map = new Map<string, string[]>();
   forEachAliasClaim(vault, (key, canonicalId) => {
     const claimants = map.get(key);
@@ -86,19 +90,41 @@ function forEachAliasClaim(vault: string, visit: (key: string, canonicalId: stri
   // collides with a real basename. Without this guard, an alias
   // entry can hijack an existing artifact's backlinks.
   const reservedCanonical = new Set<string>();
-  collectCanonicalNames(dirs.preferences, reservedCanonical);
-  collectCanonicalNames(dirs.retired, reservedCanonical);
+  // Store-only (task 2.10): the preference fold's records, read as the
+  // pages they would be.
+  const fromStore = memoryFromStore(vault);
+  const pagesOf = (dir: string): ReadonlyArray<AliasPage> =>
+    fromStore
+      ? storePagesIn(vault, dir).map((page) => ({ name: `${page.id}.md`, meta: () => page.meta }))
+      : legacyPages(dir);
+  const preferences = pagesOf(dirs.preferences);
+  const retired = pagesOf(dirs.retired);
+  collectCanonicalNames(preferences, reservedCanonical);
+  collectCanonicalNames(retired, reservedCanonical);
 
   // A single sorted pass yields a deterministic claim order. Sorting
   // by `(kind, basename)` puts `pref-*` before `ret-*`; within each
   // kind, alphabetical basename order comes first.
-  collect(dirs.preferences, reservedCanonical, visit);
-  collect(dirs.retired, reservedCanonical, visit);
+  collect(preferences, reservedCanonical, visit);
+  collect(retired, reservedCanonical, visit);
 }
 
-function collectCanonicalNames(dir: string, into: Set<string>): void {
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
+/** One `.md` page of a folder: its file name and how to read its frontmatter. */
+interface AliasPage {
+  readonly name: string;
+  readonly meta: () => Record<string, unknown>;
+}
+
+function legacyPages(dir: string): ReadonlyArray<AliasPage> {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((name) => ({
+    name,
+    meta: () => parseFrontmatter(join(dir, name))[0] as Record<string, unknown>,
+  }));
+}
+
+function collectCanonicalNames(pages: ReadonlyArray<AliasPage>, into: Set<string>): void {
+  for (const { name } of pages) {
     if (!name.endsWith(".md")) continue;
     const canonicalId = name.slice(0, -".md".length);
     into.add(canonicalId.normalize("NFC").toLowerCase());
@@ -106,21 +132,19 @@ function collectCanonicalNames(dir: string, into: Set<string>): void {
 }
 
 function collect(
-  dir: string,
+  pages: ReadonlyArray<AliasPage>,
   reservedCanonical: ReadonlySet<string>,
   visit: (key: string, canonicalId: string) => void,
 ): void {
-  if (!existsSync(dir)) return;
-  // Sort the directory listing so the claim order is deterministic
-  // across filesystems that don't enumerate in stable order.
-  const entries = readdirSync(dir).toSorted();
-  for (const name of entries) {
+  // Sort the listing so the claim order is deterministic across
+  // filesystems that don't enumerate in stable order.
+  const entries = pages.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const { name, meta: read } of entries) {
     if (!name.endsWith(".md")) continue;
     const canonicalId = name.slice(0, -".md".length);
     let meta: Record<string, unknown>;
     try {
-      const [m] = parseFrontmatter(join(dir, name));
-      meta = m as Record<string, unknown>;
+      meta = read();
     } catch {
       continue;
     }

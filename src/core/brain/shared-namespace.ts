@@ -29,9 +29,10 @@
  * `portability/origins.ts`.
  */
 
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
+import { storeOnlyMode } from "../store/store-only.ts";
 import { resolveSharedNamespace } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
 import { writeSignal, type WriteSignalInput, type WriteSignalOptions } from "./signal.ts";
@@ -97,6 +98,38 @@ const SELF_MIRROR: MirrorReport = Object.freeze({
   reason: SELF_MIRROR_REASON,
 });
 
+/**
+ * The refusal when the shared vault is store-only on this machine (this
+ * machine switched, or the shared vault has no legacy tree): a store write
+ * goes to this machine's own store, never to the shared namespace, so the
+ * mirror would only duplicate the origin record in the same store.
+ */
+const STORE_ONLY_MIRROR: MirrorReport = Object.freeze({
+  outcome: MIRROR_OUTCOME.misconfigured,
+  reason:
+    "the shared namespace is store-only on this machine, so a mirror would write this " +
+    "machine's own brain store again and never reach the shared vault; nothing was mirrored",
+});
+
+/** Why a mirror cannot run before any I/O, or `null` when it can. */
+function mirrorRefusal(sharedVault: string, originVault: string): MirrorReport | null {
+  if (isSelfMirror(sharedVault, originVault)) return SELF_MIRROR;
+  const mode = storeOnlyMode({ vault: sharedVault });
+  // A shared path that is no directory at all is a broken mount: the
+  // attempted write reports it as `failed`, as before.
+  if (mode.reason === "device-switched") return STORE_ONLY_MIRROR;
+  if (mode.reason === "no-legacy-tree" && isDirectory(sharedVault)) return STORE_ONLY_MIRROR;
+  return null;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Keep a thrown non-Error readable instead of casting it to one unchecked. */
 function failureReason(exc: unknown): MirrorReport {
   return Object.freeze({
@@ -116,7 +149,8 @@ export function mirrorSignal(
   input: WriteSignalInput,
   options: WriteSignalOptions = {},
 ): MirrorReport {
-  if (isSelfMirror(sharedVault, originVault)) return SELF_MIRROR;
+  const refused = mirrorRefusal(sharedVault, originVault);
+  if (refused !== null) return refused;
   try {
     writeSignal(sharedVault, { ...input, origin_vault: basename(originVault) }, options);
     return OK;
@@ -137,17 +171,22 @@ export function mirrorNote(
   originVault: string,
   input: MirrorNoteInput,
 ): MirrorReport {
-  if (isSelfMirror(sharedVault, originVault)) return SELF_MIRROR;
+  const refused = mirrorRefusal(sharedVault, originVault);
+  if (refused !== null) return refused;
   try {
-    appendLogEvent(sharedVault, {
-      timestamp: isoSecond(input.now ?? new Date()),
-      eventType: BRAIN_LOG_EVENT_KIND.note,
-      body: {
-        text: input.text,
-        agent: input.agent,
-        origin_vault: basename(originVault),
+    appendLogEvent(
+      sharedVault,
+      {
+        timestamp: isoSecond(input.now ?? new Date()),
+        eventType: BRAIN_LOG_EVENT_KIND.note,
+        body: {
+          text: input.text,
+          agent: input.agent,
+          origin_vault: basename(originVault),
+        },
       },
-    });
+      // Not fail-open: the mirror reports its own failure to the caller.
+    );
     return OK;
   } catch (exc) {
     return failureReason(exc);

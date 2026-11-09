@@ -511,6 +511,11 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     ],
     ["brain_writes", { action: BOGUS }, "brain_writes: 'action' must be one of list, plan_revert"],
     [
+      "brain_settings",
+      { action: BOGUS },
+      "brain_settings: 'action' must be one of get, list, set, unset",
+    ],
+    [
       "brain_note_lifecycle",
       { action: BOGUS },
       "brain_note_lifecycle: 'action' must be one of rename, move, archive, delete, move-folder, rename-folder",
