@@ -62,6 +62,12 @@ export interface ArtifactRefView {
    * entitled": the decision is always {@link ArtifactRefView.visible}.
    */
   readonly filtersNothing: boolean;
+  /**
+   * True when the caller is below local reach, so records of the store's
+   * `private` partition that carry no reference of their own (log events)
+   * are withheld from it. Absent means false.
+   */
+  readonly withholdsPrivate?: boolean;
   /** May the caller see the artifact or page this reference names? */
   readonly visible: (ref: ArtifactRef) => boolean;
   /**
@@ -142,6 +148,7 @@ export function everyArtifactRefView(...views: ReadonlyArray<ArtifactRefView>): 
   const visible = (ref: ArtifactRef): boolean => live.every((v) => v.visible(ref));
   return Object.freeze({
     filtersNothing: false,
+    ...(live.some((v) => v.withholdsPrivate === true) ? { withholdsPrivate: true } : {}),
     visible,
     row: (...refs: ReadonlyArray<ArtifactRef>) => refs.every(visible),
     keep: <T>(rows: ReadonlyArray<T>, refsOf: (r: T) => ReadonlyArray<ArtifactRef>) =>
@@ -151,13 +158,17 @@ export function everyArtifactRefView(...views: ReadonlyArray<ArtifactRefView>): 
 
 /**
  * The reference view a per-reader render asks: unfiltered when the caller
- * passed no path predicate, the predicate bound to `vault` otherwise.
+ * passed no path predicate and is at local reach, the predicate bound to
+ * `vault` otherwise. `withholdsPrivate`: the caller is below local reach,
+ * so events of the store's `private` partition are withheld from it
+ * (`ArtifactRefView.withholdsPrivate`).
  */
 export function readerRefView(
   vault: string,
   readable: ((rel: string) => boolean) | undefined,
+  withholdsPrivate = false,
 ): ArtifactRefView {
-  return readable === undefined
-    ? UNFILTERED_ARTIFACT_REFS
-    : artifactRefView(vault, (rel) => readable(rel));
+  if (readable === undefined && !withholdsPrivate) return UNFILTERED_ARTIFACT_REFS;
+  const view = artifactRefView(vault, (rel) => readable?.(rel) ?? true);
+  return withholdsPrivate ? Object.freeze({ ...view, withholdsPrivate: true }) : view;
 }

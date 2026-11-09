@@ -22,6 +22,7 @@ import {
   renderLessonsForReader,
 } from "../../../src/core/brain/lessons.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
+import { withOperationPrivacy } from "../../../src/core/store/operation-scope.ts";
 import { RULES_BLOCK_ID } from "../../../src/core/install/rules-block.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
@@ -93,5 +94,34 @@ describe("lessons with no vault", () => {
     });
     expect(narrowed.document).toContain("pref-seen");
     expect(narrowed.document).not.toContain("pref-hidden");
+  });
+
+  test("evidence recorded in the private partition is not counted for a remote reader", () => {
+    env = makeStoreEnv("osb-lessons-private-", { legacyTree: false, configureVault: false });
+    writePreference(null, {
+      slug: "quiet",
+      topic: "quiet",
+      principle: "Rule quiet.",
+      created_at: "2026-11-01T00:00:00Z",
+      unconfirmed_until: "2026-11-02T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-11-02T00:00:00Z",
+      evidenced_by: ["[[sig-x]]"],
+      confidence_value: 0.9,
+    });
+    withOperationPrivacy(true, () => {
+      for (const artifact of ["[[a]]", "[[b]]"]) {
+        appendApplyEvidence(null, {
+          pref_id: "pref-quiet",
+          artifact,
+          result: "applied",
+          agent: "t",
+        });
+      }
+    });
+    expect(renderLessonsForReader(null, {}).document).toContain("pref-quiet");
+    expect(renderLessonsForReader(null, { withholdsPrivate: true }).document).not.toContain(
+      "pref-quiet",
+    );
   });
 });

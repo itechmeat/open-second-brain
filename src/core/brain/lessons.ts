@@ -390,6 +390,11 @@ export interface LessonsReaderOptions {
    * nothing is filtered. It never reaches the shared write.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The reader is below local reach: apply-evidence events of the store's
+   * `private` partition are not counted for it.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 interface RenderLessonsOptions extends LessonsReaderOptions {
@@ -410,11 +415,13 @@ function renderLessons(vault: string | null, opts: RenderLessonsOptions): Lesson
   // With no vault every memory path is vault-relative already, and the
   // events are judged against the store's records (design D14): a reader
   // with a scope never scores an event it could not see.
+  const withholdsPrivate = opts.withholdsPrivate === true;
   let refs: ArtifactRefView | null = null;
-  if (vault !== null) refs = readerRefView(vault, opts.readable);
-  else if (opts.readable !== undefined) {
-    const readable = opts.readable;
-    refs = storeRecordRefView((page) => readable(page.rel));
+  if (vault !== null) refs = readerRefView(vault, opts.readable, withholdsPrivate);
+  else if (opts.readable !== undefined || withholdsPrivate) {
+    const readable = opts.readable ?? (() => true);
+    const view = storeRecordRefView((page) => readable(page.rel));
+    refs = withholdsPrivate ? Object.freeze({ ...view, withholdsPrivate: true }) : view;
   }
   const visible = (path: string): boolean =>
     vault === null || refs === null

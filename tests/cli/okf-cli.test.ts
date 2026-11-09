@@ -6,10 +6,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { withOperationPrivacy } from "../../src/core/store/operation-scope.ts";
+import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
+import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
+import { switchDevice } from "../core/brain/store-only/fixtures.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
+import { logShardsOf } from "../core/store/fixtures/log-shards.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -83,4 +90,80 @@ describe("o2b brain okf-export / okf-import", () => {
     });
     expect(r.returncode).not.toBe(0);
   });
+});
+
+describe("okf-export on a switched machine", () => {
+  let env: StoreEnv;
+  beforeEach(() => {
+    env = makeStoreEnv("o2b-okf-cli-store-");
+    switchDevice(env.storeRoot);
+  });
+  afterEach(() => env.cleanup());
+
+  const cliEnv = (): Record<string, string> => ({
+    OPEN_SECOND_BRAIN_CONFIG: env.configPath,
+    [STORE_ROOT_ENV]: env.storeRoot,
+  });
+
+  test.each([[[]], [["--include-prompt-derived"]]])(
+    "one private event is named on stderr and counted in okf.json (flags %j)",
+    async (flags: string[]) => {
+      withOperationPrivacy(true, () => {
+        appendLogEvent(env.vault, {
+          timestamp: "2026-06-01T09:00:00Z",
+          eventType: "note",
+          body: { text: "private diary event" },
+        });
+      });
+      const out = join(env.parent, "bundle");
+      const r = await runCli(["brain", "okf-export", "--out", out, ...flags], { env: cliEnv() });
+      expect(r.returncode).toBe(0);
+      expect(r.stderr).toContain("left 1 private log entry out of log.md");
+      const manifest = JSON.parse(readFileSync(join(out, "okf.json"), "utf8")) as {
+        log_private_omitted?: unknown;
+      };
+      expect(manifest.log_private_omitted).toBe(1);
+    },
+  );
+
+  test("nothing private: no notice, and okf.json counts zero", async () => {
+    appendLogEvent(env.vault, {
+      timestamp: "2026-06-01T09:00:00Z",
+      eventType: "note",
+      body: { text: "a shared event" },
+    });
+    const out = join(env.parent, "bundle");
+    const r = await runCli(["brain", "okf-export", "--out", out], { env: cliEnv() });
+    expect(r.returncode).toBe(0);
+    expect(r.stderr).not.toContain("private log entr");
+    const manifest = JSON.parse(readFileSync(join(out, "okf.json"), "utf8")) as {
+      log_private_omitted?: unknown;
+    };
+    expect(manifest.log_private_omitted).toBe(0);
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable private log shard fails the verb and writes no bundle",
+    async () => {
+      withOperationPrivacy(true, () => {
+        appendLogEvent(env.vault, {
+          timestamp: "2026-06-01T09:00:00Z",
+          eventType: "note",
+          body: { text: "kept from the bundle" },
+        });
+      });
+      const [shard] = logShardsOf(env.storeRoot, "private");
+      expect(shard).toBeDefined();
+      chmodSync(shard!, 0o000);
+      try {
+        const out = join(env.parent, "bundle");
+        const r = await runCli(["brain", "okf-export", "--out", out], { env: cliEnv() });
+        expect(r.returncode).not.toBe(0);
+        expect(r.stderr).toMatch(/cannot read log shard\(s\) private\/log\/\S+\.jsonl/);
+        expect(existsSync(join(out, "okf.json"))).toBe(false);
+      } finally {
+        chmodSync(shard!, 0o644);
+      }
+    },
+  );
 });

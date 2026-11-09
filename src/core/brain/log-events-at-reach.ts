@@ -156,6 +156,9 @@ export function dreamEntryAtReach(
  * page once `ret-x` was the reserved page on disk, and passed.
  */
 export function logEntryAtReach(refs: ArtifactRefView, entry: BrainLogEntry): BrainLogEntry | null {
+  // An event of the store's `private` partition is withheld below local
+  // reach whatever it names, as a private page is (review finding F333).
+  if (refs.withholdsPrivate === true && entry.fromPrivatePartition === true) return null;
   if (refs.filtersNothing) return entry;
   const shown = dreamEntryAtReach(refs, entry);
   if (shown === null) return null;
@@ -170,6 +173,12 @@ export function logEntriesAtReach(
   refs: ArtifactRefView,
   entries: ReadonlyArray<BrainLogEntry>,
 ): ReadonlyArray<BrainLogEntry> {
-  if (refs.filtersNothing) return entries;
-  return entries.flatMap((entry) => logEntryAtReach(refs, entry) ?? []);
+  // An event of the store's `private` partition is withheld below local
+  // reach whatever it names, as a private page is (review finding F333).
+  const shown =
+    refs.withholdsPrivate === true
+      ? entries.filter((e) => e.fromPrivatePartition !== true)
+      : entries;
+  if (refs.filtersNothing) return shown;
+  return shown.flatMap((entry) => logEntryAtReach(refs, entry) ?? []);
 }

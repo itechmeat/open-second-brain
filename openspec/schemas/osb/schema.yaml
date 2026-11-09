@@ -1,0 +1,362 @@
+name: osb
+version: 1
+description: Open Second Brain workflow - brainstorm with an independent agent,
+  proposal, specs, design, tasks as an executor brief, independent review,
+  apply; one change per pull request, archived inside it
+artifacts:
+  - id: brainstorm
+    generates: brainstorm.md
+    description: Joint brainstorm of the change with an independent second agent,
+      before any proposal
+    template: brainstorm.md
+    instruction: |
+      Find the best way to build this change TOGETHER with an independent
+      second agent before writing the proposal. The partner is an agent of a
+      different model family than the author, run read-only; when none is
+      available, a fresh agent of the author's family that has seen nothing of
+      the draft. Name the kind of partner (not a product or account) in the
+      Process section.
+
+      Before the brainstorm, check related work: open pull requests, changes
+      in flight under `openspec/changes/`, and recent commits touching the same
+      modules. The result goes into the "Related work" section.
+
+      Procedure:
+      1. Write your own short understanding of the problem and 2-3 candidate
+         approaches into a brief, plus the constraints that bind
+         (`openspec/project.md`) and the question: "propose the best approach,
+         attack mine, list what we have not thought of". List your concrete
+         doubts explicitly (edge cases, error output, exit codes, boundaries,
+         privacy leaks, Windows paths): the partner is most useful on them.
+         Never put secrets into a brief.
+      2. Run the partner read-only; it reads the code itself.
+      3. Merge: take the best ideas from both, resolve disagreements by
+         evidence from the code. At most two rounds with the partner; a third
+         disagreement goes to Open questions.
+      4. Open questions for the owner only when the brainstorm could not answer
+         them AND the answer changes the product, the specs, the approach or
+         the task breakdown. Everything else is decided here with the reason.
+
+      A change that only carries follow-ups already decided elsewhere (review
+      findings, a parent change's queued tasks) keeps the brainstorm short:
+      name where each was decided, and let the partner attack the approach.
+
+      Write it neutrally (the repository is public): approaches, evidence,
+      decision, rejected alternatives with one-line reasons. No machine paths,
+      host or session names, account names or internal tool names.
+    requires: []
+
+  - id: proposal
+    generates: proposal.md
+    description: Initial proposal document outlining the change
+    template: proposal.md
+    instruction: |
+      Create the proposal document that establishes WHY this change is needed.
+
+      Sections:
+      - **Why**: 1-2 sentences on the problem or opportunity. What problem does this solve? Why now?
+      - **What Changes**: Bullet list of changes. Be specific about new capabilities, modifications, or removals. Mark breaking changes with **BREAKING**.
+      - **Capabilities**: Identify which specs will be created or modified:
+        - **New Capabilities**: List capabilities being introduced. Each becomes a new `specs/<capability-path>/spec.md`. Name each capability for a durable system behavior (for example, `user-auth`), not the work in this change (for example, `add-login-endpoint`). Choose a cohesive boundary that can own related requirements as the system evolves; avoid broad catch-all capabilities. Use kebab-case for path segments you introduce (e.g., `user-auth` or `identity/user-auth`) and follow the project's existing spec organization.
+        - **Modified Capabilities**: List existing capabilities whose REQUIREMENTS are changing. Only include if spec-level behavior changes (not just implementation details). Each needs a delta spec file. Use the exact existing path under `openspec/specs/`. Leave empty if no requirement changes.
+      - **Impact**: Affected code, APIs, dependencies, or systems.
+
+      IMPORTANT: The Capabilities section is critical. It creates the contract between
+      proposal and specs phases. Research existing specs before filling this in:
+      run `openspec list --specs` for the project's capability inventory, then
+      `openspec show "<spec-id>" --type spec --json --no-scenarios` for any that
+      look related - that returns a capability's purpose and requirement texts
+      without pulling whole spec files into context. Append `--store "<id>"` to
+      both commands only for a registered standalone store, and keep `--type
+      spec`: a change and a spec sharing a name is otherwise an ambiguous-item
+      error. `openspec list` without `--specs` lists in-flight changes, not
+      specs - it never shows what the project already covers. Reuse an existing
+      capability's exact path instead of introducing a near-duplicate name.
+      The filtered read is only an overview. Before deciding what is already
+      covered or what should change, read each relevant spec in full, including
+      scenarios, with `openspec show "<spec-id>" --type spec` (same `--store` rule).
+      Each capability listed here will need a corresponding spec file.
+
+      Every change must either declare at least one capability (new or
+      modified) or explicitly opt out of specs: `openspec validate` rejects a
+      change with zero deltas unless the change's `.openspec.yaml` sets
+      `skip_specs: true`. Use `skip_specs: true` only when no spec-level
+      behavior changes (pure refactor, tooling, docs) - specs describe
+      behavior, so if behavior does not change, no spec should change either.
+      Do not invent a requirement just to satisfy validation.
+
+      Keep it concise (1-2 pages). Focus on the "why" not the "how" -
+      implementation details belong in design.md.
+
+      Build on brainstorm.md: the chosen approach and its reasons are the
+      basis; do not reopen what the brainstorm decided without new evidence.
+
+      This is the foundation - specs, design, and tasks all build on this.
+    requires:
+      - brainstorm
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Detailed specifications for the change
+    template: spec.md
+    instruction: |
+      Create specification files that define WHAT the system should do.
+
+      A spec is a behavior contract, not an implementation plan.
+
+      Good spec content:
+      - Observable behavior users or downstream systems rely on
+      - Inputs, outputs, and error conditions
+      - External constraints (security, privacy, reliability, compatibility)
+      - Scenarios that can be tested or explicitly validated
+
+      Avoid in specs:
+      - Internal class/function names
+      - Library or framework choices
+      - Step-by-step implementation details
+      - Detailed execution plans (those belong in design.md or tasks.md)
+
+      Quick test: if the implementation can change without changing externally
+      visible behavior, it likely does not belong in the spec.
+
+      Create one spec file per capability listed in the proposal's Capabilities section.
+      `<capability-path>` is the spec directory relative to `specs/` (for example,
+      `user-auth` or `identity/user-auth`). Preserve the full path:
+      - New capabilities: use the exact path from the proposal at `specs/<capability-path>/spec.md`. Any path segment newly introduced in the proposal must be kebab-case. Follow the project's existing organization; do not add a new domain level when the project uses a flat layout.
+      - Modified capabilities: use the exact existing path from `openspec/specs/<capability-path>/` when creating the delta at `specs/<capability-path>/spec.md`. Run `openspec list --specs` to confirm that path before writing the delta, appending `--store "<id>"` only for a registered standalone store - a mistyped or invented path targets a capability that does not exist rather than the one you meant. Do not move or rename the capability.
+
+      Write the spec files one at a time, so the user sees progress and an
+      interrupted run keeps the files it already wrote:
+      - Before writing anything, compare the capabilities the proposal lists
+        with the `specs/<capability-path>/spec.md` files that already exist,
+        and start with the first capability that has no file. Do not rewrite
+        an existing file unless the user asks you to.
+      - Before each file, say in one line which capability you are writing.
+      - Write each file as soon as you have drafted it. Do not plan every file
+        before writing the first.
+      - Stop when every capability the proposal lists has its file.
+
+      There must be at least one spec file unless the change's `.openspec.yaml`
+      sets `skip_specs: true` (no spec-level behavior change) - `openspec validate`
+      rejects a zero-delta change without that marker. If the proposal lists no
+      capabilities and `skip_specs` is not set, revisit the proposal first.
+
+      Delta operations (use ## headers):
+      - **ADDED Requirements**: New capabilities
+      - **MODIFIED Requirements**: Changed behavior - MUST include full updated content
+      - **REMOVED Requirements**: Deprecated features - MUST include **Reason** and **Migration**
+      - **RENAMED Requirements**: Name changes only - use FROM:/TO: format
+
+      Format requirements:
+      - Each requirement: `### Requirement: <name>` followed by description
+      - Use SHALL/MUST for normative requirements (avoid should/may)
+      - Each scenario: `#### Scenario: <name>` with WHEN/THEN format
+      - **CRITICAL**: Scenarios MUST use exactly 4 hashtags (`####`). Using 3 hashtags or bullets will fail silently.
+      - Every requirement MUST have at least one scenario.
+      - Keep each requirement's description (the text between `### Requirement:` and its first scenario) to 500 characters or fewer. `openspec validate` flags longer descriptions in ADDED requirements and in the main spec. This is a warning: normal validation still passes, but `openspec validate --strict` fails on it. When writing a new requirement, state one behavior per requirement: move examples and edge cases into scenarios, and split a requirement that covers several behaviors into separate `### Requirement:` blocks, each with its own scenarios. Under MODIFIED, keep the existing requirement block whole; never split, trim or rewrite existing text just to meet the length. Split an existing long requirement only when the user asks for it, in a change made for that purpose: under MODIFIED, keep its header and every scenario and cut its description down to one behavior without changing its meaning, then add each behavior you removed as its own ADDED requirement with its own scenarios.
+
+      New capabilities only: the delta spec's first section is `## Purpose` -
+      one or two sentences (50+ characters, or `openspec validate --strict`
+      reports it as too brief) describing what the capability is for. Archive
+      copies it into the main spec it creates; without it the new main spec is
+      left with a `TBD ... Update Purpose after archive` placeholder to fill in
+      by hand. Do NOT add `## Purpose` to a delta for an existing capability -
+      that spec already has one and the delta's is ignored. To change an
+      existing capability's Purpose - including a leftover `TBD` placeholder -
+      edit `<planningHome.root>/openspec/specs/<capability-path>/spec.md`
+      directly. `planningHome.root` comes from the `openspec instructions ...
+      --json` response. Always use it rather than a repo-relative path: it
+      resolves to the store whenever the change lives in one - whether that
+      came from `--store`, a project `store:` pointer, or a global default
+      store - and to the current repository otherwise. Do not try to work out
+      which case applies; the field already has.
+
+      MODIFIED requirements workflow:
+      1. Locate the existing requirement in `<planningHome.root>/openspec/specs/<capability-path>/spec.md` (the same store-aware root as above)
+      2. Copy the ENTIRE requirement block (from `### Requirement:` through all scenarios)
+      3. Paste under `## MODIFIED Requirements` and edit to reflect new behavior
+      4. Ensure header text matches exactly (whitespace-insensitive)
+
+      Common pitfall: Using MODIFIED with partial content loses detail at archive time.
+      If adding new concerns without changing existing behavior, use ADDED instead.
+
+      Example (a new capability, so its first section is `## Purpose`):
+      ```
+      # Spec Delta
+
+      ## Purpose
+
+      Lets users take their data out of the product in a portable format.
+
+      ## ADDED Requirements
+
+      ### Requirement: User can export data
+      The system SHALL allow users to export their data in CSV format.
+
+      #### Scenario: Successful export
+      - **WHEN** user clicks "Export" button
+      - **THEN** system downloads a CSV file with all user data
+
+      ## REMOVED Requirements
+
+      ### Requirement: Legacy export
+      **Reason**: Replaced by new export system
+      **Migration**: Use new export endpoint at /api/v2/export
+      ```
+
+      Specs should be testable - each scenario is a potential test case.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Technical design document with implementation details
+    template: design.md
+    instruction: |
+      Create the design document that explains HOW to implement the change.
+
+      When to include design.md (create only if any apply):
+      - Cross-cutting change (multiple services/modules) or new architectural pattern
+      - New external dependency or significant data model changes
+      - Security, performance, or migration complexity
+      - Ambiguity that benefits from technical decisions before coding
+
+      Sections:
+      - **Context**: Only the current state and constraints needed to explain the approach. Reference the proposal for motivation instead of restating it (e.g., "See proposal.md - Why").
+      - **Goals / Non-Goals**: What this design achieves and explicitly excludes. Don't restate the proposal's scope - add only design-level boundaries.
+      - **Decisions**: Key technical choices with rationale (why X over Y?). Include alternatives considered for each decision.
+      - **Risks / Trade-offs**: Known limitations, things that could go wrong. Format: [Risk] → Mitigation
+      - **Migration Plan**: Steps to deploy, rollback strategy (if applicable)
+      - **Open Questions**: Unknowns that can safely be answered later without
+        changing the specs, the approach, or the task breakdown. Omit if none.
+
+      Open questions are for genuinely deferrable unknowns, not decisions you
+      skipped. If a question would change the specs, the chosen approach, or
+      the task breakdown, resolve it now - ask the user instead of guessing.
+
+      Focus on architecture and approach, not line-by-line implementation.
+      The proposal covers why and what; design covers how. Reference the
+      proposal for motivation and, once written, the specs for requirements -
+      if a section would only restate them, point to them instead.
+
+      Good design docs explain the "why" behind technical decisions.
+    requires:
+      - proposal
+
+  - id: tasks
+    generates: tasks.md
+    description: Implementation checklist with trackable tasks
+    template: tasks.md
+    instruction: |
+      Create the task list. It is a self-contained brief for the agent that
+      implements the change, who may be a different agent with no other
+      context than this change folder and the repository: everything it needs
+      to know is here or in a file this list names.
+
+      Before writing tasks, check design.md for Open Questions. If any of them
+      would change what gets built, resolve them with the user first - do not
+      bake an unstated assumption into the task list.
+
+      **IMPORTANT: Follow the template below for tracked tasks.** The apply
+      phase parses checkbox format to track progress. A box holding only `x`
+      counts as done, upper or lower case and with any spacing. Every other
+      marker, including `- [~]`, `- [-]` and an empty `- []`, reads as
+      unfinished. A line with no checkbox is not tracked at all.
+
+      The executor is started with one line naming this file; nothing the
+      executor needs may live only in that launch prompt.
+
+      Structure:
+      - An opening paragraph: which artifacts to read first (project.md,
+        then the change folder); work in order, one section at a time; read the
+        design section and spec delta a section names before it; tick each box
+        as soon as it is done, so an interrupted run resumes from the first
+        open box; partial edits from an earlier attempt may be in the tree:
+        review them, keep what is right, finish the rest; change nothing
+        the list does not ask for, and on a mismatch between the brief and
+        the code stop at that task and report it.
+      - `## Environment and rules`: the shell setup (a temp dir outside the
+        checkout), and the executor rules: work only in this checkout; never
+        read or write real user state (config, vaults, state dirs); never stop
+        a process you did not start; do not commit, push or open a pull
+        request; do not start subagents; the language and naming rules of
+        `openspec/project.md`. Say which tests to run during a section (only
+        the files it touches) and that the whole gate runs once at the end.
+      - `## 0. Preconditions`: confirm the tree the change was written against
+        (the commit, the sizes or names the design relies on) and take a
+        baseline of the tests the change touches; stop and report when it
+        does not match.
+      - Numbered groups in dependency order. Long changes split into Parts
+        (`# Part A: ...`), each built and passing its own tests before the
+        next starts.
+      - A gate group: the full local gate of `openspec/project.md`, each
+        command on its own, plus any generated artifact the project commits
+        (bundles, mirrors).
+      - A last group `Report`: what the executor reports back (every box
+        ticked or why not, deviations from design.md and why, gate counts,
+        anything in the brief that did not match the code).
+
+      Guidelines:
+      - Each tracked task MUST be a checkbox: `- [ ] X.Y Task description`.
+      - Each task MUST state how to verify completion (a test, command,
+        observable behavior, or delivered artifact) in its own description.
+      - Test first: for every behaviour the task writes the failing test, runs
+        it and sees it fail, then the code. Name the test file (an existing one
+        by path, or the path of a new one) and the cases. A refactor that
+        changes no behaviour adds no test: the existing suite is its proof.
+      - Each task group lands the tests and documentation its own work calls
+        for. Do NOT collect testing or documentation into a final group.
+      - Name every file, function and command by its real name, checked
+        against the tree; never "find the relevant file" when you can name it.
+      - Track only work that can be completed before archive. Archive and
+        integration steps (review, pull request) go as plain bullets into an
+        optional `## Workflow follow-up` section at the end.
+
+      Reference specs for what needs to be built, design for how to build it.
+    requires:
+      - specs
+
+  - id: review
+    generates: review.md
+    description: Independent review of all artifacts before implementation starts
+    template: review.md
+    instruction: |
+      The artifacts are reviewed by an independent second agent before any
+      implementation starts, not by the owner: an agent of a different model
+      family than the author, or, when none is available, a fresh agent that
+      did not write the artifacts. Name the kind of reviewer. Brief it with the
+      change folder path and ask it to check: the proposal solves the stated
+      problem; specs are testable and complete (edge cases, errors,
+      compatibility, privacy, Windows); design decisions are sound for this
+      codebase and every name in them exists in the tree; tasks cover every
+      requirement with a verification, land tests with the work, and are a
+      complete brief for an executor with no other context; nothing
+      contradicts `openspec/project.md` or the brainstorm decision; scope
+      creep.
+
+      Record each finding with a verdict: fixed (artifact updated), rejected
+      (one-line reason). After fixes, one re-review round at most. Findings
+      still disputed after it, and only those that significantly change the
+      product or the development path, go to "Questions for the owner".
+      After the re-review the author decides the verdict on what is left:
+      each remaining finding is fixed or rejected with its reason and named
+      in the Findings list.
+
+      End with the verdict line: "Ready for implementation: yes" or "no" with
+      what blocks. Implementation starts only on "yes" and only with every
+      question for the owner answered.
+    requires:
+      - tasks
+
+apply:
+  requires: [ review ]
+  tracks: tasks.md
+  instruction: |
+    Read the change folder, then work through tasks.md as written: it is
+    the executor brief. Work in a worktree off a fresh main, one change per
+    pull request. When all tasks are done, the integrator runs the
+    project's full quality cycle (the local gate, the independent code
+    review rounds, the security review). Archive the change
+    (`openspec archive <change> --yes`) only after the whole cycle is
+    green, so the pull request carries the archived change and the updated
+    `openspec/specs/`.

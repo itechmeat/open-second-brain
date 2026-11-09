@@ -180,6 +180,14 @@ export async function cmdBrainOkfExport(argv: string[]): Promise<number> {
       `wrote OKF bundle to ${out} (${bundle.manifest.pages.length} page(s), ` +
         `${bundle.manifest.log_days} log day(s))\n`,
     );
+    // The partition rule, not the content class: the count prints whatever
+    // the operator's flag did with the prompt-derived entries.
+    if (log.privateEntries > 0) {
+      process.stderr.write(
+        `okf-export: left ${log.privateEntries} private log ` +
+          `${log.privateEntries === 1 ? "entry" : "entries"} out of log.md\n`,
+      );
+    }
     if (flags["include-prompt-derived"] === true) {
       process.stderr.write(EGRESS_CONTENT_CLASS_INCLUDE_NOTICE);
     } else {

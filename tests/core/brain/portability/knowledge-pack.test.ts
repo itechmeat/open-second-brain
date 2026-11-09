@@ -346,6 +346,7 @@ describe("install", () => {
       generated_at: "2026-06-01T00:00:00Z",
       vault_basename: "evil",
       log_days: 0,
+      log_private_omitted: 0,
       pages: [
         {
           id: "planted",
@@ -437,6 +438,7 @@ describe("install", () => {
       generated_at: "",
       vault_basename: "x",
       log_days: 0,
+      log_private_omitted: 0,
       pages: [
         {
           id: "n",

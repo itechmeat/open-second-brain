@@ -1384,6 +1384,7 @@ describe("v0.2 import acceptance", () => {
         generated_at: "2026-06-01T00:00:00Z",
         vault_basename: "Packed",
         log_days: 0,
+        log_private_omitted: 0,
         pages: [
           {
             id: "runbook",
@@ -1862,6 +1863,7 @@ describe("writeOkfBundle", () => {
           vault_basename: "Vault",
           pages: [],
           log_days: 0,
+          log_private_omitted: 0,
         },
         files: [{ path: `../${outsideName}/pwned.md`, contents: "nope\n" }],
       };
@@ -1871,6 +1873,37 @@ describe("writeOkfBundle", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("log_private_omitted on the legacy layout", () => {
+  test("an unswitched vault with log day files counts zero", () => {
+    note("Brain/log/2026-06-01.md", "- a plain day entry\n");
+    const bundle = buildOkfBundle(vault);
+    const log = fileOf(bundle.files, "log.md");
+    expect(log).toContain("a plain day entry");
+    expect(bundle.manifest.log_private_omitted).toBe(0);
+  });
+
+  test("a manifest without log_private_omitted parses with zero", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-omit-"));
+    try {
+      mkdirSync(join(dir, "concepts"), { recursive: true });
+      const manifest = {
+        schema: OKF_SCHEMA_VERSION,
+        producer: OKF_PRODUCER,
+        generated_at: "2026-06-01T00:00:00Z",
+        vault_basename: "Parse",
+        log_days: 2,
+        pages: [],
+      };
+      writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+      const parsed = readOkfBundle(dir);
+      expect(parsed.manifest.log_days).toBe(2);
+      expect(parsed.manifest.log_private_omitted).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
