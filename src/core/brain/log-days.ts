@@ -38,7 +38,7 @@ export interface LogDaysContext {
 }
 
 /** Every date a store log can name; the facade reads only the shards of held months. */
-const WHOLE_LOG = Object.freeze({ from: "1970-01-01", to: "9998-12-31" });
+export const WHOLE_LOG = Object.freeze({ from: "1970-01-01", to: "9998-12-31" });
 
 /** Stores one read pass keeps the days of. */
 const PASS_CACHE_LIMIT = 4;
@@ -168,6 +168,15 @@ function groupByDay(entries: ReadonlyArray<BrainLogEntry>): Map<string, LogDay> 
       .toSorted()
       .map((date) => [date, Object.freeze({ date, entries: Object.freeze(days.get(date) ?? []) })]),
   );
+}
+
+/**
+ * The entries grouped by the date their timestamp names, oldest first:
+ * the same frozen days `storeLogDays` returns, for a caller that has
+ * already read the events itself (the OKF export's shared-only days).
+ */
+export function groupLogDays(entries: ReadonlyArray<BrainLogEntry>): LogDay[] {
+  return [...groupByDay(entries).values()];
 }
 
 /**

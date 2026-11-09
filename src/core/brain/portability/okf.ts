@@ -91,7 +91,9 @@ import {
   writeLanePage,
 } from "../../store/lane-pages.ts";
 import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
-import { storeLogDays } from "../log-days.ts";
+import { groupLogDays, WHOLE_LOG } from "../log-days.ts";
+import { readStoreLogEventsReport } from "../../store/read/log-events.ts";
+import { protectionStore } from "../../store/read/protection-store.ts";
 import { renderLogDayHeader, renderLogEntryBlock } from "../log.ts";
 import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 
@@ -315,6 +317,12 @@ export interface OkfManifest {
    * shards of one day are one day here, not two.
    */
   readonly log_days: number;
+  /**
+   * Log events the export left out of `log.md` for being private, counted
+   * before any content-class filtering. Zero on the legacy layout and for
+   * a machine that holds no `private` partition.
+   */
+  readonly log_private_omitted: number;
 }
 
 /** A single file in the in-memory bundle write-plan. */
@@ -588,6 +596,12 @@ export interface OkfLog {
   readonly days: number;
   /** Entries the content-class filter dropped; zero without a filter. */
   readonly droppedEntries: number;
+  /**
+   * Log events the store held in its `private` partition, left out of
+   * `log.md` and counted before any content-class filtering; zero on the
+   * legacy layout.
+   */
+  readonly privateEntries: number;
 }
 
 /**
@@ -600,10 +614,31 @@ const LOG_BULLET_RE = /^-\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/;
 export function buildLog(vault: string, filter?: OkfLogFilter): OkfLog {
   const bodiesByDate = new Map<string, string[]>();
   let droppedEntries = 0;
-  // A store-only machine keeps no day files: each day of the store's log
-  // events is rendered the way the day file renders it (header, then one
-  // block per entry), so the bundle's `log.md` reads the same.
-  const storedDays = storeLogDays(vault);
+  // One read of the store log, counted by partition: a private event never
+  // reaches `log.md` (review finding F333), and the export refuses when a
+  // log shard cannot be read, so the bundle is never silently short of
+  // events and the private count is never a lower bound.
+  const report = readStoreLogEventsReport(WHOLE_LOG, { vault });
+  // A store-only machine whose store cannot be opened reads no events and
+  // no unreadable shard: refuse as a protection reader does, switched or
+  // not, rather than export an empty log that claims nothing private was
+  // left out.
+  if (report !== null) protectionStore(undefined, { openErrorFails: true, vault });
+  if (report !== null && report.unreadable.length > 0) {
+    throw new Error(
+      `okf export: cannot read log shard(s) ${report.unreadable.join(", ")}; the bundle would be short of their events`,
+    );
+  }
+  // Counted before the content-class filter: the partition rule and the
+  // class policy are independent, so the two counts never overlap.
+  const privateEntries = report?.events.filter((e) => e.partition === "private").length ?? 0;
+  // A store-only machine keeps no day files: the days of the shared events
+  // are rendered the way the day file renders it (header, then one block
+  // per entry), so the bundle's `log.md` reads the same.
+  const storedDays =
+    report === null
+      ? null
+      : groupLogDays(report.events.filter((e) => e.partition === "shared").map((e) => e.entry));
   for (const day of storedDays ?? []) {
     const body = [renderLogDayHeader(day.date), ...day.entries.map(renderLogEntryBlock)]
       .join("\n")
@@ -646,7 +681,12 @@ export function buildLog(vault: string, filter?: OkfLogFilter): OkfLog {
   const sections = [...bodiesByDate.keys()]
     .toSorted()
     .map((date) => `## ${date}\n\n${bodiesByDate.get(date)!.join("\n\n")}`);
-  return { contents: sections.join("\n\n"), days: bodiesByDate.size, droppedEntries };
+  return {
+    contents: sections.join("\n\n"),
+    days: bodiesByDate.size,
+    droppedEntries,
+    privateEntries,
+  };
 }
 
 /**
@@ -991,7 +1031,7 @@ export function buildOkfSubsetBundle(vault: string, pages: ReadonlyArray<OkfPage
 export function buildOkfBundleFromPages(
   vault: string,
   pages: ReadonlyArray<OkfPage>,
-  log: Pick<OkfLog, "contents" | "days"> = buildLog(vault),
+  log: Pick<OkfLog, "contents" | "days" | "privateEntries"> = buildLog(vault),
 ): OkfBundle {
   return assembleOkfBundle(vault, pages, log);
 }
@@ -999,7 +1039,7 @@ export function buildOkfBundleFromPages(
 function assembleOkfBundle(
   vault: string,
   pages: ReadonlyArray<OkfPage>,
-  log: Pick<OkfLog, "contents" | "days"> | null,
+  log: Pick<OkfLog, "contents" | "days" | "privateEntries"> | null,
 ): OkfBundle {
   // ONE instant for the whole bundle: the manifest's `generated_at` and
   // every page's `generated.at` share it, so whole-bundle byte equality
@@ -1027,6 +1067,7 @@ function assembleOkfBundle(
       producer_meta: page.producer_meta,
     })),
     log_days: log?.days ?? 0,
+    log_private_omitted: log?.privateEntries ?? 0,
   };
 
   const files: OkfBundleFile[] = [
@@ -1099,6 +1140,7 @@ interface ManifestInput {
   readonly generated_at?: unknown;
   readonly vault_basename?: unknown;
   readonly log_days?: unknown;
+  readonly log_private_omitted?: unknown;
   readonly pages?: unknown;
 }
 
@@ -1252,6 +1294,7 @@ function readSpecOkfBundle(dir: string): ParsedOkfBundle {
       vault_basename: "",
       pages: entries,
       log_days: 0,
+      log_private_omitted: 0,
     },
     // No manifest, no own-producer claim to honour: the walk's output is
     // foreign by construction - stating it directly instead of resting
@@ -1362,6 +1405,11 @@ export function readOkfBundle(dir: string): ParsedOkfBundle {
       log_days:
         typeof parsed.log_days === "number" && Number.isFinite(parsed.log_days)
           ? parsed.log_days
+          : 0,
+      log_private_omitted:
+        typeof parsed.log_private_omitted === "number" &&
+        Number.isFinite(parsed.log_private_omitted)
+          ? parsed.log_private_omitted
           : 0,
     },
     foreign: producer !== OKF_PRODUCER,

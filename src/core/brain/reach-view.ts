@@ -51,6 +51,7 @@ export function reachView(vault: string | null, reach: TransportReach): ReachVie
     return Object.freeze({
       reach,
       ...storeRecordRefView((page) => isStoreRecordReadableAtReach(page, reach)),
+      withholdsPrivate: true,
     });
   }
   // Store-only (task 2.10): a preference or signal is judged by its record.
@@ -62,5 +63,6 @@ export function reachView(vault: string | null, reach: TransportReach): ReachVie
       if (page !== undefined) return isStoreRecordReadableAtReach(page, reach);
       return isPathReadableAtReach(vault, rel, reach, cache);
     }),
+    withholdsPrivate: true,
   });
 }

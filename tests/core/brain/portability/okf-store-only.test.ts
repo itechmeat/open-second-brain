@@ -7,7 +7,7 @@
  * `okf.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendLogEvent } from "../../../../src/core/brain/log.ts";
@@ -25,7 +25,11 @@ import { writeLanePage } from "../../../../src/core/store/lane-pages.ts";
 import { withOperationPrivacy } from "../../../../src/core/store/operation-scope.ts";
 import { parseFrontmatterText } from "../../../../src/core/vault.ts";
 import { partitionRecords } from "../store-only/fixtures.ts";
+import { neverHeld } from "../../../helpers/held-partitions.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { digestVaultTree } from "../../../helpers/vault-digest.ts";
+import { StoreUnavailableError } from "../../../../src/core/store/read/protection-store.ts";
+import { copySharedLogIntoPrivate, logShardsOf } from "../../store/fixtures/log-shards.ts";
 import { makeStoreEnv, type StoreEnv } from "../../store/fixtures/store-env.ts";
 import { switchDevice } from "../store-only/fixtures.ts";
 
@@ -121,5 +125,111 @@ describe("importOkfBundle on a switched machine", () => {
     expect(() => importOkfBundle(env.vault, readOkfBundle(dir), { trusted: true })).toThrow(
       VaultBindingMismatchError,
     );
+  });
+});
+
+describe("private log events in the bundle", () => {
+  test("a private event leaves log.md, counted in the manifest", () => {
+    appendLogEvent(env.vault, {
+      timestamp: "2026-06-01T09:00:00Z",
+      eventType: "note",
+      body: { text: "a shared event" },
+    });
+    withOperationPrivacy(true, () => {
+      appendLogEvent(env.vault, {
+        timestamp: "2026-06-02T09:00:00Z",
+        eventType: "note",
+        body: { text: "a private event" },
+      });
+    });
+
+    const bundle = buildOkfBundle(env.vault);
+    const log = fileOf(bundle.files, "log.md");
+    expect(log).toContain("a shared event");
+    expect(log).not.toContain("a private event");
+    expect(bundle.manifest.log_days).toBe(1);
+    expect(bundle.manifest.log_private_omitted).toBe(1);
+  });
+
+  test("a machine that never held private counts zero", () => {
+    neverHeld(env.storeRoot);
+    appendLogEvent(env.vault, {
+      timestamp: "2026-06-01T09:00:00Z",
+      eventType: "note",
+      body: { text: "the only event" },
+    });
+    const bundle = buildOkfBundle(env.vault);
+    expect(bundle.manifest.log_private_omitted).toBe(0);
+    expect(fileOf(bundle.files, "log.md")).toContain("the only event");
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable private log shard refuses the export", () => {
+    withOperationPrivacy(true, () => {
+      appendLogEvent(env.vault, {
+        timestamp: "2026-06-01T09:00:00Z",
+        eventType: "note",
+        body: { text: "kept from the bundle" },
+      });
+    });
+    const [shard] = logShardsOf(env.storeRoot, "private");
+    expect(shard).toBeDefined();
+    chmodSync(shard!, 0o000);
+    try {
+      expect(() => buildOkfBundle(env.vault)).toThrow(/cannot read log shard\(s\) private\/log\//);
+    } finally {
+      chmodSync(shard!, 0o644);
+    }
+  });
+
+  test("a record in both partitions is private, out of log.md, counted", () => {
+    appendLogEvent(env.vault, {
+      timestamp: "2026-06-01T09:00:00Z",
+      eventType: "note",
+      body: { text: "in both" },
+    });
+    // The same record id in both partitions, as two devices that disagree
+    // on its partition would leave it.
+    copySharedLogIntoPrivate(env.storeRoot);
+
+    const bundle = buildOkfBundle(env.vault);
+    expect(fileOf(bundle.files, "log.md")).not.toContain("in both");
+    expect(bundle.manifest.log_private_omitted).toBe(1);
+  });
+
+  test("a store that cannot be opened refuses the export", () => {
+    appendLogEvent(env.vault, {
+      timestamp: "2026-06-01T09:00:00Z",
+      eventType: "note",
+      body: { text: "an event" },
+    });
+    // The store opened once, so this machine holds `private`: with its
+    // identity file gone the store no longer opens.
+    rmSync(join(env.storeRoot, "private", "store.json"));
+    expect(() => buildOkfBundle(env.vault)).toThrow(StoreUnavailableError);
+  });
+
+  test("a store-only machine never switched, with a corrupt store, refuses the export", () => {
+    // No switch marker: store-only because the vault has no legacy tree.
+    const plain = makeStoreEnv("osb-okf-unswitched-store-", { legacyTree: false });
+    try {
+      appendLogEvent(plain.vault, {
+        timestamp: "2026-06-01T09:00:00Z",
+        eventType: "note",
+        body: { text: "an event" },
+      });
+      writeFileSync(join(plain.storeRoot, "shared", "store.json"), "{ not json");
+      expect(() => buildOkfBundle(plain.vault)).toThrow(StoreUnavailableError);
+    } finally {
+      plain.cleanup();
+    }
+  });
+
+  test("an explicit vault with no legacy tree, over a corrupt store, refuses the export", () => {
+    // The configured vault still has its legacy tree (env.vault); the
+    // export names another vault, which is store-only by having none.
+    const other = join(env.parent, "other-vault");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(env.storeRoot, "shared", "store.json"), "{ not json");
+    expect(() => buildOkfBundle(other)).toThrow(StoreUnavailableError);
   });
 });

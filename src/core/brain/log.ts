@@ -85,6 +85,12 @@ export interface BrainLogEntry {
   readonly eventType: BrainLogEventKind;
   readonly agent?: string;
   readonly body: BrainLogEntryPayload;
+  /**
+   * Set on an event read from the store's `private` partition: a reader
+   * below local reach withholds it (`logEntriesAtReach`), as it withholds
+   * a private page. Never set on a day file's entry (it has no partition).
+   */
+  readonly fromPrivatePartition?: true;
 }
 
 /** Warning surfaced by {@link parseLogDay} for a malformed sub-block. */

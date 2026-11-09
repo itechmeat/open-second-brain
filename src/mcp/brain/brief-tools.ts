@@ -230,6 +230,7 @@ async function toolBrainDigest(
       linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
       ...(agentScope !== undefined ? { agentScope } : {}),
       ...(readable !== undefined ? { readable } : {}),
+      ...(restricted ? { withholdsPrivate: true } : {}),
     });
   const result = renderFor(format, readableAtContextReachOrUndefined(ctx));
 

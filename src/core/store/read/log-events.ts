@@ -22,7 +22,7 @@
 import { listLogShardFiles, readLogDay, type LogShardFile } from "../../brain/log-jsonl.ts";
 import type { BrainLogEntry } from "../../brain/log.ts";
 import type { BrainLogEventKind } from "../../brain/types.ts";
-import { LOG_EVENT_KIND, STORE_PARTITIONS } from "../constants.ts";
+import { LOG_EVENT_KIND, STORE_PARTITIONS, type StorePartition } from "../constants.ts";
 import { compareRecords, type StoreRecord } from "../envelope.ts";
 import { readSource, type ReadContext } from "./read-context.ts";
 import { readStreamRecords } from "./stream-read.ts";
@@ -126,6 +126,38 @@ export interface StoreLogEvent {
   readonly device: string;
   /** The record's clock: grows with every append of its device, whatever the entry's timestamp. */
   readonly hlc: string;
+  /**
+   * The partition the record was read from. A record id present in both
+   * partitions reads as `private`: the strict answer when devices disagree.
+   */
+  readonly partition: StorePartition;
+}
+
+/**
+ * {@link readStoreLogEvents} with the store shards that could not be read:
+ * the answer may be short, and `unreadable` names every skipped shard as
+ * `<partition>/<shard>`. `null` on an unswitched machine, whose callers
+ * keep the day files. A caller that must know the answer is whole (an
+ * exporter, the manifest counts) refuses when `unreadable` is not empty.
+ */
+export function readStoreLogEventsReport(
+  range: LogDateRange,
+  context: ReadContext = {},
+): { events: StoreLogEvent[]; unreadable: ReadonlyArray<string> } | null {
+  assertRange(range);
+  const source = readSource(context);
+  if (source.kind === "legacy") return null;
+  if (range.from > range.to) return { events: [], unreadable: [] };
+  const read = storeLogEvents(range, source.store);
+  return {
+    events: read.dated.map((d) => ({
+      entry: d.entry,
+      device: d.record.device,
+      hlc: d.record.hlc,
+      partition: d.partition,
+    })),
+    unreadable: read.unreadable,
+  };
 }
 
 /**
@@ -137,29 +169,23 @@ export function readStoreLogEvents(
   range: LogDateRange,
   context: ReadContext = {},
 ): StoreLogEvent[] | null {
-  assertRange(range);
-  const source = readSource(context);
-  if (source.kind === "legacy") return null;
-  if (range.from > range.to) return [];
-  return storeLogEvents(range, source.store).dated.map((d) => ({
-    entry: d.entry,
-    device: d.record.device,
-    hlc: d.record.hlc,
-  }));
+  return readStoreLogEventsReport(range, context)?.events ?? null;
 }
 
 function storeLogEvents(
   range: LogDateRange,
   store: Extract<ReturnType<typeof readSource>, { kind: "store" }>["store"],
 ): {
-  dated: Array<{ entry: BrainLogEntry; record: StoreRecord }>;
+  dated: Array<{ entry: BrainLogEntry; record: StoreRecord; partition: StorePartition }>;
   unreadable: string[];
 } {
   if (store === null) return { dated: [], unreadable: [] };
   const first = shiftMonth(range.from.slice(0, 7), -1);
-  const records: StoreRecord[] = [];
+  // The records of both partitions by record id: a record appended to
+  // `private` and copied (or synced) into `shared` counts once, as
+  // `private` - the strict answer when devices disagree.
+  const byId = new Map<string, { record: StoreRecord; partition: StorePartition }>();
   const unreadable: string[] = [];
-  const seen = new Set<string>();
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
     const read = readStreamRecords(
@@ -172,17 +198,22 @@ function storeLogEvents(
     );
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records) {
-      if (record.kind !== LOG_EVENT_KIND || seen.has(record.id)) continue;
-      seen.add(record.id);
-      records.push(record);
+      if (record.kind !== LOG_EVENT_KIND) continue;
+      const prior = byId.get(record.id);
+      if (prior !== undefined && (prior.partition === "private" || partition !== "private")) {
+        continue;
+      }
+      byId.set(record.id, { record, partition });
     }
   }
-  const dated: Array<{ entry: BrainLogEntry; record: StoreRecord }> = [];
-  for (const record of records) {
-    const entry = entryOf(record);
-    if (entry === null) continue;
+  const dated: Array<{ entry: BrainLogEntry; record: StoreRecord; partition: StorePartition }> = [];
+  for (const { record, partition } of byId.values()) {
+    const read = entryOf(record);
+    if (read === null) continue;
+    const entry: BrainLogEntry =
+      partition === "private" ? { ...read, fromPrivatePartition: true } : read;
     const date = entry.timestamp.slice(0, 10);
-    if (date >= range.from && date <= range.to) dated.push({ entry, record });
+    if (date >= range.from && date <= range.to) dated.push({ entry, record, partition });
   }
   const sorted = dated.toSorted(
     (a, b) =>

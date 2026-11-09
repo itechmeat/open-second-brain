@@ -118,6 +118,11 @@ export interface RenderDigestOptions {
    * byte-identical to a digest without the option.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The reader is below local reach: log events of the store's `private`
+   * partition are withheld from every section, counts included.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 export interface RenderDigestResult {
@@ -369,7 +374,7 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
     since,
     until,
     opts.agentScope,
-    readerRefView(vault, opts.readable),
+    readerRefView(vault, opts.readable, opts.withholdsPrivate === true),
   );
   // A digest rendered for a reader below local reach (a `readable`
   // filter) names a failed scan without its raised message, which can

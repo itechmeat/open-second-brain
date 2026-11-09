@@ -9,8 +9,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, join, resolve, sep } from "node:path";
 
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { VIEW_TARGET_ENV } from "../../src/core/view/constants.ts";
@@ -45,10 +45,16 @@ describe("pathsForCaller in prose", () => {
 
   test("text that only looks like a path is left as written", () => {
     env = makeStoreEnv("osb-paths-lookalike-");
+    // A sibling of the temp root is a lookalike only when the temp root is
+    // not itself under the home root (a `TMPDIR` under `$HOME` makes the
+    // sibling a real home path, which is rewritten as it should be).
+    const tmpUnderHome = resolve(tmpdir()).startsWith(`${resolve(homedir())}${sep}`);
     const text = [
       "> my old laptop kept it in /home/bob/notes and /Users/alice/x.md",
       "GET /v1/models, see /etc/hosts",
-      `a sibling of the temp root: ${tmpdir()}x/old.md and ${tmpdir()}-old`,
+      ...(tmpUnderHome
+        ? []
+        : [`a sibling of the temp root: ${tmpdir()}x/old.md and ${tmpdir()}-old`]),
       "C:\\Users\\someone\\file.txt",
     ].join("\n");
     expect(remote(env, { body: text })).toEqual({ body: text });

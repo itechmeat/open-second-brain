@@ -43,27 +43,42 @@ function unavailable(reason: string, switched = true): StoreUnavailableError {
  * when this machine has none and is not switched to one. Throws
  * {@link StoreUnavailableError} on a switched machine whose store cannot
  * be opened, or (with `needShared`) does not show its `shared` partition.
+ * With `openErrorFails`, a store that exists but cannot be opened (a
+ * corrupt `store.json`) throws on any store-only machine, switched or not:
+ * a reader that must know its answer is whole (an export) cannot read
+ * "no store" there.
  */
 export function protectionStore(
   configPath?: string,
-  options: { readonly needShared?: boolean } = {},
+  options: {
+    readonly needShared?: boolean;
+    readonly openErrorFails?: boolean;
+    /** The vault the caller reads for, when it is not the configured one. */
+    readonly vault?: string | null;
+  } = {},
 ): StoreInspection | null {
   let store: StoreInspection | null = null;
   let reason = "";
   let lost = false;
+  let openError = false;
   try {
     const { root } = resolveConfiguredStoreRoot(configPath);
     store = inspectStore(root);
     if (store === null) reason = `the store at ${root} cannot be found (no store.json)`;
   } catch (err) {
     lost = err instanceof HeldPartitionLostError;
+    openError = true;
     reason = `the store cannot be opened (${(err as Error).message})`;
   }
   const context = configPath !== undefined ? { configPath } : {};
   const switched = (): boolean => markedSwitched(context);
   if (store === null) {
     if (switched()) throw unavailable(reason);
-    if (lost && isStoreOnly(context)) throw unavailable(reason, false);
+    const storeOnly = (): boolean =>
+      isStoreOnly(options.vault !== undefined ? { ...context, vault: options.vault } : context);
+    if ((lost || (openError && options.openErrorFails === true)) && storeOnly()) {
+      throw unavailable(reason, false);
+    }
     return null;
   }
   if (options.needShared === true && !store.partitions.has("shared") && switched()) {

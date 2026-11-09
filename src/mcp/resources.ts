@@ -460,7 +460,10 @@ function readLessons(ctx: ResourceContext, uri: string, view: RequestView): Reso
   const delivery = deliveryFor(ctx, view);
   const text = view.refs.filtersNothing
     ? readMarkdown(uri, path).text
-    : renderLessonsForReader(ctx.vault, { readable: view.refs.visible }).document;
+    : renderLessonsForReader(ctx.vault, {
+        readable: view.refs.visible,
+        ...(view.refs.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
+      }).document;
   return { uri, mimeType: MIME_MARKDOWN, text: delivery.shape(text, LESSONS_REL) };
 }
 
@@ -468,6 +471,7 @@ function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView):
   const rendered = renderDigest(ctx.vault, {
     format: "markdown",
     ...(view.refs.filtersNothing ? {} : { readable: view.refs.visible }),
+    ...(view.refs.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
     // Ownership is pushed into the render's SELECTION as well as its
     // row filter, the way `readActive` does: `view.refs` already
     // carries the rule on the filter side, and the digest's
@@ -663,13 +667,13 @@ function readLog(
   // rendered from its `log-event` records, in the shape a page has.
   const log = logDayReader(ctx.vault);
   if (log.stored) {
-    const entries = log.day(rawDate).entries;
+    // Filtered first: a day whose every event the caller may not see reads
+    // as a day with none, never as an empty page (no existence oracle).
+    const entries = logEntriesAtReach(view.refs, log.day(rawDate).entries);
     if (entries.length === 0) {
       throw new MCPError(INTERNAL_ERROR, `no log events for date '${rawDate}'`);
     }
-    const blocks = logEntriesAtReach(view.refs, entries).map((e) =>
-      renderLogEntryBlock(e).trimEnd(),
-    );
+    const blocks = entries.map((e) => renderLogEntryBlock(e).trimEnd());
     const text = [renderLogDayHeader(rawDate).trimEnd(), ...blocks].join(LOG_BLOCK_SEPARATOR);
     return { uri, mimeType: MIME_MARKDOWN, text: `${text}\n` };
   }
