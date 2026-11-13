@@ -30,7 +30,7 @@
  * consumed, never held back as a pending tail.
  */
 
-import { basename, dirname } from "node:path";
+import { basename, dirname, relative } from "node:path";
 import { closeSync, fstatSync, readSync } from "node:fs";
 
 import { isValidDeviceId } from "../config.ts";
@@ -53,6 +53,7 @@ import {
   type StoreRecord,
 } from "./envelope.ts";
 import { openRegularFileForRead } from "./safe-fs.ts";
+import { lineSha256AtFd, quarantinedLines, type QuarantineKind } from "./shard-quarantine.ts";
 import { isShardFileName } from "./shard-list.ts";
 import { isTornObjectPrefix } from "./torn-line.ts";
 
@@ -67,6 +68,12 @@ export interface ReadRecord {
   readonly offset: number;
   /** Byte length of the line, newline included. */
   readonly length: number;
+  /**
+   * A pending record whose line this machine quarantined (offset and line
+   * hash both match, `shard-quarantine.ts`): still left out of every read,
+   * but no gap.
+   */
+  readonly quarantined?: true;
 }
 
 export type ShardDiagnosticKind =
@@ -86,6 +93,11 @@ export interface ShardDiagnostic {
    * machine read, so it hides nothing.
    */
   readonly torn?: true;
+  /**
+   * A non-torn `corrupt-line` whose line this machine quarantined (offset
+   * and line hash both match, `shard-quarantine.ts`): no gap.
+   */
+  readonly quarantined?: true;
 }
 
 /** One compaction a shard announced: partition-relative shard paths. */
@@ -281,6 +293,47 @@ function readLine(
   return { kind: "record", record: { record, bodyState, offset: lineOffset, length }, compaction };
 }
 
+/**
+ * Mark the diagnostics and pending records this machine quarantined: only
+ * on a match of both the offset and the hash of the line's bytes with one
+ * ledger entry of the matching kind, never on the shard or the offset
+ * alone. A `corrupt-line` entry marks only a corrupt line, a `blob-pending`
+ * entry only a pending record, and a pending record of a `settings` shard
+ * is never marked. The hash is taken from `fd`, the descriptor the read
+ * parsed, so the bytes hashed are the bytes judged. A torn line needs no
+ * mark and a newer-format line is never marked.
+ */
+function markQuarantined(
+  fd: number,
+  path: string,
+  partitionRoot: string,
+  records: ReadRecord[],
+  diagnostics: ShardDiagnostic[],
+): { records: ReadRecord[]; diagnostics: ShardDiagnostic[] } {
+  const rel = relative(partitionRoot, path).split("\\").join("/");
+  const ledger = quarantinedLines(partitionRoot, rel);
+  if (ledger.size === 0) return { records, diagnostics };
+  const settings = rel.split("/")[0] === "settings";
+  const matches = (offset: number, kind: QuarantineKind): boolean => {
+    const entry = ledger.get(offset);
+    return (
+      entry !== undefined && entry.kind === kind && lineSha256AtFd(fd, offset) === entry.sha256
+    );
+  };
+  return {
+    records: records.map((r) =>
+      r.bodyState === "pending" && !settings && matches(r.offset, "blob-pending")
+        ? { ...r, quarantined: true }
+        : r,
+    ),
+    diagnostics: diagnostics.map((d) =>
+      d.kind === "corrupt-line" && d.torn !== true && matches(d.offset, "corrupt-line")
+        ? { ...d, quarantined: true }
+        : d,
+    ),
+  };
+}
+
 /** Read and verify the shard at `path` from `options.offset`. */
 export function readShard(path: string, options: ReadShardOptions = {}): ShardRead {
   const start = options.offset ?? 0;
@@ -399,9 +452,13 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
       consumed = position;
     }
     if (options.partitionRoot !== undefined) observeRead(options.partitionRoot, records);
+    const marked =
+      options.partitionRoot === undefined
+        ? { records, diagnostics }
+        : markQuarantined(fd, path, options.partitionRoot, records, diagnostics);
     return {
-      records,
-      diagnostics,
+      records: marked.records,
+      diagnostics: marked.diagnostics,
       compactions,
       nextOffset: consumed,
       pendingTailBytes: size - consumed,
@@ -423,7 +480,9 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
  */
 export function shardReadGap(read: ShardRead): string | null {
   const reasons: string[] = [];
-  const pending = read.records.filter((r) => r.bodyState === "pending").length;
+  const pending = read.records.filter(
+    (r) => r.bodyState === "pending" && r.quarantined !== true,
+  ).length;
   if (pending > 0) {
     reasons.push(
       pending === 1
@@ -432,7 +491,7 @@ export function shardReadGap(read: ShardRead): string | null {
     );
   }
   for (const d of read.diagnostics) {
-    if (d.torn === true) continue;
+    if (d.torn === true || d.quarantined === true) continue;
     reasons.push(`${d.kind} at byte ${d.offset}: ${d.reason}`);
   }
   return reasons.length === 0 ? null : reasons.join("; ");

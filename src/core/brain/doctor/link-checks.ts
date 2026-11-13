@@ -23,12 +23,12 @@ import { reportSweptFailure, sweptFailurePath, SWEEP_ORIGIN } from "./unreadable
  */
 export const brokenBacklinkCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault, knownBasenames }, { issues, uncertain }) {
+  run({ vault, knownBasenames, withholdsPrivate }, { issues, uncertain }) {
     // Only attempt the check when there's something to scan — an empty
     // Brain layer naturally has no backlinks, and `buildBacklinkIndex`
     // would already return an empty map, but we save the parse pass.
     if (knownBasenames.size === 0) return;
-    const index = buildIndex(vault, uncertain);
+    const index = buildIndex(vault, uncertain, withholdsPrivate === true);
     if (index === null) return;
     for (const [target, refs] of index) {
       // We only flag references whose target *should* live in this
@@ -72,9 +72,10 @@ const BACKLINK_SITE = "brain.doctor.brokenBacklinks";
 function buildIndex(
   vault: string,
   uncertain: DoctorUncertainEntry[],
+  withholdsPrivate: boolean,
 ): ReturnType<typeof buildBacklinkIndex> | null {
   try {
-    return buildBacklinkIndex(vault);
+    return buildBacklinkIndex(vault, undefined, { withholdsPrivate });
   } catch (err) {
     reportSweptFailure(
       sweptFailurePath(err, brainDirs(vault).brain),

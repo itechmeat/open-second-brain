@@ -37,6 +37,7 @@ import {
   writeLaneText,
 } from "../../../src/core/store/lane-pages.ts";
 import { foldLaneEntries } from "../../../src/core/store/lane-records.ts";
+import { formatFrontmatter } from "../../../src/core/vault.ts";
 import { VaultAdapterRequiredError } from "../../../src/core/vault-adapter/index.ts";
 import {
   bindVaultToStore,
@@ -297,6 +298,26 @@ describe.each(LANE_MODES.filter((m) => m !== "legacy"))("lane pages in the store
     writeLaneText(lane.vault, join(lane.vault, "Brain", "digests", "w.json"), '{"a":1}\n');
     writeLaneText(lane.vault, join(lane.vault, "Brain", "digests", "w.json"), '{"a":1}\n');
     expect(lane.laneRecords().filter((r) => r.kind === "lane-entry")).toHaveLength(2);
+  });
+
+  test("a structured write over a raw entry drops the raw once and then churns nothing", () => {
+    lane = makeLaneEnv(mode);
+    const page = join(lane.vault, "Brain", "digests", "churn.md");
+    // No blank line after the closing fence: the whole write keeps a raw.
+    writeLaneText(lane.vault, page, "---\nkind: digest\n---\nBody.\n");
+    const entries = () => lane!.laneRecords().filter((r) => r.kind === "lane-entry");
+    expect(entries()).toHaveLength(1);
+    const written = writeLanePage(lane.vault, page, { kind: "digest" }, "Body.\n", {
+      overwrite: true,
+    });
+    expect(written).toBe(true);
+    expect(entries()).toHaveLength(2);
+    // The same parts again match the entry (its raw is gone) and are skipped.
+    const again = writeLanePage(lane.vault, page, { kind: "digest" }, "Body.\n", {
+      overwrite: true,
+    });
+    expect(again).toBe(false);
+    expect(entries()).toHaveLength(2);
   });
 
   test("a caller editing the frontmatter it read does not change the next read", () => {
@@ -600,3 +621,181 @@ describe.each(LANE_MODES.filter((m) => m !== "legacy"))(
     });
   },
 );
+
+describe("raw lane text on a store-only machine", () => {
+  test("a canonical page stores a record with no raw", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-canonical.md");
+    writeLaneText(lane.vault, page, formatFrontmatter({ kind: "k" }, "Body."));
+    const body = lane.laneRecords().find((r) => r.kind === "lane-entry")!.body as Record<
+      string,
+      unknown
+    >;
+    expect("raw" in body).toBe(false);
+    expect(readLaneText(lane.vault, page)).toBe(formatFrontmatter({ kind: "k" }, "Body."));
+  });
+
+  test("a page without frontmatter reads back verbatim", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-raw.md");
+    writeLaneText(lane.vault, page, "Just text.\n");
+    expect(readLaneText(lane.vault, page)).toBe("Just text.\n");
+  });
+
+  test("a quoted value reads back verbatim", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-quote.md");
+    writeLaneText(lane.vault, page, "---\nid: '123'\n---\nBody.\n");
+    expect(readLaneText(lane.vault, page)).toBe("---\nid: '123'\n---\nBody.\n");
+    expect(readLanePage(lane.vault, page)?.frontmatter.id).toBe("123");
+  });
+
+  test("CRLF and a missing final newline read back verbatim", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-crlf.md");
+    writeLaneText(lane.vault, page, "---\r\nkind: k\r\n---\r\nBody.\r\n");
+    expect(readLaneText(lane.vault, page)).toBe("---\r\nkind: k\r\n---\r\nBody.\r\n");
+    const noFinal = join(lane.vault, "Brain", "obligations", "obl-no-final.md");
+    writeLaneText(lane.vault, noFinal, "---\nkind: k\n---\nBody.");
+    expect(readLaneText(lane.vault, noFinal)).toBe("---\nkind: k\n---\nBody.");
+  });
+
+  test("JSON formatting reads back verbatim", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "raw.json");
+    writeLaneText(lane.vault, page, '{"a":1}\n');
+    expect(readLaneText(lane.vault, page)).toBe('{"a":1}\n');
+  });
+
+  test("a quoting-only rewrite is written", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-requote.md");
+    writeLaneText(lane.vault, page, "---\nid: '123'\n---\nBody.\n");
+    const afterFirst = lane.laneRecords().filter((r) => r.kind === "lane-entry").length;
+    writeLaneText(lane.vault, page, '---\nid: "123"\n---\nBody.\n');
+    const grown = lane.laneRecords().filter((r) => r.kind === "lane-entry").length;
+    expect(grown).toBe(afterFirst + 1);
+    expect(readLaneText(lane.vault, page)).toBe('---\nid: "123"\n---\nBody.\n');
+    writeLaneText(lane.vault, page, '---\nid: "123"\n---\nBody.\n');
+    const stable = lane.laneRecords().filter((r) => r.kind === "lane-entry").length;
+    expect(stable).toBe(grown);
+  });
+
+  test("a structured write replaces the raw", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-struct.md");
+    writeLaneText(lane.vault, page, "Just text.\n");
+    writeLanePage(lane.vault, page, { kind: "k" }, "New.\n", { overwrite: true });
+    expect(readLaneText(lane.vault, page)).toBe(formatFrontmatter({ kind: "k" }, "New.\n"));
+  });
+
+  test("a move keeps the raw", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-mv.md");
+    writeLaneText(lane.vault, page, "Just text.\n");
+    const dir = join(lane.vault, "Brain", "obligations");
+    moveLanePage(lane.vault, page, join(dir, "obl-moved.md"));
+    expect(readLaneText(lane.vault, join(dir, "obl-moved.md"))).toBe("Just text.\n");
+    const tree = join(lane.vault, "Brain", "obligations", "obl-tree");
+    mkdirSync(tree, { recursive: true });
+    const treePage = join(tree, "obl-in-tree.md");
+    writeLaneText(lane.vault, treePage, "Just text.\n");
+    const other = join(lane.vault, "Brain", "obligations", "obl-tree-2");
+    moveLaneTree(lane.vault, tree, other);
+    expect(readLaneText(lane.vault, join(other, "obl-in-tree.md"))).toBe("Just text.\n");
+  });
+
+  test("a private region in a frontmatter comment sends the entry to private", () => {
+    lane = makeLaneEnv("store");
+    const page = join(lane.vault, "Brain", "obligations", "obl-comment.md");
+    writeLaneText(lane.vault, page, "---\n# <private>secret</private>\nkind: k\n---\nBody.\n");
+    expect(lane.laneRecords("shared")).toEqual([]);
+    expect(lane.laneRecords("private")).toHaveLength(1);
+  });
+
+  test("a private reference in a frontmatter comment", () => {
+    lane = makeLaneEnv("store");
+    // The page the comment names exists on disk and carries no `pref-`/
+    // `ret-` prefix: without one, the entry is judged by the reserved-page
+    // rule (the page's own `visibility`), not by the missing-preference
+    // rule. The page is written as a file directly, since a lane write on
+    // a store-only machine lands in the store, not under the vault.
+    const notes = join(lane.vault, "Brain", "notes");
+    mkdirSync(notes, { recursive: true });
+    const reserved = join(notes, "private-note.md");
+    writeFileSync(reserved, "Plain.\n");
+    const page = join(lane.vault, "Brain", "obligations", "obl-rawref-open.md");
+    writeLaneText(
+      lane.vault,
+      page,
+      "---\n# see [[Brain/notes/private-note]]\nkind: k\n---\nBody.\n",
+    );
+    // Control: the page is not reserved, so the entry naming it stays in
+    // shared.
+    const openEntry = lane
+      .laneRecords("shared")
+      .filter((r) => r.kind === "lane-entry" && r.body["lane"] === "obligations");
+    expect(openEntry).toHaveLength(1);
+    expect(lane.laneRecords("private").filter((r) => r.body["lane"] === "obligations")).toEqual([]);
+    // Now reserve the same page as private: a further entry naming it must
+    // go to private, and the earlier one stays where it was judged.
+    writeFileSync(reserved, "---\nvisibility: private\n---\nReserved.\n");
+    const judgedPage = join(lane.vault, "Brain", "obligations", "obl-rawref.md");
+    writeLaneText(
+      lane.vault,
+      judgedPage,
+      "---\n# see [[Brain/notes/private-note]]\nkind: k\n---\nBody.\n",
+    );
+    const judged = lane
+      .laneRecords("private")
+      .filter((r) => r.kind === "lane-entry" && r.body["lane"] === "obligations");
+    expect(judged).toHaveLength(1);
+    const shared = lane
+      .laneRecords("shared")
+      .filter((r) => r.kind === "lane-entry" && r.body["lane"] === "obligations");
+    expect(shared).toHaveLength(1);
+    expect(shared[0]!.body["entry"]).toBe("obl-rawref-open");
+  });
+
+  test("a raw that does not parse back is not served", () => {
+    lane = makeLaneEnv("store");
+    appendRecord(openStore({ root: lane.env.storeRoot, device: "dev-b" }), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "t",
+      body: {
+        authority: "agent",
+        lane: "obligations",
+        entry: "obl-hand",
+        fields: { kind: "k" },
+        text: "Body.",
+        raw: "---\nkind: other\n---\nBody.\n",
+      },
+    });
+    const page = join(lane.vault, "Brain", "obligations", "obl-hand.md");
+    expect(readLaneText(lane.vault, page)).toBe(formatFrontmatter({ kind: "k" }, "Body."));
+  });
+
+  test("a hand-appended shared raw with a frontmatter comment is served as written", () => {
+    lane = makeLaneEnv("store");
+    appendRecord(openStore({ root: lane.env.storeRoot, device: "dev-b" }), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "t",
+      body: {
+        authority: "agent",
+        lane: "obligations",
+        entry: "obl-hand-comment",
+        fields: { kind: "k" },
+        text: "Body.",
+        raw: "---\n# see [[pref-nowhere-raw]]\nkind: k\n---\nBody.\n",
+      },
+    });
+    const page = join(lane.vault, "Brain", "obligations", "obl-hand-comment.md");
+    expect(readLaneText(lane.vault, page)).toBe(
+      "---\n# see [[pref-nowhere-raw]]\nkind: k\n---\nBody.\n",
+    );
+  });
+});

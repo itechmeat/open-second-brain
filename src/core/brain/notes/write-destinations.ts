@@ -113,6 +113,11 @@ export interface WriteDestinationsFilter {
    * bound measured from the present would answer a clean, wrong empty.
    */
   readonly now?: Date;
+  /**
+   * The caller is below local reach: a write logged by an event of the
+   * store's `private` partition is not counted. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 export interface WriteDestinationsResult {
@@ -252,6 +257,7 @@ export function listWriteDestinations(
   )) {
     warnings.push(...day.warnings);
     day.entries.forEach((entry, index) => {
+      if (filter.withholdsPrivate === true && entry.fromPrivatePartition === true) return;
       const device = day.entryShardIds[index] ?? "";
       if (filter.device !== undefined && device !== filter.device) return;
       const touch = projectTouch(entry);

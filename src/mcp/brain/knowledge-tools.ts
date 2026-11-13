@@ -454,6 +454,7 @@ async function toolBrainMocAudit(
     const report = auditMoc(ctx.vault, targetId, {
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
       readable: readableAtContextReach(ctx),
+      withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
     });
     return {
       vault_path: vaultPathField(ctx),
@@ -600,7 +601,12 @@ function toolBrainIdeaDiscovery(
   // itself, before the ranking and the cap, so the list is the one a vault
   // without that page would give.
   const ideas = view.keep(
-    discoverIdeas(ctx.vault, { now, cap, include: readableAtContextReach(ctx) }),
+    discoverIdeas(ctx.vault, {
+      now,
+      cap,
+      include: readableAtContextReach(ctx),
+      withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
+    }),
     (i) => i.sourceArtifacts,
   );
   let triggersCreated: number | undefined;

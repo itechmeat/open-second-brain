@@ -106,6 +106,7 @@ async function toolBrainMorningBrief(
     topK,
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(readable !== undefined ? { readable } : {}),
+    withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
     lookbackDays,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
@@ -361,7 +362,9 @@ async function toolBrainDailyBrief(
   const dateCoerced = coerceIsoTimestampOrDate("brain_daily_brief", "date", dateRaw, "date-only");
   const date = dateCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
-  const index = buildTimelineIndex(ctx.vault, {});
+  const index = buildTimelineIndex(ctx.vault, {
+    withholdsPrivate: requestRefView(ctx).withholdsPrivate === true,
+  });
   const brief = buildDailyBrief(index, ctx.vault, date, {
     offsetHours: cfg.daily_window_offset_hours,
   });
@@ -411,7 +414,9 @@ async function toolBrainWeeklySynthesis(
   );
   const weekEnd = weekEndCoerced ?? new Date().toISOString().slice(0, 10);
   const cfg = loadTemporalConfigSafe(ctx.vault);
-  const index = buildTimelineIndex(ctx.vault, {});
+  const index = buildTimelineIndex(ctx.vault, {
+    withholdsPrivate: requestRefView(ctx).withholdsPrivate === true,
+  });
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
   const atReach = periodRowsAtReach(ctx, index, {
     since: synth.windowStart,
@@ -573,6 +578,7 @@ async function toolBrainOperatorSummary(
     ...(dreamSummary ? { dreamSummary } : {}),
     ...(topActionsN !== undefined ? { topActionsN } : {}),
     ...(readable !== undefined ? { readable } : {}),
+    withholdsPrivate: view.withholdsPrivate === true,
     ...(view.filtersNothing
       ? {}
       : {

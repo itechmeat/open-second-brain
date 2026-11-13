@@ -142,6 +142,15 @@ export interface DualWriteStatus {
   readonly last_error: string | null;
   readonly last_failure_at: string | null;
   readonly last_skip_at: string | null;
+  /**
+   * The failures known to concern only the `shared` partition: the
+   * operation's records were all placed in `shared` when its append failed
+   * ({@link failedOnlyInShared}). The only failure counters a caller below
+   * local reach may see; `failures` counts these and every other one.
+   */
+  readonly shared_failures: number;
+  readonly shared_last_error: string | null;
+  readonly shared_last_failure_at: string | null;
 }
 
 const EMPTY_STATUS: DualWriteStatus = Object.freeze({
@@ -151,6 +160,9 @@ const EMPTY_STATUS: DualWriteStatus = Object.freeze({
   last_error: null,
   last_failure_at: null,
   last_skip_at: null,
+  shared_failures: 0,
+  shared_last_error: null,
+  shared_last_failure_at: null,
 });
 
 type WarningKind = "failure" | "device" | "store";
@@ -194,6 +206,11 @@ export function readDualWriteStatus(path: string = dualWriteStatusPath()): DualW
       last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
       last_failure_at: typeof parsed.last_failure_at === "string" ? parsed.last_failure_at : null,
       last_skip_at: typeof parsed.last_skip_at === "string" ? parsed.last_skip_at : null,
+      shared_failures: typeof parsed.shared_failures === "number" ? parsed.shared_failures : 0,
+      shared_last_error:
+        typeof parsed.shared_last_error === "string" ? parsed.shared_last_error : null,
+      shared_last_failure_at:
+        typeof parsed.shared_last_failure_at === "string" ? parsed.shared_last_failure_at : null,
     };
   } catch {
     return EMPTY_STATUS;
@@ -230,11 +247,19 @@ function recordFailure(err: unknown): void {
       "Later failures in this process are counted, not printed; `o2b brain doctor` reports them.",
   );
   const at = new Date().toISOString();
+  const shared = failedOnlyInShared(err);
   bumpStatus((s) => ({
     ...s,
     failures: s.failures + 1,
     last_error: message.slice(0, 500),
     last_failure_at: at,
+    ...(shared
+      ? {
+          shared_failures: s.shared_failures + 1,
+          shared_last_error: message.slice(0, 500),
+          shared_last_failure_at: at,
+        }
+      : {}),
   }));
 }
 
@@ -353,23 +378,51 @@ export function appendStoreRecords(
     if (at.onlyIfApart === true && (joined.length === 0 || raised === partition)) continue;
     placed.push([record, raised]);
   }
-  // Every partition is checked before the first append, so a machine
-  // without one writes none of the records rather than half the operation.
-  for (const [, at] of placed) {
-    if (!store.partitions.has(at)) throw new PartitionUnavailableError(at, store.root);
+  try {
+    // Every partition is checked before the first append, so a machine
+    // without one writes none of the records rather than half the operation.
+    for (const [, at] of placed) {
+      if (!store.partitions.has(at)) throw new PartitionUnavailableError(at, store.root);
+    }
+    return placed.map(([record, at]) =>
+      appendRecord(store, {
+        partition: at,
+        stream: record.stream,
+        ...(record.ledger !== undefined ? { ledger: record.ledger } : {}),
+        kind: record.kind,
+        agent:
+          record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
+        scope: record.scope ?? null,
+        body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
+      }),
+    );
+  } catch (err) {
+    if (typeof err === "object" && err !== null) {
+      failedPlacement.set(err, new Set(placed.map(([, at]) => at)));
+    }
+    throw err;
   }
-  return placed.map(([record, at]) =>
-    appendRecord(store, {
-      partition: at,
-      stream: record.stream,
-      ...(record.ledger !== undefined ? { ledger: record.ledger } : {}),
-      kind: record.kind,
-      agent:
-        record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
-      scope: record.scope ?? null,
-      body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
-    }),
-  );
+}
+
+/** The partitions of the operation whose append threw this error (see {@link appendStoreRecords}). */
+const failedPlacement = new WeakMap<object, ReadonlySet<StorePartition>>();
+
+/**
+ * Whether the failed write `err` (or the error it wraps, `cause`) is known
+ * to concern only the `shared` partition: it was thrown by
+ * {@link appendStoreRecords} for an operation whose records were all placed
+ * in `shared`. Any other failure (one before the records were placed, a
+ * device id or store that cannot be resolved, a builder that threw, or an
+ * operation with a record in `private`) may concern `private`, so it
+ * answers `false`: doctor never shows it to a caller below local reach.
+ */
+export function failedOnlyInShared(err: unknown): boolean {
+  for (const e of [err, (err as { cause?: unknown } | null)?.cause]) {
+    if (typeof e !== "object" || e === null) continue;
+    const placed = failedPlacement.get(e);
+    if (placed !== undefined) return placed.size > 0 && [...placed].every((p) => p === "shared");
+  }
+  return false;
 }
 
 /**

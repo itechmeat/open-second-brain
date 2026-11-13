@@ -35,6 +35,7 @@ import {
   appendStoreRecords,
   builtRecords,
   dualWrite,
+  failedOnlyInShared,
   storeFor,
   type DualWriteBuild,
   type DualWriteContext,
@@ -212,6 +213,15 @@ export interface StoreWriteStatus {
   readonly last_reason: StoreWriteFailure | null;
   readonly last_error: string | null;
   readonly last_failure_at: string | null;
+  /**
+   * The failures known to concern only the `shared` partition
+   * (`failedOnlyInShared` in `dual-write.ts`): the only failure counters a
+   * caller below local reach may see; `failures` counts these and every
+   * other one.
+   */
+  readonly shared_failures: number;
+  readonly shared_last_error: string | null;
+  readonly shared_last_failure_at: string | null;
 }
 
 const EMPTY_STATUS: StoreWriteStatus = Object.freeze({
@@ -219,6 +229,9 @@ const EMPTY_STATUS: StoreWriteStatus = Object.freeze({
   last_reason: null,
   last_error: null,
   last_failure_at: null,
+  shared_failures: 0,
+  shared_last_error: null,
+  shared_last_failure_at: null,
 });
 
 /** Path of the fail-open status file: beside the per-store state directories. */
@@ -238,6 +251,11 @@ export function readStoreWriteStatus(path: string = storeWriteStatusPath()): Sto
           : null,
       last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
       last_failure_at: typeof parsed.last_failure_at === "string" ? parsed.last_failure_at : null,
+      shared_failures: typeof parsed.shared_failures === "number" ? parsed.shared_failures : 0,
+      shared_last_error:
+        typeof parsed.shared_last_error === "string" ? parsed.shared_last_error : null,
+      shared_last_failure_at:
+        typeof parsed.shared_last_failure_at === "string" ? parsed.shared_last_failure_at : null,
     };
   } catch {
     return EMPTY_STATUS;
@@ -258,16 +276,30 @@ function recordFailOpen(error: StoreWriteError): void {
       // stderr closed: nothing left to tell
     }
   }
+  const shared = failedOnlyInShared(error);
   try {
     const path = storeWriteStatusPath();
     mkdirSync(dirname(path), { recursive: true });
     withLocalLock(path, () => {
       const current = readStoreWriteStatus(path);
+      const at = new Date().toISOString();
+      const message = error.message.slice(0, 500);
       const next: StoreWriteStatus = {
         failures: current.failures + 1,
         last_reason: error.reason,
-        last_error: error.message.slice(0, 500),
-        last_failure_at: new Date().toISOString(),
+        last_error: message,
+        last_failure_at: at,
+        ...(shared
+          ? {
+              shared_failures: current.shared_failures + 1,
+              shared_last_error: message,
+              shared_last_failure_at: at,
+            }
+          : {
+              shared_failures: current.shared_failures,
+              shared_last_error: current.shared_last_error,
+              shared_last_failure_at: current.shared_last_failure_at,
+            }),
       };
       atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
     });

@@ -159,6 +159,26 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "next append or a completed sync closes it, and no command on this machine can",
   },
   {
+    code: "store-shard-newer-format",
+    reason:
+      "the shard holds a record of a format this release does not know; upgrading Open Second " +
+      "Brain on this machine reads it, and setting the line aside would hide a valid record",
+  },
+  {
+    code: "store-shard-blob-pending",
+    reason:
+      "a record's body blob has not arrived yet; a sync tool may still deliver it, and setting " +
+      "the record aside is allowed only once it is old enough and never for a settings shard, " +
+      "which the finding itself says per record",
+  },
+  {
+    code: "store-shard-line-too-long",
+    reason:
+      "the bad line runs past the longest line a quarantine can name, so it cannot be set aside " +
+      "on this machine; only repairing or removing it in the shard of the device that wrote it " +
+      "resolves it",
+  },
+  {
     code: "store-shard-unreadable",
     reason:
       "a shard file this machine holds could not be read (permissions, a disk error, a sync " +

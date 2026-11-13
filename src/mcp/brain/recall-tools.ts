@@ -292,6 +292,7 @@ async function toolBrainRecallTelemetry(
     const readCost = coerceNonNegativeNumber("read_cost", args["read_cost"]);
     const writeHeavyRatio = coerceNonNegativeNumber("write_heavy_ratio", args["write_heavy_ratio"]);
     const meter = computeMemoryCostMeter(ctx.vault, {
+      withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
       ...(filter.since !== undefined ? { since: filter.since } : {}),
       ...(filter.until !== undefined ? { until: filter.until } : {}),
       ...(writeCost !== undefined || readCost !== undefined

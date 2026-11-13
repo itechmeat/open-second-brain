@@ -21,7 +21,7 @@ import { join, sep } from "node:path";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
 import { compareRecords } from "../../../src/core/store/envelope.ts";
-import { parseFrontmatterText } from "../../../src/core/vault.ts";
+import { formatFrontmatter, parseFrontmatterText } from "../../../src/core/vault.ts";
 import { migrationAvailability } from "../../../src/core/store/migration-availability.ts";
 import { migrationDir } from "../../../src/core/store-migration/journal.ts";
 import { runMigration } from "../../../src/core/store-migration/migrate.ts";
@@ -33,6 +33,7 @@ import {
 } from "../../../src/core/store-migration/migration-records.ts";
 import { rollback } from "../../../src/core/store-migration/outcome.ts";
 import { RollbackRefusedError } from "../../../src/core/store-migration/rollback.ts";
+import { writeLaneText } from "../../../src/core/store/lane-pages.ts";
 import { readVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -209,6 +210,57 @@ describe("rollback", () => {
     expect(bodyAfter).toBe(bodyBefore);
     expect(meta["text"]).toBeUndefined();
     expect(meta["principle"]).toBe("Open rule, edited");
+  });
+
+  test("a lane page written whole on the store rolls back byte for byte, stale raw renders", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // A page with no frontmatter, written whole on the switched machine:
+    // the store keeps its `raw`, and the export serves it back unchanged.
+    const whole = join(a.vault, "Brain", "notes", "whole.md");
+    writeLaneText(a.vault, whole, "Just text.\n");
+    // An entry whose `raw` does not parse back to its fields and text is
+    // exported as the rendering, never as the stale bytes.
+    appendRecord(
+      a.store(),
+      {
+        partition: "shared",
+        stream: "events",
+        kind: "lane-entry",
+        agent: "t",
+        body: {
+          authority: "agent",
+          lane: "notes",
+          entry: "stale",
+          fields: { title: "Stale" },
+          text: "Body.\n",
+          raw: "Stale bytes that do not parse back.\n",
+        },
+      },
+      { now: () => afterTheSwitch() },
+    );
+    expect(existsSync(whole)).toBe(false);
+    rollback(a.vault);
+    expect(readFileSync(whole, "utf8")).toBe("Just text.\n");
+    expect(readFileSync(join(a.vault, "Brain", "notes", "stale.md"), "utf8")).toBe(
+      formatFrontmatter({ title: "Stale" }, "Body.\n"),
+    );
+  });
+
+  test("a malformed JSON lane file written whole on the store rolls back byte for byte", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // Malformed JSON is stored as text with no `raw` (the rendering already
+    // equals it), so only the shared fallback can put the bytes back.
+    const bad = join(a.vault, "Brain", "notes", "raw-bad.json");
+    writeLaneText(a.vault, bad, "{bad");
+    expect(existsSync(bad)).toBe(false);
+    rollback(a.vault);
+    expect(readFileSync(bad, "utf8")).toBe("{bad");
   });
 
   test("puts post-switch and late remote records back once, in fold order", () => {

@@ -46,6 +46,7 @@ export function runStoreSideDoctor(
     configPath: opts.configPath,
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     ...(opts.reach !== undefined ? { reach: opts.reach } : {}),
+    ...(opts.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
   };
   for (const check of STORE_SIDE_CHECKS) {
     if (!check.failSoft) {

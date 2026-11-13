@@ -56,6 +56,12 @@ export interface DiscoverIdeasOptions {
    * vault without that page would give. Absent, every page counts.
    */
   readonly include?: (rel: string) => boolean;
+  /**
+   * The caller is below local reach: the open questions leave out log
+   * events of the store's `private` partition (passed to the morning
+   * brief's scan).
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 interface NoteFile {
@@ -204,6 +210,7 @@ export function discoverIdeas(
       now: opts.now,
       topK: 0,
       lookbackDays: opts.lookbackDays ?? 30,
+      withholdsPrivate: opts.withholdsPrivate === true,
     }).openQuestions;
   for (const question of openQuestions) {
     candidates.push(

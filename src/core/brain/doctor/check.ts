@@ -59,6 +59,13 @@ export interface DoctorCheckContext {
    * here; it never leaves this absent.
    */
   readonly reach?: TransportReach;
+  /**
+   * The caller is below local reach: the broken-backlinks check ignores
+   * references made only by log events of the store's `private` partition,
+   * and the store check reports nothing about that partition. Absent reads
+   * as false (the operator's own shell).
+   */
+  readonly withholdsPrivate?: boolean;
   /** Every valid wikilink target inside `Brain/`, keyed by basename. */
   readonly knownBasenames: ReadonlySet<string>;
   /**
@@ -95,7 +102,7 @@ export interface DoctorFindings {
  */
 export interface StoreSideCheckContext extends Pick<
   DoctorCheckContext,
-  "now" | "dbPath" | "configPath" | "readable" | "reach"
+  "now" | "dbPath" | "configPath" | "readable" | "reach" | "withholdsPrivate"
 > {
   readonly vault: string | null;
 }

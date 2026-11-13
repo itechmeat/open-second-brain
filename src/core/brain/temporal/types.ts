@@ -83,6 +83,11 @@ export interface TemporalEvent {
    * belief-evolution to derive per-preference status transitions.
    */
   readonly dreamSummary?: DreamSummarySlots;
+  /**
+   * Set when the event was read from the store's `private` partition.
+   * A reader below local reach withholds it, whatever it names.
+   */
+  readonly fromPrivatePartition?: true;
 }
 
 /** Window that produced a {@link TimelineIndex}. */

@@ -59,6 +59,7 @@ import { preferencePath, retiredPath, validateSlug } from "../brain/paths.ts";
 import { preferencePageBody } from "../brain/preference.ts";
 import { PREFERENCE_TEXT_FIELD } from "../brain/preference-store.ts";
 import { brainRelOfEntry } from "../store/lane-paths.ts";
+import { rawParsesBack, renderLaneText } from "../store/lane-raw.ts";
 import { signalPagePath } from "../store/read/signals.ts";
 import {
   LANE_ENTRY_KIND,
@@ -409,14 +410,20 @@ function laneEntryPath(vault: string, key: string, fold: LaneFold): string | nul
   );
 }
 
-/** A lane entry's file text: JSON, a page, or plain text, by its extension. */
+/** A lane entry's file text: its `raw` when it parses back, else by its extension. */
 function laneEntryText(
   path: string,
-  value: { readonly fields: Readonly<Record<string, unknown>>; readonly text: string },
+  value: {
+    readonly fields: Readonly<Record<string, unknown>>;
+    readonly text: string;
+    readonly raw?: string;
+  },
 ): string {
-  if (path.endsWith(".json")) return `${JSON.stringify(value.fields, null, 2)}\n`;
+  if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
+    return value.raw;
+  }
   if (path.endsWith(".md")) return formatFrontmatter(asFrontmatter(value.fields), value.text);
-  return value.text;
+  return renderLaneText(path, value.fields, value.text);
 }
 
 /** Every touched lane entry, written back from the lane fold at its path. */

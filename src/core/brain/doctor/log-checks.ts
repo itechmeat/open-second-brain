@@ -9,12 +9,13 @@
 
 import type { DegradationNotice } from "../../integrity/degradation.ts";
 import { listVaultBasenames } from "../../vault.ts";
+import { withoutPrivateEntries } from "../log-events-at-reach.ts";
 import { listLogMarkdownFiles } from "../log-jsonl.ts";
 import { parseLogDayFile, type BrainLogEntry } from "../log.ts";
 import { brainDirs } from "../paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { parseArtifactRef } from "../wikilink.ts";
-import type { DoctorCheck } from "./check.ts";
+import type { DoctorCheck, DoctorCheckContext } from "./check.ts";
 import type { DoctorUncertainEntry } from "./report.ts";
 import { forwardSweepNotices, reportSweptFailure, SWEEP_ORIGIN } from "./unreadable-path.ts";
 
@@ -90,6 +91,28 @@ function evidencePreferenceSources(e: BrainLogEntry): { readonly sources?: Reado
 }
 
 /**
+ * The `apply-evidence` events an evidence lint may quote: every one for
+ * the operator's own shell, and none of the store's `private` partition
+ * for a caller that withholds it. Both lints below put the event's
+ * timestamp and artifact name into their message, so a private event
+ * quoted to a remote caller would disclose private activity. Neither
+ * lint has a fixer, so leaving a private event out hides a finding from
+ * that caller only and changes no repair.
+ */
+function quotableEvidence(
+  logs: DoctorCheckContext["logs"],
+  withholdsPrivate: boolean | undefined,
+): BrainLogEntry[] {
+  const out: BrainLogEntry[] = [];
+  for (const { entries } of logs) {
+    for (const e of withoutPrivateEntries(entries, withholdsPrivate === true)) {
+      if (e.eventType === BRAIN_LOG_EVENT_KIND.applyEvidence) out.push(e);
+    }
+  }
+  return out;
+}
+
+/**
  * `malformed-evidence-range`: walks every `apply-evidence` event,
  * runs the artifact wikilink through {@link parseArtifactRef}, and
  * flags any malformed range suffix (`:abc-def`, `:120-100`, etc.).
@@ -97,24 +120,21 @@ function evidencePreferenceSources(e: BrainLogEntry): { readonly sources?: Reado
  */
 export const evidenceRangeCheck: DoctorCheck = {
   failSoft: true,
-  run({ logs }, { issues }) {
-    for (const { entries } of logs) {
-      for (const e of entries) {
-        if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
-        const artifact = e.body["artifact"];
-        if (typeof artifact !== "string") continue;
-        const parsed = parseArtifactRef(artifact);
-        if (parsed.malformedRange) {
-          issues.push({
-            severity: "warning",
-            code: "malformed-evidence-range",
-            ...evidencePreferenceSources(e),
-            message:
-              `apply-evidence at ${e.timestamp} references artifact ${parsed.raw}` +
-              ` with malformed range '${parsed.rangeText}'.` +
-              " Use `[[file:N-N]]` (inclusive, 1-based) or `[[file:N]]`.",
-          });
-        }
+  run({ logs, withholdsPrivate }, { issues }) {
+    for (const e of quotableEvidence(logs, withholdsPrivate)) {
+      const artifact = e.body["artifact"];
+      if (typeof artifact !== "string") continue;
+      const parsed = parseArtifactRef(artifact);
+      if (parsed.malformedRange) {
+        issues.push({
+          severity: "warning",
+          code: "malformed-evidence-range",
+          ...evidencePreferenceSources(e),
+          message:
+            `apply-evidence at ${e.timestamp} references artifact ${parsed.raw}` +
+            ` with malformed range '${parsed.rangeText}'.` +
+            " Use `[[file:N-N]]` (inclusive, 1-based) or `[[file:N]]`.",
+        });
       }
     }
   },
@@ -140,7 +160,7 @@ const ORPHAN_EVIDENCE_SITE = "brain.doctor.orphanEvidence";
  */
 export const orphanEvidenceCheck: DoctorCheck = {
   failSoft: true,
-  run({ vault, logs }, { issues, uncertain }) {
+  run({ vault, logs, withholdsPrivate }, { issues, uncertain }) {
     const notices: DegradationNotice[] = [];
     const basenames: ReadonlySet<string> = listVaultBasenames(vault, {
       notices,
@@ -153,23 +173,20 @@ export const orphanEvidenceCheck: DoctorCheck = {
         "references against, so a reference that resolves under it reads as orphaned here",
       uncertain,
     });
-    for (const { entries } of logs) {
-      for (const e of entries) {
-        if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
-        const artifact = e.body["artifact"];
-        if (typeof artifact !== "string") continue;
-        const target = parseArtifactRef(artifact).target;
-        if (!target) continue;
-        if (basenames.has(target)) continue;
-        issues.push({
-          severity: "warning",
-          code: "orphan-evidence",
-          ...evidencePreferenceSources(e),
-          message:
-            `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
-            " but no file with that basename exists in the vault.",
-        });
-      }
+    for (const e of quotableEvidence(logs, withholdsPrivate)) {
+      const artifact = e.body["artifact"];
+      if (typeof artifact !== "string") continue;
+      const target = parseArtifactRef(artifact).target;
+      if (!target) continue;
+      if (basenames.has(target)) continue;
+      issues.push({
+        severity: "warning",
+        code: "orphan-evidence",
+        ...evidencePreferenceSources(e),
+        message:
+          `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
+          " but no file with that basename exists in the vault.",
+      });
     }
   },
 };

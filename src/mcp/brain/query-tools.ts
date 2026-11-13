@@ -340,11 +340,12 @@ async function toolBrainQuery(
         if (!queryView.visible(res.preference.id)) {
           throw new BrainNotFoundError(preference);
         }
-        emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
+        const evidence = logEntriesAtReach(queryView, res.evidence);
+        emitQueryTelemetry(evidence.length > 0 ? "ok" : "empty", evidence.length);
         return {
           mode: "preference",
           preference: shapePreferencePayload(delivery, res.preference),
-          evidence: res.evidence.map(serializeLogEntry),
+          evidence: evidence.map(serializeLogEntry),
         };
       } catch (exc) {
         if (exc instanceof BrainNotFoundError) {
@@ -539,6 +540,12 @@ async function toolBrainWrites(
   const limit = coerceInt(args, "limit", BRAIN_WRITES_DEFAULT_LIMIT, 1, BRAIN_WRITES_MAX_LIMIT);
   const offset = cursorOffsetArg("brain_writes", args);
 
+  // The log never opens the notes it names, so the reach rule is asked
+  // per target here: at remote reach a write to a page reserved against
+  // remote reads (or one whose file is gone - an unreadable claim fails
+  // closed) is dropped before counting, so neither its path nor the
+  // total betrays it. At local reach the view is the shared no-op.
+  const view = reachView(ctx.vault, contextReach(ctx));
   const result = ledgerRead("brain_writes", () =>
     listNoteWrites(ctx.vault, {
       ...(agent !== null ? { agent } : {}),
@@ -547,14 +554,9 @@ async function toolBrainWrites(
       ...(since !== null ? { since } : {}),
       ...(until !== null ? { until } : {}),
       ...(rawOp !== null ? { op: rawOp } : {}),
+      withholdsPrivate: view.withholdsPrivate === true,
     }),
   );
-  // The log never opens the notes it names, so the reach rule is asked
-  // per target here: at remote reach a write to a page reserved against
-  // remote reads (or one whose file is gone - an unreadable claim fails
-  // closed) is dropped before counting, so neither its path nor the
-  // total betrays it. At local reach the view is the shared no-op.
-  const view = reachView(ctx.vault, contextReach(ctx));
   const writes = view.filtersNothing
     ? result.writes
     : result.writes.filter((w) => view.visible(w.target));
@@ -600,9 +602,12 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
     ...selectorArg(args, "since"),
     ...selectorArg(args, "until"),
   };
+  const view = reachView(ctx.vault, contextReach(ctx));
   let plan;
   try {
-    plan = planNoteRevert(ctx.vault, selector);
+    plan = planNoteRevert(ctx.vault, selector, {
+      withholdsPrivate: view.withholdsPrivate === true,
+    });
   } catch (err) {
     if (err instanceof NoteRevertError) {
       throw new MCPError(INVALID_PARAMS, `brain_writes: ${err.code}: ${err.message}`);
@@ -621,7 +626,6 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
   // whenever the withheld page did. The CLI apply re-plans in full and
   // refuses this digest with `digest_mismatch`, the safe outcome for a
   // plan the caller could not fully see.
-  const view = reachView(ctx.vault, contextReach(ctx));
   const entries = view.filtersNothing
     ? plan.entries
     : plan.entries.filter((entry) => view.visible(entry.target));
@@ -677,6 +681,7 @@ async function toolBrainWriteDestinations(
   );
   const offset = cursorOffsetArg("brain_write_destinations", args);
 
+  const view = reachView(ctx.vault, contextReach(ctx));
   const result = ledgerRead("brain_write_destinations", () =>
     listWriteDestinations(ctx.vault, {
       ...(agent !== null ? { agent } : {}),
@@ -684,9 +689,9 @@ async function toolBrainWriteDestinations(
       ...(path !== null ? { path } : {}),
       ...(since !== null ? { since } : {}),
       ...(until !== null ? { until } : {}),
+      withholdsPrivate: view.withholdsPrivate === true,
     }),
   );
-  const view = reachView(ctx.vault, contextReach(ctx));
   const rows = view.filtersNothing
     ? result.destinations
     : result.destinations.filter((d) => view.visible(d.target));
@@ -827,7 +832,9 @@ async function toolBrainBacklinks(
   // published another owner's preference and retired ids to any caller
   // (a-label-is-not-a-boundary, U3). The scope is the gated one: no
   // argument exists on this tool, and under `off` the view hides nothing.
-  const index = buildBacklinkIndex(ctx.vault, gatedOwnerScopeView(ctx.vault, ctx.agentName).scope);
+  const index = buildBacklinkIndex(ctx.vault, gatedOwnerScopeView(ctx.vault, ctx.agentName).scope, {
+    withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
+  });
   // The same reasoning one rule over: a ref names the artifact that WROTE
   // it, so an index unfiltered by reach publishes the id of a page
   // reserved against remote reads. A withheld TARGET answers as an absent

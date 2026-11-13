@@ -14,7 +14,6 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { parseFrontmatterText } from "../vault.ts";
 import { laneStoreFold } from "./lane-fold-cache.ts";
 import { lanePlaceOf } from "./lane-paths.ts";
 import {
@@ -24,6 +23,7 @@ import {
   STANDING_RULE_LANE,
   type LaneEntryValue,
 } from "./lane-records.ts";
+import { lanePrivacyRow, laneTextParts, rawToKeep } from "./lane-raw.ts";
 import { opaqueFields } from "./operation-privacy.ts";
 import { isPrivateFrontmatter } from "./private-page.ts";
 import { rowNamesPrivatePage } from "./reference-privacy.ts";
@@ -175,9 +175,13 @@ export function sameEntry(
   value: LaneEntryValue | null,
   fields: Readonly<Record<string, unknown>>,
   text: string,
+  raw?: string,
 ): boolean {
   return (
-    value !== null && value.text === text && canonicalJson(value.fields) === canonicalJson(fields)
+    value !== null &&
+    value.text === text &&
+    canonicalJson(value.fields) === canonicalJson(fields) &&
+    value.raw === raw
   );
 }
 
@@ -189,10 +193,15 @@ export function isPrivateEntry(
   vault: string,
   fields: Readonly<Record<string, unknown>>,
   text: string,
+  raw?: string,
 ): boolean {
   return (
     isPrivateFrontmatter(fields) ||
-    rowNamesPrivatePage(existsSync(vault) ? vault : null, { fields, text }, PAGE_OPAQUE_FIELDS)
+    rowNamesPrivatePage(
+      existsSync(vault) ? vault : null,
+      lanePrivacyRow(fields, text, raw),
+      PAGE_OPAQUE_FIELDS,
+    )
   );
 }
 
@@ -209,17 +218,20 @@ export function entryRecord(
    * device without that partition never sees the old entry removed.
    */
   placement: "judged" | "located" = "judged",
+  raw?: string,
 ): DualWriteRecord {
   const { lane, entry } = placeOf(vault, path);
   const agent =
     typeof fields["agent"] === "string" && fields["agent"].trim() !== ""
       ? fields["agent"].trim()
       : undefined;
+  const kept = rawToKeep(path, raw, fields, text);
   return laneEntryRecord({
     lane,
     entry,
     fields,
     text,
+    ...(kept !== undefined ? { raw: kept } : {}),
     authority: authorityFor(lane),
     ...(agent !== undefined ? { agent } : {}),
     private: isPrivate,
@@ -276,24 +288,4 @@ export function storedEntryPrivate(vault: string, path: string): boolean {
  * and body, a JSON object as the fields, anything else (malformed JSON
  * included, which the legacy writer also writes as it is) as text.
  */
-export function laneTextParts(
-  path: string,
-  text: string,
-): { fields: Record<string, unknown>; body: string } {
-  if (path.endsWith(".md")) {
-    const [frontmatter, rest] = parseFrontmatterText(text);
-    return { fields: frontmatter, body: rest };
-  }
-  if (path.endsWith(".json")) {
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return { fields: {}, body: text };
-    }
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { fields: parsed as Record<string, unknown>, body: "" };
-    }
-  }
-  return { fields: {}, body: text };
-}
+export { laneTextParts } from "./lane-raw.ts";

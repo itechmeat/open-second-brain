@@ -68,6 +68,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { brainDirs, snapshotsDir } from "./paths.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { storeLogDays, withLogReadPass } from "./log-days.ts";
+import { withoutPrivateEntries } from "./log-events-at-reach.ts";
 import { readStoreLogEvents } from "../store/read/log-events.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { loadBrainConfig } from "./policy.ts";
@@ -188,6 +189,12 @@ function lessonsCountsSafe(vault: string): LessonApprovalCounts & {
 export interface ComputeBrainStatusOptions {
   /** Wall clock for staleness math. Defaults to `new Date()`. */
   readonly now?: Date;
+  /**
+   * The caller is below local reach: the log days, the last dream and
+   * apply-evidence times and the maintenance debt are computed as if the
+   * events of the store's `private` partition did not exist. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 // ----- Public API ----------------------------------------------------------
@@ -231,14 +238,15 @@ function computeBrainStatusInPass(
     });
   }
 
-  const counts = source === "store" ? countStoreArtifacts(vault) : countArtifacts(vault);
-  const { lastDreamAt, lastApplyEvidenceAt } = scanLogTimestamps(vault);
+  const withholds = opts.withholdsPrivate === true;
+  const counts = source === "store" ? countStoreArtifacts(vault, withholds) : countArtifacts(vault);
+  const { lastDreamAt, lastApplyEvidenceAt } = scanLogTimestamps(vault, withholds);
   const signalsAwaitingDream = countSignalsAwaitingDream(
     vault,
     opts.now ?? new Date(),
     source === "store",
   );
-  const maintenanceDebt = computeMaintenanceDebt(vault, lastDreamAt);
+  const maintenanceDebt = computeMaintenanceDebt(vault, lastDreamAt, withholds);
 
   return Object.freeze({
     present: true,
@@ -276,8 +284,12 @@ function computeBrainStatusInPass(
  * `maintenance_debt.log_events_since_dream` from `computeBrainStatus`
  * instead (`second_brain_status` / `osb://status`).
  */
-export function computeMaintenanceOverdueFlag(vault: string | null): boolean | null {
-  const log = recentStatusLog(vault) ?? statusLog(vault);
+export function computeMaintenanceOverdueFlag(
+  vault: string | null,
+  opts: { readonly withholdsPrivate?: boolean } = {},
+): boolean | null {
+  const withholds = opts.withholdsPrivate === true;
+  const log = recentStatusLog(vault, withholds) ?? statusLog(vault, withholds);
   if (log === null) return null;
   const newest = log.dates.at(-1);
   if (newest === undefined) return null;
@@ -349,7 +361,7 @@ function countArtifacts(vault: string): BrainStatusCounts {
  * their status. The log days and the snapshots are not memory records
  * and are counted where they are.
  */
-function countStoreArtifacts(vault: string): BrainStatusCounts {
+function countStoreArtifacts(vault: string, withholdsPrivate: boolean): BrainStatusCounts {
   const dirs = brainDirs(vault);
   const inFolder = (dir: string): number => storePagesIn(vault, dir).length;
   const preferences_by_status: Record<string, number> = {};
@@ -371,7 +383,7 @@ function countStoreArtifacts(vault: string): BrainStatusCounts {
     preferences,
     preferences_by_status: Object.freeze(preferences_by_status),
     retired: inFolder(dirs.retired),
-    log_days: statusLog(vault)?.dates.length ?? 0,
+    log_days: statusLog(vault, withholdsPrivate)?.dates.length ?? 0,
     // The snapshot module's folder: the device-local state once switched.
     snapshots: countZst(snapshotsDir(vault)),
   };
@@ -398,7 +410,7 @@ const RECENT_LOG_DAYS = 31;
  * own timestamp spells, and one a device whose clock runs ahead wrote can
  * already name tomorrow; the whole-log read has no upper bound either.
  */
-function recentStatusLog(vault: string | null): StatusLog | null {
+function recentStatusLog(vault: string | null, withholdsPrivate: boolean): StatusLog | null {
   const now = new Date();
   const from = new Date(now.getTime() - RECENT_LOG_DAYS * 86_400_000);
   const to = new Date(now.getTime() + 86_400_000);
@@ -406,9 +418,16 @@ function recentStatusLog(vault: string | null): StatusLog | null {
     { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
     { vault },
   );
-  if (stored === null || stored.length === 0) return null;
+  if (stored === null) return null;
+  // Below local reach a private event is not there, and a day it alone
+  // filled is not a log day.
+  const shown = withoutPrivateEntries(
+    stored.map((s) => s.entry),
+    withholdsPrivate,
+  );
+  if (shown.length === 0) return null;
   const byDate = new Map<string, BrainLogEntry[]>();
-  for (const { entry } of stored) {
+  for (const entry of shown) {
     const date = entry.timestamp.slice(0, 10);
     const day = byDate.get(date);
     if (day === undefined) byDate.set(date, [entry]);
@@ -425,12 +444,17 @@ function recentStatusLog(vault: string | null): StatusLog | null {
  * `Brain/log/` is absent), the store's `log-event` records on a store-only
  * one (task 2.10), where a day carries no read warning.
  */
-function statusLog(vault: string | null): StatusLog | null {
+function statusLog(vault: string | null, withholdsPrivate = false): StatusLog | null {
   const stored = storeLogDays(vault);
   if (stored !== null) {
-    const byDate = new Map(stored.map((d) => [d.date, d.entries] as const));
+    // Below local reach a private event is not there, and a day it alone
+    // filled is not a log day. Day files carry no mark.
+    const days = stored
+      .map((d) => ({ date: d.date, entries: withoutPrivateEntries(d.entries, withholdsPrivate) }))
+      .filter((d) => d.entries.length > 0 || !withholdsPrivate);
+    const byDate = new Map(days.map((d) => [d.date, d.entries] as const));
     return {
-      dates: stored.map((d) => d.date),
+      dates: days.map((d) => d.date),
       day: (date) => ({ entries: byDate.get(date) ?? [], warnings: [] }),
     };
   }
@@ -473,11 +497,14 @@ function readFrontmatterStatus(path: string): string {
   }
 }
 
-function scanLogTimestamps(vault: string): {
+function scanLogTimestamps(
+  vault: string,
+  withholdsPrivate: boolean,
+): {
   lastDreamAt: string | null;
   lastApplyEvidenceAt: string | null;
 } {
-  const log = statusLog(vault);
+  const log = statusLog(vault, withholdsPrivate);
   if (log === null) return { lastDreamAt: null, lastApplyEvidenceAt: null };
   const days = log.dates.toReversed(); // newest day first
 
@@ -525,8 +552,12 @@ function scanLogTimestamps(vault: string): {
  * dream's own day, so the scan is bounded to "since the last dream",
  * not the whole log history, on every vault that HAS dreamed.
  */
-function computeMaintenanceDebt(vault: string, lastDreamAt: string | null): MaintenanceDebt {
-  const log = statusLog(vault);
+function computeMaintenanceDebt(
+  vault: string,
+  lastDreamAt: string | null,
+  withholdsPrivate: boolean,
+): MaintenanceDebt {
+  const log = statusLog(vault, withholdsPrivate);
   if (log === null) return NEVER_DREAMED_DEBT;
 
   const cutoffMs = lastDreamAt !== null ? Date.parse(lastDreamAt) : null;

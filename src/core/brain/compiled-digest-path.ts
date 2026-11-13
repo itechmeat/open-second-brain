@@ -37,6 +37,13 @@ import { noVaultRoot } from "../platform-dirs.ts";
 export type CompiledDigest = "active" | "lessons";
 
 const DIGESTS_DIR = "digests";
+
+/**
+ * The folder of every digest cache of the store `storeId`.
+ */
+export function digestCacheRoot(storeId: string): string {
+  return join(deviceStateDirFor(storeId), DIGESTS_DIR);
+}
 const VAULT_KEY_CHARS = 16;
 /** The cache directory of the digests of a machine with no vault. */
 const NO_VAULT_DIGEST_KEY = "no-vault";

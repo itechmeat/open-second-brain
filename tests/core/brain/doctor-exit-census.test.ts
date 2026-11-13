@@ -217,6 +217,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "storage-capacity-critical",
   "storage-capacity-warn",
   "store-missing",
+  "store-shard-corrupt-line",
   "sync-conflict-log",
   "tier-drift",
   "topic-key-collision",

@@ -66,11 +66,17 @@ export function queryAgentSources(
   // correct `total_matched` sat next to a roster that named exactly what
   // it withheld (context-integrity-gates, A5). An unscoped call filters
   // nothing, so the roster is the same array it always was.
-  const visible = collectAgentSourceContributions(vault).filter(
-    (contribution) =>
-      (ownerScope === null || isOwnerVisible(contribution.owner ?? null, ownerScope)) &&
-      (opts.view === undefined || opts.view.row(...contributionRefs(contribution))),
-  );
+  // A contribution read from the store's `private` partition is withheld
+  // below local reach whatever it names, and the mark itself never leaves.
+  const withholdsPrivate = opts.view?.withholdsPrivate === true;
+  const visible = collectAgentSourceContributions(vault)
+    .filter(
+      (contribution) =>
+        !(withholdsPrivate && contribution.fromPrivatePartition === true) &&
+        (ownerScope === null || isOwnerVisible(contribution.owner ?? null, ownerScope)) &&
+        (opts.view === undefined || opts.view.row(...contributionRefs(contribution))),
+    )
+    .map(withoutPrivateMark);
   const availableAgents = summarizeAgentSources(visible);
   const availableIds = new Set(availableAgents.map((a) => a.id));
   const selectedAgents = normalizeAgents(
@@ -171,4 +177,11 @@ function contributionRefs(
     }
   }
   return refs;
+}
+
+/** The contribution as it leaves this module: without the private mark. */
+function withoutPrivateMark(contribution: AgentSourceContribution): AgentSourceContribution {
+  if (contribution.fromPrivatePartition === undefined) return contribution;
+  const { fromPrivatePartition: _mark, ...rest } = contribution;
+  return Object.freeze(rest);
 }

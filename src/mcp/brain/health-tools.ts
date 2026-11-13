@@ -147,6 +147,7 @@ async function toolBrainDoctor(
     // local reach in the uncertain stream, by name (`doctor/check.ts`).
     // Resolved fail-closed: a context that proved nothing is remote.
     reach: contextReach(ctx),
+    withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
   });
 
   // Every issue names the artifact it is about - `path`, `target`, the
@@ -241,6 +242,7 @@ async function toolBrainDoctor(
           : collectMaintenanceActions(vault, {
               onError: (e) => collectErrors.push(e),
               visible: view.visible,
+              withholdsPrivate: view.withholdsPrivate === true,
             }),
         (a) => [a.target],
       )
@@ -407,6 +409,7 @@ async function toolBrainStatus(
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     // A cited page the caller may not read at its reach answers as an absent one.
     readable: readableAtContextReach(ctx),
+    withholdsPrivate: findingView.withholdsPrivate === true,
     ...(findingView.filtersNothing
       ? {}
       : { keepFinding: (finding) => findingView.row(...findingRefs(ctx.vault, finding)) }),

@@ -40,6 +40,7 @@ import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { storeLogDays } from "./log-days.ts";
+import { withoutPrivateEntries } from "./log-events-at-reach.ts";
 import { listLogShardFiles, readLogDay } from "./log-jsonl.ts";
 import { brainDirs } from "./paths.ts";
 import { normalizeDerivedKeys } from "./preference.ts";
@@ -156,7 +157,11 @@ export interface BacklinkIndex extends ReadonlyMap<string, ReadonlyArray<Backlin
  * report would leak exactly what the filter withheld. Absent (every
  * existing call site) means no ownership filtering at all.
  */
-export function buildBacklinkIndex(vault: string, ownerScope?: string | null): BacklinkIndex {
+export function buildBacklinkIndex(
+  vault: string,
+  ownerScope?: string | null,
+  opts: { readonly withholdsPrivate?: boolean } = {},
+): BacklinkIndex {
   const dirs = brainDirs(vault);
   const view = ownerScopeView(vault, ownerScope ?? null);
   const aliasIndex = buildAliasIndex(vault);
@@ -221,7 +226,7 @@ export function buildBacklinkIndex(vault: string, ownerScope?: string | null): B
   collectSignals(pagesOf(dirs.inbox), push, fail);
   collectSignals(pagesOf(dirs.processed), push, fail);
   collectSignals(pagesOf(dirs.archived), push, fail);
-  collectLog(vault, dirs.log, push, fail);
+  collectLog(vault, dirs.log, push, fail, opts.withholdsPrivate === true);
 
   // Freeze each entry's array so downstream callers can't mutate the
   // shared index.
@@ -379,6 +384,7 @@ function collectLog(
   dir: string,
   push: (target: string, ref: BacklinkRef) => void,
   fail: (row: BacklinkParseFailure) => void,
+  withholdsPrivate: boolean,
 ): void {
   // Store-only (task 2.10): the log is the store's `log-event` records.
   const stored = storeLogDays(vault);
@@ -402,7 +408,9 @@ function collectLog(
       fail({ source, sourceKind: LOG_READ_KIND, reason: failureReason(err, dir) });
       continue;
     }
-    for (const e of entries) {
+    // Below local reach an event of the store's `private` partition
+    // references nothing (`withholdsPrivate`).
+    for (const e of withoutPrivateEntries(entries, withholdsPrivate)) {
       // Walk every payload value, pulling wikilink targets out of
       // scalar fields and string arrays alike. We don't whitelist
       // which fields can carry references — the payload key becomes

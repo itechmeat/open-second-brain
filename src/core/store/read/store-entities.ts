@@ -10,6 +10,8 @@
  * (`../store-privacy.ts`). It is cached per store root and re-read only
  * when an `events` shard of a held partition appears, grows or changes,
  * so a writer operation that judges many references reads the store once.
+ * A read that left out a record whose body is a pending blob is not
+ * cached, because the blob's arrival moves no stamp the cache compares.
  *
  * Signals fold their `signal` and `signal-state` records
  * (`../fold-signals.ts`), so a reader tells an inbox signal from a
@@ -44,6 +46,7 @@ import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
 import { partitionDir, resolveConfiguredStoreRoot } from "../store-paths.ts";
 import { readStreamRecords } from "./stream-read.ts";
+import { quarantineStamp } from "../shard-quarantine.ts";
 
 /** One preference of the fold, with its privacy. */
 export interface StorePreference {
@@ -77,6 +80,8 @@ export interface StoreEntities {
   readonly pinned: ReadonlyMap<StorePartition, PinnedFold>;
   /** Partition-relative paths of `events` shards that could not be read. */
   readonly unreadable: ReadonlyArray<string>;
+  /** Whether a record was left out because its body is a pending blob. */
+  readonly skippedPending: boolean;
 }
 
 interface Cached {
@@ -88,8 +93,12 @@ const cache = new Map<string, Cached>();
 
 const EVENTS = { stream: "events" } as const;
 
+/**
+ * What a read depends on: every `events` shard, and the quarantine ledger,
+ * which decides whether a shard reads whole without changing its bytes.
+ */
 function fingerprintOf(store: StoreInspection): string {
-  const parts: string[] = [store.storeId];
+  const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
     let shards: ReturnType<typeof listShards>;
     try {
@@ -129,8 +138,10 @@ function build(store: StoreInspection): StoreEntities {
   const all: Array<{ record: StoreRecord; partition: StorePartition }> = [];
   const unreadable: string[] = [];
   const pinned = new Map<StorePartition, PinnedFold>();
+  let skippedPending = false;
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS);
+    if (read.skippedPending) skippedPending = true;
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records) all.push({ record, partition });
     pinned.set(
@@ -192,7 +203,7 @@ function build(store: StoreInspection): StoreEntities {
       partitions: new Set(entry.history.map((r) => partitionOf.get(r.id) ?? "shared")),
     });
   }
-  return { store, preferences, signals, pinned, unreadable };
+  return { store, preferences, signals, pinned, unreadable, skippedPending };
 }
 
 /** The entities of the store at `store.root`, cached until an `events` shard changes. */
@@ -202,8 +213,12 @@ export function readEntitiesOf(store: StoreInspection): StoreEntities {
   if (cached !== undefined && cached.fingerprint === fingerprint) return cached.entities;
   const entities = build(store);
   // A shard unreadable for a moment (a Windows sharing violation) keeps its
-  // size and mtime, so a cached incomplete read would never be retried.
-  if (entities.unreadable.length === 0) cache.set(store.root, { fingerprint, entities });
+  // size and mtime, so a cached incomplete read would never be retried. A
+  // read that left out a pending record is not cached either: when its blob
+  // arrives no stamp of the fingerprint moves (a quarantined pending blob
+  // opens no gap, so it is not in `unreadable`).
+  if (entities.unreadable.length === 0 && !entities.skippedPending)
+    cache.set(store.root, { fingerprint, entities });
   else cache.delete(store.root);
   return entities;
 }

@@ -83,6 +83,8 @@ export function laneEntryRecord(input: {
   readonly entry: string;
   readonly fields: Readonly<Record<string, unknown>>;
   readonly text: string;
+  /** The file's text byte for byte, when the fields and text do not reproduce it. */
+  readonly raw?: string;
   readonly authority: Authority;
   readonly agent?: string;
   readonly private: boolean;
@@ -105,6 +107,7 @@ export function laneEntryRecord(input: {
       entry: input.entry,
       fields: plainJson(input.fields),
       text: input.text,
+      ...(input.raw !== undefined ? { raw: input.raw } : {}),
     },
   };
 }
@@ -136,6 +139,11 @@ export interface LaneEntryValue {
   readonly entry: string;
   readonly fields: Readonly<Record<string, unknown>>;
   readonly text: string;
+  /**
+   * The file's text byte for byte, when the fields and text do not
+   * reproduce it; served only when it parses back to them (`lane-raw.ts`).
+   */
+  readonly raw?: string;
 }
 
 export interface LaneEntryState {
@@ -192,6 +200,7 @@ export function foldLaneEntries(input: Iterable<StoreRecord>): LaneFold {
             entry,
             fields: record.body["fields"] as Record<string, unknown>,
             text: record.body["text"] as string,
+            ...(typeof record.body["raw"] === "string" ? { raw: record.body["raw"] } : {}),
           };
     register.offer(laneEntryKey(lane, entry), {
       record,

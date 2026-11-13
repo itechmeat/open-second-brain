@@ -10,7 +10,9 @@
  * in `core/store/store-init.ts`; this file parses flags and renders.
  * `path` reports where the store and its device-local state are
  * (`store-path.ts`); `device` lists the devices the store knows and
- * retires one that is gone (`store-device.ts`).
+ * retires one that is gone (`store-device.ts`); `partition leave` takes a
+ * partition off this machine (`store-partition.ts`). `shard` quarantines one bad
+ * line of a held shard on this machine, lists and releases it (`store-shard.ts`).
  */
 
 import {
@@ -32,11 +34,13 @@ import { claimViewWriter } from "../core/view/writer.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { sortedReplacer } from "./helpers.ts";
 import { cmdStoreDevice, STORE_DEVICE_USAGE } from "./store-device.ts";
+import { cmdStorePartition, STORE_PARTITION_USAGE } from "./store-partition.ts";
 import { cmdStorePath, STORE_PATH_USAGE } from "./store-path.ts";
+import { cmdStoreShard, STORE_SHARD_USAGE } from "./store-shard.ts";
 
 const INIT_USAGE =
   "usage: o2b store init [--partitions shared|shared,private] [--config <file>] [--json]";
-const USAGE = `${INIT_USAGE}\n${STORE_PATH_USAGE}\n${STORE_DEVICE_USAGE}`;
+const USAGE = `${INIT_USAGE}\n${STORE_PATH_USAGE}\n${STORE_DEVICE_USAGE}\n${STORE_PARTITION_USAGE}\n${STORE_SHARD_USAGE}`;
 
 /** `refused` is an answer (the store exists, or is partial), not a broken argv. */
 const STORE_EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
@@ -55,6 +59,10 @@ export async function handleStoreSubcommand(argv: ReadonlyArray<string>): Promis
       return cmdStorePath(rest);
     case "device":
       return cmdStoreDevice(rest);
+    case "partition":
+      return cmdStorePartition(rest);
+    case "shard":
+      return cmdStoreShard(rest);
     default:
       process.stderr.write(`error: unknown store verb: ${verb}\n${USAGE}\n`);
       return STORE_EXIT.usage;

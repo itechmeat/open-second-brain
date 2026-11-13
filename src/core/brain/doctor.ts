@@ -612,6 +612,7 @@ function resolveContext(
     configPath: opts.configPath,
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     ...(opts.reach !== undefined ? { reach: opts.reach } : {}),
+    ...(opts.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
     knownBasenames: collectAllBasenames(vault, {
       site: CONTEXT_SITE,
       consequence:

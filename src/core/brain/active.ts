@@ -108,6 +108,11 @@ export interface RenderActiveOptions extends RegenerateActiveOptions {
    * reaches the shared write.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The reader is below local reach: the most-applied counts leave out
+   * events of the store's `private` partition. Never reaches the write.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /** Who is reading the shared digest: the two read-time narrowings. */
@@ -225,6 +230,7 @@ export function renderActive(vault: string | null, opts: RenderActiveOptions = {
     now,
     windowDays,
     limit,
+    withholdsPrivate: opts.withholdsPrivate === true,
   });
 
   const body = renderBody({
@@ -276,6 +282,7 @@ export function renderActiveForReader(
     ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     ...(generatedAt !== null ? { generatedAt } : {}),
+    withholdsPrivate: opts.restricted === true,
   });
 }
 
