@@ -855,6 +855,8 @@ export function createSnapshot(
     writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
     const tarArgs = [
       "-c",
+      "-f",
+      "-",
       "-C",
       tarPathArg(vault),
       "--no-recursion",
