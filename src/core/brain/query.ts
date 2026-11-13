@@ -42,7 +42,7 @@ import {
   isTombstoned,
   resolveChainTip,
   type ChainLookup,
-} from "./lifecycle/tombstone.ts";
+} from "./lifecycle/tombstone-read.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { vaultRelative } from "../path-safety.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";

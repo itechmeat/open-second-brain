@@ -31,7 +31,7 @@ import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { brainDirs, claimGraphPath } from "./paths.ts";
-import { isTombstoned, normalizeChainLink, resolveChainTip } from "./lifecycle/tombstone.ts";
+import { isTombstoned, normalizeChainLink, resolveChainTip } from "./lifecycle/tombstone-read.ts";
 import { isValidAt } from "./lifecycle/temporal-replace.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 

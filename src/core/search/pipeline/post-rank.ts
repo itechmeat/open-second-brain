@@ -19,7 +19,7 @@ import {
   MAX_CHAIN_DEPTH,
   SUPERSEDED_BY_KEY,
   isTombstoned,
-} from "../../brain/lifecycle/tombstone.ts";
+} from "../../brain/lifecycle/tombstone-read.ts";
 import {
   buildMemoryTrustAssessment,
   buildRetrievalDecisionTrace,

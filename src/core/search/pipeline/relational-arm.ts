@@ -22,7 +22,7 @@ import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
 import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
 import { EXACT_WIKILINK_RE } from "../../brain/wikilink.ts";
-import { SUPERSEDED_BY_KEY } from "../../brain/lifecycle/tombstone.ts";
+import { SUPERSEDED_BY_KEY } from "../../brain/lifecycle/tombstone-read.ts";
 import { discoverConfig } from "../../config.ts";
 import { envOrConfig, parseBool } from "../../validate.ts";
 import {

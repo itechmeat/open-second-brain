@@ -32,7 +32,7 @@ import {
   resolveOwnerScopeDelivery,
   type OwnerScopeDelivery,
 } from "./preferences-collect.ts";
-import { buildChainLookup, isTombstoned, resolveChainTip } from "./lifecycle/tombstone.ts";
+import { buildChainLookup, isTombstoned, resolveChainTip } from "./lifecycle/tombstone-read.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { preferChainTips } from "./inject-governor.ts";
 import { tensionWarningsForContextItems } from "./tensions.ts";

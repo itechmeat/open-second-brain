@@ -29,7 +29,7 @@ import type { Store } from "./store.ts";
 import { deriveTrust, hasSupersededRelation } from "./enrich.ts";
 import { KNOWLEDGE_PACK_FIELD, parseKnowledgePackStamp } from "../brain/portability/pack-stamp.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
-import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
+import { isTombstoned } from "../brain/lifecycle/tombstone-read.ts";
 import { storeRecordPages, type StoreMemoryPage } from "../brain/memory-pages.ts";
 import { memoryFromStore } from "../store/read/memory-ids.ts";
 import { SUPERSEDE_FADE_MULTIPLIER } from "./ranker.ts";

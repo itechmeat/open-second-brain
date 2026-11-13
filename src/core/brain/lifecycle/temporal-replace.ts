@@ -36,7 +36,7 @@ import { appendLogEvent } from "../log.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { normalizeChainLink, SUPERSEDED_BY_KEY } from "./tombstone.ts";
+import { normalizeChainLink, SUPERSEDED_BY_KEY } from "./tombstone-read.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 // ----- Constants ------------------------------------------------------------
