@@ -648,12 +648,21 @@ nodes:
     inside a repository script is fixed at the cause: a bounded retry
     in that script (a fixed attempt count and backoff, then the error
     by name), not a rerun. Otherwise fix at the cause, run the
-    affected local gates, commit per the brief and push the same way push_pr did
-    (SSH when .github/workflows/ changed). Do not edit the PR text
-    unless the fix changes what it claims.
+    affected local gates and commit per the brief. A code fix (not a
+    pure formatting or mirror sync) goes through the convergence table
+    of the dev-quality-cycle skill before the push: usually OCR on your
+    fix commits only (`<skill>/scripts/cycle.sh --range
+    <before-fix>..HEAD --steps ocr`); verify its findings like the
+    cycle_review node does, then write `<branch> <git rev-parse HEAD>`
+    to <git-dir>/osb-pr-prepare/cycle-reviewed. Push only when that is
+    clean, the same way push_pr did (SSH when .github/workflows/
+    changed). The bot_review node after you handles the bot's findings
+    on the new head. Do not edit the PR text unless the fix changes
+    what it claims.
 
     Wrap ONLY the result in <node_output> and </node_output>: each failed
-    check, the cause, and the fix commit or the rerun.
+    check, the cause, the fix commit or the rerun, and the cycle pass on
+    the fix commits (range, findings, decision).
   profile: null
   max_retries: null
   timeout_seconds: null
@@ -936,7 +945,7 @@ edges:
   fallback: true
   join: null
 - from: ci_fix
-  to: ci_wait
+  to: bot_review
   condition: null
   fallback: false
   join: null

@@ -58,6 +58,8 @@ if [ "$rc" -eq 124 ]; then
   echo "CI-GATE: red (checks still pending after ${WATCH_TIMEOUT}s)"
   exit 1
 fi
+# 125-127: timeout or gh could not run, so CI was never observed.
+[ "$rc" -lt 125 ] || die "the checks watch could not run (exit $rc)"
 failed=$(gh pr checks "$OSB_PR_NUMBER" --json name,bucket -q '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")' 2>/dev/null || true)
 echo "CI-GATE: red (failed: ${failed:-the check list could not be read, see the checks above})"
 # Per failed job, not `--log-failed` on the run: the job logs stay readable

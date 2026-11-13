@@ -2,9 +2,9 @@
 # Final gates before the push: the QA gates (qa-gates.sh) and the
 # architecture gate (arch-gate.sh) again, after the OpenCodeReview pass may
 # have committed fixes. When HEAD is still the commit the QA gates last
-# passed on, nothing changed since the green QA and architecture gates (the
-# architecture gate runs after the QA gates and any fix it needed moves
-# HEAD), so the re-run is skipped.
+# passed on AND the commit the architecture gate last passed on (each gate
+# records its own green HEAD), nothing changed since both were green, so the
+# re-run is skipped. A red architecture gate leaves no marker, so it runs again.
 #
 # Exit 0: both green, or skipped (`FINAL-GATES: pass`). Exit 1: a red gate
 # (`FINAL-GATES: red`, followed by the markers and output of the red gates).
@@ -19,7 +19,9 @@ load_ctx
 
 head=$(git rev-parse HEAD)
 green="$CTX_DIR/qa-green-head"
-if [ -f "$green" ] && [ "$(cat "$green")" = "$head" ]; then
+arch_green="$CTX_DIR/arch-green-head"
+if [ -f "$green" ] && [ "$(cat "$green")" = "$head" ] &&
+  [ -f "$arch_green" ] && [ "$(cat "$arch_green")" = "$head" ]; then
   echo "FINAL-GATES: pass (HEAD $head unchanged since the green QA and architecture gates)"
   exit 0
 fi

@@ -19,6 +19,9 @@ mb=$(git merge-base "origin/$OSB_BASE" HEAD) || die "no merge base between origi
 git diff --quiet "$mb" HEAD && die "the branch carries no change against origin/$OSB_BASE"
 git diff --quiet || die "tracked files have unstaged changes; the intake commits the implementation first"
 git diff --cached --quiet || die "the index holds staged, uncommitted changes"
+untracked=$(git ls-files --others --exclude-standard)
+[ -z "$untracked" ] ||
+  die "untracked files are not in HEAD (commit or ignore them): $(printf '%s' "$untracked" | tr '\n' ' ')"
 
 echo "context ok: kind=$OSB_KIND release=$OSB_RELEASE base=$OSB_BASE branch=$OSB_BRANCH merge-base=$mb"
 echo "commits: $(git rev-list --count "$mb"..HEAD), files: $(git diff --name-only "$mb" HEAD | wc -l)"

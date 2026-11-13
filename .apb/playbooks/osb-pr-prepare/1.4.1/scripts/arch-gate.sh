@@ -39,6 +39,8 @@ set -e
 
 if [ "$rc" -eq 0 ]; then
   cat "$work/check.out"
+  # final-gates.sh skips its re-run only while HEAD is still this commit.
+  git -C "$root" rev-parse HEAD >"$CTX_DIR/arch-green-head"
   echo "ARCH-GATE: pass (no new violation against $mb)"
   exit 0
 fi

@@ -68,6 +68,12 @@ bun_test() {
   rc=$?
   cat "$logs/bun-test.raw"
   [ "$rc" -eq 0 ] && return 0
+  # An error outside a named test (an unhandled rejection while a file loads)
+  # is never covered by the known-failure list, whatever else failed.
+  if grep -qE '^# Unhandled error|^ *[1-9][0-9]* errors?$' "$logs/bun-test.raw"; then
+    echo "bun test reported an error outside a named test: not a known failure"
+    return 1
+  fi
   sed -n 's/^(fail) \(.*\) \[[0-9.]*m\{0,1\}s\]$/\1/p; t; s/^(fail) \(.*\)$/\1/p' "$logs/bun-test.raw" |
     LC_ALL=C sort -u >"$logs/bun-test.failed"
   [ -s "$logs/bun-test.failed" ] || {
@@ -95,9 +101,11 @@ python_tests() {
 
 anti_drift_ran() {
   (
-    cd tests/python &&
-      PATH="$root/scripts:$PATH" HOME="$test_home" "$py" -m unittest test_static_schemas -v >"$logs/anti-drift.raw" 2>&1
+    cd tests/python || exit 1
+    PATH="$root/scripts:$PATH" HOME="$test_home" "$py" -m unittest test_static_schemas -v >"$logs/anti-drift.raw" 2>&1
+    rc=$?
     cat "$logs/anti-drift.raw"
+    [ "$rc" -eq 0 ] || exit "$rc"
     grep -q "test_static_schemas_match_live_tools_list" "$logs/anti-drift.raw" || exit 1
     if grep -qE 'test_static_schemas_match_live_tools_list.* \.\.\. skipped' "$logs/anti-drift.raw"; then
       echo "anti-drift skipped itself; the live server was not reachable"

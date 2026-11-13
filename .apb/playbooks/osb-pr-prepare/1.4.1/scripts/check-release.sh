@@ -25,6 +25,7 @@ if [ "$OSB_RELEASE" = none ]; then
   head_first=$(grep -m1 -E '^## \[' CHANGELOG.md || true)
   [ "$head_first" = "$base_first" ] ||
     die "kind $OSB_KIND ships no release, but the first CHANGELOG heading moved '$base_first' -> '$head_first'"
+  git diff --quiet && git diff --cached --quiet || die "documentation or CHANGELOG changes are not committed"
   echo "release check ok: no release, version stays $now"
   exit 0
 fi

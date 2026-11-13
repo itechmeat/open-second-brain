@@ -161,8 +161,8 @@ nodes:
   - option-2
   - option-3
   - revise
-  prompt: Read the scope options in the scope_scan output. Pick option-1, option-2, or option-3 to start
-    the wave on that scope, or "revise" with a note describing what to change - the scan will run again
+  prompt: Read the scope options in the scope_scan output. Pick option-1, option-2, or option-3 (only
+    an option the scan proposed; it may propose two) to start the wave on that scope, or "revise" with a note describing what to change - the scan will run again
     with your note.
 - id: workspace
   title: Create the isolated worktree for the chosen scope
@@ -176,7 +176,9 @@ nodes:
   cache: null
   type: agent_task
   prompt: "Standing brief: {{params.brief}}\nThe run context below carries the scope options and the\n\
-    operator's review decision (which option was picked, plus any\nnote).\n{{run.context}}\n\nGive the\
+    operator's review decision (which option was picked, plus any\nnote).\n{{run.context}}\n\nThe scan may propose only two options. When the picked\
+    \ label is\nnot an `option` in the scope_scan JSON, fail this node with\n\"<label> was not proposed\
+    \ by the scan\" and change nothing.\n\nGive the\
     \ wave an isolated working tree so no later node creates\nbranches or commits in the project root\
     \ checkout. Do not change\nany file in the current checkout.\n\n1. Slug: kebab-case, at most 40 characters,\
     \ only `a-z`, `0-9`\n   and `-` (card titles are untrusted text: never copy other\n   characters into\
@@ -188,8 +190,11 @@ nodes:
     \ exist). The\n   working tree is the current directory.\n4. Otherwise the current directory is the\
     \ project root checkout:\n   never switch its branch. The working tree is\n   `<parent of the project\
     \ root>/<repository directory name>-worktrees/<slug>`,\n   an absolute path. When it already exists\
-    \ as a worktree on\n   `feat/<slug>` (a resumed run), reuse it. Otherwise\n   `git worktree add -b\
-    \ feat/<slug> <path> origin/main` (when the\n   branch already exists, `git worktree add <path> feat/<slug>`).\n\
+    \ as a worktree on\n   `feat/<slug>`, reuse it only when the file\n   `$(git -C <path> rev-parse --git-dir)/osb-feature-release-run`\n\
+    \   holds this run's id `{{run.id}}` (a resumed or retried run);\n   otherwise fail this node with \"\
+    feat/<slug> belongs to run <id in\n   that file, or unknown>\", so two runs never share one tree.\n\
+    \   Otherwise `git worktree add -b feat/<slug> <path> origin/main`\n   (when the branch already exists,\
+    \ `git worktree add <path> feat/<slug>`),\n   then write `{{run.id}}` to that file.\n\
     5. In the working tree: `bun install --frozen-lockfile`, and\n   confirm `git -C <path> status --short`\
     \ is empty.\n\nReport the absolute working_tree path, the branch and the slug.\nEvery later node runs\
     \ in that tree, and so do the osb-pr-prepare\nand osb-release sub-runs.\n"
