@@ -13,9 +13,12 @@
  * machine read before and that are gone now: an entry's records in one
  * are unknown, so a privacy decision over the fold fails closed while any
  * is listed. Such a fold is never cached, so a shard that reads again is
- * folded at once; nor is a fold that left out a record whose body is a
- * pending blob, so the record is folded as soon as its blob arrives. A switched machine whose store cannot be opened lists
- * that reason the same way (`read/protection-store.ts`).
+ * folded at once. A fold that left out a record whose body is a pending
+ * blob is cached against the availability of every blob it skipped
+ * (`pendingBlobs`): the stamp moves the moment a blob arrives, so the fold
+ * is rebuilt then, and it stays cached while every one is absent. A
+ * switched machine whose store cannot be opened lists that reason the same
+ * way (`read/protection-store.ts`).
  */
 
 import { createHash } from "node:crypto";
@@ -23,7 +26,7 @@ import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { processDirsEnv, stateRootDir } from "../platform-dirs.ts";
-import { STORE_PARTITIONS } from "./constants.ts";
+import { STORE_PARTITIONS, type StorePartition } from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
 import { parseHlc } from "./hlc.ts";
 import {
@@ -37,7 +40,7 @@ import { quarantineStamp } from "./shard-quarantine.ts";
 import { protectionStore, StoreUnavailableError } from "./read/protection-store.ts";
 import { listShards } from "./shard-list.ts";
 import type { StoreInspection } from "./store-open.ts";
-import { partitionDir } from "./store-paths.ts";
+import { blobPath, partitionDir } from "./store-paths.ts";
 
 export interface LaneFolded {
   readonly fingerprint: string;
@@ -51,6 +54,12 @@ export interface LaneFolded {
    * could not see (unreadable, or gone since this machine read it).
    */
   readonly unreadable: ReadonlyArray<string>;
+  /**
+   * `<partition>/<sha>` of every blob a skipped pending record's body
+   * still references (the identities the cache fingerprints against, one
+   * stat each, instead of rescanning the shards).
+   */
+  readonly pendingBlobs: ReadonlyArray<string>;
 }
 
 const EMPTY_FOLD: LaneFolded = {
@@ -59,16 +68,21 @@ const EMPTY_FOLD: LaneFolded = {
   clocks: new Map(),
   privateKeys: new Set(),
   unreadable: [],
+  pendingBlobs: [],
 };
 
 const cache = new Map<string, LaneFolded>();
 
 /**
- * A stamp of every `events` shard of `store`; it moves whenever a record
- * lands, and with the quarantine ledger, which decides whether a shard
- * reads whole without changing its bytes.
+ * A stamp of every `events` shard of `store`, the quarantine ledger, and
+ * the availability of the blobs a previous fold skipped (`pending`,
+ * `<partition>/<sha>` composites): a stat per skipped blob, so the stamp
+ * moves the moment one is delivered and stays put while it is absent.
  */
-export function laneFingerprintOf(store: StoreInspection): string {
+export function laneFingerprintOf(
+  store: StoreInspection,
+  pending: ReadonlyArray<string> = [],
+): string {
   const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
     for (const shard of listShards(partitionDir(store.root, partition), { stream: "events" })) {
@@ -81,6 +95,22 @@ export function laneFingerprintOf(store: StoreInspection): string {
       }
       parts.push(`${partition}/${shard.rel}=${stamp}`);
     }
+  }
+  // The blobs the last fold skipped: a quarantined pending blob opens no
+  // gap and moves no shard stamp, so their availability is the stamp the
+  // fingerprint compares. A stat per blob, no shard is read.
+  for (const identity of pending.toSorted()) {
+    const slashAt = identity.indexOf("/");
+    const partition = identity.slice(0, slashAt) as StorePartition;
+    const sha = identity.slice(slashAt + 1);
+    let stamp = "absent";
+    try {
+      const stat = statSync(blobPath(partitionDir(store.root, partition), sha));
+      stamp = `${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      // absent: the stamp that lets the fold stay cached
+    }
+    parts.push(`blob ${identity}=${stamp}`);
   }
   return parts.join("\n");
 }
@@ -101,18 +131,20 @@ export function laneStoreFold(): LaneFolded {
     return { ...EMPTY_FOLD, unreadable: [err.message] };
   }
   if (store === null) return EMPTY_FOLD;
-  const fingerprint = laneFingerprintOf(store);
   const cached = cache.get(store.root);
+  const fingerprint = laneFingerprintOf(store, cached?.pendingBlobs ?? []);
   if (cached !== undefined && cached.fingerprint === fingerprint) return cached;
   const records: StoreRecord[] = [];
   const inPrivate = new Set<string>();
   const unreadable: string[] = [];
-  let skippedPending = false;
+  const pendingBlobs: string[] = [];
+  let pendingUnkeyed = false;
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
     const read = readStreamRecords(store.root, partition, { stream: "events" });
-    if (read.skippedPending) skippedPending = true;
     for (const rel of read.unreadable) unreadable.push(`${partition}/${rel}`);
+    for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
+    if (read.pendingUnkeyed) pendingUnkeyed = true;
     for (const record of read.records) {
       if (record.kind !== LANE_ENTRY_KIND && record.kind !== LANE_ENTRY_REMOVE_KIND) continue;
       records.push(record);
@@ -130,12 +162,14 @@ export function laneStoreFold(): LaneFolded {
     for (const h of state.history) newest = Math.max(newest, parseHlc(h.record.hlc)?.physical ?? 0);
     clocks.set(key, newest);
   }
-  const folded = { fingerprint, entries, clocks, privateKeys, unreadable };
+  const folded = { fingerprint, entries, clocks, privateKeys, unreadable, pendingBlobs };
   // A shard that reads again after a permission change keeps its size and
   // mtime, so the fingerprint would not move: an incomplete fold is never
-  // reused. Nor is one that left out a record whose body is a pending blob:
-  // the blob's arrival moves neither a shard stamp nor the quarantine stamp.
-  if (unreadable.length === 0 && !skippedPending) cache.set(store.root, folded);
+  // reused. A fold that left out a pending record is cached against the
+  // availability of every blob it skipped: the stamp moves the moment a
+  // blob arrives, so the fold is rebuilt then. A skipped record that names
+  // no blob has no such stamp, so that fold is not cached.
+  if (unreadable.length === 0 && !pendingUnkeyed) cache.set(store.root, folded);
   else cache.delete(store.root);
   return folded;
 }

@@ -483,10 +483,26 @@ function discoverMcpToolPopulation(
   for (const file of files) {
     constantsByFile.set(file.path, stringConstantsIn(lexedViews(file).withoutComments));
   }
+  // A file qualifies when it imports a note-content primitive itself, or
+  // when it imports ANY identifier from a file that does. The second
+  // reading exists because the registration site and the handlers it
+  // registers are different files since the 700-line split (task 3.19):
+  // the registry holds the `name:` literals while the handler module it
+  // imports holds the primitive, so the file-level rule needs the one
+  // step across that import to keep finding the same surfaces. One step,
+  // not a transitive closure: the aggregator that spreads every registry
+  // (brain-tools.ts, tools.ts) must not qualify through it.
+  const direct = new Set<string>();
+  for (const file of files) {
+    if (importsNoteContentPrimitive(lexedViews(file).withoutComments)) direct.add(file.path);
+  }
   const found = new Set<string>();
   for (const file of files) {
     const text = lexedViews(file).withoutComments;
-    if (!importsNoteContentPrimitive(text)) continue;
+    const qualifies =
+      direct.has(file.path) ||
+      [...importSources(file, text).values()].some((source) => direct.has(source));
+    if (!qualifies) continue;
     for (const literal of toolNameLiteralsIn(text)) {
       if (realToolNames.has(literal)) found.add(literal);
     }

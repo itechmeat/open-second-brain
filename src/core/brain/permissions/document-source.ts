@@ -47,9 +47,15 @@ export function storedPermissionsText(configPath?: string): string | null {
     store = protectionStore(configPath, { needShared: true });
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
+    // The cause rides along, so a caller that serves the text below
+    // local reach can tell a store-open failure from a document fault
+    // and redact it the way the store check's own findings are
+    // (`storeOpenFailureDetail`): the store-open error names a held
+    // partition's file.
     throw new PermissionsDocumentError(
       `${PERMISSIONS_SETTING_LABEL}: ${err.message}; writes the permissions document governs ` +
         "are refused until then",
+      { cause: err },
     );
   }
   if (store === null || !store.partitions.has("shared")) return null;

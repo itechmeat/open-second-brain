@@ -120,14 +120,14 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
     ...rows(["core/brain/agent-source/vault-provider.ts"], "at-reach", "D2 row 4"),
     ...rows(["core/brain/backlinks.ts"], "at-reach", "D2 row 5"),
     ...rows(
-      [
-        "core/brain/digest-agent-summary.ts",
-        "core/brain/digest.ts",
-        "core/brain/lessons.ts",
-        "core/brain/event-trace.ts",
-      ],
+      ["core/brain/digest-agent-summary.ts", "core/brain/lessons.ts", "core/brain/event-trace.ts"],
       "at-reach",
       "`logEntryAtReach` with the caller's view",
+    ),
+    ...rows(
+      ["core/brain/digest-collect.ts"],
+      "at-reach",
+      "`logEntryAtReach` with the caller's view; the digest's log window moved out of `digest.ts` in the 700-line split (task 3.19)",
     ),
     ...rows(
       ["core/brain/doctor/orphan-session-check.ts", "core/brain/doctor/records.ts"],
@@ -179,12 +179,16 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
     ),
     ...rows(["core/brain/query.ts"], "at-reach", "`brain_query` filters every mode (D2 row 1)"),
     ...rows(
-      ["mcp/brain/analytics-tools.ts", "mcp/brain/brief-tools.ts"],
+      ["mcp/brain/analytics-tools.ts", "mcp/brain/brief-view-tools.ts"],
       "at-reach",
-      "`requestRefView` (D1); derived rows: an index built withholding (D2 row 9)",
+      "`requestRefView` (D1); derived rows: an index built withholding (D2 row 9); the brief views moved out of `brief-tools.ts` in the 700-line split (task 3.19)",
     ),
     ...rows(["mcp/brain/review-tools.ts"], "at-reach", "D2 row 9"),
-    ...rows(["mcp/resources.ts"], "at-reach", "`osb://log` filters (D3 of `lane-pages-split`)"),
+    ...rows(
+      ["mcp/resources-record-readers.ts"],
+      "at-reach",
+      "`osb://log` filters (D3 of `lane-pages-split`); the log reader moved out of `resources.ts` in the 700-line split (task 3.19)",
+    ),
     ...rows(
       [
         "core/brain/log-days.ts",

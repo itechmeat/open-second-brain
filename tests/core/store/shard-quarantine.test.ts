@@ -7,7 +7,8 @@
  * record is still left out until the blob arrives, and the migration's
  * refusals still see it.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -676,7 +677,7 @@ function quarantinedPending(e: StoreEnv, kind: string, body: Record<string, unkn
 const BIG = "x".repeat(20_000);
 
 describe("a cached read that skipped a quarantined pending record", () => {
-  test("the entity read shows the record once its blob arrives, in the same process", () => {
+  test("the entity read is served from the cache while the blob is absent, and shows the record once it arrives", () => {
     env = makeStoreEnv("osb-quarantine-entities-blob-", { legacyTree: false });
     const deliver = quarantinedPending(env, PINNED_SET_KIND, {
       authority: "human",
@@ -684,14 +685,32 @@ describe("a cached read that skipped a quarantined pending record", () => {
     });
     const pinned = () =>
       readEntitiesOf(inspectStore(env!.storeRoot)!).pinned.get("shared")?.content ?? null;
+    // The first read builds; the second warms the cache with the skipped
+    // blob's availability stamp (absent).
     expect(pinned()).toBeNull();
-    // Read twice before the blob arrives, so a cache would be warm.
     expect(pinned()).toBeNull();
+    // The third read is served from the cache while the blob stays absent:
+    // no shard file is opened for it.
+    const open = spyOn(fs, "openSync");
+    const readFile = spyOn(fs, "readFileSync");
+    const shardReads = (): string[] =>
+      [...open.mock.calls, ...readFile.mock.calls]
+        .map((call) => String(call[0]))
+        .filter((p) => p.startsWith(env!.storeRoot) && p.endsWith(".jsonl"));
+    try {
+      expect(pinned()).toBeNull();
+      expect(shardReads()).toEqual([]);
+    } finally {
+      open.mockRestore();
+      readFile.mockRestore();
+    }
     deliver();
+    // The blob's arrival moves the fingerprint's blob stamp, so the first
+    // read after it rebuilds and holds the record.
     expect(pinned()).toBe(BIG);
   });
 
-  test("the lane fold shows the entry once its blob arrives, in the same process", () => {
+  test("the lane fold is served from the cache while the blob is absent, and folds the entry once it arrives", () => {
     env = makeStoreEnv("osb-quarantine-lane-blob-", { legacyTree: false });
     switchDevice(env.storeRoot);
     const deliver = quarantinedPending(env, LANE_ENTRY_KIND, {
@@ -706,7 +725,24 @@ describe("a cached read that skipped a quarantined pending record", () => {
     expect(laneStoreFold().unreadable).toEqual([]);
     expect(text()).toBeNull();
     expect(text()).toBeNull();
+    // The third fold is served from the cache while the blob stays absent:
+    // no shard file is opened for it.
+    const open = spyOn(fs, "openSync");
+    const readFile = spyOn(fs, "readFileSync");
+    const shardReads = (): string[] =>
+      [...open.mock.calls, ...readFile.mock.calls]
+        .map((call) => String(call[0]))
+        .filter((p) => p.startsWith(env!.storeRoot) && p.endsWith(".jsonl"));
+    try {
+      expect(text()).toBeNull();
+      expect(shardReads()).toEqual([]);
+    } finally {
+      open.mockRestore();
+      readFile.mockRestore();
+    }
     deliver();
+    // The blob's arrival moves the fingerprint's blob stamp, so the first
+    // fold after it rebuilds and folds the entry.
     expect(text()).toBe(BIG);
   });
 });

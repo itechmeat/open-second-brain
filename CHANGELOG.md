@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lost private partition's name stays out of remote doctor answers.** The `permissions-unreadable` finding is built from a fail-closed store read whose error names the lost partition's identity file; below local reach the finding now carries the same redaction the doctor's store section applies to its own findings, so a remote caller reads only that the store could not be opened and where to run the doctor. A local run still names the cause.
+- **A store read that skipped a quarantined pending blob is now cached.** The entity read and the lane fold cache such a read against the availability of every blob the skipped record still references (one stat per blob), so a blob that never arrives no longer makes every call rescan the shards, and the record appears on the first read after the blob is delivered.
 - **Windows: `o2b search reindex` no longer fails with `EBUSY` on its own staging file.** A `bun:sqlite` connection with unfinalized statements survives `close()` until garbage collection and keeps `brain.sqlite.new` open, so the rename swap failed on every attempt on Windows (POSIX `rename(2)` ignores open handles). The rebuild now forces a collection cycle right before the swap renames.
 - **The active preference digest no longer lists a retired preference.** `brain reject`, a tombstone and setting or clearing a preference's expiration now refresh `Brain/active.md`, an explicitly expired preference leaves the digest at its deadline, and `o2b brain refresh --stale` detects and rebuilds a digest that differs from the current preference set.
 

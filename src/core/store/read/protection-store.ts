@@ -26,15 +26,34 @@ import { isStoreOnly, markedSwitched } from "../store-only.ts";
 import { HeldPartitionLostError, inspectStore, type StoreInspection } from "../store-open.ts";
 import { resolveConfiguredStoreRoot } from "../store-paths.ts";
 
-/** The store of a switched machine cannot be opened, so its rules are unknown. */
+/**
+ * The store of a switched machine cannot be opened, so its rules are
+ * unknown. `root` is the store root the open failed for, when it was
+ * resolved before the failure: a caller that serves the reason below
+ * local reach redacts the reason to the root and a pointer at the local
+ * doctor (`storeOpenFailureDetail` in the doctor's store check), since
+ * the reason embeds the store-open error, which can name a held
+ * partition's file.
+ */
 export class StoreUnavailableError extends Error {
   override readonly name = "StoreUnavailableError";
+  constructor(
+    message: string,
+    readonly root: string | null = null,
+  ) {
+    super(message);
+  }
 }
 
-function unavailable(reason: string, switched = true): StoreUnavailableError {
+function unavailable(
+  reason: string,
+  switched = true,
+  root: string | null = null,
+): StoreUnavailableError {
   return new StoreUnavailableError(
     `this machine ${switched ? "switched to" : "writes to"} the brain store and ${reason}; the ` +
       "rules stored there are unknown until it opens again. Run `o2b brain doctor`",
+    root,
   );
 }
 
@@ -61,9 +80,11 @@ export function protectionStore(
   let reason = "";
   let lost = false;
   let openError = false;
+  let root: string | null = null;
   try {
-    const { root } = resolveConfiguredStoreRoot(configPath);
-    store = inspectStore(root);
+    const resolved = resolveConfiguredStoreRoot(configPath);
+    root = resolved.root;
+    store = inspectStore(resolved.root);
     if (store === null) reason = `the store at ${root} cannot be found (no store.json)`;
   } catch (err) {
     lost = err instanceof HeldPartitionLostError;
@@ -73,16 +94,20 @@ export function protectionStore(
   const context = configPath !== undefined ? { configPath } : {};
   const switched = (): boolean => markedSwitched(context);
   if (store === null) {
-    if (switched()) throw unavailable(reason);
+    if (switched()) throw unavailable(reason, true, root);
     const storeOnly = (): boolean =>
       isStoreOnly(options.vault !== undefined ? { ...context, vault: options.vault } : context);
     if ((lost || (openError && options.openErrorFails === true)) && storeOnly()) {
-      throw unavailable(reason, false);
+      throw unavailable(reason, false, root);
     }
     return null;
   }
   if (options.needShared === true && !store.partitions.has("shared") && switched()) {
-    throw unavailable(`the shared partition of the store at ${store.root} cannot be found`);
+    throw unavailable(
+      `the shared partition of the store at ${store.root} cannot be found`,
+      true,
+      store.root,
+    );
   }
   return store;
 }
