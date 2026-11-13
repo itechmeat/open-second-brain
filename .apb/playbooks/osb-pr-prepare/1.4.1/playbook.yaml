@@ -693,10 +693,10 @@ nodes:
     First wait for CodeRabbit's review OF THE CURRENT HEAD to be POSTED:
     it usually arrives minutes after the push, long before the checks
     end. Take the head with `git rev-parse HEAD` and poll
-    `gh api repos/<owner>/<repo>/pulls/<n>/reviews` in one blocking loop
+    `gh api --paginate --slurp repos/<owner>/<repo>/pulls/<n>/reviews` in one blocking loop
     (sleep 60 between calls, at most 10 minutes) until a CodeRabbit
     review's `commit_id` equals that head; an earlier review does not
-    count. Then read what it said (`.../pulls/<n>/comments` and `gh pr
+    count. Then read what it said (`gh api --paginate --slurp .../pulls/<n>/comments` and `gh pr
     view <n> --comments`). If no review of the head appears in that
     window, say so in the reply and continue. Handle only comments you have not already
     answered in an earlier pass of this node.
