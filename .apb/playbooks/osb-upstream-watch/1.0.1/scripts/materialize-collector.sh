@@ -39,6 +39,9 @@ from pathlib import Path
 RELEASE_BODY_MAX = 4000
 COMMITS_FALLBACK_DAYS = 60
 CANDIDATE_CAP = 10
+COMMITS_PER_PAGE = 100
+COMMITS_MAX_PAGES = 10
+PR_LIST_LIMIT = 1000
 
 URL_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
@@ -137,11 +140,18 @@ def _write_table_atomic(path, text):
     os.replace(tmp, p)
 
 
+def _cell_text(value):
+    """One table cell: line breaks collapse to spaces and literal pipes are
+    HTML-encoded, so gh stderr or a done --error reason can never split the row
+    or add a column to the pipe-based parser."""
+    return " ".join(str(value).splitlines()).replace("|", "&#124;")
+
+
 def _set_cell(parts, idx, value):
     if idx >= len(parts):
         return
     old = parts[idx]
-    new = " " + value
+    new = " " + _cell_text(value)
     if len(new) < len(old):
         new = new + " " * (len(old) - len(new))
     else:
@@ -255,6 +265,27 @@ def _state_dir(state_root, day):
     return Path(state_root) / day.isoformat()
 
 
+CURRENT_DAY_FILE = "current-day"
+
+
+def _write_collection_day(state_root, day):
+    """Pin the collection's day under the state root, so pending/next/done keep
+    reading and writing that day's snapshot and ledger even past midnight UTC."""
+    root = Path(state_root)
+    root.mkdir(parents=True, exist_ok=True)
+    _write_table_atomic(root / CURRENT_DAY_FILE, day.isoformat() + "\n")
+
+
+def _collection_day(state_root):
+    """The day pinned by the last non-dry collect in this state root; today
+    (UTC) when no collect has pinned one."""
+    p = Path(state_root) / CURRENT_DAY_FILE
+    try:
+        return date.fromisoformat(p.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return today_utc()
+
+
 def append_processed(path, repo, status, *, last_tag=None, commit=None, error=None, reason=None):
     rec = {"repo": repo, "status": status, "processed_at": _now_iso()}
     if last_tag:
@@ -326,19 +357,48 @@ def gh_release_list(owner, repo):
 
 
 def gh_release_view(owner, repo, tag):
+    """(body, None) on success - the body may legitimately be empty - or
+    (None, (rc, out, err)) when the fetch failed."""
     rc, out, err = run_gh(["release", "view", tag, "-R", f"{owner}/{repo}"])
     if rc != 0:
-        return ""
+        return None, (rc, out, err)
     body = out or ""
     if len(body) > RELEASE_BODY_MAX:
         body = body[:RELEASE_BODY_MAX] + "\n…(truncated)"
-    return body
+    return body, None
 
 
 def gh_api_commits(owner, repo, since):
-    # First page only: the cap and drop accounting cover the fetched page (no pagination).
-    return _gh_json(["api", "-X", "GET", f"repos/{owner}/{repo}/commits",
-                     "-F", f"since={since}", "-F", "per_page=100"])
+    """Every commit in the window, paginated before any feature filtering. A
+    window larger than COMMITS_MAX_PAGES pages is reported as a failure, so the
+    watermark never advances past commits that were not seen."""
+    out = []
+    for page in range(1, COMMITS_MAX_PAGES + 1):
+        data, gherr = _gh_json(["api", "-X", "GET", f"repos/{owner}/{repo}/commits",
+                                "-F", f"since={since}", "-F", f"per_page={COMMITS_PER_PAGE}",
+                                "-F", f"page={page}"])
+        if data is None:
+            return None, gherr
+        if not isinstance(data, list):
+            return None, (1, "", "unexpected commits payload")
+        out.extend(data)
+        if len(data) < COMMITS_PER_PAGE:
+            return out, None
+    return None, (1, "", f"incomplete window: more than {COMMITS_MAX_PAGES * COMMITS_PER_PAGE} "
+                         "commits since the watermark; narrow it with --since")
+
+
+def gh_commit_date(owner, repo, sha):
+    """Committer date (ISO) of one commit, or None with the gh error."""
+    data, gherr = _gh_json(["api", f"repos/{owner}/{repo}/commits/{sha}"])
+    if data is None:
+        return None, gherr
+    date_s = (((data or {}).get("commit") or {}).get("committer") or {}).get("date") or ""
+    try:
+        _parse_iso(date_s)
+    except ValueError:
+        return None, (1, "", f"unexpected commit date {date_s!r}")
+    return date_s, None
 
 
 def gh_repo_exists(owner, repo):
@@ -348,9 +408,14 @@ def gh_repo_exists(owner, repo):
 
 def gh_merged_prs(owner, repo, since_date):
     """Merged PRs with mergedAt on/after since_date (YYYY-MM-DD) - same window as releases."""
-    return _gh_json(["pr", "list", "-R", f"{owner}/{repo}", "--state", "merged",
-                     "--search", f"merged:>={since_date}", "--limit", "100",
-                     "--json", "number,title,labels,mergedAt,url,mergeCommit"])
+    prs, gherr = _gh_json(["pr", "list", "-R", f"{owner}/{repo}", "--state", "merged",
+                           "--search", f"merged:>={since_date}", "--limit", str(PR_LIST_LIMIT),
+                           "--json", "number,title,labels,mergedAt,url,mergeCommit"])
+    if prs is not None and len(prs) >= PR_LIST_LIMIT:
+        # the search API stops at this many results: older in-window PRs were not seen
+        return None, (1, "", f"incomplete window: {PR_LIST_LIMIT} or more merged PRs since "
+                             "the watermark; narrow it with --since")
+    return prs, gherr
 
 
 # --------------------------------------------------------------------------- #
@@ -373,12 +438,27 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
     if releases is None:
         return {"error": f"release list failed: {gherr[2][:200]}"}, "error"
 
+    wm_sha = ""
     if since_override:
         since = since_override
     else:
         since = iso_since_from_updated(row["updated"])
         lrt = row.get("last_release_tag", "")
-        if lrt and not lrt.startswith("commit:"):
+        if lrt.startswith("commit:"):
+            # the stored activity watermark: start after that commit, not at
+            # midnight of its sweep day, so its PRs and commits are not re-collected
+            wm_sha = lrt[len("commit:"):].strip()
+            if wm_sha:
+                wm_date, gherr = gh_commit_date(owner, repo, wm_sha)
+                if wm_date is None:
+                    combined = (gherr[1] + gherr[2]).lower()
+                    if "404" not in combined and "not found" not in combined \
+                            and "422" not in combined:
+                        return {"error": f"watermark commit lookup failed: {gherr[2][:200]}"}, "error"
+                    # the commit is gone (force push): keep the Updated window
+                elif wm_date > since:
+                    since = wm_date
+        elif lrt:
             for r in releases:
                 if r.get("tagName") == lrt and r.get("publishedAt") and r["publishedAt"] > since:
                     since = r["publishedAt"]
@@ -394,12 +474,15 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
         kept, dropped = cap_candidates(ordered, cap)
         for r in kept:
             tag = r["tagName"]
+            body, gherr = gh_release_view(owner, repo, tag)
+            if body is None:
+                return {"error": f"release view {tag} failed: {gherr[2][:200]}"}, "error"
             base["releases"].append({
                 "tag": tag,
                 "published_at": r.get("publishedAt", ""),
                 "name": r.get("name", ""),
                 "url": f"https://github.com/{owner}/{repo}/releases/tag/{tag}",
-                "body": gh_release_view(owner, repo, tag),
+                "body": body,
             })
         base["newest_tag"] = kept[-1]["tagName"]
         if dropped:
@@ -409,8 +492,13 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
     if mode == "activity":
         # Same window as releases: merged PRs first (clean feature units), commits as fallback
         # for repos that push to master without PRs.
-        prs, _ = gh_merged_prs(owner, repo, since[:10])
-        feat_prs = filter_feature_prs(prs or [])
+        prs, gherr = gh_merged_prs(owner, repo, since[:10])
+        if prs is None:
+            return {"error": f"merged PR fetch failed: {gherr[2][:200]}"}, "error"
+        # the search is date-granular: drop PRs at or before the exact watermark
+        prs = [p for p in prs if (p.get("mergedAt") or "") > since
+               and not (wm_sha and ((p.get("mergeCommit") or {}).get("oid") or "").startswith(wm_sha))]
+        feat_prs = filter_feature_prs(prs)
         if feat_prs:
             ordered = sorted(feat_prs, key=lambda p: p.get("mergedAt", ""))
             kept, dropped = cap_candidates(ordered, cap)
@@ -427,7 +515,7 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
             merge_oid = ((kept[-1].get("mergeCommit") or {}) or {}).get("oid") or ""
             if not merge_oid:
                 # an empty watermark would silently pin the repo as up-to-date forever
-                return {"error": "no merge commit in the first page"}, "error"
+                return {"error": "no merge commit on the newest feature PR"}, "error"
             base["newest_commit_sha"] = merge_oid[:7]
             base["mode"] = "prs"
             if dropped:
@@ -441,6 +529,9 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
                     return {"error": "commits 404 but repo exists (malformed request)"}, "error"
                 return {"error": "repo not found"}, "error"
             return {"error": f"commits fetch failed: {gherr[2][:200]}"}, "error"
+        if wm_sha:
+            # `since` is inclusive on the API side: the watermark commit itself comes back
+            commits = [c for c in commits if not (c.get("sha") or "").startswith(wm_sha)]
         feat = filter_feature_commits(commits)
         if not feat:
             return {"reason": "no-feature-activity"}, "empty"
@@ -565,6 +656,8 @@ def cmd_collect(table, state_root, refetch=False, since_date=None, process_all=F
             sd.mkdir(parents=True, exist_ok=True)
             snap_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2),
                                  encoding="utf-8")
+    if not dry_run:
+        _write_collection_day(state_root, today)
 
     processed = set() if dry_run else read_processed_repos(proc_path)
     pending = [
@@ -586,7 +679,7 @@ def _pending_blocks(state_root, repo=None):
     """The day snapshot's projects the processed ledger has not consumed yet,
     optionally narrowed to one owner/name. Read-only: no ledger, no table, no
     state write. Empty when nothing is pending or no snapshot exists."""
-    sd = _state_dir(state_root, today_utc())
+    sd = _state_dir(state_root, _collection_day(state_root))
     snap_path = sd / "collection.json"
     if not snap_path.exists():
         return []
@@ -622,21 +715,27 @@ def cmd_block(table, repo, since_date=None, cap=CANDIDATE_CAP, stale_days=COMMIT
 
 
 def cmd_done(table, state_root, repo, last_tag=None, commit=None, error=None):
-    today = today_utc()
-    sd = _state_dir(state_root, today)
+    # the collection's pinned day, not the current date: the watermark must not
+    # jump past items published between the collection and a post-midnight done
+    day = _collection_day(state_root)
+    sd = _state_dir(state_root, day)
     proc_path = sd / "processed.ndjson"
     owner, r = repo.split("/", 1)
     tp = Path(table)
     text = tp.read_text(encoding="utf-8")
     if error:
         text = rewrite_row(text, owner, r, last_error=error[:200])
-        append_processed(proc_path, repo, "error", error=error)
     else:
         tagval = last_tag if last_tag else (f"commit:{commit}" if commit else None)
-        text = rewrite_row(text, owner, r, updated=today.strftime("%d.%m.%Y"),
+        text = rewrite_row(text, owner, r, updated=day.strftime("%d.%m.%Y"),
                            last_tag=tagval, last_error="")
-        append_processed(proc_path, repo, "done", last_tag=last_tag, commit=commit)
+    # table first: a ledger record without its table writeback would drop the
+    # repo from pending while its watermark was never saved
     _write_table_atomic(tp, text)
+    if error:
+        append_processed(proc_path, repo, "error", error=error)
+    else:
+        append_processed(proc_path, repo, "done", last_tag=last_tag, commit=commit)
     return {"repo": repo, "status": "error" if error else "done"}
 
 
