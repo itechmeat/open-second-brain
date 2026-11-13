@@ -65,7 +65,7 @@ import { buildEntityIndex } from "./entities/index-builder.ts";
 import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 import type { BrainEntity } from "./entities/types.ts";
-import { readLifecycleState } from "./lifecycle/tombstone.ts";
+import { readLifecycleState } from "./lifecycle/tombstone-read.ts";
 import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { validateIsoDate } from "./paths.ts";
 import {

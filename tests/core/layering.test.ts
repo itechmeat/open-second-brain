@@ -129,9 +129,10 @@ describe("core layering", () => {
     const rawMentions: string[] = [];
     for (const file of walk(CORE_ROOT)) {
       const text = readFileSync(file, "utf8");
+      const code = lexCode(text);
       for (const { pattern } of BANNED) {
         if (text.includes(pattern)) rawMentions.push(`${file} mentions ${pattern}`);
-        if (lexCode(text).includes(pattern)) {
+        if (code.includes(pattern)) {
           throw new Error(`${file}: ${pattern} survives the code view`);
         }
       }

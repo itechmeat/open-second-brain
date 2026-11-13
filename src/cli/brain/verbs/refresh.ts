@@ -29,11 +29,12 @@ export async function cmdBrainRefresh(argv: string[]): Promise<number> {
   let plan;
   let result;
   try {
-    plan = planRecompile(vault);
+    const now = new Date();
+    plan = planRecompile(vault, { now, includeActiveDigest: true });
     result = await executeRecompile(vault, plan, {
       dryRun: Boolean(flags["dry-run"]),
       agent: resolveBrainAgent(flags, config),
-      now: new Date(),
+      now,
     });
   } catch (exc) {
     return fail(`refresh failed: ${(exc as Error).message ?? exc}`);

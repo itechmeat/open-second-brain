@@ -41,6 +41,7 @@ import { join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { regenerateActiveQuiet } from "./active.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
@@ -387,9 +388,10 @@ export function setExpiration(
       kind === EXPIRATION_TARGET_KIND.signal ? SIGNAL_OPAQUE_FIELDS : PREFERENCE_OPAQUE_FIELDS;
     return isPrivateFrontmatter(frontmatter) || rowNamesPrivatePage(vault, frontmatter, opaque);
   };
+  const now = opts.now ?? new Date();
   const logChange = (): void => {
     appendLogEvent(vault, {
-      timestamp: isoSecond(opts.now ?? new Date()),
+      timestamp: isoSecond(now),
       eventType: BRAIN_LOG_EVENT_KIND.expirationSet,
       body: {
         target: `[[${trimmed}]]`,
@@ -403,26 +405,35 @@ export function setExpiration(
       },
     });
   };
-  withOperationPrivacy(targetPrivate, () => {
-    if (kind === EXPIRATION_TARGET_KIND.signal) {
-      routeSignalState({
-        vault,
-        id: trimmed,
-        fields,
-        ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
-        ...(frontmatter !== null ? { legacyFrontmatter: frontmatter } : {}),
-        legacy,
-      });
-    } else {
-      routePreferencePage({
-        vault,
-        slug,
-        frontmatter: { [EXPIRATION_DATE_FIELD]: normalized ?? null } as FrontmatterMap,
-        legacy,
-      });
+  let preferenceWritten = false;
+  try {
+    withOperationPrivacy(targetPrivate, () => {
+      if (kind === EXPIRATION_TARGET_KIND.signal) {
+        routeSignalState({
+          vault,
+          id: trimmed,
+          fields,
+          ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
+          ...(frontmatter !== null ? { legacyFrontmatter: frontmatter } : {}),
+          legacy,
+        });
+      } else {
+        routePreferencePage({
+          vault,
+          slug,
+          frontmatter: { [EXPIRATION_DATE_FIELD]: normalized ?? null } as FrontmatterMap,
+          legacy,
+        });
+        preferenceWritten = true;
+      }
+      logChange();
+    });
+  } finally {
+    // The preference write is authoritative even if its audit append throws.
+    if (preferenceWritten && trimmed.startsWith("pref-")) {
+      regenerateActiveQuiet(vault, { now, legacyOnly: true });
     }
-    logChange();
-  });
+  }
 
   return Object.freeze({
     id: trimmed,

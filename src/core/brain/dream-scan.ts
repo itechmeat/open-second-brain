@@ -28,7 +28,7 @@ import {
   SUPERSEDED_BY_KEY,
   buildChainLookup,
   resolveChainTip,
-} from "./lifecycle/tombstone.ts";
+} from "./lifecycle/tombstone-read.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { brainDirs, brainDirsOf } from "./paths.ts";
 import {

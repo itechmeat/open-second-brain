@@ -6311,7 +6311,7 @@ function isSwitched(context, options) {
   } catch {
     switched = false;
   }
-  if (switched) {
+  if (switched && options.persistSwitch !== false) {
     seenSwitched.add(key);
     writeMarker(root, device);
   }

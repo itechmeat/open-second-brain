@@ -33,6 +33,7 @@ import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
+import { regenerateActive } from "../../src/core/brain/active.ts";
 import { hookAuditDir } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
@@ -641,6 +642,25 @@ describe("brain query", () => {
   });
 });
 
+describe("brain refresh", () => {
+  test("previews and rebuilds a stale active preference digest", async () => {
+    await bootstrap();
+    const path = regenerateActive(vault).path;
+    const stale = readFileSync(path, "utf8").replace("## Confirmed (0)", "## Confirmed (1)");
+    writeFileSync(path, stale, "utf8");
+    const opts = { env: { OPEN_SECOND_BRAIN_CONFIG: config } };
+    const args = ["brain", "refresh", "--stale", "--vault", vault, "--json"];
+    const preview = await runCli([...args, "--dry-run"], opts);
+    expect(preview.returncode).toBe(0);
+    expect(JSON.parse(preview.stdout).plan.entries).toMatchObject([{ kind: "rederive-active" }]);
+    expect(readFileSync(path, "utf8")).toBe(stale);
+    const applied = await runCli(args, opts);
+    expect(applied.returncode).toBe(0);
+    expect(JSON.parse(applied.stdout).result.rederived).toEqual([path]);
+    expect(readFileSync(path, "utf8")).toContain("## Confirmed (0)");
+  });
+});
+
 describe("brain reject", () => {
   test("moves a pref to retired/", async () => {
     await bootstrap();
@@ -663,6 +683,8 @@ describe("brain reject", () => {
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
     expect(seed.returncode).toBe(0);
+    const digestPath = regenerateActive(vault).path;
+    expect(readFileSync(digestPath, "utf8")).toContain("## Confirmed (1)");
     const r = await runCli(
       [
         "brain",
@@ -680,6 +702,10 @@ describe("brain reject", () => {
     expect(r.stdout).toContain("retired: ret-obsolete");
     expect(existsSync(join(vault, "Brain", "preferences", "pref-obsolete.md"))).toBe(false);
     expect(existsSync(join(vault, "Brain", "retired", "ret-obsolete.md"))).toBe(true);
+    const digest = readFileSync(digestPath, "utf8");
+    expect(digest).toContain("## Confirmed (0)");
+    expect(digest).toContain("## Recently retired");
+    expect(digest).toContain("ret-obsolete");
   });
 
   test("missing --id exits 1", async () => {

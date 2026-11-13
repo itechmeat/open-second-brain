@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { checkPageFreshness } from "../../../src/core/brain/freshness.ts";
+import { freezeVault } from "../../../src/core/brain/freeze.ts";
 import { writeHandoffNote } from "../../../src/core/brain/handoff.ts";
 import { executeRecompile, planRecompile } from "../../../src/core/brain/recompile.ts";
 
@@ -109,6 +110,45 @@ describe("executeRecompile", () => {
     expect(result.dry_run).toBe(true);
     expect(result.rederived).toHaveLength(0);
     expect(readFileSync(page, "utf8")).toBe(before);
+  });
+
+  test("previews and refreshes stale active preferences without rewriting a fresh digest", async () => {
+    const digest = join(vault, "Brain", "active.md");
+    const stale =
+      "---\ngenerated_at: 2026-06-09T12:00:00Z\n---\n## Confirmed (1)\n- retired marker\n";
+    writeFileSync(digest, stale, "utf8");
+    expect(planRecompile(vault).entries).toEqual([]);
+    const plan = planRecompile(vault, { now: NOW, includeActiveDigest: true });
+    expect(plan.entries).toContainEqual({
+      kind: "rederive-active",
+      page: digest,
+      reason: "the active preference digest differs from current memory state",
+    });
+    await executeRecompile(vault, plan, { dryRun: true, agent: "tester", now: NOW });
+    expect(readFileSync(digest, "utf8")).toBe(stale);
+
+    const result = await executeRecompile(vault, plan, { agent: "tester", now: NOW });
+    expect(result.rederived).toEqual([digest]);
+    expect(result.errors).toEqual([]);
+    const fresh = readFileSync(digest, "utf8");
+    expect(fresh).toContain("## Confirmed (0)");
+    expect(fresh).not.toContain("retired marker");
+    expect(planRecompile(vault, { now: NOW, includeActiveDigest: true }).entries).toEqual([]);
+    expect(readFileSync(digest, "utf8")).toBe(fresh);
+  });
+
+  test("a frozen vault can preview a stale active digest but refuses a refresh write", async () => {
+    const digest = join(vault, "Brain", "active.md");
+    const stale = "---\nkind: brain-active\n---\n\n## Confirmed (1)\n";
+    writeFileSync(digest, stale, "utf8");
+    freezeVault(vault, { now: NOW, agent: "tester", reason: "migration" });
+    const plan = planRecompile(vault, { now: NOW, includeActiveDigest: true });
+    expect(plan.entries.map((entry) => entry.kind)).toEqual(["rederive-active"]);
+    await executeRecompile(vault, plan, { dryRun: true, now: NOW, agent: "tester" });
+    await expect(executeRecompile(vault, plan, { now: NOW, agent: "tester" })).rejects.toThrow(
+      "frozen",
+    );
+    expect(readFileSync(digest, "utf8")).toBe(stale);
   });
 
   test("re-derives a stale handoff note in place and makes it fresh again", async () => {

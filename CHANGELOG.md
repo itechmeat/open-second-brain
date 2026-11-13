@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Windows: `o2b search reindex` no longer fails with `EBUSY` on its own staging file.** A `bun:sqlite` connection with unfinalized statements survives `close()` until garbage collection and keeps `brain.sqlite.new` open, so the rename swap failed on every attempt on Windows (POSIX `rename(2)` ignores open handles). The rebuild now forces a collection cycle right before the swap renames.
+- **The active preference digest no longer lists a retired preference.** `brain reject`, a tombstone and setting or clearing a preference's expiration now refresh `Brain/active.md`, an explicitly expired preference leaves the digest at its deadline, and `o2b brain refresh --stale` detects and rebuilds a digest that differs from the current preference set.
 
 ## [1.98.0] - 2026-11-02
 

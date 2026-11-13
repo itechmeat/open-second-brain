@@ -49,14 +49,21 @@ const VAULT_KEY_CHARS = 16;
 const NO_VAULT_DIGEST_KEY = "no-vault";
 
 /** Whether the digests of `vault` are rendered on demand into the device-local cache. */
-export function digestsRenderedOnDemand(vault: string | null, configPath?: string): boolean {
+export function digestsRenderedOnDemand(
+  vault: string | null,
+  configPath?: string,
+  options: { persistSwitch?: boolean } = {},
+): boolean {
   // No vault (or its stand-in path): store-only, and the digests have no
   // vault file (D14 item 7).
   if (vault === null || isNoVaultPath(vault)) return true;
   // A machine that holds its own switch record renders on demand whatever
   // state the vault folder is in (unmounted, briefly unreadable), as the
   // rest of its machine state does (`machineStateLocation`).
-  const mode = storeOnlyMode({ vault, ...(configPath !== undefined ? { configPath } : {}) });
+  const mode = storeOnlyMode(
+    { vault, ...(configPath !== undefined ? { configPath } : {}) },
+    options,
+  );
   if (mode.reason === "device-switched") return true;
   // Otherwise a vault path that names no directory, or one this process
   // cannot list, is a configuration fault, not a store-only machine:
