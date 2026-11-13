@@ -103,6 +103,27 @@ describe("createSnapshot", () => {
     }
   });
 
+  test("writes a restorable archive even when tar has a default archive path", () => {
+    const oldTape = process.env["TAPE"];
+    const defaultArchive = join(configHome, "default.tar");
+    const runId = "dream-explicit-archive";
+    process.env["TAPE"] = defaultArchive;
+    try {
+      const snapshot = createSnapshot(vault, runId, { reason: DREAM });
+      expect(existsSync(defaultArchive)).toBe(false);
+
+      const extracted = join(configHome, "extracted");
+      mkdirSync(extracted);
+      extractSnapshotArchive(snapshot.path, extracted);
+      expect(readFileSync(join(extracted, "Brain", "log", "2026-05-14.md"), "utf8")).toBe(
+        readFileSync(join(brainDirs(vault).log, "2026-05-14.md"), "utf8"),
+      );
+    } finally {
+      if (oldTape === undefined) delete process.env["TAPE"];
+      else process.env["TAPE"] = oldTape;
+    }
+  });
+
   test("rejects invalid run_id", () => {
     expect(() => createSnapshot(vault, "../escape", { reason: DREAM })).toThrow();
   });
