@@ -29,7 +29,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,8 @@ import {
   setExpiration,
 } from "../../../src/core/brain/expiration-set.ts";
 import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { resolveAppendShardId } from "../../../src/core/brain/ledger-shards.ts";
+import { logShardJsonlPath } from "../../../src/core/brain/paths.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
@@ -115,6 +117,19 @@ function seedPreference(): string {
 }
 
 describe("setting an expiration", () => {
+  test("updates the digest if the expiration saves but the audit append fails", () => {
+    const id = seedPreference();
+    const now = new Date("2026-07-16T12:00:00Z");
+    const digest = regenerateActive(vault, { now }).path;
+    expect(readFileSync(digest, "utf8")).toContain(id);
+    const logPath = logShardJsonlPath(vault, "2026-07-16", resolveAppendShardId());
+    mkdirSync(logPath, { recursive: true });
+    expect(() => setExpiration(vault, id, "2026-07-15", { now })).toThrow("EISDIR");
+    const page = join(vault, "Brain", "preferences", `${id}.md`);
+    expect(readFileSync(page, "utf8")).toContain("expiration_date: 2026-07-15");
+    expect(readFileSync(digest, "utf8")).not.toContain(id);
+  });
+
   test("the digest drops expired preferences and restores them when expiration is cleared", () => {
     const id = seedPreference();
     const now = new Date("2026-07-16T12:00:00Z");

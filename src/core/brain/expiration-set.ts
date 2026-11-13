@@ -405,29 +405,34 @@ export function setExpiration(
       },
     });
   };
-  withOperationPrivacy(targetPrivate, () => {
-    if (kind === EXPIRATION_TARGET_KIND.signal) {
-      routeSignalState({
-        vault,
-        id: trimmed,
-        fields,
-        ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
-        ...(frontmatter !== null ? { legacyFrontmatter: frontmatter } : {}),
-        legacy,
-      });
-    } else {
-      routePreferencePage({
-        vault,
-        slug,
-        frontmatter: { [EXPIRATION_DATE_FIELD]: normalized ?? null } as FrontmatterMap,
-        legacy,
-      });
+  let preferenceWritten = false;
+  try {
+    withOperationPrivacy(targetPrivate, () => {
+      if (kind === EXPIRATION_TARGET_KIND.signal) {
+        routeSignalState({
+          vault,
+          id: trimmed,
+          fields,
+          ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
+          ...(frontmatter !== null ? { legacyFrontmatter: frontmatter } : {}),
+          legacy,
+        });
+      } else {
+        routePreferencePage({
+          vault,
+          slug,
+          frontmatter: { [EXPIRATION_DATE_FIELD]: normalized ?? null } as FrontmatterMap,
+          legacy,
+        });
+        preferenceWritten = true;
+      }
+      logChange();
+    });
+  } finally {
+    // The preference write is authoritative even if its audit append throws.
+    if (preferenceWritten && trimmed.startsWith("pref-")) {
+      regenerateActiveQuiet(vault, { now, legacyOnly: true });
     }
-    logChange();
-  });
-
-  if (kind === EXPIRATION_TARGET_KIND.preference && trimmed.startsWith("pref-")) {
-    regenerateActiveQuiet(vault, { now, legacyOnly: true });
   }
 
   return Object.freeze({

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { parseFrontmatter, writeFrontmatter } from "../../../../src/core/vault.ts";
 import { regenerateActive } from "../../../../src/core/brain/active.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
+import { resolveAppendShardId } from "../../../../src/core/brain/ledger-shards.ts";
+import { logShardJsonlPath } from "../../../../src/core/brain/paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import {
   TombstoneError,
@@ -68,6 +70,19 @@ test("tombstone sets lifecycle frontmatter without deleting the file and preserv
   expect(body).toBe("This is the human prose body.");
   expect(readFileSync(digest, "utf8")).toContain("## Confirmed (0)");
   expect(readFileSync(digest, "utf8")).not.toContain("pref-alpha");
+});
+
+test("updates the digest if the tombstone saves but the audit append fails", () => {
+  const rel = writePref("log-failure");
+  const digest = regenerateActive(vault, { now: NOW }).path;
+  expect(readFileSync(digest, "utf8")).toContain("pref-log-failure");
+  const logPath = logShardJsonlPath(vault, "2026-07-18", resolveAppendShardId());
+  mkdirSync(logPath, { recursive: true });
+  expect(() => tombstone({ vault, path: rel, reason: "wrong", agent: "tester", now: NOW })).toThrow(
+    "EISDIR",
+  );
+  expect(parseFrontmatter(join(vault, rel))[0]["_status"]).toBe("tombstoned");
+  expect(readFileSync(digest, "utf8")).not.toContain("pref-log-failure");
 });
 
 test("re-issuing a tombstone is a byte-identical no-op returning the existing state", () => {

@@ -189,60 +189,62 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
     });
   }
 
-  const explicitAgent = normalizeAgentArgument(input.agent ?? null);
-  const agent = explicitAgent ?? resolveAgentName(input.configPath);
-  appendLogEvent(input.vault, {
-    timestamp: tombstonedAt,
-    eventType: BRAIN_LOG_EVENT_KIND.tombstone,
-    body: {
-      path: relPath,
-      reason,
-      prior_status: priorStatus,
-      ...(supersededBy !== null ? { superseded_by: supersededBy } : {}),
-      agent,
-    },
-  });
-
-  // Belief lifecycle suite (B4): a supersede/tombstone is a belief change,
-  // so it emits a decision-change receipt. The receipt's own idempotency
-  // key (subject + before + after) makes a replay a no-op, mirroring the
-  // tombstone no-op above. Fail-soft: an accountability-log hiccup must
-  // never fail the tombstone write itself.
   try {
-    appendDecisionChangeReceipt(input.vault, {
-      subject: relPath,
-      before: `status:${priorStatus}`,
-      after:
-        supersededBy !== null
-          ? `status:tombstoned superseded_by:${supersededBy}`
-          : "status:tombstoned",
-      actor: agent,
-      rationale: reason,
-      reasonCode: supersededBy !== null ? "supersede" : "tombstone",
-      ...(supersededBy !== null ? { alternatives: [priorStatus] } : {}),
-      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    const explicitAgent = normalizeAgentArgument(input.agent ?? null);
+    const agent = explicitAgent ?? resolveAgentName(input.configPath);
+    appendLogEvent(input.vault, {
+      timestamp: tombstonedAt,
+      eventType: BRAIN_LOG_EVENT_KIND.tombstone,
+      body: {
+        path: relPath,
+        reason,
+        prior_status: priorStatus,
+        ...(supersededBy !== null ? { superseded_by: supersededBy } : {}),
+        agent,
+      },
     });
-  } catch {
-    // Receipt is best-effort accountability; the tombstone frontmatter and
-    // its `tombstone` log event remain authoritative.
-  }
 
-  if (rawMeta["kind"] === "brain-preference") {
-    regenerateActiveQuiet(input.vault, { now, legacyOnly: true });
+    // Belief lifecycle suite (B4): a supersede/tombstone is a belief change,
+    // so it emits a decision-change receipt. The receipt's own idempotency
+    // key (subject + before + after) makes a replay a no-op, mirroring the
+    // tombstone no-op above. Fail-soft: an accountability-log hiccup must
+    // never fail the tombstone write itself.
+    try {
+      appendDecisionChangeReceipt(input.vault, {
+        subject: relPath,
+        before: `status:${priorStatus}`,
+        after:
+          supersededBy !== null
+            ? `status:tombstoned superseded_by:${supersededBy}`
+            : "status:tombstoned",
+        actor: agent,
+        rationale: reason,
+        reasonCode: supersededBy !== null ? "supersede" : "tombstone",
+        ...(supersededBy !== null ? { alternatives: [priorStatus] } : {}),
+        ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+      });
+    } catch {
+      // Receipt is best-effort accountability; the tombstone frontmatter and
+      // its `tombstone` log event remain authoritative.
+    }
+    return {
+      changed: true,
+      path: relPath,
+      state: {
+        tombstoned: true,
+        tombstonedAt,
+        tombstoneReason: reason,
+        supersededBy,
+      },
+      agent,
+      loggedAt: tombstonedAt,
+    };
+  } finally {
+    // The frontmatter is already committed, even if the audit append throws.
+    if (rawMeta["kind"] === "brain-preference") {
+      regenerateActiveQuiet(input.vault, { now, legacyOnly: true });
+    }
   }
-
-  return {
-    changed: true,
-    path: relPath,
-    state: {
-      tombstoned: true,
-      tombstonedAt,
-      tombstoneReason: reason,
-      supersededBy,
-    },
-    agent,
-    loggedAt: tombstonedAt,
-  };
 }
 
 export interface SupersedeInput {
