@@ -73,6 +73,11 @@ export interface CollectMaintenanceActionsOptions {
    * call.
    */
   readonly visible?: (ref: string | null | undefined) => boolean;
+  /**
+   * The caller is below local reach: the token footprint leaves out the
+   * log events of the store's `private` partition. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /**
@@ -139,7 +144,9 @@ export function collectMaintenanceActions(
       .filter((f) => visible(f.path) && visible(f.from))
       .map((f) => ({ path: f.path, from: f.from }));
   }
-  const footprint = collectSignal("token-footprint", onError, () => computeTokenFootprint(vault));
+  const footprint = collectSignal("token-footprint", onError, () =>
+    computeTokenFootprint(vault, { withholdsPrivate: opts.withholdsPrivate === true }),
+  );
   if (footprint !== undefined) {
     tokenFootprint = {
       total: footprint.total,

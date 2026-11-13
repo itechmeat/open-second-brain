@@ -8,6 +8,7 @@
  */
 
 import { logDayReader } from "./log-days.ts";
+import { withoutPrivateEntries } from "./log-events-at-reach.ts";
 import { MOST_APPLIED_LIMIT_DEFAULT, MOST_APPLIED_WINDOW_DAYS_DEFAULT } from "./policy.ts";
 import { isoDate } from "./time.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
@@ -31,6 +32,12 @@ export interface ComputeMostAppliedOptions {
   readonly windowDays?: number;
   /** Max entries returned. Defaults to 10. */
   readonly limit?: number;
+  /**
+   * The caller is below local reach: events of the store's `private`
+   * partition are not counted, so the counts and the order read as if
+   * they did not exist. Default false (local callers and the CLI).
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /**
@@ -90,7 +97,7 @@ export function computeMostApplied(
       );
       continue;
     }
-    for (const e of parsed.entries) {
+    for (const e of withoutPrivateEntries(parsed.entries, opts.withholdsPrivate === true)) {
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
       if (e.body["result"] !== BRAIN_APPLY_RESULT.applied) continue;
       const eventMs = Date.parse(e.timestamp);

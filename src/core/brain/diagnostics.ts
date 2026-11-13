@@ -64,6 +64,7 @@ import {
 import { ATTESTATION_CHECK_CODE } from "./doctor/attestation-check.ts";
 import { RECEIPT_CONTENT_DRIFT_CODE } from "./doctor/receipt-content-drift-check.ts";
 import { GIT_TRACKED_DERIVED_STATE_CODE } from "./doctor/git-tracked-state-check.ts";
+import { STORE_SHARD_CORRUPT_LINE_CODE } from "./doctor/store-gap-check.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
@@ -1050,6 +1051,14 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain doctor",
         autoRepairable: false,
       },
+      {
+        // The structural form; the finding's message carries the concrete
+        // command with the shard as `<partition>/<shard>` and its offset.
+        code: STORE_SHARD_CORRUPT_LINE_CODE,
+        issueClass: "a bad line in the middle of a held store shard",
+        nextCommand: "o2b store shard quarantine <partition-shard> --offset <n>",
+        autoRepairable: false,
+      },
       // --- Skill-accept transaction refusals (no-dead-ends, phase 3) ---
       // Both are states the accept transaction itself can leave an
       // operator in, and both used to refuse without naming a way out.
@@ -1553,7 +1562,7 @@ export interface PlanRepairOptions {
  * the same findings, each with its next-command hint.
  */
 export function planRepair(vault: string, opts: PlanRepairOptions = {}): RepairPlan {
-  const issues = opts.issues ?? collectDoctorIssues(vault, opts.readable, opts.dbPath);
+  const issues = opts.issues ?? collectDoctorIssues(vault, opts.readable, opts.dbPath, false);
 
   const fixes: RepairItem[] = [];
   for (const fixer of FIXERS) {
@@ -1590,10 +1599,12 @@ function collectDoctorIssues(
   vault: string,
   readable: ((rel: string) => boolean) | undefined,
   dbPath: string | undefined,
+  withholdsPrivate: boolean,
 ): ReadonlyArray<DoctorIssue> {
   const doctor = runDoctor(vault, {
     ...(readable !== undefined ? { readable } : {}),
     ...(dbPath !== undefined ? { dbPath } : {}),
+    withholdsPrivate,
   });
   return [...doctor.errors, ...doctor.warnings];
 }
@@ -1810,8 +1821,9 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
         ...(opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {}),
       })
     : planRepair(vault, {
-        issues: view.keep(collectDoctorIssues(vault, opts.readable, opts.dbPath), (i) =>
-          doctorIssueRefs(vault, i),
+        issues: view.keep(
+          collectDoctorIssues(vault, opts.readable, opts.dbPath, view.withholdsPrivate === true),
+          (i) => doctorIssueRefs(vault, i),
         ),
       });
   const fixes = view.keep(plan.fixes, repairRefs);

@@ -97,6 +97,12 @@ export interface AuditMocOptions {
    * target's `referenceCount`.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The caller is below local reach: log events of the store's `private`
+   * partition count toward no member's `backlinkCount` (passed to the
+   * backlink index).
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /** The structural hub thresholds (from `link_graph` config unless overridden). */
@@ -231,7 +237,9 @@ export function auditMoc(
   const outboundTargets = verdict.outboundTargets;
 
   // Backlink index + cluster member metadata.
-  const index = buildBacklinkIndex(vault, view.scope);
+  const index = buildBacklinkIndex(vault, view.scope, {
+    withholdsPrivate: opts.withholdsPrivate === true,
+  });
   const wellCovered: MocClusterMember[] = [];
   const fragile: MocClusterMember[] = [];
   const candidateMissing: { id: string; referenceCount: number }[] = [];

@@ -495,7 +495,9 @@ function readDigestLatest(ctx: ResourceContext, uri: string, view: RequestView):
 }
 
 function readStatus(ctx: ResourceContext, uri: string): ResourceContent {
-  const snapshot = computeBrainStatus(ctx.vault);
+  const snapshot = computeBrainStatus(ctx.vault, {
+    withholdsPrivate: resolvedTransportReach(ctx.reach) !== TRANSPORT_REACH.local,
+  });
   return {
     uri,
     mimeType: MIME_MARKDOWN,
@@ -748,7 +750,9 @@ function readBacklinks(
   // not-found path at all (an unknown target is a legitimate zero), so a
   // refusal here would be the one response shape that proves the page
   // exists. The echoed target is the caller's own argument.
-  const index = buildBacklinkIndex(ctx.vault, view.ownerScope);
+  const index = buildBacklinkIndex(ctx.vault, view.ownerScope, {
+    withholdsPrivate: view.refs.withholdsPrivate === true,
+  });
   // Every spelling the target answers to across its retirement: a
   // retired reserved record is otherwise asked as `pref-x`, which names
   // no page once `ret-x` is the one on disk.

@@ -36,6 +36,7 @@ import { defaultConfigPath, discoverConfig } from "../../config.ts";
 import { foldSettings } from "../../store/fold-settings.ts";
 import { protectionStore, StoreUnavailableError } from "../../store/read/protection-store.ts";
 import { readStreamRecords } from "../../store/read/stream-read.ts";
+import { quarantineStamp } from "../../store/shard-quarantine.ts";
 import { listShards } from "../../store/shard-list.ts";
 import { partitionDir } from "../../store/store-paths.ts";
 import type { StoreInspection } from "../../store/store-open.ts";
@@ -217,11 +218,14 @@ function statStamp(path: string): string {
   }
 }
 
-/** What a read depends on: the settings shards and the machine config file. */
+/**
+ * What a read depends on: the settings shards, the quarantine ledger
+ * (which decides whether a shard reads whole) and the machine config file.
+ */
 function fingerprintOf(store: StoreInspection | null, configPath: string): string {
   const parts = [configPath, statStamp(configPath)];
   if (store !== null && store.partitions.has("shared")) {
-    parts.push(store.storeId);
+    parts.push(store.storeId, `quarantine=${quarantineStamp(store.root)}`);
     for (const shard of listShards(partitionDir(store.root, "shared"), SETTINGS)) {
       parts.push(`${shard.rel}=${statStamp(shard.path)}`);
     }

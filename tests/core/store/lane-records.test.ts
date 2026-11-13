@@ -110,4 +110,21 @@ describe("lane entries", () => {
     expect(laneNameOf(".sessions")).toBe("sessions");
     expect(laneNameOf("Procedural Memory")).toBe("procedural-memory");
   });
+
+  test("the fold ignores a raw that is not a string", () => {
+    const record = rec({
+      physical: 1,
+      kind: LANE_ENTRY_KIND,
+      body: authored("agent", {
+        lane: "obligations",
+        entry: "obl-a",
+        fields: { s: 1 },
+        text: "t",
+        raw: 5 as never,
+      }),
+    });
+    const fold = foldLaneEntries([record]);
+    expect(fold.rejected).toEqual([]);
+    expect(fold.entries.get(laneEntryKey("obligations", "obl-a"))!.value?.raw).toBeUndefined();
+  });
 });

@@ -583,7 +583,9 @@ function collectDigestData(
   // Built once and shared with `computeConnectionHealth` below: both
   // read the same vault state within this digest run, so one
   // full-history backlink scan replaces two.
-  const backlinkIndex = buildBacklinkIndex(vault);
+  const backlinkIndex = buildBacklinkIndex(vault, undefined, {
+    withholdsPrivate: refs.withholdsPrivate === true,
+  });
   const inbound = (id: string): number => visibleBacklinkCount(backlinkIndex, id, refs);
   const top_referenced = pickTopReferenced(inbound, preferences);
   // `merge_suggestions` reflects current vault state, not windowed
@@ -637,6 +639,7 @@ function collectDigestData(
     now: until,
     windowDays: mostAppliedWindowDays,
     limit: mostAppliedLimit,
+    withholdsPrivate: refs.withholdsPrivate === true,
   }).map((e) => ({
     id: e.preference.id,
     principle: e.preference.principle,
@@ -684,6 +687,7 @@ function collectDigestData(
       collectMaintenanceActions(vault, {
         onError: (e) => collectErrors.push(e),
         visible: scopedRefs.visible,
+        withholdsPrivate: refs.withholdsPrivate === true,
       }),
       (action) => [action.target],
     ),

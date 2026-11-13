@@ -27,6 +27,7 @@ import { resolvedSecretLiterals } from "../core/secret-resolver.ts";
 import type { ConfigDiscovery } from "../core/types.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
+import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
 import { doctor } from "../core/doctor.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
@@ -140,7 +141,11 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     broken === null ? Object.keys(discovery.data).toSorted() : unresolvedField(broken);
   // Safe to call on a vault that has no Brain layer yet — returns
   // `present: false` with zero counts.
-  const brain = vaultExists ? computeBrainStatus(ctx.vault) : unexaminable;
+  const brain = vaultExists
+    ? computeBrainStatus(ctx.vault, {
+        withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
+      })
+    : unexaminable;
   // On the broken branch this gate is unresolvable, so the block is built
   // rather than skipped: `buildSearchStatusBlock` resolves its own config
   // and degrades to `{ exists: false, error }` naming the same file. A skip

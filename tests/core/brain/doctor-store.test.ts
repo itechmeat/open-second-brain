@@ -3,13 +3,14 @@
  * not in use, and when it is, the dual-write counters, state-digest
  * findings and same-id conflicts.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -19,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { nextCommandField } from "../../../src/core/brain/next-step.ts";
 import {
   STORE_CLOCK_AHEAD_CODE,
   STORE_DIGEST_DIVERGENT_CODE,
@@ -33,6 +35,7 @@ import {
   STORE_SHARD_TAIL_HELD_CODE,
   STORE_SHARD_UNREADABLE_CODE,
   STORE_REMOVED_AWAITING_COMPACTION_CODE,
+  STORE_WRITE_FAIL_OPEN_CODE,
 } from "../../../src/core/brain/doctor/store-check.ts";
 import {
   reservedDeviceDirIssues,
@@ -50,12 +53,29 @@ import { publishStateDigest } from "../../../src/core/store/state-digest.ts";
 import { inspectStore, openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
 import { ensureStore } from "../store/fixtures/temp-store.ts";
+import {
+  STORE_SHARD_BLOB_PENDING_CODE,
+  STORE_SHARD_CORRUPT_LINE_CODE,
+  STORE_SHARD_LINE_TOO_LONG_CODE,
+  STORE_SHARD_NEWER_FORMAT_CODE,
+  storeGapFindings,
+} from "../../../src/core/brain/doctor/store-gap-check.ts";
+import type { DoctorFindings } from "../../../src/core/brain/doctor/check.ts";
+import { addQuarantine } from "../../../src/core/store/shard-quarantine-write.ts";
+import {
+  lineSha256At,
+  QUARANTINE_HASH_CAP_BYTES,
+} from "../../../src/core/store/shard-quarantine.ts";
+import { ledgerRowRecord } from "../../../src/core/store/dual-write-records.ts";
+import { routeWrite } from "../../../src/core/store/store-write.ts";
+import { SETTING_SET_KIND } from "../../../src/core/store/constants.ts";
 import { dualWriteStatusPath, shardPath } from "../../../src/core/store/store-paths.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,
   STORE_ROOT_ENV,
+  "O2B_DEVICE_ID",
   "HOME",
   "XDG_STATE_HOME",
   "XDG_DATA_HOME",
@@ -128,6 +148,13 @@ function machine(device: string): StoreHandle {
 
 const at = (ms: number) => () => ms;
 
+/** Run the gap findings over one shard named as read only in part. */
+function gapFindingsOf(rel: string): DoctorFindings {
+  const out: DoctorFindings = { issues: [], uncertain: [] };
+  storeGapFindings(inspectStore(storeRoot)!, [{ partition: "shared", rel }], NOW + 10, out);
+  return out;
+}
+
 describe("store not in use", () => {
   test("no flag and no store root: the section says nothing, even about old counters", () => {
     writeFailureCounter(4);
@@ -189,7 +216,64 @@ describe("store in use", () => {
     const finding = report.errors.find((i) => i.code === STORE_PARTITION_LOST_CODE);
     expect(finding?.message).toContain("private partition");
     expect(finding?.message).toContain("private/store.json");
+    expect(finding?.message).toContain("o2b store partition leave private");
     expect(storeCodes()).toEqual([STORE_PARTITION_LOST_CODE]);
+  });
+
+  test("below local reach a lost partition is still an error but never names private", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    ensureStore(storeRoot);
+    openStore({ root: storeRoot, device: "dev-a" });
+    rmSync(join(storeRoot, "private", "store.json"));
+    const lostOf = (opts: { withholdsPrivate?: true; reach?: "remote" }) =>
+      runDoctor(vault, { now: new Date(NOW), ...opts }).errors.filter(
+        (i) => i.code === STORE_PARTITION_LOST_CODE,
+      );
+    for (const opts of [{ withholdsPrivate: true } as const, { reach: "remote" } as const]) {
+      const lost = lostOf(opts);
+      expect(lost).toHaveLength(1);
+      expect(lost[0]!.message).toContain("a partition of the brain store");
+      expect(lost[0]!.message).not.toContain("private");
+    }
+    rmSync(join(storeRoot, "shared", "store.json"));
+    expect(lostOf({})[0]!.message).toContain("private/store.json");
+    const both = lostOf({ withholdsPrivate: true });
+    expect(both).toHaveLength(1);
+    expect(both[0]!.message).toContain("the shared partition and another partition");
+    expect(both[0]!.message).not.toContain("private");
+  });
+
+  test("below local reach a store that does not open keeps its finding without the cause", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    ensureStore(storeRoot);
+    openStore({ root: storeRoot, device: "dev-a" });
+    const privateIdentity = join(storeRoot, "private", "store.json");
+    const sharedId = (
+      JSON.parse(readFileSync(join(storeRoot, "shared", "store.json"), "utf8")) as {
+        store_id: string;
+      }
+    ).store_id;
+    const otherId = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const invalidOf = (opts: { withholdsPrivate?: true; reach?: "remote" }) =>
+      runDoctor(vault, { now: new Date(NOW), ...opts }).warnings.filter(
+        (i) => i.code === STORE_ROOT_INVALID_CODE,
+      );
+    const original = readFileSync(privateIdentity, "utf8");
+    for (const broken of ["{ not json", original.replace(sharedId, otherId)]) {
+      writeFileSync(privateIdentity, broken);
+      const local = invalidOf({});
+      expect(local).toHaveLength(1);
+      expect(local[0]!.message).toContain("private");
+      for (const opts of [{ withholdsPrivate: true } as const, { reach: "remote" } as const]) {
+        const remote = invalidOf(opts);
+        expect(remote).toHaveLength(1);
+        expect(remote[0]!.path).toBe(local[0]!.path);
+        expect(remote[0]!.message).toContain("could not be opened");
+        expect(remote[0]!.message).not.toContain("private");
+        expect(remote[0]!.message).not.toContain(sharedId);
+        expect(remote[0]!.message).not.toContain(otherId);
+      }
+    }
   });
 
   test("a store that never held private on this machine is no finding", () => {
@@ -621,5 +705,313 @@ describe("removed content awaiting compaction", () => {
     const issue = report.warnings.find((i) => i.code === STORE_REMOVED_AWAITING_COMPACTION_CODE);
     expect(issue?.message).toContain("1 record(s) of removed content");
     expect(issue?.message).toContain("1 of forgotten signals");
+  });
+});
+
+describe("shards read only in part", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** Three notes of dev-b in one shard, written at `when`; returns its path. */
+  function threeNotes(when = NOW): string {
+    machine("dev-a");
+    const b = machine("dev-b");
+    let path = "";
+    for (const n of [1, 2, 3]) {
+      path = appendRecord(
+        b,
+        { partition: "shared", stream: "events", kind: "note", agent: "t", body: { n } },
+        { now: at(when) },
+      ).path;
+    }
+    return path;
+  }
+
+  /** Rewrite the middle line of the shard at `path`; returns its offset. */
+  function editMiddle(path: string, edit: (line: string) => string): number {
+    const lines = readFileSync(path, "utf8").split("\n");
+    lines[1] = edit(lines[1]!);
+    writeFileSync(path, lines.join("\n"));
+    return Buffer.byteLength(lines[0]!) + 1;
+  }
+
+  const relOf = (path: string): string =>
+    path
+      .slice(join(storeRoot, "shared").length + 1)
+      .split("\\")
+      .join("/");
+
+  function findings(code: string, now = NOW + 10) {
+    const report = runDoctor(vault, { now: new Date(now) });
+    return {
+      errors: report.errors.filter((i) => i.code === code),
+      warnings: report.warnings.filter((i) => i.code === code),
+    };
+  }
+
+  test("a corrupt middle line is an error naming the offset and the quarantine command", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = threeNotes();
+    const offset = editMiddle(path, (line) => line.replace('"n":2', '"n":20'));
+    const { errors } = findings(STORE_SHARD_CORRUPT_LINE_CODE);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.path).toBe(`shared/${relOf(path)}`);
+    expect(errors[0]!.message).toContain(`byte ${offset}`);
+    expect(errors[0]!.message).toContain(
+      `o2b store shard quarantine shared/${relOf(path)} --offset ${offset}`,
+    );
+  });
+
+  test("a corrupt line too long to hash names source repair, no quarantine command", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = threeNotes();
+    // Past the hash cap the verb always refuses (`line-too-long`).
+    const offset = editMiddle(path, () => "x".repeat(QUARANTINE_HASH_CAP_BYTES + 10));
+    expect(findings(STORE_SHARD_CORRUPT_LINE_CODE).errors).toEqual([]);
+    const { errors } = findings(STORE_SHARD_LINE_TOO_LONG_CODE);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.path).toBe(`shared/${relOf(path)}`);
+    expect(errors[0]!.message).toContain(`byte ${offset}`);
+    expect(errors[0]!.message).toContain("repair or remove it at its source");
+    expect(errors[0]!.message).not.toContain("o2b store shard quarantine");
+    expect(nextCommandField(errors[0]!.code)).toEqual({});
+  });
+
+  test("a newer-format line is a warning to upgrade, with no command", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = threeNotes();
+    editMiddle(path, (line) => line.replace('"v":1', '"v":99'));
+    const { warnings, errors } = findings(STORE_SHARD_NEWER_FORMAT_CODE);
+    expect(errors).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.message).toContain("upgrade Open Second Brain");
+    expect(warnings[0]!.message).not.toContain("o2b store shard quarantine");
+  });
+
+  /** A dev-b record in `stream` whose blob has not arrived, written at `when`. */
+  function pendingBlob(stream: "events" | "settings", when: number): string {
+    machine("dev-a");
+    const path = appendRecord(
+      machine("dev-b"),
+      stream === "events"
+        ? {
+            partition: "shared",
+            stream,
+            kind: "note",
+            agent: "t",
+            body: { n: 1, text: "x".repeat(20_000) },
+          }
+        : {
+            partition: "shared",
+            stream,
+            kind: SETTING_SET_KIND,
+            agent: "t",
+            body: { authority: "human", key: "brain.x.y", value: "x".repeat(20_000) },
+          },
+      { now: at(when) },
+    ).path;
+    rmSync(join(storeRoot, "shared", "blobs"), { recursive: true, force: true });
+    return path;
+  }
+
+  test("a young pending blob is a warning with no command, an old one an error with it", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = pendingBlob("events", NOW - DAY);
+    const young = findings(STORE_SHARD_BLOB_PENDING_CODE);
+    expect(young.errors).toEqual([]);
+    expect(young.warnings).toHaveLength(1);
+    expect(young.warnings[0]!.message).not.toContain("o2b store shard quarantine");
+    const old = findings(STORE_SHARD_BLOB_PENDING_CODE, NOW + 8 * DAY);
+    expect(old.warnings).toEqual([]);
+    expect(old.errors).toHaveLength(1);
+    expect(old.errors[0]!.message).toContain(
+      `o2b store shard quarantine shared/${relOf(path)} --offset 0`,
+    );
+  });
+
+  test("an old pending blob in a settings shard names no command", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    pendingBlob("settings", NOW - DAY);
+    const { errors } = findings(STORE_SHARD_BLOB_PENDING_CODE, NOW + 8 * DAY);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).not.toContain("o2b store shard quarantine");
+  });
+
+  // A clock stamp that verifies but names no instant a date can hold.
+  const UNREADABLE_HLC = `"hlc":"${Number.MAX_SAFE_INTEGER}.0"`;
+
+  test("a pending blob whose clock stamp does not parse says so and offers no quarantine by age", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = pendingBlob("events", NOW - 8 * DAY);
+    const lines = readFileSync(path, "utf8").split("\n");
+    lines[0] = lines[0]!.replace(/"hlc":"[^"]*"/, UNREADABLE_HLC);
+    writeFileSync(path, lines.join("\n"));
+    for (const now of [NOW + 10, NOW + 30 * DAY]) {
+      const { errors, warnings } = findings(STORE_SHARD_BLOB_PENDING_CODE, now);
+      expect(warnings).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]!.message).toContain("its clock stamp does not parse");
+      expect(errors[0]!.message).not.toContain("has not arrived since");
+      expect(errors[0]!.message).not.toContain("o2b store shard quarantine");
+    }
+  });
+
+  test("a shard gone since the partition read is skipped, not thrown", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const path = threeNotes();
+    const rel = relOf(path);
+    rmSync(path);
+    expect(gapFindingsOf(rel).issues).toEqual([]);
+  });
+
+  test.skipIf(IS_WINDOWS)(
+    "a shard swapped for a link is an error with no quarantine command",
+    () => {
+      process.env[STORE_ROOT_ENV] = storeRoot;
+      const path = threeNotes();
+      const aside = join(parent, "aside.jsonl");
+      writeFileSync(aside, readFileSync(path));
+      rmSync(path);
+      symlinkSync(aside, path);
+      const { issues } = gapFindingsOf(relOf(path));
+      expect(issues).toHaveLength(1);
+      expect(issues[0]!.code).toBe(STORE_SHARD_UNREADABLE_CODE);
+      expect(issues[0]!.message).toContain("could not be read");
+      expect(issues[0]!.message).not.toContain("o2b store shard quarantine");
+      // The next step the doctor attaches by code names no command either.
+      expect(nextCommandField(issues[0]!.code)).toEqual({});
+    },
+  );
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a shard that fails the second read for another reason than its removal is named with the error code",
+    () => {
+      process.env[STORE_ROOT_ENV] = storeRoot;
+      const path = threeNotes();
+      chmodSync(path, 0o000);
+      try {
+        const { issues } = gapFindingsOf(relOf(path));
+        expect(issues).toHaveLength(1);
+        expect(issues[0]!.severity).toBe("error");
+        expect(issues[0]!.code).toBe(STORE_SHARD_UNREADABLE_CODE);
+        expect(issues[0]!.path).toBe(`shared/${relOf(path)}`);
+        expect(issues[0]!.message).toContain("EACCES");
+        expect(nextCommandField(issues[0]!.code)).toEqual({});
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
+
+  test("below local reach no store finding names the private partition, and the counts are those of a store without it", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    threeNotes();
+    const doctor = (opts: { withholdsPrivate?: true; reach?: "remote" } = {}) =>
+      runDoctor(vault, { now: new Date(NOW + 10), ...opts });
+    const before = doctor();
+    // A private shard with a clock far ahead and a corrupt middle line: a
+    // clock-ahead warning and a corrupt-line error, both naming `private`.
+    const b = machine("dev-b");
+    let path = "";
+    for (const n of [1, 2, 3]) {
+      path = appendRecord(
+        b,
+        { partition: "private", stream: "events", kind: "note", agent: "t", body: { n } },
+        { now: at(NOW + 30 * DAY) },
+      ).path;
+    }
+    editMiddle(path, (line) => line.replace('"n":2', '"n":20'));
+    const local = doctor();
+    const named = (r: typeof local) =>
+      [...r.errors, ...r.warnings].filter(
+        (i) => (i.path ?? "").includes("private") || i.message.includes("private"),
+      );
+    expect(named(local).map((i) => i.code)).toEqual(
+      expect.arrayContaining([STORE_SHARD_CORRUPT_LINE_CODE, STORE_CLOCK_AHEAD_CODE]),
+    );
+    for (const remote of [doctor({ withholdsPrivate: true }), doctor({ reach: "remote" })]) {
+      expect(named(remote)).toEqual([]);
+      expect(remote.errors.length).toBe(before.errors.length);
+      expect(remote.warnings.length).toBe(before.warnings.length);
+      expect(remote.trust_verdict).toEqual(before.trust_verdict);
+    }
+  });
+
+  test("a torn line and a quarantined line give no finding", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    const torn = threeNotes();
+    editMiddle(torn, (line) => line.slice(0, Math.floor(line.length / 2)));
+    expect(findings(STORE_SHARD_CORRUPT_LINE_CODE).errors).toEqual([]);
+    const offset = editMiddle(torn, () =>
+      readFileSync(torn, "utf8").split("\n")[0]!.replace('"n":1', '"n":10'),
+    );
+    expect(findings(STORE_SHARD_CORRUPT_LINE_CODE).errors).toHaveLength(1);
+    addQuarantine(storeRoot, {
+      partition: "shared",
+      shard: relOf(torn),
+      offset,
+      sha256: lineSha256At(torn, offset, join(storeRoot, "shared"))!,
+      kind: "corrupt-line",
+      reason: "test",
+    });
+    expect(findings(STORE_SHARD_CORRUPT_LINE_CODE).errors).toEqual([]);
+  });
+});
+
+describe("failed writes below local reach", () => {
+  /** Make `<partition>/ledgers` a file, so every ledger-row append there fails naming its path. */
+  function blockAppends(partition: "shared" | "private"): string {
+    const blocked = join(storeRoot, partition, "ledgers");
+    writeFileSync(blocked, "not a folder\n");
+    return blocked;
+  }
+
+  /** One dual write (the vault keeps its legacy tree) and one fail-open store-only write. */
+  function writeRow(partition: "shared" | "private"): void {
+    const store = () => ledgerRowRecord("metrics", { n: 1 }, partition);
+    const quiet = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      routeWrite({ legacy: () => null, store, context: { vault } });
+      routeWrite({ legacy: () => null, store, context: { vault: null }, failOpen: true });
+    } finally {
+      quiet.mockRestore();
+    }
+  }
+
+  const CODES = [STORE_DUAL_WRITE_FAILURES_CODE, STORE_WRITE_FAIL_OPEN_CODE];
+  const failuresOf = (opts: { withholdsPrivate?: true; reach?: "remote" } = {}) =>
+    runDoctor(vault, { now: new Date(NOW), ...opts }).warnings.filter((i) =>
+      CODES.includes(i.code),
+    );
+
+  test("a failed private write shows nothing below local reach; a failed shared one still shows", () => {
+    process.env[STORE_DUAL_WRITE_ENV] = "1";
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    process.env["O2B_DEVICE_ID"] = "dev-a";
+    ensureStore(storeRoot);
+    const blocked = blockAppends("private");
+    writeRow("private");
+    const local = failuresOf();
+    expect(local.map((i) => i.code).toSorted()).toEqual(CODES.toSorted());
+    // The error text names the private folder the append could not use.
+    expect(local.every((i) => i.message.includes(blocked))).toBe(true);
+    for (const opts of [{ withholdsPrivate: true } as const, { reach: "remote" } as const]) {
+      expect(failuresOf(opts)).toEqual([]);
+    }
+
+    const sharedBlocked = blockAppends("shared");
+    writeRow("shared");
+    for (const opts of [{ withholdsPrivate: true } as const, { reach: "remote" } as const]) {
+      const remote = failuresOf(opts);
+      expect(remote.map((i) => i.code).toSorted()).toEqual(CODES.toSorted());
+      for (const issue of remote) {
+        expect(issue.message.startsWith("1 ")).toBe(true);
+        expect(issue.message).toContain("to the shared partition");
+        expect(issue.message).toContain(sharedBlocked);
+        expect(issue.message).not.toContain(blocked);
+        expect(issue.message).not.toContain("private");
+      }
+    }
+    // The operator's own doctor still counts both.
+    expect(failuresOf().every((i) => i.message.startsWith("2 "))).toBe(true);
   });
 });

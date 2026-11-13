@@ -22,7 +22,7 @@
  * the next does not.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -50,7 +50,11 @@ import { runCli as runCliRaw, type RunCliOptions } from "../helpers/run-cli.ts";
  */
 const runCli = (args: ReadonlyArray<string>, opts: RunCliOptions = {}) =>
   runCliRaw(args, { stdin: "", ...opts });
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+// Every test here runs the CLI, most of them several times.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /**
  * Passphrases assembled at runtime so no source line carries a literal

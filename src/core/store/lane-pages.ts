@@ -44,7 +44,6 @@ import { noVaultRoot } from "../platform-dirs.ts";
 import { containedRecordPath } from "../record-path.ts";
 import type { FrontmatterMap } from "../types.ts";
 import {
-  formatFrontmatter,
   parseFrontmatter,
   parseFrontmatterText,
   writeFrontmatterAtomic,
@@ -72,6 +71,7 @@ import {
   storedEntryPrivate,
   tombstoneOf,
 } from "./lane-entry-store.ts";
+import { rawParsesBack, rawToKeep, renderLaneText } from "./lane-raw.ts";
 import { brainRelOfEntry, lanePlaceOf } from "./lane-paths.ts";
 import { configuredStore } from "./read/store-entities.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS, withLocalLock } from "./local-lock.ts";
@@ -263,10 +263,10 @@ export function readLaneText(vault: string, path: string): string | null {
   if (heldInStore(vault, path)) {
     const value = storeEntry(vault, path);
     if (value === null) return null;
-    if (path.endsWith(".md")) return formatFrontmatter(value.fields as FrontmatterMap, value.text);
-    return path.endsWith(".json") && value.text === ""
-      ? `${JSON.stringify(value.fields, null, 2)}\n`
-      : value.text;
+    if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
+      return value.raw;
+    }
+    return renderLaneText(path, value.fields, value.text);
   }
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
@@ -399,7 +399,8 @@ export function writeLaneText(
 ): void {
   if (opts.exclusive !== true && heldInStore(vault, path)) {
     const { fields, body } = laneTextParts(path, text);
-    if (sameEntry(storeEntry(vault, path), fields, body)) return;
+    const raw = rawToKeep(path, text, fields, body);
+    if (sameEntry(storeEntry(vault, path), fields, body, raw)) return;
   }
   const replaced = opts.exclusive !== true && legacyPagePrivate(vault, path);
   withCreateLock(vault, path, opts.exclusive === true, undefined, () =>
@@ -411,6 +412,7 @@ export function writeLaneText(
       },
       store: () => {
         const { fields, body } = laneTextParts(path, text);
+        const raw = rawToKeep(path, text, fields, body);
         return [
           ...replacedShared(vault, path),
           entryRecord(
@@ -418,7 +420,9 @@ export function writeLaneText(
             path,
             fields,
             body,
-            replaced || storedEntryPrivate(vault, path) || isPrivateEntry(vault, fields, body),
+            replaced || storedEntryPrivate(vault, path) || isPrivateEntry(vault, fields, body, raw),
+            "judged",
+            raw,
           ),
         ];
       },
@@ -536,6 +540,7 @@ export function moveLanePage(
           rewrite?.body ?? value.text,
           isPrivate,
           "located",
+          rewrite === undefined ? value.raw : undefined,
         ),
       ],
       context(vault),
@@ -601,6 +606,7 @@ export function moveLaneTree(vault: string, from: string, to: string): void {
               value.text,
               partition === "private",
               "located",
+              value.raw,
             ),
             located: { partition, content: true },
           },

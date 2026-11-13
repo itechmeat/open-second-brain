@@ -35,6 +35,15 @@ export interface StreamRead {
    * this machine read before and that are gone now.
    */
   readonly unreadable: ReadonlyArray<string>;
+  /**
+   * Whether a record was left out because its body is still a pending
+   * blob. A quarantined pending blob opens no gap, so `unreadable` does
+   * not name its shard; and when the blob arrives, neither the shard's
+   * bytes nor the quarantine ledger change. A caller that caches a read
+   * on those stamps must not cache one that skipped a pending record, or
+   * it keeps answering without that record after the blob is delivered.
+   */
+  readonly skippedPending: boolean;
 }
 
 export interface StreamReadOptions {
@@ -72,9 +81,10 @@ export function readStreamRecords(
     // A stream that cannot be listed (its folder, or any device folder
     // below it: EACCES, EBUSY) is named whole, as an unreadable shard is,
     // and none of its shards is read; the other streams still read.
-    return { records, unreadable: [streamPrefix(ref)] };
+    return { records, unreadable: [streamPrefix(ref)], skippedPending: false };
   }
   const compactions: Compaction[] = [];
+  let skippedPending = false;
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device) continue;
     if (options.month !== undefined && !options.month(monthOf(shard.rel))) continue;
@@ -93,6 +103,7 @@ export function readStreamRecords(
     compactions.push(...read.compactions);
     for (const entry of read.records) {
       if (entry.bodyState !== "pending") records.push(entry.record);
+      else skippedPending = true;
     }
   }
   const gone = trackSeenShards(
@@ -105,5 +116,5 @@ export function readStreamRecords(
     shards.map((shard) => shard.rel),
     replacedShards(compactions),
   );
-  return { records, unreadable: [...unreadable, ...gone] };
+  return { records, unreadable: [...unreadable, ...gone], skippedPending };
 }

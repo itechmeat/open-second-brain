@@ -194,6 +194,7 @@ function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
       event_type: entry.eventType,
       body: cloneLogBody(entry.body),
     },
+    ...privateMark(entry),
   });
 }
 
@@ -234,7 +235,13 @@ function noteWriteContribution(
       event_type: entry.eventType,
       body: cloneLogBody(entry.body),
     },
+    ...privateMark(entry),
   });
+}
+
+/** The mark of an event read from the store's `private` partition, or nothing. */
+function privateMark(entry: BrainLogEntry): { readonly fromPrivatePartition?: true } {
+  return entry.fromPrivatePartition === true ? { fromPrivatePartition: true } : {};
 }
 
 function logTopic(entry: BrainLogEntry): string | undefined {

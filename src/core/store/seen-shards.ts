@@ -25,7 +25,8 @@
  * between two processes only delays tracking a shard to the next read.
  * A surface that promises to write nothing (doctor, the status block)
  * runs inside {@link withoutSeenRecording}: it still reports a shard the
- * ledger names that is gone, and records nothing.
+ * ledger names that is gone, and records nothing. Leaving a partition
+ * (`partition-leave.ts`) clears its entries.
  */
 
 import { mkdirSync, readFileSync, statSync } from "node:fs";
@@ -119,6 +120,51 @@ function load(path: string): Ledger {
   return ledger;
 }
 
+/**
+ * The ledger at `path`, read strictly: a file that exists but cannot be
+ * read or parsed, or is not a version 1 ledger of the shape this release
+ * writes, throws, so a caller that must clear the file's entries
+ * (`forgetSeenPartition`) refuses instead of seeing zero entries and
+ * reporting a clearing that did not happen. An absent file is zero
+ * entries.
+ */
+function loadStrict(path: string): Ledger {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "ENOENT") return new Map();
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `the seen-shards ledger ${path} cannot be parsed ` +
+        `(${err instanceof Error ? err.message : String(err)})`,
+      { cause: err },
+    );
+  }
+  if (!isStrictLedger(parsed)) {
+    throw new Error(`the seen-shards ledger ${path} is not a version 1 ledger this release reads`);
+  }
+  return parseLedger(text);
+}
+
+/** A version 1 ledger whose `shards` maps each partition to a list of shard names. */
+function isStrictLedger(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { version, shards } = value as { version?: unknown; shards?: unknown };
+  if (version !== 1) return false;
+  if (typeof shards !== "object" || shards === null || Array.isArray(shards)) return false;
+  return Object.entries(shards).every(
+    ([partition, rels]) =>
+      isPartition(partition) && Array.isArray(rels) && rels.every((rel) => typeof rel === "string"),
+  );
+}
+
 /** Apply `change` to the ledger on disk and write it back; never throws. */
 function update(path: string, change: (ledger: Ledger) => void): void {
   try {
@@ -138,6 +184,17 @@ function update(path: string, change: (ledger: Ledger) => void): void {
   }
 }
 
+/**
+ * The device-local ledger file of the store `storeId`, keyed by the root:
+ * two copies of one store on one machine (a moved root, a test bench of two
+ * machines) never share a ledger.
+ */
+function seenLedgerFile(storeRoot: string, storeId: string): string {
+  const rootKey = createHash("sha256").update(resolve(storeRoot)).digest("hex").slice(0, 16);
+  const name = SEEN_SHARDS_FILE.replace(/\.json$/, `-${rootKey}.json`);
+  return join(deviceStateDirFor(storeId, processDirsEnv()), name);
+}
+
 function ledgerPath(partitionRoot: string): { path: string; partition: StorePartition } | null {
   const partition = basename(partitionRoot);
   if (!isPartition(partition)) return null;
@@ -148,14 +205,36 @@ function ledgerPath(partitionRoot: string): { path: string; partition: StorePart
     return null;
   }
   if (storeId === null) return null;
-  // Keyed by the root as well: two copies of one store on one machine (a
-  // moved root, a test bench of two machines) never share a ledger.
-  const rootKey = createHash("sha256")
-    .update(resolve(dirname(partitionRoot)))
-    .digest("hex")
-    .slice(0, 16);
-  const name = SEEN_SHARDS_FILE.replace(/\.json$/, `-${rootKey}.json`);
-  return { path: join(deviceStateDirFor(storeId, processDirsEnv()), name), partition };
+  return { path: seenLedgerFile(dirname(partitionRoot), storeId), partition };
+}
+
+/**
+ * Remove the partition's entries from this machine's seen-shards ledger of
+ * the store `storeId`, and return how many there were. Checked, not
+ * best-effort: the ledger is read strictly, so a file that exists but
+ * cannot be read or parsed throws (the lenient `load` would answer an
+ * empty map and report a clearing that did not happen), and the ledger's
+ * `update` never throws, so this verifies the write landed before the
+ * caller reports the partition cleared.
+ */
+export function forgetSeenPartition(
+  storeRoot: string,
+  storeId: string,
+  partition: StorePartition,
+): number {
+  const path = seenLedgerFile(storeRoot, storeId);
+  const count = loadStrict(path).get(partition)?.size ?? 0;
+  if (count > 0) {
+    update(path, (ledger) => {
+      ledger.delete(partition);
+    });
+    if ((loadStrict(path).get(partition)?.size ?? 0) > 0) {
+      throw new Error(
+        `could not clear the seen-shard entries of the ${partition} partition in ${path}`,
+      );
+    }
+  }
+  return count;
 }
 
 function deviceOf(rel: string): string {

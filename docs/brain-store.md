@@ -199,6 +199,23 @@ from there to the other trusted machines:
 o2b store init --partitions shared,private
 ```
 
+### Leaving a partition
+
+A machine that held a partition refuses every store command once that
+partition's `store.json` is gone: the held partitions are sticky, and the
+refusal names the two remedies. To take the partition off on purpose,
+stop syncing its folder, remove the folder, and run
+`o2b store partition leave <partition>`; it clears this machine's held
+marker for the partition, its seen-shard entries and the digest caches,
+and the search index drops its records on its next catch-up. It refuses
+`shared` (leaving it is leaving the store), and it refuses, changing
+nothing, while `shared/store.json` is missing or unreadable, so restore
+that file first. It also refuses while the partition's `store.json` is
+still present, and it refuses while the folder still holds files, unless
+`--force` is given; the files then stay on disk and this machine ignores
+them. A `store.json` that returns by sync or a restore makes
+the machine hold the partition again.
+
 ## Syncing
 
 Open Second Brain never syncs anything itself. Use any file sync tool:
@@ -575,6 +592,76 @@ follows old instructions), doctor reports `legacy-tree-reappeared` with the
 writer when a file names it. Nothing reads that folder; stop the writer and
 move the folder out of the vault.
 
+## Shards read only in part
+
+A shard of a held partition can read only in part: a line in its middle is
+not a valid record, a record is of a format this release does not know, or
+a record's body blob has not arrived. A record in such a gap may be the one
+that makes a page private or sets a setting, so every read that decides a
+protection fails closed on this machine until the gap is gone: capture,
+settings reads and writes, lane privacy, exact state, attestations, the OKF
+export and the migration. A line cut short by a crash and closed by the
+device's next append is not a gap.
+
+The doctor names each gap, with the shard as `<partition>/<shard path>` and
+the byte offset of the line:
+
+- `store-shard-corrupt-line` (error): a bad line in the middle. Repair it at
+  its source when you can; otherwise the finding names the command that
+  quarantines it on this machine.
+- `store-shard-line-too-long` (error): a bad line in the middle too long
+  for a quarantine to name. Repair or remove it at its source; no command
+  is named.
+- `store-shard-newer-format` (warning): upgrade Open Second Brain on this
+  machine, which then reads the record. Such a line is never quarantined:
+  it is a valid record.
+- `store-shard-blob-pending` (warning, error once the record is seven days
+  old): a sync tool may still deliver the blob, so it is quarantined only
+  from seven days on, and never in a `settings` shard, whose record may be
+  a setting in force: deliver that blob from the machine that wrote it.
+  When the record's clock stamp does not parse as a time, its age is
+  unknown: the finding is an error that says so, and the record is never
+  quarantined by age.
+
+`o2b store shard quarantine <partition>/<shard> --offset <n>` records, in a
+ledger kept in this machine's device-local state, the line's offset and the
+hash of its bytes. The shard then reads as whole on this machine; the line
+stays in the file and no other machine is affected. The entry matches only
+those bytes at that offset: a different line written there, or another bad
+line of the same shard, is a gap again. The last line of a shard this
+machine writes is refused, because its writer may still be appending. A
+quarantined record whose blob arrives later reads with its body, with no
+step of yours. The rollback, the late import of the transition, the
+migration preflight and the legacy removal still refuse while any record
+waits for its blob, quarantined or not. One exception:
+`o2b brain migrate-store --remove-legacy --force` goes past a shard read
+only in part, a quarantined or pending blob included, as it goes past a
+cohort device still on the legacy layout. That risks data loss: a record
+in that shard may have the legacy tree as its only readable copy, and the
+tree leaves the vault (it is kept in the dated archive described under
+"Removing the legacy tree"). A shard that cannot be read at all still
+refuses, even with `--force`. Prefer letting the blob arrive or repairing
+the line before forcing the removal.
+
+A quarantine cannot name a line longer than the hash cap (sixty-four times
+the store line cap, 1 MiB): the verb refuses it as `line-too-long`, so the
+doctor reports such a line as `store-shard-line-too-long` (error) and names
+no command; repair or remove it at its source, in the shard of the device
+that wrote it. The quarantine ledger is read only when it is of the version
+this release writes; a ledger of another version, or one that does not
+parse, quarantines nothing on this machine, so every line it named is a gap
+again until the ledger is repaired or removed.
+
+`o2b store shard list` prints every entry with its state: `held` while the
+same bytes still stand there, `resolved` once the line reads as a record,
+`stale` once other bytes stand at the offset.
+`o2b store shard release <partition>/<shard> --offset <n>` removes the
+entry's mark. The line is a gap again only if it still is one: then the
+protection reads fail closed again, while a `resolved` entry (its blob has
+arrived) leaves the shard whole. When another process holds the ledger's
+lock past the wait budget, `quarantine` and `release` refuse with
+`ledger-busy` and change nothing; run the command again.
+
 ## What the partitions protect, and what they do not
 
 The partitions decide **which machines receive which records**. They are a
@@ -621,8 +708,8 @@ that come from the store, the migration and the view:
 | Code | What it means | What to do |
 | --- | --- | --- |
 | `store-missing` | No store exists at the configured root. | Run `o2b init` (or `o2b store init`) on the first machine; on other machines check `store_root` and wait for sync. |
-| `store-root-invalid` | The store root cannot be used: it is inside the vault, or holds partitions of two different stores. | Point `store_root` outside the vault, and keep only one store's partitions under it. |
-| `store-partition-lost` | A partition this machine has held (it opened or initialised it here) no longer shows its `store.json`. The store is not opened: every protection fails closed and every store write is refused, because the partition's records cannot be read. | Restore that partition's `store.json` from sync or a backup. No command takes a partition off this machine's list. |
+| `store-root-invalid` | The store root cannot be used: it is inside the vault, a partition's `store.json` does not parse, or it holds partitions of two different stores. A caller below local reach (a remote MCP client) sees only that the store could not be opened, without the file or the store ids. | Point `store_root` outside the vault, keep only one store's partitions under it, and restore a `store.json` that does not parse from sync or a backup. |
+| `store-partition-lost` | A partition this machine has held (it opened or initialised it here) no longer shows its `store.json`. The store is not opened: every protection fails closed and every store write is refused, because the partition's records cannot be read. | Restore that partition's `store.json` from sync or a backup. To stop holding `private` on this machine on purpose, stop syncing its folder, remove the folder, then run `o2b store partition leave private` (it needs `shared/store.json`, so restore `shared` first when both are lost); `shared` can only be restored. |
 | `store-device-state-foreign` | The device-local state directory holds entries of other devices: it was put into a sync folder. | Remove it from the sync tool, sync only `shared/` and `private/`, then delete the other devices' entries in it. |
 | `machine-state-adopt-conflicts` | When this machine switched, two fresh vaults held a machine-state file with different bytes; the first vault's copy is live and the other is kept in the `adopt-conflicts/` folder the finding names, with the file count. | Compare each kept file with the live copy at the same path, copy over what is still needed, then delete the folder. |
 | `store-mode-loose` | Store files or folders are readable by other accounts on this machine. | Run the `chmod -R go-rwx` command the finding prints. |
@@ -635,8 +722,8 @@ that come from the store, the migration and the view:
 | `store-device-retired-returned` | A device you retired wrote a record after its retirement, so it is on the digest roster again. | Nothing to do if the machine is back on purpose (migrate it if it still keeps the legacy tree). If a new machine reused the id, give it its own `device_id` and retire the old id again. |
 | `store-clock-ahead` | Records carry a clock more than a day ahead of now. | Fix the clock of the device the finding names. |
 | `store-device-dir-reserved` | A peer's device id is a name Windows reserves (such as `con`), so its folder cannot exist on Windows. | Give that peer another `device_id` in its machine config. |
-| `store-write-fail-open` | Writes from hooks or telemetry did not land (no store yet, no device id, a missing partition); their callers went on. | Fix the cause the finding names, then delete the counter file `store-write.json` in the `stores` state directory (`~/.local/state/open-second-brain/stores/` on Linux) to reset it. |
-| `store-dual-write-failures`, `store-dual-write-skipped`, `store-dual-write-no-store` | Only on a machine running the phase 1 dual-write trial (`store_dual_write`): store copies of legacy writes failed or were skipped. | Fix the cause, or migrate the machine and turn the trial off. |
+| `store-write-fail-open` | Writes from hooks or telemetry did not land (no store yet, no device id, a missing partition); their callers went on. A caller below local reach (a remote MCP client) sees only the failed writes known to go to `shared/`: a failure that may concern `private/` shows no count, time, error text or path there. | Fix the cause the finding names, then delete the counter file `store-write.json` in the `stores` state directory (`~/.local/state/open-second-brain/stores/` on Linux) to reset it. |
+| `store-dual-write-failures`, `store-dual-write-skipped`, `store-dual-write-no-store` | Only on a machine running the phase 1 dual-write trial (`store_dual_write`): store copies of legacy writes failed or were skipped. Below local reach the failures follow the rule of `store-write-fail-open`, and the skipped writes are reported without their count. | Fix the cause, or migrate the machine and turn the trial off. |
 | `migration-available` | This machine still keeps its brain in the vault's `Brain/` tree, or it switched before this vault was configured and the vault's legacy tree was never imported. | Follow [Moving an existing install](#moving-an-existing-install); on a switched machine run `o2b brain migrate-store`, which imports the tree and binds the vault. |
 | `legacy-devices-pending` | This machine switched, but the named devices still write the legacy tree. | Migrate each named machine, and retire the ones that are gone with `o2b store device retire <device-id>`. |
 | `legacy-tree-reappeared` | A `Brain/` folder is back in the vault after the legacy tree was removed. | Stop the writer the finding names and move the folder out of the vault. |

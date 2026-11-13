@@ -207,6 +207,12 @@ export interface BuildOperatorSnapshotOptions {
    * so the two seams read as one pattern.
    */
   readonly writerLockHeldAt?: (dbPath: string) => boolean;
+  /**
+   * The caller is below local reach: the stale scan's timeline and the
+   * doctor pass leave out the log events of the store's `private`
+   * partition. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /**
@@ -265,6 +271,7 @@ export async function buildOperatorSnapshot(
     const doctor = runDoctor(vault, {
       now,
       ...(searchDbPath !== null ? { dbPath: searchDbPath } : {}),
+      ...(opts.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
     });
     if (doctor.errors.length > 0) {
       problem("doctor-errors", `${doctor.errors.length} invariant error(s)`);
@@ -308,7 +315,7 @@ export async function buildOperatorSnapshot(
   if (vault !== null) {
     try {
       const cfg = loadTemporalConfigSafe(vault);
-      const index = buildTimelineIndex(vault, {});
+      const index = buildTimelineIndex(vault, { withholdsPrivate: opts.withholdsPrivate === true });
       const stale = findStaleEntries(index, vault, cfg, { now });
       staleTotal =
         stale.stalePreferences.length + stale.staleSignals.length + stale.staleLogFiles.length;

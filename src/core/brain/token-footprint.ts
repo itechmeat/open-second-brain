@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { storeLogDays } from "./log-days.ts";
+import { withoutPrivateEntries } from "./log-events-at-reach.ts";
 import { memoryFromStore, storePagesIn } from "./memory-pages.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
@@ -81,15 +82,21 @@ function sumStorePages(vault: string, dir: string): { tokens: number; files: num
 /**
  * The store's log on a store-only machine, measured as its days: one
  * "file" per day with an event, the events of the day as JSON lines (the
- * shape a day file holds).
+ * shape a day file holds). With `withholdsPrivate`, an event of the
+ * store's `private` partition is not measured, and a day left with no
+ * event is not a file.
  */
-function sumStoreLog(vault: string): { tokens: number; files: number } {
+function sumStoreLog(vault: string, withholdsPrivate: boolean): { tokens: number; files: number } {
   const days = storeLogDays(vault) ?? [];
   let tokens = 0;
+  let files = 0;
   for (const day of days) {
-    tokens += estimateTokens(day.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+    const entries = withoutPrivateEntries(day.entries, withholdsPrivate);
+    if (entries.length === 0) continue;
+    tokens += estimateTokens(entries.map((entry) => JSON.stringify(entry)).join("\n"));
+    files += 1;
   }
-  return { tokens, files: days.length };
+  return { tokens, files };
 }
 
 /**
@@ -105,9 +112,20 @@ function resolveWarnThreshold(envValue: string | undefined): number {
   return TOKEN_WARN_THRESHOLD_DEFAULT;
 }
 
+export interface ComputeTokenFootprintOptions {
+  readonly warnThreshold?: number;
+  readonly envWarnThreshold?: string;
+  /**
+   * The caller is below local reach: the log bucket leaves out the events
+   * of the store's `private` partition. The page buckets are page
+   * aggregates and count every page. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
+}
+
 export function computeTokenFootprint(
   vault: string,
-  opts: { warnThreshold?: number; envWarnThreshold?: string } = {},
+  opts: ComputeTokenFootprintOptions = {},
 ): TokenFootprintReport {
   const dirs = brainDirs(vault);
   const tracked: Array<[name: string, path: string]> = [
@@ -128,7 +146,7 @@ export function computeTokenFootprint(
   for (const [name, path] of tracked) {
     let measured: { tokens: number; files: number };
     if (!fromStore) measured = sumDir(path);
-    else if (name === "log") measured = sumStoreLog(vault);
+    else if (name === "log") measured = sumStoreLog(vault, opts.withholdsPrivate === true);
     else measured = sumStorePages(vault, path);
     const { tokens, files } = measured;
     byCategory.push({ name, tokens, files });

@@ -44,9 +44,15 @@ export { eventAtReach, recordRefs };
 /**
  * The reference view for one request: unfiltered at local reach with the
  * ownership gate off, the request's reach and owner predicate otherwise.
+ * Below local reach it also withholds every log event of the store's
+ * `private` partition, whatever it names.
  */
 export function requestRefView(ctx: ServerContext): ArtifactRefView {
-  return readerRefView(ctx.vault, readableAtContextReachOrUndefined(ctx));
+  return readerRefView(
+    ctx.vault,
+    readableAtContextReachOrUndefined(ctx),
+    contextReach(ctx) !== TRANSPORT_REACH.local,
+  );
 }
 
 /**

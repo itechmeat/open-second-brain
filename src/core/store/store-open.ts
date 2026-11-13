@@ -89,13 +89,24 @@ export class HeldPartitionLostError extends StoreOpenError {
     readonly root: string,
     readonly partitions: ReadonlyArray<StorePartition>,
   ) {
+    // Leaving `shared` is leaving the store, so the verb refuses it: for a
+    // lost `shared` the only remedy is the restore. With `shared` among the
+    // lost partitions, leaving anything else cannot work either: the leave
+    // reads the store id from `shared/store.json` before it clears anything,
+    // so it refuses with `no-store-id` and changes nothing. Name only the
+    // restores.
+    const leave = partitions.includes("shared")
+      ? ""
+      : `, or run ${partitions
+          .map((p) => `\`o2b store partition leave ${p}\``)
+          .join(" and ")} to stop holding ${partitions.length > 1 ? "them" : "it"} on this machine`;
     super(
       `the ${partitions.join(" and ")} partition${partitions.length > 1 ? "s" : ""} of the ` +
         `brain store at ${root}, which this machine has held, no longer show${
           partitions.length > 1 ? "" : "s"
         } ${STORE_IDENTITY_FILE}; its records cannot be read, so the store is not opened. ` +
         `Restore ${partitions.map((p) => `${p}/${STORE_IDENTITY_FILE}`).join(" and ")} ` +
-        "from sync or a backup",
+        `from sync or a backup${leave}`,
     );
     this.name = "HeldPartitionLostError";
   }

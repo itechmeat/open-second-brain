@@ -262,8 +262,12 @@ describe("an export with nothing to redact is byte-identical", () => {
     for (const file of expected.files) {
       // `okf.json` carries `generated_at`, which moves between runs.
       if (file.path === "okf.json") continue;
-      expect(`${file.path}: ${readFileSync(join(out, file.path), "utf8")}`).toBe(
-        `${file.path}: ${file.contents}`,
+      // A page's `generated.at` is stamped to the second, and the CLI run
+      // and this in-process build may fall on either side of one.
+      const unstamped = (text: string): string =>
+        text.replace(/^(generated: \{.*\bat: ")[^"]+(")/m, "$1<at>$2");
+      expect(`${file.path}: ${unstamped(readFileSync(join(out, file.path), "utf8"))}`).toBe(
+        `${file.path}: ${unstamped(file.contents)}`,
       );
     }
   });

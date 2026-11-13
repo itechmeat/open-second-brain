@@ -17,13 +17,14 @@
  * protection reader fails closed exactly as for an unopenable store, and
  * every write refuses. A machine that never held a partition is unaffected.
  *
- * No command takes a partition off this record: the remedy is to restore the
- * partition's identity file (sync, or a backup). The list is keyed by the
- * store root as configured, like the switch marker.
+ * One command takes a partition off this record: `o2b store partition leave
+ * <partition>` (`partition-leave.ts`), once the partition's identity file is
+ * gone. The other remedy is to restore the identity file (sync, or a backup).
+ * The list is keyed by the store root as configured, like the switch marker.
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -88,4 +89,24 @@ export function lostHeldPartitions(
   if (STORE_PARTITIONS.every((p) => held.has(p))) return [];
   const dir = ledgerDir();
   return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync(markerPath(dir, root, p)));
+}
+
+/**
+ * Whether this machine holds a marker for the partition at `root`: the
+ * fact {@link recordHeldPartitions} wrote and {@link HeldPartitionLostError}
+ * reads.
+ */
+export function isHeldPartitionMarked(root: string, partition: StorePartition): boolean {
+  return existsSync(markerPath(ledgerDir(), root, partition));
+}
+
+/**
+ * Take the partition off this machine's held list: remove the marker, and
+ * return `true` when one was there. `false` changes nothing.
+ */
+export function forgetHeldPartition(root: string, partition: StorePartition): boolean {
+  const marker = markerPath(ledgerDir(), root, partition);
+  if (!existsSync(marker)) return false;
+  rmSync(marker, { force: true });
+  return true;
 }

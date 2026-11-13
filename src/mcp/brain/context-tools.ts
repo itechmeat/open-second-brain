@@ -436,7 +436,9 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // `computeMaintenanceOverdueFlag`'s docblock for the cost bound. This
   // is the always-loaded path, so the full `maintenance_debt` derivation
   // on `computeBrainStatus` never runs here.
-  const maintenanceOverdue = computeMaintenanceOverdueFlag(vault);
+  const maintenanceOverdue = computeMaintenanceOverdueFlag(vault, {
+    withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
+  });
 
   // The operator's standing rules, resolved before anything else this
   // surface assembles - INCLUDING the no-Brain return below. `brain_context`

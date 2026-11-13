@@ -61,6 +61,11 @@ export interface BuildConceptClusterOptions {
    * other would leave the more disclosive half open.
    */
   readonly ownerScope?: string | null;
+  /**
+   * The caller is below local reach: log events of the store's `private`
+   * partition link nothing (passed to the backlink index).
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 /**
@@ -80,7 +85,9 @@ export function buildConceptCluster(
   const scope = opts.ownerScope ?? null;
   const targetTitle = resolveTitle(vault, normalised);
 
-  const index = buildBacklinkIndex(vault, scope);
+  const index = buildBacklinkIndex(vault, scope, {
+    withholdsPrivate: opts.withholdsPrivate === true,
+  });
   const refs = index.get(normalised) ?? [];
   const linkers: ConceptLinker[] = refs
     .map((r) =>

@@ -231,12 +231,15 @@ async function toolBrainStaleScan(
 ): Promise<Record<string, unknown>> {
   void _args;
   const cfg = loadTemporalConfigSafe(ctx.vault);
-  const index = buildTimelineIndex(ctx.vault, {});
-  const report = findStaleEntries(index, ctx.vault, cfg);
   // Every stale row names its artifact by id, topic and vault-relative
   // path (a-label-is-not-a-boundary, U3). Log shards are named by date
   // and shared by construction, so they carry no ownership to read.
+  // Below local reach a private log event anchors no preference's age.
   const view = reviewView(ctx);
+  const index = buildTimelineIndex(ctx.vault, {
+    withholdsPrivate: view.withholdsPrivate === true,
+  });
+  const report = findStaleEntries(index, ctx.vault, cfg);
   return {
     vault_path: vaultPathField(ctx),
     thresholds: report.thresholds,

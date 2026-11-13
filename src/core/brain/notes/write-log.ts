@@ -86,6 +86,11 @@ export interface ListNoteWritesFilter {
   /** Inclusive upper bound, same two spellings. */
   readonly until?: string;
   readonly op?: NoteWriteOp;
+  /**
+   * The caller is below local reach: a write logged by an event of the
+   * store's `private` partition is not listed. Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 export interface ListNoteWritesResult {
@@ -197,6 +202,7 @@ export function listNoteWrites(
   )) {
     warnings.push(...day.warnings);
     day.entries.forEach((entry, index) => {
+      if (filter.withholdsPrivate === true && entry.fromPrivatePartition === true) return;
       const record = projectRecord(entry, day.entryShardIds[index] ?? "");
       if (record === null) return;
       if (filter.agent !== undefined && record.agent !== filter.agent) return;

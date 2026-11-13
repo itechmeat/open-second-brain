@@ -93,6 +93,8 @@ type FileStat = Pick<ShardStat, "identity" | "size" | "mtimeMs">;
 interface ProcessState {
   readonly scanner: ShardScanner;
   readonly storeRoot: string;
+  /** The partitions the scanner lists: a machine that leaves one gets a new state. */
+  readonly partitions: string;
   lastCheckMs: number;
   indexIdentity: string | null;
   /** Shard stats as of the watermarks last seen, or null when unknown. */
@@ -129,10 +131,18 @@ export function catchUpIntervalMs(env: NodeJS.ProcessEnv = process.env): number 
 
 function stateFor(config: ResolvedSearchConfig, store: IndexedStore): ProcessState {
   const existing = states.get(config.dbPath);
-  if (existing !== undefined && existing.storeRoot === store.root) return existing;
+  const partitions = store.partitions.join(",");
+  if (
+    existing !== undefined &&
+    existing.storeRoot === store.root &&
+    existing.partitions === partitions
+  ) {
+    return existing;
+  }
   const fresh: ProcessState = {
     scanner: new ShardScanner(store),
     storeRoot: store.root,
+    partitions,
     lastCheckMs: Number.NEGATIVE_INFINITY,
     indexIdentity: null,
     known: null,

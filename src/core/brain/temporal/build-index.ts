@@ -58,6 +58,12 @@ export interface BuildTimelineIndexOptions {
   readonly until?: string;
   /** Wall clock; defaults to `new Date()`. Used to derive the default `until`. */
   readonly now?: Date;
+  /**
+   * Skip every log event of the store's `private` partition: for the
+   * builders whose output no reference view filters, below local reach.
+   * Only a store-only machine marks events; day files carry no mark.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,7 +84,7 @@ export function buildTimelineIndex(
   const window = resolveWindow(opts);
 
   const events: TemporalEvent[] = [];
-  collectLogEvents(vault, window, events);
+  collectLogEvents(vault, window, events, opts.withholdsPrivate === true);
   collectRetiredEvents(vault, window, events);
 
   events.sort(compareEvents);
@@ -170,7 +176,12 @@ function addDays(day: string, delta: number): string {
   return new Date(t + delta * ONE_DAY_MS).toISOString().slice(0, 10);
 }
 
-function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEvent[]): void {
+function collectLogEvents(
+  vault: string,
+  window: TimelineWindow,
+  out: TemporalEvent[],
+  withholdsPrivate: boolean,
+): void {
   const sinceDay = dateKeyFromIso(window.since);
   const untilDay = dateKeyFromIso(window.until);
   // Err permissive by one day on each side (timezone safety - the
@@ -185,6 +196,7 @@ function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEv
     for (const entry of entries) {
       if (entry.timestamp < window.since) continue;
       if (entry.timestamp >= window.until) continue;
+      if (withholdsPrivate && entry.fromPrivatePartition === true) continue;
       out.push(
         normaliseLogEntry(entry, {
           path: `${STORE_LOG_POINTER_PREFIX}${dateKeyFromIso(entry.timestamp)}`,
@@ -265,6 +277,7 @@ function normaliseLogEntry(entry: BrainLogEntry, source: TemporalEventSource): T
     ...(artifact !== undefined ? { artifact } : {}),
     ...(text !== undefined ? { text } : {}),
     ...(dreamSummary !== undefined ? { dreamSummary } : {}),
+    ...(entry.fromPrivatePartition === true ? { fromPrivatePartition: true as const } : {}),
   });
 }
 

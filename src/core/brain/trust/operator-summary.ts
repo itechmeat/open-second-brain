@@ -137,6 +137,13 @@ export interface BuildOperatorSummaryOptions {
    * taken over the entries it keeps. Omitted, every entry counts.
    */
   readonly keepVerification?: (entry: VerificationDeltaEntry) => boolean;
+  /**
+   * The caller is below local reach: the maintenance actions and the
+   * doctor pass leave out the log events of the store's `private`
+   * partition (the token footprint's log bucket, the broken-backlink
+   * check). Default false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 const DEFAULT_TOP_ACTIONS_N = 5;
@@ -149,7 +156,7 @@ export function buildOperatorSummary(
   const dreamSummary = opts.dreamSummary;
 
   const doctorResult = keptDoctorResult(
-    safeDoctor(vault, guardrails, dreamSummary, opts.readable),
+    safeDoctor(vault, guardrails, dreamSummary, opts.readable, opts.withholdsPrivate === true),
     opts.keepIssue,
   );
   const dreamCounts = summariseDream(dreamSummary);
@@ -169,6 +176,7 @@ export function buildOperatorSummary(
     collectErrors,
     opts.readable !== undefined,
     opts.visibleRef,
+    opts.withholdsPrivate === true,
   );
 
   const trust = computeTrustVerdict({
@@ -257,12 +265,14 @@ function safeDoctor(
   guardrails: ResolvedBrainGuardrailConfig,
   dreamSummary: DreamRunSummary | undefined,
   readable: BuildOperatorSummaryOptions["readable"],
+  withholdsPrivate: boolean,
 ): RunDoctorResult {
   try {
     return runDoctor(vault, {
       guardrails,
       ...(dreamSummary ? { dreamSummary } : {}),
       ...(readable !== undefined ? { readable } : {}),
+      ...(withholdsPrivate ? { withholdsPrivate: true } : {}),
     });
   } catch {
     return Object.freeze({ warnings: [], errors: [] });
@@ -373,6 +383,7 @@ function safeTopActions(
   collectErrors: { scan: MaintenanceCollectSignal; message: string }[],
   restricted: boolean,
   visibleRef?: BuildOperatorSummaryOptions["visibleRef"],
+  withholdsPrivate = false,
 ): ReadonlyArray<ActionItem> {
   try {
     const all = collectMaintenanceActions(vault, {
@@ -387,6 +398,7 @@ function safeTopActions(
       // actions ask, so the sinks cannot disagree about what a scoped
       // caller is shown.
       ...(visibleRef !== undefined ? { visible: visibleRef } : {}),
+      withholdsPrivate,
     });
     const kept = keepAction === undefined ? all : all.filter(keepAction);
     return Object.freeze(kept.slice(0, Math.max(0, topN)));

@@ -142,7 +142,11 @@ async function toolBrainBeliefEvolution(
   const target = hasPref
     ? { prefId: (prefIdRaw as string).trim() }
     : { topic: (topicRaw as string).trim() };
-  const index = buildTimelineIndex(ctx.vault, {});
+  // Every row is derived from the index and never passes `eventAtReach`,
+  // so below local reach a private event must not enter the index at all:
+  // its evidence row or transition would name only readable records.
+  const refs = requestRefView(ctx);
+  const index = buildTimelineIndex(ctx.vault, { withholdsPrivate: refs.withholdsPrivate === true });
   const evo = buildBeliefEvolution(index, ctx.vault, target);
   // A topic target fans out to every pref/ret carrying that topic, so
   // one `topic` argument reaches artifacts the caller never named
@@ -155,7 +159,6 @@ async function toolBrainBeliefEvolution(
   // records answer to, and a pref_id target the caller cannot read is
   // answered as an absent one: no row at all.
   const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
-  const refs = requestRefView(ctx);
   const targetShown = !hasPref || recordReadable(refs, (prefIdRaw as string).trim());
   const shown = <T>(
     rows: ReadonlyArray<T>,
@@ -220,15 +223,16 @@ async function toolBrainConceptSynthesis(
   // `unlinkedMentions[]` carries a VERBATIM line of the mentioning
   // page's body (a-label-is-not-a-boundary, U3). Both producers already
   // take the scope; passing it is the whole fix.
-  const cluster = buildConceptCluster(ctx.vault, targetId, {
-    includeUnlinked,
-    ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
-  });
   // At the caller's reach a linker or a mention whose source page the
   // caller cannot read is dropped, and a target it cannot read (under its
   // pref- or ret- spelling) is answered as an absent one: its own id as
-  // the title and an empty cluster.
+  // the title and an empty cluster. A private log event links nothing.
   const refs = requestRefView(ctx);
+  const cluster = buildConceptCluster(ctx.vault, targetId, {
+    includeUnlinked,
+    ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+    withholdsPrivate: refs.withholdsPrivate === true,
+  });
   const targetShown = recordReadable(refs, cluster.targetId);
   return {
     vault_path: vaultPathField(ctx),

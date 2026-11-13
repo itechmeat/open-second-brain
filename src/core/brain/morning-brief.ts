@@ -21,6 +21,7 @@ import { brainDirs } from "./paths.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { logDayReader } from "./log-days.ts";
+import { logEntryAtReach } from "./log-events-at-reach.ts";
 import { reconcileTopicPreferenceId } from "./log.ts";
 import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
 import { isoDate, relativeAge } from "./time.ts";
@@ -73,6 +74,11 @@ export interface MorningBriefOptions {
    * every preference is a candidate.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The caller is below local reach: log events of the store's `private`
+   * partition are left out of the open questions and the notes.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
 interface ConfirmedPref {
@@ -144,6 +150,10 @@ function scanRecentLog(
     const entries = log.day(date).entries;
     for (let j = entries.length - 1; j >= 0; j--) {
       const e = entries[j]!;
+      // The reference rule every sibling reader applies: an event this
+      // caller may not see (a private one, or one naming an unreadable
+      // record) is neither an open question nor a note.
+      if (logEntryAtReach(refs, e) === null) continue;
       const ts = typeof e.timestamp === "string" ? e.timestamp : "";
       if (e.eventType === BRAIN_LOG_EVENT_KIND.reconcile) {
         // Auto-resolutions carry a `resolution` field; only open
@@ -198,7 +208,7 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
     vault,
     opts.now,
     lookbackDays,
-    readerRefView(vault, opts.readable),
+    readerRefView(vault, opts.readable, opts.withholdsPrivate === true),
   );
 
   // Budget all variable-length entries together so one oversized entry

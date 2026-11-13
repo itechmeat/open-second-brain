@@ -13,7 +13,8 @@
  * machine read before and that are gone now: an entry's records in one
  * are unknown, so a privacy decision over the fold fails closed while any
  * is listed. Such a fold is never cached, so a shard that reads again is
- * folded at once. A switched machine whose store cannot be opened lists
+ * folded at once; nor is a fold that left out a record whose body is a
+ * pending blob, so the record is folded as soon as its blob arrives. A switched machine whose store cannot be opened lists
  * that reason the same way (`read/protection-store.ts`).
  */
 
@@ -32,6 +33,7 @@ import {
   type LaneEntryValue,
 } from "./lane-records.ts";
 import { readStreamRecords } from "./read/stream-read.ts";
+import { quarantineStamp } from "./shard-quarantine.ts";
 import { protectionStore, StoreUnavailableError } from "./read/protection-store.ts";
 import { listShards } from "./shard-list.ts";
 import type { StoreInspection } from "./store-open.ts";
@@ -61,9 +63,13 @@ const EMPTY_FOLD: LaneFolded = {
 
 const cache = new Map<string, LaneFolded>();
 
-/** A stamp of every `events` shard of `store`; it moves whenever a record lands. */
+/**
+ * A stamp of every `events` shard of `store`; it moves whenever a record
+ * lands, and with the quarantine ledger, which decides whether a shard
+ * reads whole without changing its bytes.
+ */
 export function laneFingerprintOf(store: StoreInspection): string {
-  const parts: string[] = [store.storeId];
+  const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
     for (const shard of listShards(partitionDir(store.root, partition), { stream: "events" })) {
       let stamp = "missing";
@@ -101,9 +107,11 @@ export function laneStoreFold(): LaneFolded {
   const records: StoreRecord[] = [];
   const inPrivate = new Set<string>();
   const unreadable: string[] = [];
+  let skippedPending = false;
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
     const read = readStreamRecords(store.root, partition, { stream: "events" });
+    if (read.skippedPending) skippedPending = true;
     for (const rel of read.unreadable) unreadable.push(`${partition}/${rel}`);
     for (const record of read.records) {
       if (record.kind !== LANE_ENTRY_KIND && record.kind !== LANE_ENTRY_REMOVE_KIND) continue;
@@ -125,8 +133,9 @@ export function laneStoreFold(): LaneFolded {
   const folded = { fingerprint, entries, clocks, privateKeys, unreadable };
   // A shard that reads again after a permission change keeps its size and
   // mtime, so the fingerprint would not move: an incomplete fold is never
-  // reused.
-  if (unreadable.length === 0) cache.set(store.root, folded);
+  // reused. Nor is one that left out a record whose body is a pending blob:
+  // the blob's arrival moves neither a shard stamp nor the quarantine stamp.
+  if (unreadable.length === 0 && !skippedPending) cache.set(store.root, folded);
   else cache.delete(store.root);
   return folded;
 }

@@ -91,6 +91,9 @@ function trimTransitions<K extends string>(
  * is the reason this per-event rule exists.
  */
 export function eventAtReach(refs: ArtifactRefView, ev: TemporalEvent): TemporalEvent | null {
+  // An event of the store's `private` partition is withheld below local
+  // reach whatever it names, as in `logEntryAtReach`.
+  if (refs.withholdsPrivate === true && ev.fromPrivatePartition === true) return null;
   if (refs.filtersNothing) return ev;
   if (!isBrainLogRel(ev.source.path) && !refs.visible(ev.source.path)) return null;
   if (ev.kind === BRAIN_LOG_EVENT_KIND.applyEvidence) {
@@ -175,10 +178,21 @@ export function logEntriesAtReach(
 ): ReadonlyArray<BrainLogEntry> {
   // An event of the store's `private` partition is withheld below local
   // reach whatever it names, as a private page is (review finding F333).
-  const shown =
-    refs.withholdsPrivate === true
-      ? entries.filter((e) => e.fromPrivatePartition !== true)
-      : entries;
+  const shown = withoutPrivateEntries(entries, refs.withholdsPrivate === true);
   if (refs.filtersNothing) return shown;
   return shown.flatMap((entry) => logEntryAtReach(refs, entry) ?? []);
+}
+
+/**
+ * The entries without those of the store's `private` partition when
+ * `withholds` is set (a caller below local reach), all of them otherwise:
+ * the one filter every counting reader applies before it counts, so a
+ * number or timestamp shown to a remote caller reads as if the withheld
+ * events did not exist.
+ */
+export function withoutPrivateEntries<T extends { readonly fromPrivatePartition?: true }>(
+  entries: ReadonlyArray<T>,
+  withholds: boolean,
+): ReadonlyArray<T> {
+  return withholds ? entries.filter((e) => e.fromPrivatePartition !== true) : entries;
 }

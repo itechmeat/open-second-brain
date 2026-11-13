@@ -33,8 +33,21 @@
  *    the device retirements may be in it;
  *  - a shard whose last bytes have not verified for an hour: the reader
  *    holds that tail back, so the record in it is read nowhere;
+ *  - a shard read only in part, one finding per gap (`store-gap-check.ts`):
+ *    a corrupt middle line and an old pending blob as errors, a
+ *    newer-format line and a young pending blob as warnings;
  *  - what a synced peer can deliver (`store-trust-check.ts`): a record id
  *    in both partitions, and store paths other local accounts can read.
+ *
+ * Below local reach (a caller with `withholdsPrivate`, or a `reach` other
+ * than local) every finding is computed without the `private` partition,
+ * so none names a private shard, offset, record id, device time or count,
+ * and a lost `private` identity file is reported without naming the
+ * partition (`storeAtReach`, `lostPartitionFinding`); a store that does not
+ * open for another reason is reported without the error text, which can
+ * name a partition's file or the store ids (`storeOpenFailureDetail`). The write counters
+ * follow the same rule: only failures known to concern only `shared` are
+ * shown, and the skipped writes without their count (`dualWriteFindings`).
  *
  * Read-only: it never creates the store or refreshes its format document.
  */
@@ -42,7 +55,12 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-import { STORE_PARTITIONS, type StorePartition } from "../../store/constants.ts";
+import { TRANSPORT_REACH } from "../../graph/transport-reach.ts";
+import {
+  STORE_IDENTITY_FILE,
+  STORE_PARTITIONS,
+  type StorePartition,
+} from "../../store/constants.ts";
 import type { StoreRecord } from "../../store/envelope.ts";
 import { compareHlc, formatHlc, HLC_MAX_DRIFT_MS, parseHlc, type Hlc } from "../../store/hlc.ts";
 import { compareCodeUnits } from "../../store/compare.ts";
@@ -79,6 +97,13 @@ import {
 } from "./store-trust-check.ts";
 import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
 import { returnedRetiredIssues } from "./device-retire-check.ts";
+import {
+  STORE_SHARD_UNREADABLE_CODE,
+  storeGapFindings,
+  type PartialShard,
+} from "./store-gap-check.ts";
+
+export { STORE_SHARD_UNREADABLE_CODE };
 
 /** Removed content still awaits compaction in the shards. */
 export const STORE_REMOVED_AWAITING_COMPACTION_CODE = "store-removed-awaiting-compaction";
@@ -101,8 +126,6 @@ export const STORE_DIGEST_SILENT_CODE = "store-digest-silent";
 export const STORE_RECORD_ID_CONFLICT_CODE = "store-record-id-conflict";
 /** A partition this machine holds could not be read. */
 export const STORE_PARTITION_UNREADABLE_CODE = "store-partition-unreadable";
-/** One shard of a held partition could not be read; the rest were checked. */
-export const STORE_SHARD_UNREADABLE_CODE = "store-shard-unreadable";
 /** A shard's last bytes have not verified for a long time, so its last record is read nowhere. */
 export const STORE_SHARD_TAIL_HELD_CODE = "store-shard-tail-held";
 /** No store exists at the root; `o2b store init` creates one. */
@@ -132,26 +155,62 @@ function warn(out: DoctorFindings, code: string, message: string, path?: string)
   } satisfies DoctorIssue);
 }
 
-function dualWriteFindings(out: DoctorFindings): void {
+/**
+ * The failure part of a write status: below local reach only the
+ * failures known to concern only `shared` (the `shared_*` counters);
+ * otherwise every failure.
+ */
+function failuresAtReach(
+  status: {
+    readonly failures: number;
+    readonly last_error: string | null;
+    readonly last_failure_at: string | null;
+    readonly shared_failures: number;
+    readonly shared_last_error: string | null;
+    readonly shared_last_failure_at: string | null;
+  },
+  atReach: boolean,
+): { count: number; error: string | null; at: string | null } {
+  return atReach
+    ? {
+        count: status.shared_failures,
+        error: status.shared_last_error,
+        at: status.shared_last_failure_at,
+      }
+    : { count: status.failures, error: status.last_error, at: status.last_failure_at };
+}
+
+/**
+ * The dual-write counters. Below local reach (`atReach`) a failure that
+ * may concern the `private` partition is not shown at all (no count, time
+ * or error text, which can name a private shard): only the failures known
+ * to concern only `shared` are. The skipped writes are reported without
+ * their count, since the skipped writes include private ones.
+ */
+function dualWriteFindings(out: DoctorFindings, atReach: boolean): void {
   const path = dualWriteStatusPath();
   const status = readDualWriteStatus(path);
-  if (status.failures > 0) {
+  const failed = failuresAtReach(status, atReach);
+  if (failed.count > 0) {
     warn(
       out,
       STORE_DUAL_WRITE_FAILURES_CODE,
-      `${status.failures} brain store dual write(s) failed on this machine` +
-        (status.last_failure_at !== null ? `, the last at ${status.last_failure_at}` : "") +
-        (status.last_error !== null ? ` (${status.last_error})` : "") +
+      `${failed.count} brain store dual write(s) ${atReach ? "to the shared partition " : ""}` +
+        "failed on this machine" +
+        (failed.at !== null ? `, the last at ${failed.at}` : "") +
+        (failed.error !== null ? ` (${failed.error})` : "") +
         "; the legacy writes were kept, so the store is missing those records. " +
         "Fix the cause, then delete the counter file to reset it",
       path,
     );
   }
+  const counted = (n: number): string =>
+    atReach ? "brain store dual writes were" : `${n} brain store dual write(s) were`;
   if (status.skipped_no_device > 0) {
     warn(
       out,
       STORE_DUAL_WRITE_SKIPPED_CODE,
-      `${status.skipped_no_device} brain store dual write(s) were skipped because this machine ` +
+      `${counted(status.skipped_no_device)} skipped because this machine ` +
         "has no device id; set device_id in the machine config (and leave O2B_DEVICE_ID unset " +
         "or set it to a real id) so the store can name this device's shards",
       path,
@@ -161,7 +220,7 @@ function dualWriteFindings(out: DoctorFindings): void {
     warn(
       out,
       STORE_DUAL_WRITE_NO_STORE_CODE,
-      `${status.skipped_no_store} brain store dual write(s) were skipped because no store ` +
+      `${counted(status.skipped_no_store)} skipped because no store ` +
         "existed; the legacy writes were kept, so the store is missing those records. " +
         "Run `o2b store init` if it has not been run, then delete the counter file to reset it",
       path,
@@ -169,16 +228,18 @@ function dualWriteFindings(out: DoctorFindings): void {
   }
 }
 
-function failOpenWriteFindings(out: DoctorFindings): void {
+/** The fail-open counters, under the same rule at reach as {@link dualWriteFindings}. */
+function failOpenWriteFindings(out: DoctorFindings, atReach: boolean): void {
   const path = storeWriteStatusPath();
-  const status = readStoreWriteStatus(path);
-  if (status.failures === 0) return;
+  const failed = failuresAtReach(readStoreWriteStatus(path), atReach);
+  if (failed.count === 0) return;
   warn(
     out,
     STORE_WRITE_FAIL_OPEN_CODE,
-    `${status.failures} fail-open brain store write(s) on this machine did not land` +
-      (status.last_failure_at !== null ? `, the last at ${status.last_failure_at}` : "") +
-      (status.last_error !== null ? ` (${status.last_error})` : "") +
+    `${failed.count} fail-open brain store write(s) ${atReach ? "to the shared partition " : ""}` +
+      "on this machine did not land" +
+      (failed.at !== null ? `, the last at ${failed.at}` : "") +
+      (failed.error !== null ? ` (${failed.error})` : "") +
       "; the hooks and telemetry that made them went on, so the store is missing those " +
       "records. Fix the cause, then delete the counter file to reset it",
     path,
@@ -260,9 +321,14 @@ function digestMessage(finding: DigestFinding): string {
 function readHeldPartitions(
   store: StoreInspection,
   out: DoctorFindings,
-): { shards: Map<StorePartition, PartitionShard[]>; complete: Set<StorePartition> } {
+): {
+  shards: Map<StorePartition, PartitionShard[]>;
+  complete: Set<StorePartition>;
+  partial: PartialShard[];
+} {
   const shards = new Map<StorePartition, PartitionShard[]>();
   const complete = new Set<StorePartition>();
+  const partial: PartialShard[] = [];
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
     const dir = partitionDir(store.root, partition);
@@ -281,6 +347,7 @@ function readHeldPartitions(
         readPartition(dir, {
           onUnreadable: (s) => {
             if (s.incomplete !== true) unreadable.push(s);
+            else partial.push({ partition, rel: s.rel });
           },
         }),
       );
@@ -308,7 +375,7 @@ function readHeldPartitions(
     }
     if (unreadable.length === 0) complete.add(partition);
   }
-  return { shards, complete };
+  return { shards, complete, partial };
 }
 
 /**
@@ -348,13 +415,45 @@ function heldTailFindings(
   }
 }
 
+/**
+ * Whether the caller is below local reach: a wire surface that names its
+ * reach (`brain_doctor`) or one that only marks the caller as withheld from
+ * private data (`brain_brief view=operator`, `brain_status`, the repair
+ * pass). Neither set reads as the operator's own shell.
+ */
+function withholdsPrivate(ctx: StoreSideCheckContext): boolean {
+  return (
+    ctx.withholdsPrivate === true ||
+    (ctx.reach !== undefined && ctx.reach !== TRANSPORT_REACH.local)
+  );
+}
+
+/**
+ * The store as a caller below local reach may see it: without the `private`
+ * partition. Every finding below is computed from this one view, so none of
+ * them names a private shard, offset, record id, device time or count: no
+ * unreadable shard, gap or held tail, no record id conflict, clock-ahead or
+ * digest finding, no cross-partition id, loose mode or reserved name, and
+ * the removal backlog counts only `shared`. The caller's `ok`, counts and
+ * trust verdict read as if the `private` partition were not held here.
+ */
+function storeAtReach(store: StoreInspection, ctx: StoreSideCheckContext): StoreInspection {
+  if (!withholdsPrivate(ctx) || !store.partitions.has("private")) return store;
+  return {
+    ...store,
+    partitions: new Set([...store.partitions].filter((partition) => partition !== "private")),
+  };
+}
+
 function storeFindings(
-  store: StoreInspection,
+  held: StoreInspection,
   ctx: StoreSideCheckContext,
   out: DoctorFindings,
 ): void {
   const nowMs = ctx.now.getTime();
-  const { shards, complete } = readHeldPartitions(store, out);
+  const store = storeAtReach(held, ctx);
+  const { shards, complete, partial } = readHeldPartitions(store, out);
+  storeGapFindings(store, partial, nowMs, out);
   // Digests are compared only over partitions read in full: a cut with a
   // shard missing would read as a divergence that is not there.
   const digestShards = new Map([...shards].filter(([partition]) => complete.has(partition)));
@@ -431,6 +530,51 @@ function removalBacklogFinding(
   );
 }
 
+/**
+ * A held partition lost its identity file, so the store is not opened.
+ * Below local reach the finding follows the same rule as every other store
+ * finding and never names the `private` partition. It is still reported,
+ * with the partitions it may name: the store that does not open fails
+ * every protection closed for `shared` as well, so `ok` and the trust
+ * verdict must not read as healthy.
+ */
+function lostPartitionFinding(
+  err: HeldPartitionLostError,
+  ctx: StoreSideCheckContext,
+  out: DoctorFindings,
+): void {
+  let message = err.message;
+  if (withholdsPrivate(ctx) && err.partitions.includes("private")) {
+    const both = err.partitions.includes("shared");
+    const which = both ? "the shared partition and another partition" : "a partition";
+    message =
+      `${which} of the brain store at ${err.root}, which this machine has held, no longer ` +
+      `${both ? "show" : "shows"} ${STORE_IDENTITY_FILE}, so the store is not opened and every protection fails ` +
+      "closed. Run `o2b brain doctor` on this machine for the partitions and the remedy";
+  }
+  out.issues.push({
+    severity: "error",
+    code: STORE_PARTITION_LOST_CODE,
+    path: err.root,
+    message,
+  } satisfies DoctorIssue);
+}
+
+/**
+ * The detail of a store that did not open for a reason other than a lost
+ * partition. The error text can name a partition's file (a malformed
+ * `private/store.json`) or the store ids that disagree, so below local
+ * reach the finding keeps its code and the store root and says only that
+ * the store did not open; the operator's own doctor reads the cause.
+ */
+function storeOpenFailureDetail(err: unknown, root: string, ctx: StoreSideCheckContext): string {
+  if (!withholdsPrivate(ctx)) return err instanceof Error ? err.message : String(err);
+  return (
+    `the brain store at ${root} could not be opened, so every protection fails closed. ` +
+    "Run `o2b brain doctor` on this machine for the cause and the remedy"
+  );
+}
+
 /** Whether this machine uses the store: the flag is on or a root is configured. */
 function storeInUse(
   ctx: StoreSideCheckContext,
@@ -467,8 +611,10 @@ export const storeCheck: StoreSideDoctorCheck = {
     }
     if (!storeInUse(ctx, root, rootError)) return;
 
-    dualWriteFindings(out);
-    failOpenWriteFindings(out);
+    // Read before the store is: a failed write into `private` is withheld
+    // below local reach as every other private finding is.
+    dualWriteFindings(out, withholdsPrivate(ctx));
+    failOpenWriteFindings(out, withholdsPrivate(ctx));
     if (rootError !== null || root === null) {
       warn(
         out,
@@ -482,20 +628,10 @@ export const storeCheck: StoreSideDoctorCheck = {
       store = inspectStore(root.root);
     } catch (err) {
       if (err instanceof HeldPartitionLostError) {
-        out.issues.push({
-          severity: "error",
-          code: STORE_PARTITION_LOST_CODE,
-          path: root.root,
-          message: err.message,
-        } satisfies DoctorIssue);
+        lostPartitionFinding(err, ctx, out);
         return;
       }
-      warn(
-        out,
-        STORE_ROOT_INVALID_CODE,
-        err instanceof Error ? err.message : String(err),
-        root.root,
-      );
+      warn(out, STORE_ROOT_INVALID_CODE, storeOpenFailureDetail(err, root.root, ctx), root.root);
       return;
     }
     if (store === null) {

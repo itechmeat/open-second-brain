@@ -52,6 +52,12 @@ export interface AgentSourceContribution {
    */
   readonly origin_vault?: string;
   readonly data: Readonly<Record<string, unknown>>;
+  /**
+   * Set on a log contribution read from the store's `private` partition.
+   * Internal: `queryAgentSources` withholds such a contribution below
+   * local reach and strips the field from every contribution it returns.
+   */
+  readonly fromPrivatePartition?: true;
 }
 
 /**

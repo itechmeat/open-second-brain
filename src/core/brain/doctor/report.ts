@@ -54,6 +54,11 @@ export interface RunDoctorOptions {
    */
   readonly reach?: TransportReach;
   /**
+   * The caller is below local reach. Passed through to
+   * {@link DoctorCheckContext.withholdsPrivate}. Omitted reads as false.
+   */
+  readonly withholdsPrivate?: boolean;
+  /**
    * Optional precomputed dream summary (v0.10.16). When supplied,
    * the doctor runs the verification-delta helper and folds the
    * counts into the trust verdict. When omitted, verification

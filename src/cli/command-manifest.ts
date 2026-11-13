@@ -1342,6 +1342,28 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
+        command(
+          "partition",
+          "Take a partition off this machine on purpose",
+          [flag("config", "string"), flag("json", "boolean")],
+          [
+            command("leave", "Stop holding a partition whose folder is gone (never shared)", [
+              flag("force", "boolean"),
+            ]),
+          ],
+        ),
+        command(
+          "shard",
+          "Skip one bad line of a held shard on this machine, list the skipped lines, or release one",
+          [flag("config", "string"), flag("json", "boolean")],
+          [
+            command("quarantine", "Skip one bad line of a held shard on this machine", [
+              flag("offset", "string"),
+            ]),
+            command("list", "List the quarantined lines with their state"),
+            command("release", "Read a quarantined line again", [flag("offset", "string")]),
+          ],
+        ),
       ],
     ),
     command(

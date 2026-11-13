@@ -71,7 +71,8 @@ export interface TraceIdeaLineageOptions {
   /** Maximum backward hops from the queried artifact. Default 8. */
   readonly maxDepth?: number;
   /**
-   * Leave out continuity rows flagged `private`, as if they did not exist.
+   * Leave out continuity rows flagged `private`, and a preference's log
+   * events of the store's `private` partition, as if they did not exist.
    * Set for a caller at remote reach.
    */
   readonly withholdPrivate?: boolean;
@@ -88,7 +89,7 @@ export function traceIdeaLineage(
   const id = input.id.trim();
   if (id.length === 0) throw new IdeaLineageError("idea lineage requires a non-empty id");
   if (id.startsWith("pref-") || id.startsWith("ret-")) {
-    return preferenceLineage(vault, id);
+    return preferenceLineage(vault, id, opts.withholdPrivate === true);
   }
   return continuityLineage(
     vault,
@@ -276,8 +277,12 @@ function snippet(text: string): string {
 
 // ----- preference belief evolution -----------------------------------------
 
-function preferenceLineage(vault: string, prefId: string): IdeaLineageResult {
-  const index = buildTimelineIndex(vault, {});
+function preferenceLineage(
+  vault: string,
+  prefId: string,
+  withholdPrivate: boolean,
+): IdeaLineageResult {
+  const index = buildTimelineIndex(vault, { withholdsPrivate: withholdPrivate });
   const evo = buildBeliefEvolution(index, vault, { prefId });
   if (evo.transitions.length === 0 && evo.evidence.length === 0 && evo.retirements.length === 0) {
     throw new IdeaLineageError(`no belief lineage for ${prefId}`);

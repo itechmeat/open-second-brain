@@ -250,6 +250,17 @@ export function readHeldRecords(store: Pick<StoreHandle, "root" | "partitions">)
       },
     })) {
       records.push(...shard.all);
+      // A pending blob is a gap here even when this machine quarantined its
+      // line: rollback, the late import, the preflight and the legacy
+      // removal refuse on it, and none of them waits for it.
+      const rel = `${partition}/${shard.rel}`;
+      if (
+        shard.pending.length > 0 &&
+        shard.rel.split("/")[0] !== DIGEST_STREAM &&
+        !partial.includes(rel)
+      ) {
+        partial.push(rel);
+      }
     }
   }
   return {
