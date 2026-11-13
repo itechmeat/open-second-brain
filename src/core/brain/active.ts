@@ -505,11 +505,17 @@ function readRecentlyRetired(
       // Same rationale as readActivePreferences.
     }
   }
+  // Newest first; an unparseable date sorts last, and the id breaks ties so
+  // the order never depends on how the folder or the store lists its pages.
+  const time = (r: BrainRetired): number => {
+    const t = Date.parse(r.retired_at);
+    return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
+  };
   out.sort((a, b) => {
-    const ta = Date.parse(a.retired_at);
-    const tb = Date.parse(b.retired_at);
-    if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;
-    return tb - ta; // newest first
+    const ta = time(a);
+    const tb = time(b);
+    if (ta !== tb) return tb > ta ? 1 : -1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return out.slice(0, limit);
 }
