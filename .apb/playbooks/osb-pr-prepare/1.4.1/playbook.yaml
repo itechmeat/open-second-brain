@@ -275,8 +275,11 @@ nodes:
     worktree, then append its exact `bun test` name (as printed after
     "(fail) ", without the timing) to
     <git-dir>/osb-pr-prepare/known-test-failures.txt and name it with
-    the evidence in your output. Never add a test that fails only on
-    the branch.
+    the evidence in your output. Write the merge base you proved it on
+    (`git merge-base origin/<base> HEAD`) to
+    <git-dir>/osb-pr-prepare/known-test-failures.base: the QA gate
+    ignores the list once the merge base moves. Never add a test that
+    fails only on the branch.
 
     Commit fixes per the brief. Wrap ONLY the result in <node_output>
     and </node_output>: each red gate, the cause, the fix commit or the
@@ -687,13 +690,15 @@ nodes:
     Do not wait for the checks to conclude and do not watch them; the
     ci_wait node after you waits for the checks. Start the review work now.
 
-    First wait for CodeRabbit's review to be POSTED: it usually arrives
-    minutes after the push, long before the checks end. Poll
-    `gh api repos/<owner>/<repo>/pulls/<n>/reviews` and
-    `.../pulls/<n>/comments` in one blocking loop (sleep 60 between calls,
-    at most 10 minutes), then read what it said: `gh pr view <n>
-    --comments`. If no CodeRabbit review appears in that window, say so in
-    the reply and continue. Handle only comments you have not already
+    First wait for CodeRabbit's review OF THE CURRENT HEAD to be POSTED:
+    it usually arrives minutes after the push, long before the checks
+    end. Take the head with `git rev-parse HEAD` and poll
+    `gh api repos/<owner>/<repo>/pulls/<n>/reviews` in one blocking loop
+    (sleep 60 between calls, at most 10 minutes) until a CodeRabbit
+    review's `commit_id` equals that head; an earlier review does not
+    count. Then read what it said (`.../pulls/<n>/comments` and `gh pr
+    view <n> --comments`). If no review of the head appears in that
+    window, say so in the reply and continue. Handle only comments you have not already
     answered in an earlier pass of this node.
 
     The operator may hand external review documents to the orchestrator
@@ -716,7 +721,10 @@ nodes:
       skill (references/convergence.md, section 5): usually OCR on the
       fix commits only (`<skill>/scripts/cycle.sh --range
       <before-fix>..HEAD --steps ocr`), never a full cycle restart by
-      itself. Push only when that is clean.
+      itself. A code fix also passes the QA and architecture gates on
+      the fix head: `sh .apb/playbooks/osb-pr-prepare/$(cat
+      .apb/playbooks/osb-pr-prepare/current)/scripts/final-gates.sh`. Push only when both are
+      clean.
     - Commit fixes per the brief (for example `fix: address CodeRabbit
       review feedback`) and push the same way push_pr did. A push here
       restarts CI; that is expected, because the ci_wait node after you

@@ -80,7 +80,11 @@ bun_test() {
     echo "bun test exited $rc without a (fail) line: a crash, not a test failure"
     return 1
   }
-  if [ -f "$known" ]; then
+  # The list holds only failures proven on one merge base; a moved base voids it.
+  if [ -f "$known" ] && [ "$(cat "$known.base" 2>/dev/null)" != "$(git merge-base "origin/$OSB_BASE" HEAD 2>/dev/null)" ]; then
+    echo "known-test-failures.txt was proven on another merge base: ignored"
+    unknown=$(cat "$logs/bun-test.failed")
+  elif [ -f "$known" ]; then
     unknown=$(LC_ALL=C sort -u "$known" | LC_ALL=C comm -23 "$logs/bun-test.failed" -)
   else
     unknown=$(cat "$logs/bun-test.failed")

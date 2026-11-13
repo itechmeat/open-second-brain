@@ -51,8 +51,15 @@ echo "checks for PR #$OSB_PR_NUMBER at $head (CI run $run_id):"
 gh pr checks "$OSB_PR_NUMBER" 2>&1 || true
 
 if [ "$rc" -eq 0 ]; then
-  echo "CI-GATE: green"
-  exit 0
+  # `--watch` exits 0 with a cancelled check: a cancelled job validated nothing.
+  cancelled=$(gh pr checks "$OSB_PR_NUMBER" --json name,bucket -q '[.[] | select(.bucket == "cancel") | .name] | join(", ")') ||
+    die "the check list could not be read after the watch"
+  if [ -z "$cancelled" ]; then
+    echo "CI-GATE: green"
+    exit 0
+  fi
+  echo "CI-GATE: red (cancelled: $cancelled)"
+  exit 1
 fi
 if [ "$rc" -eq 124 ]; then
   echo "CI-GATE: red (checks still pending after ${WATCH_TIMEOUT}s)"
