@@ -3,6 +3,7 @@ import {
   resolveNearDuplicateRetireSiblingsEnabled,
 } from "../../../core/config.ts";
 import { scanBrain } from "../../../core/brain/dream-scan.ts";
+import { regenerateActiveQuiet } from "../../../core/brain/active.ts";
 import { READ_ALL_REFS } from "../../../core/brain/near-duplicate.ts";
 import {
   loadPreference,
@@ -100,6 +101,8 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
   } catch (err) {
     process.stderr.write(`warning: append reject log failed: ${(err as Error).message}\n`);
   }
+
+  regenerateActiveQuiet(vault, { now, legacyOnly: true });
 
   // Near-duplicate defense: list (never retire) the active preferences that
   // resemble the one just rejected. The operator's own shell reads the whole

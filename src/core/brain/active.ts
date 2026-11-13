@@ -45,7 +45,11 @@ import {
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
-import { compiledDigestPath, digestsRenderedOnDemand } from "./compiled-digest-path.ts";
+import {
+  compiledDigestPath,
+  digestCachePath,
+  digestsRenderedOnDemand,
+} from "./compiled-digest-path.ts";
 import { legacyMemoryPage, type MemoryPage, storeMemoryPages } from "./memory-pages.ts";
 import { withLogReadPass } from "./log-days.ts";
 import { parseRetiredMeta } from "./preference.ts";
@@ -55,11 +59,13 @@ import {
   buildChainLookup,
   resolveChainTip,
   type ChainLookup,
-} from "./lifecycle/tombstone.ts";
+} from "./lifecycle/tombstone-read.ts";
+import { filterExpired } from "./expiration.ts";
 import { chainVerdict } from "../search/correction-coupling.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "./path-constants.ts";
-import { brainActivePath, brainDirsForWrite, brainDirsOf } from "./paths.ts";
+import { brainActivePath, brainDirs, brainDirsOf } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
@@ -176,10 +182,20 @@ export interface RegenerateActiveResult {
  * `brain_doctor`; this render's job is to surface what is knowable.
  */
 export function renderActive(vault: string | null, opts: RenderActiveOptions = {}): ActiveRender {
+  return renderActiveAt(vault, opts);
+}
+
+function renderActiveAt(
+  vault: string | null,
+  opts: RenderActiveOptions,
+  expirationNow?: Date,
+): ActiveRender {
   const now = opts.now ?? new Date();
 
   const readable = opts.readable ?? READ_EVERYTHING;
-  const preferences = readActivePreferences(vault, opts.agentScope, readable);
+  const preferences = filterExpired(readActivePreferences(vault, opts.agentScope, readable), {
+    now: expirationNow ?? now,
+  });
   const retiredRecent = readRecentlyRetired(
     vault,
     RECENTLY_RETIRED_COUNT,
@@ -312,15 +328,18 @@ export function activeDigestPathForRead(
   // gives its body: what changed since is time alone, as for a vault file
   // the next dream pass has not rewritten yet. A changed input renders now.
   const path = compiledDigestPath(vault, "active");
+  const now = opts.now ?? new Date();
   const stamp = readGeneratedAt(path);
   const stampMs = stamp === null ? Number.NaN : Date.parse(stamp);
   // One read pass: the check render and a regeneration share one log read.
   return withLogReadPass(() => {
     if (stamp !== null && !Number.isNaN(stampMs)) {
-      const atStamp = renderActive(vault, { now: new Date(stampMs) });
+      // Keep the log window at the cached generation, but do not keep serving
+      // a preference whose explicit expiration has passed since then.
+      const atStamp = renderActiveAt(vault, { now: new Date(stampMs) }, now);
       if (readExistingBody(path) === atStamp.body.trim()) return path;
     }
-    return regenerateActive(vault, opts).path;
+    return regenerateActive(vault, { now }).path;
   });
 }
 
@@ -337,7 +356,10 @@ export function regenerateActive(
   opts: RegenerateActiveOptions = {},
 ): RegenerateActiveResult {
   const now = opts.now ?? new Date();
-  const path = compiledDigestPath(vault, "active");
+  const onDemand = digestsRenderedOnDemand(vault);
+  if (!onDemand && vault !== null) assertVaultIdentityForWrite(vault);
+  const path =
+    onDemand || vault === null ? digestCachePath(vault, "active") : brainActivePath(vault);
   const rendered = renderActive(vault, { now });
 
   // `readExistingBody` returns the trimmed body (parseFrontmatter
@@ -348,7 +370,7 @@ export function regenerateActive(
   if (changed) {
     // The device-local cache directory of a store-only machine may not
     // exist yet; the vault's `Brain/` always does when this is reached.
-    if (digestsRenderedOnDemand(vault)) mkdirSync(dirname(path), { recursive: true });
+    if (onDemand) mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, rendered.document);
   }
 
@@ -368,9 +390,10 @@ export function regenerateActive(
  */
 export function regenerateActiveQuiet(
   vault: string | null,
-  opts: RegenerateActiveOptions = {},
+  opts: RegenerateActiveOptions & { legacyOnly?: boolean } = {},
 ): void {
   try {
+    if (opts.legacyOnly && digestsRenderedOnDemand(vault)) return;
     regenerateActive(vault, opts);
   } catch (err) {
     process.stderr.write(`warning: regenerate active.md failed: ${(err as Error).message}\n`);
@@ -403,7 +426,7 @@ function readActivePreferences(
   readable: (rel: string) => boolean,
 ): BrainPreference[] {
   // With no vault the folders are the store's (design D14).
-  const dirs = vault === null ? brainDirsOf(null) : brainDirsForWrite(vault);
+  const dirs = brainDirsOf(vault);
   // The shared delivery-path walk (context-integrity-gates, Unit A) owns
   // the listing and the parse; a corrupted or status/folder-mismatched
   // file is omitted there, and `brain_doctor` is the surface that flags
@@ -424,7 +447,7 @@ function readActivePreferences(
 
 function legacyRetiredPages(vault: string | null): MemoryPage[] {
   const root = legacyVaultOf(vault, "readRecentlyRetired");
-  const dir = brainDirsForWrite(root).retired;
+  const dir = brainDirs(root).retired;
   if (!existsSync(dir)) return [];
   return readdirSync(dir).map((name) => legacyMemoryPage(root, "retired", name));
 }
@@ -613,6 +636,14 @@ function renderDocument(body: string, generatedAt: string): string {
     "",
   ];
   return lines.join("\n");
+}
+
+/** Find an existing stale vault digest using the same body comparison as regeneration. */
+export function legacyActiveIsStale(vault: string, path: string, now: Date): boolean {
+  if (!existsSync(path) || digestsRenderedOnDemand(vault, undefined, { persistSwitch: false })) {
+    return false;
+  }
+  return readExistingBody(path) !== renderActive(vault, { now }).body.trim();
 }
 
 function readExistingBody(path: string): string | null {

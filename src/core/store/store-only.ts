@@ -65,6 +65,8 @@ export interface StoreOnlyContext {
 }
 
 export interface StoreOnlyOptions {
+  /** A read-only preview must not persist a newly observed switch. */
+  readonly persistSwitch?: boolean;
   /**
    * The switch-record reader (default: {@link readSwitchRecords}); no
    * production caller sets it. It stays for the read-facade parity tests,
@@ -255,7 +257,7 @@ function isSwitched(context: StoreOnlyContext, options: StoreOnlyOptions): boole
   } catch {
     switched = false;
   }
-  if (switched) {
+  if (switched && options.persistSwitch !== false) {
     seenSwitched.add(key);
     writeMarker(root, device);
   }

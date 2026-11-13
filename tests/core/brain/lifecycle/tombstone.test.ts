@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatter } from "../../../../src/core/vault.ts";
+import { regenerateActive } from "../../../../src/core/brain/active.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import {
@@ -51,6 +52,8 @@ const NOW = new Date("2026-07-18T12:00:00Z");
 
 test("tombstone sets lifecycle frontmatter without deleting the file and preserves the body", () => {
   const rel = writePref("alpha", {}, "This is the human prose body.");
+  const digest = regenerateActive(vault, { now: NOW }).path;
+  expect(readFileSync(digest, "utf8")).toContain("## Confirmed (1)");
   const res = tombstone({ vault, path: rel, reason: "wrong belief", agent: "tester", now: NOW });
 
   expect(res.changed).toBe(true);
@@ -63,6 +66,8 @@ test("tombstone sets lifecycle frontmatter without deleting the file and preserv
   expect(meta["tombstoned_at"]).toBe("2026-07-18T12:00:00Z");
   expect(meta["tombstone_reason"]).toBe("wrong belief");
   expect(body).toBe("This is the human prose body.");
+  expect(readFileSync(digest, "utf8")).toContain("## Confirmed (0)");
+  expect(readFileSync(digest, "utf8")).not.toContain("pref-alpha");
 });
 
 test("re-issuing a tombstone is a byte-identical no-op returning the existing state", () => {

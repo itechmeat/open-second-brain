@@ -20,6 +20,7 @@ import {
 import { activeDigestPathForRead, renderActive } from "../../../../src/core/brain/active.ts";
 import { collectExplorerData } from "../../../../src/core/brain/explorer.ts";
 import { scanApplyEvidence } from "../../../../src/core/brain/dream-refresh.ts";
+import { setExpiration } from "../../../../src/core/brain/expiration-set.ts";
 import { renderDigest } from "../../../../src/core/brain/digest.ts";
 import { computeAgentSummary } from "../../../../src/core/brain/digest-agent-summary.ts";
 import { collectEvidenceForSlug } from "../../../../src/core/brain/evidence.ts";
@@ -303,6 +304,27 @@ describe("compiled digests on a switched machine", () => {
     }
     expect(answers[1]).toEqual(answers[0]!);
     expect(answers[1]!.body).toContain(FIXTURE.confirmed);
+  });
+
+  test("a store-only reader stops serving a preference when its expiration passes", () => {
+    const env = own.switched;
+    useEnv(env);
+    const path = activeDigestPathForRead(env.vault, { now: FIXTURE_NOW });
+    const before = readFileSync(path, "utf8");
+    expect(before).toContain(`\`${FIXTURE.confirmed}\``);
+    setExpiration(env.vault, FIXTURE.confirmed, "2026-11-07", {
+      now: FIXTURE_NOW,
+    });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(activeDigestPathForRead(env.vault, { now: new Date("2026-11-07T23:59:59Z") })).toBe(
+      path,
+    );
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(activeDigestPathForRead(env.vault, { now: new Date("2026-11-08T00:00:00Z") })).toBe(
+      path,
+    );
+    expect(readFileSync(path, "utf8")).not.toContain(`\`${FIXTURE.confirmed}\``);
+    expect(existsSync(join(env.vault, "Brain", "active.md"))).toBe(false);
   });
 });
 

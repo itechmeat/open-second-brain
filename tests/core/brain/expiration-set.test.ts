@@ -34,6 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { regenerateActive } from "../../../src/core/brain/active.ts";
 import {
   EXPIRATION_CLEAR,
   ExpirationTargetNotFoundError,
@@ -114,6 +115,20 @@ function seedPreference(): string {
 }
 
 describe("setting an expiration", () => {
+  test("the digest drops expired preferences and restores them when expiration is cleared", () => {
+    const id = seedPreference();
+    const now = new Date("2026-07-16T12:00:00Z");
+    const digest = regenerateActive(vault, { now }).path;
+    expect(readFileSync(digest, "utf8")).toContain(id);
+    setExpiration(vault, id, "2026-07-15", { now });
+    expect(readFileSync(digest, "utf8")).toContain("## Confirmed (0)");
+    expect(readFileSync(digest, "utf8")).not.toContain(id);
+    expect(existsSync(join(vault, "Brain", "preferences", `${id}.md`))).toBe(true);
+    setExpiration(vault, id, EXPIRATION_CLEAR, { now });
+    expect(readFileSync(digest, "utf8")).toContain("## Confirmed (1)");
+    expect(readFileSync(digest, "utf8")).toContain(id);
+  });
+
   test("stamps a signal and leaves its other frontmatter alone", () => {
     const id = seedSignal();
     const before = readFileSync(join(vault, "Brain/inbox", `${id}.md`), "utf8");

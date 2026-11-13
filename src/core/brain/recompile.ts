@@ -18,8 +18,9 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { HYGIENE_AUDIT_DIR } from "./audit-dirs.ts";
 import { scanFreshness } from "./freshness.ts";
+import { legacyActiveIsStale, regenerateActive } from "./active.ts";
 import { writeHandoffNote } from "./handoff.ts";
-import { brainDirsForWrite, snapshotsDir } from "./paths.ts";
+import { brainActivePath, brainDirsForWrite, snapshotsDir } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
@@ -30,7 +31,7 @@ import { lanePagesInStore, readLaneText, removeLanePage } from "../store/lane-pa
 import { lanePlaceOf } from "../store/lane-paths.ts";
 import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
-export type RecompileEntryKind = "rederive-handoff" | "cleanup" | "manual";
+export type RecompileEntryKind = "rederive-handoff" | "rederive-active" | "cleanup" | "manual";
 
 export interface RecompileEntry {
   readonly kind: RecompileEntryKind;
@@ -68,11 +69,27 @@ function resolveSource(vault: string, source: string): string {
  * Build the recompile plan from the current freshness state. Read-only
  * and side-effect free - this IS the dry-run preview.
  */
-export function planRecompile(vault: string): RecompilePlan {
+export function planRecompile(
+  vault: string,
+  options: { now?: Date; includeActiveDigest?: boolean } = {},
+): RecompilePlan {
   const freshness = scanFreshness(vault);
   const entries: RecompileEntry[] = [];
+  // Comparing the shared digest reads preferences from the whole vault.
+  // Only the operator's CLI refresh opts in; scoped planners keep their existing scope.
+  const activePath = options.includeActiveDigest ? brainActivePath(vault) : null;
+  if (activePath !== null && legacyActiveIsStale(vault, activePath, options.now ?? new Date())) {
+    entries.push(
+      Object.freeze({
+        kind: "rederive-active" as const,
+        page: activePath,
+        reason: "the active preference digest differs from current memory state",
+      }),
+    );
+  }
 
   for (const stale of freshness.stale) {
+    if (stale.page === activePath) continue;
     const [meta] = parseFrontmatter(stale.page);
     const sessionId = typeof meta["session_id"] === "string" ? meta["session_id"] : null;
     const sources = Array.isArray(meta["source_paths"]) ? (meta["source_paths"] as string[]) : [];
@@ -99,6 +116,7 @@ export function planRecompile(vault: string): RecompilePlan {
   }
 
   for (const orphan of freshness.orphaned) {
+    if (orphan === activePath) continue;
     entries.push(
       Object.freeze({
         kind: "cleanup" as const,
@@ -251,6 +269,9 @@ export async function executeRecompile(
           targetPath: entry.page,
         });
         rederived.push(entry.page);
+      } else if (entry.kind === "rederive-active") {
+        const digest = regenerateActive(vault, { now: opts.now });
+        if (digest.changed) rederived.push(digest.path);
       } else {
         archived.push(archivePage(vault, entry.page, opts.now));
       }
