@@ -19,11 +19,12 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -147,5 +148,99 @@ describe("brain_clusters operation=run", () => {
     expect(localBatches).toHaveLength(1);
     expect((localBatches as Array<{ written: string[] }>)[0]!.written.length).toBeGreaterThan(0);
     expect(JSON.stringify(local)).toContain("Brain/clusters/");
+  });
+});
+
+/**
+ * The ownership half of the same root closure: a proposal names two pages
+ * by path, so under `integrity.owner_scope_delivery: fail` a proposal
+ * naming another owner's page is dropped whole, and a lane page carrying
+ * an owner is answered only to that owner - the same composed view every
+ * sibling reader asks.
+ */
+describe("brain_bridges under integrity.owner_scope_delivery: fail", () => {
+  const OWNER_A = "agent-a";
+  const CALLER = "agent-b";
+  const OWNED_A = "canary-alpha.md";
+  const OWNED_B = "canary-beta.md";
+
+  /** A near-identical pair owned by `OWNER_A`, indexed into the vec store. */
+  async function writeOwnedPair(): Promise<void> {
+    const body =
+      "Release the candidate build to staging, watch error rates closely, expand gradually, roll back on regression.";
+    for (const name of [OWNED_A, OWNED_B]) {
+      writeFileSync(join(vault, name), `---\nowner: ${OWNER_A}\n---\n\n# ${name}\n\n${body}\n`);
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }), { embeddings: true });
+  }
+
+  function setGateFail(): void {
+    writeFileSync(
+      brainConfigPath(vault),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+    );
+  }
+
+  function ctxFor(reach: TransportReach, agentName?: string): ServerContext {
+    return { vault, reach, configPath, repoRoot: null, agentName };
+  }
+
+  function bridgesTool() {
+    return BRAIN_TOOLS.find((t) => t.name === "brain_bridges")!;
+  }
+
+  test("discover drops a pair that names another owner's pages, whole", async () => {
+    await writeOwnedPair();
+    setGateFail();
+
+    // The owner sees its own pair.
+    const asA = (
+      (await bridgesTool().handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+        operation: "discover",
+        min_similarity: 0.5,
+      })) as { proposals: ReadonlyArray<{ source: string; target: string }> }
+    ).proposals;
+    expect(
+      asA.some((p) => p.source === OWNED_A || p.target === OWNED_A || p.source === OWNED_B),
+    ).toBe(true);
+
+    // Another scope sees neither end - the proposal is gone whole, not
+    // reported with one end missing.
+    const asB = (
+      (await bridgesTool().handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+        operation: "discover",
+        min_similarity: 0.5,
+      })) as { proposals: ReadonlyArray<{ source: string; target: string }> }
+    ).proposals;
+    expect(
+      asB.some((p) => p.source === OWNED_A || p.target === OWNED_A || p.source === OWNED_B),
+    ).toBe(false);
+  });
+
+  test("list answers an owner-stamped proposals artifact only to its owner", async () => {
+    await writeOwnedPair();
+    setGateFail();
+    // Produce the shared artifact, then stamp the page with an owner - the
+    // state a writer resolved under an enforced identity leaves.
+    const bridges = bridgesTool();
+    await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "discover",
+      min_similarity: 0.5,
+    });
+    const artifact = join(vault, "Brain", "proposals", "bridges.md");
+    const text = readFileSync(artifact, "utf8");
+    writeFileSync(artifact, text.replace("---\n", `---\nowner: ${OWNER_A}\n`));
+
+    const asB = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    // A withheld lane page answers exactly as an absent one.
+    expect(asB["exists"]).toBe(false);
+    expect(asB["proposals"]).toBe(0);
+
+    const asA = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    expect(asA["exists"]).toBe(true);
   });
 });

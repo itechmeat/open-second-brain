@@ -11,6 +11,7 @@ import { loadPermissionsDocumentFor } from "../../core/brain/permissions/documen
 import { resolveAgentName } from "../../core/config.ts";
 import { resolveEffectiveScope, signalRecordExists, writeSignal } from "../../core/brain/signal.ts";
 import { computePayloadHash, lookupKey, rememberKey } from "../../core/brain/idempotency-ledger.ts";
+import { preferencePathOf } from "../../core/brain/paths.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../core/route-scope.ts";
 import {
   adviseIncomingFeedback,
@@ -20,7 +21,11 @@ import {
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
-import { writePreference, preferencePresence } from "../../core/brain/preference.ts";
+import {
+  loadPreference,
+  preferencePresence,
+  writePreference,
+} from "../../core/brain/preference.ts";
 import { sha256Hex } from "../../core/integrity/digest.ts";
 import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
@@ -427,6 +432,7 @@ export async function toolBrainFeedback(
     // Positive evidence this capture is unfinished: the marker pair from
     // a force-confirmed original, with the same payload as THIS retry,
     // and a signal that still exists on disk / in the store.
+    const presence = preferencePresence(vault, slug, ctx.configPath ?? undefined);
     const resumable =
       markerKey !== undefined &&
       doneKey !== undefined &&
@@ -435,8 +441,55 @@ export async function toolBrainFeedback(
       lookupKey(vault, doneKey, PREFERENCE_MARKER_NAMESPACE) === null &&
       // A rule the user retired in the crash window stays retired: the
       // resume must not write a fresh confirmed rule beside it.
-      preferencePresence(vault, slug, ctx.configPath ?? undefined) !== "retired" &&
+      presence !== "retired" &&
       signalRecordExists(vault, sigResult.path, sigResult.id, ctx.configPath ?? undefined);
+    if (resumable && presence === "active") {
+      // The crash landed AFTER the preference write but BEFORE the DONE
+      // marker: the rule the original call wrote is already active. An
+      // active rule matching this capture's own slug and payload IS the
+      // completed capture, so the replay closes the ledger instead of
+      // attempting the write a second time (which would refuse on the
+      // existing rule). A rule that exists under this slug but does not
+      // match the payload is not this capture's write, so it falls
+      // through to the resume below and surfaces the conflict.
+      const existing = loadPreference(vault, slug, {
+        ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      });
+      const captureMatches =
+        existing !== null &&
+        existing.topic === topic.trim() &&
+        existing.principle === principle.trim() &&
+        existing.scope === effectiveScope &&
+        existing.expiration_date === expires;
+      if (captureMatches && doneKey !== undefined) {
+        appendMarkerReceipt(vault, doneKey, captureHash, createdAt);
+        logConfirmedPreference(existing.id);
+        const existingPath = preferencePathOf(vault, slug);
+        return {
+          kind: "preference",
+          deduped: true,
+          staged: false,
+          signal_path:
+            vault === null
+              ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+              : toolPath(ctx, sigResult.path),
+          signal_absolute_path:
+            vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+          signal_id: sigResult.id,
+          preference_path:
+            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : toolPath(ctx, existingPath),
+          preference_absolute_path:
+            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : resolve(existingPath),
+          preference_id: existing.id,
+          path:
+            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : toolPath(ctx, existingPath),
+          absolute_path:
+            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : resolve(existingPath),
+          id: existing.id,
+          agent,
+        };
+      }
+    }
     if (resumable) {
       const resumed = writeConfirmedPreference();
       if (doneKey !== undefined) appendMarkerReceipt(vault, doneKey, captureHash, createdAt);

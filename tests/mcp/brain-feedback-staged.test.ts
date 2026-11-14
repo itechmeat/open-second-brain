@@ -387,4 +387,64 @@ describe("brain_feedback staged receipt", () => {
       readdirSync(join(vault, "Brain", "preferences")).filter((f) => f.startsWith("pref-")),
     ).toEqual([]);
   });
+
+  test("a crash-window replay of a completed capture answers deduped without writing again", async () => {
+    // A completed forced capture whose DONE marker is then lost: PENDING
+    // without DONE, the signal still alive, and the rule the original
+    // call wrote still ACTIVE. The replay must recognise the rule as this
+    // capture's own completed write, close the ledger, and answer deduped
+    // - not attempt the preference write a second time and fail on the
+    // existing rule.
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "active-in-crash-window-1",
+    };
+    const first = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(first["kind"]).toBe("preference");
+    const prefId = String(first["preference_id"]);
+    const prefsDir = join(vault, "Brain", "preferences");
+    expect(existsSync(join(prefsDir, `${prefId}.md`))).toBe(true);
+
+    // Lose the DONE marker: exactly the on-disk state a crash between the
+    // preference write and the DONE append leaves.
+    dropDoneMarker(vault, args.idempotency_key);
+
+    // The replay: no error, deduped, naming the rule that already exists,
+    // and without a second preference page.
+    const replay = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(replay["deduped"]).toBe(true);
+    expect(replay["kind"]).toBe("preference");
+    expect(replay["preference_id"]).toBe(prefId);
+    expect(readdirSync(prefsDir).filter((f) => f.startsWith("pref-"))).toEqual([`${prefId}.md`]);
+
+    // The ledger is closed again: a further replay is the ordinary
+    // completed-capture no-op.
+    const again = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(again["deduped"]).toBe(true);
+    expect(again["kind"]).toBe("signal");
+    expect(readdirSync(prefsDir).filter((f) => f.startsWith("pref-"))).toEqual([`${prefId}.md`]);
+  });
 });
+
+/** Rewrite the idempotency ledger shards without this key's DONE marker. */
+function dropDoneMarker(vault: string, key: string): void {
+  const doneKey = `pref-capture-done:${sha256Hex(key)}`;
+  const ledgerDir = join(vault, "Brain", "logs", "idempotency");
+  let dropped = 0;
+  for (const shard of readdirSync(ledgerDir)) {
+    const path = join(ledgerDir, shard);
+    const kept = readFileSync(path, "utf8")
+      .split("\n")
+      .filter((line) => {
+        if (line.trim() === "") return true;
+        const record = JSON.parse(line) as { key?: string; namespace?: string };
+        const isDone = record.key === doneKey && record.namespace === PREFERENCE_MARKER_NAMESPACE;
+        if (isDone) dropped += 1;
+        return !isDone;
+      })
+      .join("\n");
+    writeFileSync(path, kept);
+  }
+  expect(dropped).toBe(1);
+}

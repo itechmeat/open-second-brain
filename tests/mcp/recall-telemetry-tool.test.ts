@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import {
   emitRecallTelemetry,
   RECALL_CHANNEL,
@@ -571,5 +572,89 @@ describe("brain_recall_telemetry reach boundary on list, summary and gate ops", 
 
     const summary = await callTelemetry(remote, { operation: "summary" });
     expect(summary["total"]).toBe(0);
+  });
+});
+
+/**
+ * The ownership half of the same filter, under
+ * `integrity.owner_scope_delivery: fail`: a record whose artifact refs
+ * name another owner's page is withheld at LOCAL reach too - the private
+ * partition stays a remote-only withholding, but the owner reference
+ * filter is not reach-bound. With the gate off, a local caller still sees
+ * everything.
+ */
+describe("brain_recall_telemetry under integrity.owner_scope_delivery: fail", () => {
+  const OWNER_A = "agent-a";
+  const CALLER = "agent-b";
+
+  /** The caller's tool handler call, resolved under one enforced identity. */
+  function callAs(args: Record<string, unknown>, agentName?: string) {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_recall_telemetry")!;
+    return tool.handler(
+      { vault, configPath, repoRoot: null, agentName, reach: TRANSPORT_REACH.local },
+      args,
+    );
+  }
+
+  function setGate(mode: "fail" | null): void {
+    writeFileSync(
+      brainConfigPath(vault),
+      mode === null
+        ? "schema_version: 1\n"
+        : "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+    );
+  }
+
+  function seedForeignPref(): void {
+    writePreference(vault, {
+      slug: "foreign-rule",
+      topic: "foreign-rule",
+      principle: "A rule owned by another scope.",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      owner: OWNER_A,
+    });
+  }
+
+  function emitForeignRecord(): void {
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "owner-scope-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "context_pack",
+      status: "ok",
+      durationMs: 3,
+      resultCount: 1,
+      topArtifacts: [{ id: "pref-foreign-rule" }],
+    });
+  }
+
+  test("a record naming another owner's artifact is withheld at local reach", async () => {
+    seedForeignPref();
+    emitForeignRecord();
+    setGate("fail");
+
+    const list = (await callAs({ operation: "list" }, CALLER)) as Record<string, unknown>;
+    expect(list["total"]).toBe(0);
+    expect(JSON.stringify(list)).not.toContain("pref-foreign-rule");
+
+    const summary = (await callAs({ operation: "summary" }, CALLER)) as Record<string, unknown>;
+    expect(summary["total"]).toBe(0);
+
+    // Not over-filtering: the record travels whole to its own owner.
+    const asOwner = (await callAs({ operation: "list" }, OWNER_A)) as Record<string, unknown>;
+    expect(asOwner["total"]).toBe(1);
+  });
+
+  test("with the gate off, a local caller keeps every record", async () => {
+    seedForeignPref();
+    emitForeignRecord();
+    setGate(null);
+
+    const list = (await callAs({ operation: "list" }, CALLER)) as Record<string, unknown>;
+    expect(list["total"]).toBe(1);
   });
 });

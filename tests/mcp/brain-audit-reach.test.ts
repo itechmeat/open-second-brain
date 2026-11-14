@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { appendPrefAudit } from "../../src/core/brain/pref-audit.ts";
 import { BRAIN_PREFERENCE_STATUS, PREF_AUDIT_OP } from "../../src/core/brain/types.ts";
@@ -21,6 +22,8 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
+import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const WITHHELD_MARKER = "zzwithheldreasonzz";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
@@ -135,5 +138,64 @@ describe("brain_audit at remote reach", () => {
     const local = await auditCall(TRANSPORT_REACH.local, "pref-withheld");
     expect(local["count"]).toBe(1);
     expect(JSON.stringify(local)).toContain(WITHHELD_MARKER);
+  });
+});
+
+/**
+ * The ownership half of the same rule, under
+ * `integrity.owner_scope_delivery: fail`: the trail is private with the
+ * preference's OWNER too. `requestRefView` asks
+ * `readableAtContextReachOrUndefined`, which binds the ownership rule to
+ * the same request, so the trail of another owner's preference answers as
+ * an absent one even at local reach - and the owner's own trail is kept.
+ */
+describe("brain_audit under integrity.owner_scope_delivery: fail", () => {
+  const OWNER_A = "agent-a";
+  const CALLER = "agent-b";
+  const FOREIGN = "foreign-slug";
+  const OWN = "own-slug";
+
+  beforeEach(() => {
+    confirmed(FOREIGN, "A rule owned by another scope.");
+    confirmed(OWN, "A rule owned by the caller.");
+    stampOwner(join(vault, "Brain", "preferences", `pref-${FOREIGN}.md`), OWNER_A);
+    stampOwner(join(vault, "Brain", "preferences", `pref-${OWN}.md`), CALLER);
+    audit(`pref-${FOREIGN}`, "foreign trail");
+    audit(`pref-${OWN}`, "own trail");
+    // The gate reads the brain config, so it is set AFTER the seeding
+    // writes, which must not be owner-stamped by the gate itself.
+    writeFileSync(
+      brainConfigPath(vault),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+    );
+  });
+
+  function stampOwner(abs: string, owner: string): void {
+    const text = readFileSync(abs, "utf8");
+    writeFileSync(abs, text.replace("---\n", `---\nowner: ${owner}\n`));
+  }
+
+  async function auditAs(prefId: string, agentName: string): Promise<Record<string, unknown>> {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_audit")!;
+    const ctx: ServerContext = {
+      vault,
+      configPath,
+      repoRoot: null,
+      agentName,
+      reach: TRANSPORT_REACH.local,
+    };
+    return (await tool.handler(ctx, { pref_id: prefId })) as Record<string, unknown>;
+  }
+
+  test("another owner's trail answers as an absent one at local reach", async () => {
+    const foreign = await auditAs(`pref-${FOREIGN}`, CALLER);
+    expect(foreign["count"]).toBe(0);
+    expect(foreign["records"]).toEqual([]);
+    expect(JSON.stringify(foreign)).not.toContain("foreign trail");
+
+    // The caller's own trail is kept: the absence is the ownership rule.
+    const own = await auditAs(`pref-${OWN}`, CALLER);
+    expect(own["count"]).toBe(1);
+    expect(JSON.stringify(own)).toContain("own trail");
   });
 });

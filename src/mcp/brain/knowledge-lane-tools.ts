@@ -66,7 +66,14 @@ import { readableAtContextReach } from "./reach-readable.ts";
  */
 export function laneVisible(ctx: ServerContext, vault: string): (rel: string) => boolean {
   if (lanePagesInStore(vault)) return readableAtContextReach(ctx);
-  const view = reachView(vault, contextReach(ctx));
+  // The reach view alone is not the whole rule: a lane page can carry an
+  // owner, and under `integrity.owner_scope_delivery: fail` the ownership
+  // rule must be asked of it too - the same composed view every sibling
+  // reader applies.
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(vault, ctx.agentName),
+    reachView(vault, contextReach(ctx)),
+  );
   return (rel) => view.visible(rel);
 }
 
@@ -235,7 +242,13 @@ export async function toolBrainBridges(
     //
     // `list` reads the artifact this branch just wrote, and asks the rule
     // over the FILE - which is why writing it unfiltered is safe here.
-    const view = reachView(ctx.vault, contextReach(ctx));
+    // The rule is the composed one: a proposal naming another owner's
+    // page is withheld whole under `integrity.owner_scope_delivery: fail`,
+    // exactly as the reach rule withholds one end below local reach.
+    const view = everyArtifactRefView(
+      gatedOwnerScopeView(ctx.vault, ctx.agentName),
+      reachView(ctx.vault, contextReach(ctx)),
+    );
     return {
       vec_available: report.vecAvailable,
       ...(report.reason !== undefined ? { reason: report.reason } : {}),

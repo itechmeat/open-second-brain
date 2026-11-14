@@ -37,11 +37,14 @@ import { coerceNonNegativeNumber, recallTelemetryFilter } from "./recall-coerce-
 import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
 
 /**
- * The telemetry records this caller may see. A LOCAL caller filters
+ * The telemetry records this caller may see. A LOCAL caller keeps every
+ * record whose artifact refs name something it may see - the ownership
+ * gate applies at every reach - and with the gate off it still filters
  * nothing, by construction. Below local reach the records drop BEFORE any
  * total or summary count is taken (the analytics rule - a count that
  * still included a withheld record leaks its number):
- *   - a `private` record is dropped whole;
+ *   - a `private` record is dropped whole (a REMOTE-only withholding: a
+ *     local caller owns the partition it sits in);
  *   - a record whose artifact refs (its `sourceRefs`, or the
  *     `top_artifacts` in its payload) name anything the composed
  *     request's reach and ownership view withholds is dropped whole -
@@ -51,21 +54,22 @@ import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
  *     something through its `path` when the emitter had one and through
  *     its bare `id` otherwise, so both spellings are asked.
  * Gate telemetry carries no artifact refs, so only the private half
- * applies to it.
+ * applies to it below local reach.
  */
 function callerVisibleTelemetry(
   ctx: ServerContext,
   records: ReadonlyArray<ContinuityRecord>,
 ): ReadonlyArray<ContinuityRecord> {
-  if (contextReach(ctx) === TRANSPORT_REACH.local) return records;
+  const local = contextReach(ctx) === TRANSPORT_REACH.local;
   const refs = everyArtifactRefView(
     requestRefView(ctx),
     gatedOwnerScopeView(ctx.vault, ctx.agentName),
   );
+  if (local && refs.filtersNothing) return records;
   const hiddenRef = (ref: unknown): boolean =>
     typeof ref === "string" && ref !== "" && !refs.filtersNothing && !refs.visible(ref);
   return records.filter((record) => {
-    if (record.private) return false;
+    if (!local && record.private) return false;
     if (refs.filtersNothing) return true;
     // An emitter that had no path for an artifact still carries its id
     // (`pref-…` of a withheld preference, say), so both spellings are
