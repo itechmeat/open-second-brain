@@ -116,7 +116,7 @@ import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/reco
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
-import { acquireWriterLockSync } from "../search/store/writer-lock.ts";
+import { acquireWriterLockSync, WRITER_LOCK_STALE_MS } from "../search/store/writer-lock.ts";
 import { appendLogEvent } from "./log.ts";
 import {
   buildManifest,
@@ -288,6 +288,17 @@ export interface CreateSnapshotOptions extends SnapshotStoreOptions {
    * by recording that it took a recovery point.
    */
   readonly now?: Date;
+  /**
+   * Absolute path of a live derived store whose writer lock the CALLER
+   * already holds. When it names the store this snapshot archives, the
+   * archive is written under that lock instead of acquiring it again
+   * (the lock is not re-entrant, so a second acquire would refuse).
+   *
+   * One caller needs it: the gated restore takes the lock before its
+   * recovery point and keeps it through the swap, so no write lands
+   * between the two. Any other path, or absent, takes the lock as usual.
+   */
+  readonly heldStoreLock?: string;
 }
 
 export interface SnapshotInfo {
@@ -569,6 +580,22 @@ export interface RecoveryPointEvidence {
   readonly path: string;
 }
 
+/**
+ * What {@link restoreSnapshot} tells its
+ * {@link RestoreSnapshotOptions.beforeDiscard} callback.
+ */
+export interface BeforeDiscardContext {
+  /**
+   * The live derived store whose writer lock the restore already holds,
+   * or null when the restore does not replace the store (and holds no
+   * lock). The lock is taken before the callback and kept through the
+   * swap, so a recovery point taken here sees every commit the swap
+   * replaces. A snapshot taken in the callback passes this path as
+   * `heldStoreLock`, or its own acquire of the same lock refuses.
+   */
+  readonly heldStoreLock: string | null;
+}
+
 export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
   /**
    * The write lane the restore is guarded on (default: content), as the
@@ -599,7 +626,7 @@ export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
    * minted by `snapshot-gate.ts`, which composes THIS module - taking
    * `takeSnapshot` from there would make the pair a cycle.
    */
-  readonly beforeDiscard?: () => RecoveryPointEvidence | void;
+  readonly beforeDiscard?: (ctx: BeforeDiscardContext) => RecoveryPointEvidence | void;
 }
 
 // ----- Tooling detection ---------------------------------------------------
@@ -1031,7 +1058,7 @@ function coverDerivedStore(
   liveVault: string,
   runId: string,
   tools: ToolAvailability,
-  opts: SnapshotStoreOptions,
+  opts: SnapshotStoreOptions & { readonly heldStoreLock?: string },
 ): BrainManifestDerivedStore {
   // The policy and the live store are the caller's vault's (the search
   // index is keyed by the real vault), never the mapped state root's; the
@@ -1073,8 +1100,11 @@ function coverDerivedStore(
   // The writer lock on the LIVE store path, held across the integrity
   // scan and the copy, so an index run cannot mutate the file underneath
   // the snapshot. It is the same lock every other writer serialises on,
-  // taken synchronously because this whole module is synchronous.
-  const release = acquireWriterLockSync(sourcePath);
+  // taken synchronously because this whole module is synchronous. A
+  // caller that already holds it on this exact path (the gated restore)
+  // says so, and the archive is written under the caller's lock.
+  const release =
+    opts.heldStoreLock === sourcePath ? (): void => {} : acquireWriterLockSync(sourcePath);
   try {
     assertStoreIsSound(sourcePath, runId);
 
@@ -2164,11 +2194,15 @@ function refuseEscapingSymlinks(root: string, runId: string): void {
  *   4. When the manifest says the snapshot included the derived store:
  *      check the archive against the recorded digest, decompress it
  *      beside the live store, and run the integrity check on the result.
- *   5. Run {@link RestoreSnapshotOptions.beforeDiscard}, the seam where a
+ *   5. Take the derived store's writer lock (when it is being replaced),
+ *      so lock contention also refuses before anything is touched. It is
+ *      held from here through the swap.
+ *   6. Run {@link RestoreSnapshotOptions.beforeDiscard}, the seam where a
  *      recovery point of the state about to be discarded is taken, then
  *      re-check that the derived-store records did not change under it.
- *   6. Take the derived store's writer lock (when it is being replaced),
- *      so lock contention also refuses before anything is touched.
+ *      The lock taken in step 5 means no write lands between the recovery
+ *      point and the swap, so the recovery point holds every commit the
+ *      swap replaces.
  *   7. Swap: move each live top-level entry aside and rename the staged
  *      one into place, then rename the staged store over the live one.
  *      Renames only, on one filesystem, so the window is short. If any
@@ -2182,7 +2216,10 @@ function refuseEscapingSymlinks(root: string, runId: string): void {
  * in `snapshot-gate.ts`; callers that do not get a `recoverability`
  * verdict saying so rather than silence. When the swap fails AND its undo
  * fails too, the error names what was swapped, where the outgoing entries
- * were left, and the recovery point when one was taken.
+ * were left, and the recovery point when one was taken. When the lock
+ * cannot be released after the swap committed, the error says the restore
+ * committed and names the recovery point; a release failure never
+ * replaces an earlier error, it is added to it.
  */
 export function restoreSnapshot(
   vault: string,
@@ -2242,38 +2279,45 @@ export function restoreSnapshot(
       ? readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e) && e !== staged!.name)
       : [];
 
-    // The last moment at which the live state still exists. A throw here
-    // propagates and nothing has been replaced yet, which is the same
-    // abort-before-the-operation rule the destructive gate applies.
-    const evidence = opts.beforeDiscard?.() ?? null;
-
-    // The callback is the one step that can change `.snapshots/` between
-    // the pre-flight and the store swap - it takes a recovery point, and
-    // a retention pass rides behind that. `assertDerivedStoreRestorable`
-    // above validated a state this callback may have invalidated, so the
-    // pre-flight is re-run against the state that actually reaches the
-    // rest of the restore, and the RECORD is compared rather than only
-    // re-checked: a manifest that has been removed outright would pass a
-    // fresh pre-flight while turning a covered store into "coverage
-    // unknown, nothing restored".
-    if (opts.beforeDiscard !== undefined) {
-      assertDerivedStoreRestorable(vault, runId);
-      const after = derivedStoreRestoreState(vault, runId);
-      if (after !== storeStateBefore) {
-        throw new BrainSnapshotError(
-          "the derived-store records of this snapshot changed while the recovery point was " +
-            `being taken (${storeStateBefore} -> ${after}); refusing before the Brain tree is ` +
-            "touched, so nothing is half-restored",
-          runId,
-        );
-      }
-    }
-
-    // The writer lock is taken before the first rename, not inside the
-    // store swap: an index run holding it is a refusal like any other,
-    // and it must arrive while nothing has been replaced yet.
+    // The writer lock is taken before the recovery point, not inside the
+    // store swap, and held through the swap. Taken before the recovery
+    // point because a writer committing between the recovery point and
+    // the swap would land a change the swap discards and the recovery
+    // point never saw. Taken before the first rename because an index run
+    // holding it is a refusal like any other, and it must arrive while
+    // nothing has been replaced yet.
     const release = store === null ? null : acquireStoreLockForRestore(store.target, runId);
+    let evidence: RecoveryPointEvidence | null = null;
+    let committed = false;
+    let primary: { readonly err: unknown } | null = null;
     try {
+      // The last moment at which the live state still exists. A throw
+      // here propagates and nothing has been replaced yet, which is the
+      // same abort-before-the-operation rule the destructive gate applies.
+      evidence = opts.beforeDiscard?.({ heldStoreLock: store?.target ?? null }) ?? null;
+
+      // The callback is the one step that can change `.snapshots/` between
+      // the pre-flight and the store swap - it takes a recovery point, and
+      // a retention pass rides behind that. `assertDerivedStoreRestorable`
+      // above validated a state this callback may have invalidated, so the
+      // pre-flight is re-run against the state that actually reaches the
+      // rest of the restore, and the RECORD is compared rather than only
+      // re-checked: a manifest that has been removed outright would pass a
+      // fresh pre-flight while turning a covered store into "coverage
+      // unknown, nothing restored".
+      if (opts.beforeDiscard !== undefined) {
+        assertDerivedStoreRestorable(vault, runId);
+        const after = derivedStoreRestoreState(vault, runId);
+        if (after !== storeStateBefore) {
+          throw new BrainSnapshotError(
+            "the derived-store records of this snapshot changed while the recovery point was " +
+              `being taken (${storeStateBefore} -> ${after}); refusing before the Brain tree is ` +
+              "touched, so nothing is half-restored",
+            runId,
+          );
+        }
+      }
+
       const swap = swapBrainTree(staged, dirs.brain, liveEntries, runId, evidence);
       if (store !== null) {
         try {
@@ -2284,9 +2328,14 @@ export function restoreSnapshot(
           });
         }
       }
+      committed = true;
       swap.finish();
+    } catch (err) {
+      primary = { err };
+      throw err;
     } finally {
-      release?.();
+      if (release !== null)
+        releaseStoreLockAfterRestore(release, runId, committed, primary, evidence);
     }
 
     const derivedStore = plan.result;
@@ -2778,6 +2827,55 @@ function acquireStoreLockForRestore(target: string, runId: string): () => void {
 }
 
 /**
+ * Release the writer lock {@link acquireStoreLockForRestore} took.
+ *
+ * A failed release must not hide what happened before it. When the
+ * restore already failed, that error stays the one thrown and the
+ * release failure is appended to its message as a second line. When the
+ * swap committed, the live tree and store are the snapshot's now, and the
+ * error says so and names the recovery point, rather than reading like a
+ * restore that changed nothing.
+ */
+function releaseStoreLockAfterRestore(
+  release: () => void,
+  runId: string,
+  committed: boolean,
+  primary: { readonly err: unknown } | null,
+  recoveryPoint: RecoveryPointEvidence | null,
+): void {
+  try {
+    release();
+    return;
+  } catch (releaseErr) {
+    const what = `releasing the derived store's writer lock failed (${errorText(releaseErr)})`;
+    if (primary !== null) {
+      // The primary error is rethrown by the caller's catch once this
+      // finally returns; it only gains the release failure as a line.
+      if (primary.err instanceof Error) {
+        primary.err.message += `\nalso: ${what}`;
+      }
+      return;
+    }
+    if (committed) {
+      const recovery =
+        recoveryPoint === null
+          ? "no recovery point was taken for this restore"
+          : `the recovery point ${recoveryPoint.runId} (${recoveryPoint.path}) holds the ` +
+            `pre-restore state; \`o2b brain rollback ${recoveryPoint.runId}\` puts it back`;
+      throw new BrainSnapshotError(
+        `the restore committed: Brain/ and the derived store now hold snapshot ${runId}, but ` +
+          `${what}; the lock is stale-released after ${WRITER_LOCK_STALE_MS} ms; ${recovery}`,
+        runId,
+        { cause: releaseErr },
+      );
+    }
+    // Unreachable: nothing failed and nothing committed means the try
+    // block did not finish, which is a throw, which is `primary`.
+    throw new BrainSnapshotError(`restore: ${what}`, runId, { cause: releaseErr });
+  }
+}
+
+/**
  * A store swap that failed between its two renames and could not put the
  * outgoing store back: the live path has no store, and the pre-restore
  * one is at the `.bak` path.
@@ -2848,9 +2946,13 @@ function commitDerivedStoreSwap(store: StagedDerivedStore): void {
       );
     }
     if (movedAside) putBackOutgoingStore(target, outgoing, what, err);
-    throw new Error(`${what}; the store swap was undone, the pre-restore store is back in place`, {
-      cause: err,
-    });
+    throw new Error(
+      `${what}; the store swap was undone` +
+        (movedAside
+          ? ", the pre-restore store is back in place"
+          : ", and no store was live before it"),
+      { cause: err },
+    );
   }
 }
 

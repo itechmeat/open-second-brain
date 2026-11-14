@@ -136,6 +136,8 @@ export interface WithDestructiveSnapshotOptions {
    * name.
    */
   readonly available?: (runId: string) => boolean;
+  /** Forwarded to {@link CreateSnapshotOptions.heldStoreLock}. */
+  readonly heldStoreLock?: string;
   /**
    * Archives the retention pass behind this snapshot must not remove, on
    * top of the snapshot itself (which is always protected).
@@ -300,7 +302,12 @@ export function takeSnapshot(
     vault,
     baseRunId,
     (runId) =>
-      createSnapshot(vault, runId, { reason, now, ...(opts.lane ? { lane: opts.lane } : {}) }).path,
+      createSnapshot(vault, runId, {
+        reason,
+        now,
+        ...(opts.lane ? { lane: opts.lane } : {}),
+        ...(opts.heldStoreLock !== undefined ? { heldStoreLock: opts.heldStoreLock } : {}),
+      }).path,
     MAX_SNAPSHOT_ID_ATTEMPTS,
     opts.available,
   );
@@ -459,9 +466,12 @@ export function restoreSnapshotWithRecoveryPoint(
   let recoveryPoint: DestructiveSnapshot | null = null;
   const result = restoreSnapshot(vault, runId, {
     ...opts,
-    beforeDiscard: (): RecoveryPointEvidence => {
+    beforeDiscard: ({ heldStoreLock }): RecoveryPointEvidence => {
       const point = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual, {
         ...opts,
+        // The restore holds the store writer lock from before this point
+        // through the swap; the snapshot writes its store archive under it.
+        ...(heldStoreLock !== null ? { heldStoreLock } : {}),
         protectRunIds: [runId, ...(opts.protectRunIds ?? [])],
       });
       recoveryPoint = point;

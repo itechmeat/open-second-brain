@@ -44,10 +44,12 @@ import {
   restoreSnapshot,
   SNAPSHOT_TOOL_TIMEOUT_ENV,
 } from "../../../src/core/brain/snapshot.ts";
+import { restoreSnapshotWithRecoveryPoint } from "../../../src/core/brain/snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
+import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -552,3 +554,191 @@ function withoutExcluded(tree: Record<string, string>): Record<string, string> {
     ),
   );
 }
+
+/** Turn on derived-store coverage in the vault's own policy, as an operator does. */
+function coverStoreByPolicy(): void {
+  atomicWriteFileSync(
+    join(brainDirs(vault).brain, "_brain.yaml"),
+    "schema_version: 1\nsnapshots:\n  include_derived_store: true\n",
+  );
+}
+
+/** Names of the tables in the store at `path`. */
+function tablesOf(path: string): string[] {
+  const db = new Database(path, { readonly: true });
+  try {
+    return db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((r) => r.name)
+      .toSorted();
+  } finally {
+    db.close();
+  }
+}
+
+type LockSync = typeof lockfile.lockSync;
+
+/**
+ * Run `fn` with every writer lock taken on the live store wrapped by
+ * `wrapRelease`. Locks on other paths, and locks the test itself takes
+ * while `bypass()` is true, are the real ones.
+ */
+function withStoreLockRelease<T>(
+  wrapRelease: (real: () => void) => () => void,
+  fn: () => T,
+  bypass: () => boolean = () => false,
+): T {
+  const realLockSync: LockSync = lockfile.lockSync.bind(lockfile);
+  const spy = spyOn(lockfile, "lockSync").mockImplementation(((path, opts) => {
+    const release = realLockSync(path, opts);
+    return String(path) === dbPath && !bypass() ? wrapRelease(release) : release;
+  }) as LockSync);
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe("the gated restore holds the store lock from the recovery point through the swap", () => {
+  test("a writer cannot commit between the recovery point and the swap", () => {
+    coverStoreByPolicy();
+    snapshotThenDiverge();
+
+    // A writer waiting on the lock: the moment any holder releases it
+    // before the store is swapped, it takes the lock and commits.
+    let swapped = false;
+    let inWriter = false;
+    let lateCommits = 0;
+    const writer = (): void => {
+      inWriter = true;
+      try {
+        const release = acquireWriterLockSync(dbPath);
+        try {
+          const db = new Database(dbPath);
+          db.exec(`CREATE TABLE late_commit_${lateCommits} (id INTEGER PRIMARY KEY)`);
+          db.close();
+          lateCommits++;
+        } finally {
+          release();
+        }
+      } finally {
+        inWriter = false;
+      }
+    };
+
+    // What the swap replaces, read at the swap itself, and whether a
+    // writer could take the lock at that point.
+    let replaced: string[] | null = null;
+    let writerAtSwap: unknown = null;
+    const realRename = fs.renameSync;
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(from) === dbPath && String(to) === `${dbPath}.bak`) {
+        replaced = tablesOf(dbPath);
+        try {
+          inWriter = true;
+          acquireWriterLockSync(dbPath)();
+        } catch (err) {
+          writerAtSwap = err;
+        } finally {
+          inWriter = false;
+        }
+        swapped = true;
+      }
+      realRename(from, to);
+    });
+    let recoveryRunId: string;
+    try {
+      const result = withStoreLockRelease(
+        (real) => () => {
+          real();
+          if (!swapped) writer();
+        },
+        () => restoreSnapshotWithRecoveryPoint(vault, RUN_ID),
+        () => inWriter,
+      );
+      recoveryRunId = result.recoveryPoint.runId;
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // The lock was never released before the swap, so no writer got in,
+    // and one that tried at the swap was refused.
+    expect(lateCommits).toBe(0);
+    expect(String(writerAtSwap)).toMatch(/another writer holds the search index lock/u);
+    expect(replaced).not.toBeNull();
+    expect(replaced!).toContain("post_snapshot_marker");
+    expect(markerTableExists()).toBe(false);
+
+    // The recovery point holds every table the restore replaced.
+    restoreSnapshot(vault, recoveryRunId);
+    expect(tablesOf(dbPath)).toEqual(replaced!);
+  });
+
+  test("a lock release that fails after the swap committed says so and names the recovery point", () => {
+    coverStoreByPolicy();
+    snapshotThenDiverge();
+    let threw: unknown = null;
+    try {
+      withStoreLockRelease(
+        (real) => () => {
+          real();
+          throw new Error("simulated unlock failure");
+        },
+        () => restoreSnapshotWithRecoveryPoint(vault, RUN_ID),
+      );
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(BrainSnapshotError);
+    expect((threw as Error).message).toMatch(
+      /the restore committed: Brain\/ and the derived store now hold snapshot dream-restore-order, but releasing the derived store's writer lock failed \(simulated unlock failure\).*the recovery point manual-\S+ \(.+\) holds the pre-restore state/u,
+    );
+    // It did commit: the live state is the snapshot's.
+    expect(markerTableExists()).toBe(false);
+    expect(existsSync(join(brainDirs(vault).brain, "post-snapshot-marker.md"))).toBe(false);
+  });
+
+  test("a lock release that fails after a failed swap does not mask the swap error", () => {
+    snapshotThenDiverge();
+    expectUntouched(
+      () =>
+        withStoreLockRelease(
+          (real) => () => {
+            real();
+            throw new Error("simulated unlock failure");
+          },
+          () => withFailingRename(isMoveIn, () => restoreSnapshot(vault, RUN_ID)),
+        ),
+      /^snapshot\[dream-restore-order\]: restore failed during the swap: a Brain\/ rename failed.*as they were before the restore\nalso: releasing the derived store's writer lock failed \(simulated unlock failure\)$/su,
+    );
+  });
+});
+
+describe("a -wal removal failure with no live store before the restore", () => {
+  test("does not claim a pre-restore store was put back", () => {
+    snapshotThenDiverge();
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    const wal = `${dbPath}-wal`;
+    writeFileSync(wal, "");
+    const realUnlink = fs.unlinkSync;
+    const spy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
+      if (String(path) === wal) throw fsError("EBUSY", wal);
+      realUnlink(path);
+    });
+    let threw: unknown = null;
+    try {
+      restoreSnapshot(vault, RUN_ID);
+    } catch (err) {
+      threw = err;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(threw).toBeInstanceOf(BrainSnapshotError);
+    const message = (threw as Error).message;
+    expect(message).toMatch(/the store swap was undone, and no store was live before it/u);
+    expect(message).not.toMatch(/back in place/u);
+    expect(existsSync(dbPath)).toBe(false);
+  });
+});
