@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { listMetrics } from "../../src/core/brain/metrics.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
@@ -203,21 +204,29 @@ test("brain_clusters run with batch_size returns per-batch results", async () =>
   await initialize(server);
 
   const run = await call(server, "brain_clusters", { operation: "run", batch_size: 1 });
-  // The default server reach is below local, so the batches are the
-  // rebuilt-over-visible form: renumbered `index`, the notes this caller
-  // may see, and no `start`/`end` offsets - those count detected
-  // communities, which a restricted view never names.
-  const batches = run["batches"] as Array<{
+  // The default server reach is below local, so the batches are
+  // withheld whole - the same rule the top-level `removed` follows: a
+  // batch's very existence counts detected communities, and a raw
+  // `error` names a `cluster-<community id>.md` note, so no filtered
+  // form of the list can be shown without disclosing one.
+  expect(run["batches"]).toEqual([]);
+
+  // Local reach filters nothing, so the batches stay verbatim: raw
+  // `index`/`start`/`end` offsets and all.
+  const localServer = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+  await initialize(localServer);
+  const localRun = await call(localServer, "brain_clusters", { operation: "run", batch_size: 1 });
+  const localBatches = localRun["batches"] as Array<{
     index: number;
     start?: number;
     end?: number;
     written: string[];
   }>;
-  expect(batches).toHaveLength(1);
-  expect(batches[0]!.index).toBe(0);
-  expect(batches[0]!.written.length).toBeGreaterThan(0);
-  expect(batches[0]!.start).toBeUndefined();
-  expect(batches[0]!.end).toBeUndefined();
+  expect(localBatches).toHaveLength(1);
+  expect(localBatches[0]!.index).toBe(0);
+  expect(localBatches[0]!.written.length).toBeGreaterThan(0);
+  expect(localBatches[0]!.start).toBe(0);
+  expect(localBatches[0]!.end).toBeGreaterThan(0);
 
   const badZero = await callError(server, "brain_clusters", { operation: "run", batch_size: 0 });
   expect(badZero.code).toBe(-32602);

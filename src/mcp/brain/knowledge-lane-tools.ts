@@ -366,7 +366,6 @@ export async function toolBrainClusters(
     // the materialiser's own naming rule, not by asking the note file
     // what it owns.
     const visibleNotes = new Set(visible.map((c) => `Brain/clusters/cluster-${c.id}.md`));
-    const visibleIds = new Set(visible.map((c) => c.id));
     return {
       communities: visible.map((c) => ({
         id: c.id,
@@ -381,44 +380,15 @@ export async function toolBrainClusters(
       // subject cannot be resolved, and a `removed` entry naming a hidden
       // seed is the same disclosure as a `written` one.
       removed: view.filtersNothing ? materialized.removed : [],
-      // Each batch repeats the same disclosure in miniature: its `written`
-      // names the notes it materialised and its last `removed` the stale
-      // sweep's full list, so the same two rules filter every batch too.
-      // A restricted view REBUILDS the batches over the visible
-      // communities only: `index`/`start`/`end` count every detected
-      // community (hidden ones included - a batch whose `communities`
-      // came back empty would still show, through its offsets, that a
-      // withheld community exists and how many there are), and a raw
-      // `error` message names the failed note's file, which is
-      // `cluster-<community id>.md` - the seed page's path. So a batch
-      // with no visible community is dropped whole, `index` is renumbered
-      // over what survives, `start`/`end` are left out, and `error` is
-      // dropped unless every community the batch covered is visible. An
-      // unrestricted view keeps the batches verbatim.
-      ...(materialized.batches
-        ? {
-            batches: view.filtersNothing
-              ? materialized.batches
-              : materialized.batches
-                  .map((batch) => {
-                    const covered = communities.slice(batch.start, batch.end);
-                    return {
-                      batch,
-                      anyVisible: covered.some((c) => visibleIds.has(c.id)),
-                      allVisible: covered.every((c) => visibleIds.has(c.id)),
-                    };
-                  })
-                  .filter((entry) => entry.anyVisible)
-                  .map((entry, index) => ({
-                    index,
-                    written: entry.batch.written.filter((p) => visibleNotes.has(p)),
-                    removed: [] as string[],
-                    ...(entry.allVisible && entry.batch.error !== undefined
-                      ? { error: entry.batch.error }
-                      : {}),
-                  })),
-          }
-        : {}),
+      // The batches are withheld whole whenever ANY rule is live - the
+      // same rule the top-level `removed` follows. A batch's very
+      // EXISTENCE is the disclosure: rebuilding them over the visible
+      // communities would still count hidden ones through the offsets
+      // and the renumbered indexes (with `batch_size: 2` and the order
+      // visible, hidden, visible, hidden, two batches would appear where
+      // an unrestricted vault shows one), and a raw `error` names a
+      // `cluster-<community id>.md` file - the hidden seed's path.
+      ...(materialized.batches ? { batches: view.filtersNothing ? materialized.batches : [] } : {}),
     };
   } finally {
     await store.close();

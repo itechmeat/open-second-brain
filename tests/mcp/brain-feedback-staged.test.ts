@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -24,8 +25,11 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
+import { moveToRetired } from "../../src/core/brain/preference.ts";
 import { deleteBySource } from "../../src/core/brain/source-cleanup.ts";
+import { sha256Hex } from "../../src/core/integrity/digest.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { PREFERENCE_MARKER_NAMESPACE } from "../../src/mcp/brain/feedback-tool.ts";
 import { FEEDBACK_TOOLS } from "../../src/mcp/brain/feedback-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -270,5 +274,117 @@ describe("brain_feedback staged receipt", () => {
     expect(replay["kind"]).toBe("signal");
     expect(replay["preference_id"]).toBeUndefined();
     expect(readdirSync(prefsDir).filter((f) => f.startsWith("pref-"))).toEqual([]);
+  });
+
+  test("a capture with a 250-character key replays deduped without an error", async () => {
+    // The ledger accepts client keys up to 256 characters. The marker
+    // keys are digests of the key, never the key plus a suffix, so a
+    // near-limit key must still capture fresh and replay deduped: with a
+    // suffix appended the PENDING/DONE appends fail soft and every
+    // replay's marker lookup throws instead.
+    const key = "k".repeat(250);
+    const args = { ...ARGS, force_confirmed: true, idempotency_key: key };
+    const first = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(first["kind"]).toBe("preference");
+    const prefId = String(first["preference_id"]);
+    expect(existsSync(join(vault, "Brain", "preferences", `${prefId}.md`))).toBe(true);
+
+    // The forced replay of the completed capture: a deduped no-op that
+    // answers normally, with no preference written twice.
+    const replay = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(replay["deduped"]).toBe(true);
+    expect(replay["kind"]).toBe("signal");
+    expect(replay["preference_id"]).toBeUndefined();
+    expect(
+      readdirSync(join(vault, "Brain", "preferences")).filter((f) => f.startsWith("pref-")),
+    ).toEqual([`${prefId}.md`]);
+  });
+
+  test("a crash-window resume still fires after the dream pass moved the signal", async () => {
+    // The same blocked-lane first call as above, but before the retry the
+    // signal page MOVES: the dream pass files inbox pages under
+    // `Brain/inbox/processed/`. The signal is still alive, so the resume
+    // must find it by id in the processed folder and complete the
+    // capture instead of answering a dead no-op.
+    const prefsDir = join(vault, "Brain", "preferences");
+    rmSync(prefsDir, { recursive: true, force: true });
+    writeFileSync(prefsDir, "not a directory");
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "moved-signal-resume-1",
+    };
+    await expect(handler(ctx, args)).rejects.toThrow();
+
+    const signalFile = readdirSync(brainDirs(vault).inbox).find((f) =>
+      f.includes("staged-feedback"),
+    );
+    expect(signalFile).toBeDefined();
+    mkdirSync(join(vault, "Brain", "inbox", "processed"), { recursive: true });
+    renameSync(
+      join(brainDirs(vault).inbox, signalFile!),
+      join(vault, "Brain", "inbox", "processed", signalFile!),
+    );
+
+    rmSync(prefsDir);
+    mkdirSync(prefsDir, { recursive: true });
+    const retry = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(retry["kind"]).toBe("preference");
+    expect(retry["deduped"]).toBe(true);
+    expect(existsSync(join(prefsDir, `${String(retry["preference_id"])}.md`))).toBe(true);
+  });
+
+  test("a crash-window replay after the rule was retired writes nothing", async () => {
+    // A completed forced capture whose DONE marker is then lost (the
+    // crash window: PENDING without DONE) leaves a replay resumable - so
+    // a rule the user retired in that window must not be re-confirmed
+    // beside its own retirement.
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "retired-in-crash-window-1",
+    };
+    const first = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(first["kind"]).toBe("preference");
+    const prefId = String(first["preference_id"]);
+
+    // Lose the DONE marker: rewrite the ledger shards without it, which
+    // is exactly the on-disk state a crash between the preference write
+    // and the DONE append leaves.
+    const doneKey = `pref-capture-done:${sha256Hex(args.idempotency_key)}`;
+    const ledgerDir = join(vault, "Brain", "logs", "idempotency");
+    let dropped = 0;
+    for (const shard of readdirSync(ledgerDir)) {
+      const path = join(ledgerDir, shard);
+      const kept = readFileSync(path, "utf8")
+        .split("\n")
+        .filter((line) => {
+          if (line.trim() === "") return true;
+          const record = JSON.parse(line) as { key?: string; namespace?: string };
+          const isDone = record.key === doneKey && record.namespace === PREFERENCE_MARKER_NAMESPACE;
+          if (isDone) dropped += 1;
+          return !isDone;
+        })
+        .join("\n");
+      writeFileSync(path, kept);
+    }
+    expect(dropped).toBe(1);
+
+    // The user retires the rule in the crash window.
+    moveToRetired(vault, join(vault, "Brain", "preferences", `${prefId}.md`), "user-rejected", {
+      now: new Date(),
+      retired_by: "[[2026-01-01]]",
+      user_rejected_reason: "superseded",
+    });
+
+    // The replay: PENDING without DONE and a live signal, but the rule
+    // is retired, so the guard keeps the replay a true no-op.
+    const replay = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(replay["deduped"]).toBe(true);
+    expect(replay["kind"]).toBe("signal");
+    expect(replay["preference_id"]).toBeUndefined();
+    expect(
+      readdirSync(join(vault, "Brain", "preferences")).filter((f) => f.startsWith("pref-")),
+    ).toEqual([]);
   });
 });

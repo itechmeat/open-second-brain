@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -522,5 +522,54 @@ describe("brain_recall_telemetry reach boundary on list, summary and gate ops", 
       skipped: 0,
       by_reason: { threshold: 1 },
     });
+  });
+
+  test("an id-only artifact of a withheld preference drops the record at remote reach", async () => {
+    // The emitter had no path for the artifact, only its bare Brain id -
+    // the shape `emitRecallTelemetry` records whenever the ranked search
+    // never surfaced a path. The preference's page is reserved against
+    // remote reads, so the record that names it only by id must drop
+    // whole below local reach.
+    writePreference(vault, {
+      slug: "withheld",
+      topic: "withheld",
+      principle: "A rule nobody else may read",
+      created_at: "2026-05-20T19:00:00.000Z",
+      unconfirmed_until: "2026-05-21T00:00:00.000Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: ["[[sig-2026-05-20-withheld]]"],
+      confirmed_at: "2026-05-20T19:00:00.000Z",
+    });
+    const prefPath = join(vault, "Brain", "preferences", "pref-withheld.md");
+    const page = readFileSync(prefPath, "utf8");
+    const frontmatterEnd = page.indexOf("\n---", 1);
+    atomicWriteFileSync(
+      prefPath,
+      `${page.slice(0, frontmatterEnd)}\nvisibility: [private]${page.slice(frontmatterEnd)}`,
+    );
+
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T19:01:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "search",
+      status: "ok",
+      durationMs: 1,
+      resultCount: 1,
+      topArtifacts: [{ id: "pref-withheld" }],
+    });
+
+    const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+    await initialize(local);
+    expect((await callTelemetry(local, { operation: "list" }))["total"]).toBe(1);
+
+    const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    await initialize(remote);
+    const seen = await callTelemetry(remote, { operation: "list" });
+    expect(seen["total"]).toBe(0);
+    expect(JSON.stringify(seen)).not.toContain("pref-withheld");
+
+    const summary = await callTelemetry(remote, { operation: "summary" });
+    expect(summary["total"]).toBe(0);
   });
 });

@@ -20,7 +20,8 @@ import {
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
-import { writePreference } from "../../core/brain/preference.ts";
+import { writePreference, preferencePresence } from "../../core/brain/preference.ts";
+import { sha256Hex } from "../../core/integrity/digest.ts";
 import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
@@ -91,7 +92,7 @@ export const STORE_RECORD_PREFIX = "store:";
  * lives outside the shared key space so a client key reused across tools
  * never collides with one.
  */
-const PREFERENCE_MARKER_NAMESPACE = "brain-feedback-preference";
+export const PREFERENCE_MARKER_NAMESPACE = "brain-feedback-preference";
 
 /**
  * Ledger keys of the force-confirmed capture marker: the PENDING marker
@@ -101,9 +102,19 @@ const PREFERENCE_MARKER_NAMESPACE = "brain-feedback-preference";
  * is positive evidence: PENDING present, DONE absent. Both carry the same
  * capture hash, so a retry whose force flag or expiration differs from
  * the original call never resumes the original's capture.
+ *
+ * Both keys are derived from a fixed-length digest of the client key,
+ * never from the key itself: the ledger accepts keys up to 256
+ * characters, and appending a suffix to a near-limit key would push the
+ * marker past that limit - the PENDING/DONE appends would fail soft, but
+ * every later `lookupKey` on the retry path would throw and turn the
+ * documented deduped replay of a successful capture into an error. A
+ * digest keeps every valid client key usable.
  */
-const preferenceMarkerKey = (idempotencyKey: string): string => `${idempotencyKey}#preference`;
-const preferenceDoneKey = (idempotencyKey: string): string => `${idempotencyKey}#preference-done`;
+const preferenceMarkerKey = (idempotencyKey: string): string =>
+  `pref-capture:${sha256Hex(idempotencyKey)}`;
+const preferenceDoneKey = (idempotencyKey: string): string =>
+  `pref-capture-done:${sha256Hex(idempotencyKey)}`;
 
 /**
  * The payload identity of the force-confirmed preference write, hashed
@@ -422,7 +433,10 @@ export async function toolBrainFeedback(
       forceConfirmed &&
       lookupKey(vault, markerKey, PREFERENCE_MARKER_NAMESPACE)?.contentHash === captureHash &&
       lookupKey(vault, doneKey, PREFERENCE_MARKER_NAMESPACE) === null &&
-      signalRecordExists(vault, sigResult.path, sigResult.id);
+      // A rule the user retired in the crash window stays retired: the
+      // resume must not write a fresh confirmed rule beside it.
+      preferencePresence(vault, slug, ctx.configPath ?? undefined) !== "retired" &&
+      signalRecordExists(vault, sigResult.path, sigResult.id, ctx.configPath ?? undefined);
     if (resumable) {
       const resumed = writeConfirmedPreference();
       if (doneKey !== undefined) appendMarkerReceipt(vault, doneKey, captureHash, createdAt);

@@ -47,7 +47,9 @@ import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
  *     request's reach and ownership view withholds is dropped whole -
  *     the same view the `observed_reuse` and `dead_weight` operations
  *     apply to the same keys, and the same drop-whole rule the cluster
- *     batches follow for a subject that cannot be resolved.
+ *     batches follow for a subject that cannot be resolved. A ref names
+ *     something through its `path` when the emitter had one and through
+ *     its bare `id` otherwise, so both spellings are asked.
  * Gate telemetry carries no artifact refs, so only the private half
  * applies to it.
  */
@@ -60,17 +62,24 @@ function callerVisibleTelemetry(
     requestRefView(ctx),
     gatedOwnerScopeView(ctx.vault, ctx.agentName),
   );
-  const hiddenPath = (path: unknown): boolean =>
-    typeof path === "string" && path !== "" && !refs.filtersNothing && !refs.visible(path);
+  const hiddenRef = (ref: unknown): boolean =>
+    typeof ref === "string" && ref !== "" && !refs.filtersNothing && !refs.visible(ref);
   return records.filter((record) => {
     if (record.private) return false;
     if (refs.filtersNothing) return true;
-    if (record.sourceRefs.some((ref) => hiddenPath(ref.path))) return false;
-    const top = record.payload["top_artifacts"];
-    return !(
-      Array.isArray(top) &&
-      top.some((artifact) => hiddenPath((artifact as { path?: unknown } | null)?.path))
-    );
+    // An emitter that had no path for an artifact still carries its id
+    // (`pref-…` of a withheld preference, say), so both spellings are
+    // asked of the view - the same keys the `observed_reuse` branch
+    // filters, which arrive as bare ids just as often.
+    if (
+      record.sourceRefs.some((ref) => hiddenRef(ref.path) || hiddenRef(ref.id)) ||
+      (Array.isArray(record.payload["top_artifacts"]) &&
+        (
+          record.payload["top_artifacts"] as ReadonlyArray<{ id?: unknown; path?: unknown } | null>
+        ).some((artifact) => hiddenRef(artifact?.path) || hiddenRef(artifact?.id)))
+    )
+      return false;
+    return true;
   });
 }
 
