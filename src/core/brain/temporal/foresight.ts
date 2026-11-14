@@ -48,17 +48,28 @@ export interface BuildForesightOptions {
   readonly now: Date;
   readonly horizonDays?: number;
   /**
-   * Withhold continuity records flagged `private` from the extract fold.
-   * The MCP handler sets it for every caller below local reach, the same
-   * withholding flag the other report surfaces hand their folds; local
-   * reach keeps the unfiltered output. Absent means false.
+   * Withhold private material from the whole fold: continuity records
+   * flagged `private` from the extract fold, and support that comes
+   * from private-classified recurrence events from the recurring
+   * projection (the event's scope can name a private page, and that
+   * scope becomes the item title). The MCP handler sets it for every
+   * caller below local reach, the same withholding flag the other
+   * report surfaces hand their folds; local reach keeps the unfiltered
+   * output. Absent means false.
    */
   readonly withholdsPrivate?: boolean;
 }
 
-function recurringItems(vault: string, nowMs: number, horizonDays: number): ForesightItem[] {
+function recurringItems(
+  vault: string,
+  nowMs: number,
+  horizonDays: number,
+  withholdsPrivate: boolean,
+): ForesightItem[] {
   const out: Array<{ item: ForesightItem; dueMs: number }> = [];
-  for (const cadence of listRecurrenceCadences(vault)) {
+  for (const cadence of listRecurrenceCadences(vault, undefined, {
+    excludePrivateEvents: withholdsPrivate,
+  })) {
     if (cadence.meanIntervalDays === null) continue;
     const lastMs = Date.parse(cadence.lastAt);
     if (!Number.isFinite(lastMs)) continue;
@@ -127,7 +138,7 @@ export function buildForesight(vault: string, opts: BuildForesightOptions): Fore
   const horizonDays = opts.horizonDays ?? FORESIGHT_HORIZON_DAYS;
   const nowMs = opts.now.getTime();
   const upcoming = [
-    ...recurringItems(vault, nowMs, horizonDays),
+    ...recurringItems(vault, nowMs, horizonDays, opts.withholdsPrivate === true),
     ...extractItems(vault, nowMs, opts.withholdsPrivate === true),
   ];
   return Object.freeze({

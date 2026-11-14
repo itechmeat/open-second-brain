@@ -115,11 +115,18 @@ export const PREFERENCE_MARKER_NAMESPACE = "brain-feedback-preference";
  * every later `lookupKey` on the retry path would throw and turn the
  * documented deduped replay of a successful capture into an error. A
  * digest keeps every valid client key usable.
+ *
+ * Both keys hash the TRIMMED key: the receipt the ledger keeps for the
+ * client key is normalised the same way (trimmed), so a retry that
+ * spells the key with different surrounding whitespace dedupes the
+ * original signal and must find its PENDING/DONE markers too - hashing
+ * the untrimmed key would strand the marker behind a marker no retry
+ * key can ever match.
  */
 const preferenceMarkerKey = (idempotencyKey: string): string =>
-  `pref-capture:${sha256Hex(idempotencyKey)}`;
+  `pref-capture:${sha256Hex(idempotencyKey.trim())}`;
 const preferenceDoneKey = (idempotencyKey: string): string =>
-  `pref-capture-done:${sha256Hex(idempotencyKey)}`;
+  `pref-capture-done:${sha256Hex(idempotencyKey.trim())}`;
 
 /**
  * The payload identity of the force-confirmed preference write, hashed

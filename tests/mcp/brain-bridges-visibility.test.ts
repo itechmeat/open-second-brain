@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
+import { writeBridgeProposals } from "../../src/core/brain/link-graph/bridge-discovery.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
@@ -97,6 +98,35 @@ describe("brain_bridges operation=discover", () => {
     const local = JSON.parse(await discover(TRANSPORT_REACH.local));
     const remote = JSON.parse(await discover(TRANSPORT_REACH.remote));
     expect(remote.scanned_candidates).toBe(local.scanned_candidates);
+  });
+});
+
+describe("brain_bridges list reads the artifact discover wrote", () => {
+  test("a proposal path containing parentheses round-trips writer to parser", async () => {
+    // `writeBridgeProposals` emits the path unchanged inside the source
+    // cell - `[[Design (v2)]] (Notes/Design (v2).md)` - so the parser
+    // must take the path up to the cell's final parenthesis, not the
+    // first one. A parser that stops early cannot read the row back,
+    // and the whole artifact then answers as absent even at local reach.
+    const source = "Notes/Design (v2).md";
+    const target = "Notes/Spec (v2).md";
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(join(vault, source), "# Design\n\nSee [[Spec (v2)]].\n");
+    writeFileSync(join(vault, target), "# Spec\n\nSee [[Design (v2)]].\n");
+    writeBridgeProposals(
+      vault,
+      {
+        proposals: [{ source, target, similarity: 0.8, sourceInbound: 1, targetInbound: 1 }],
+        scannedCandidates: 2,
+        vecAvailable: true,
+      },
+      { now: new Date("2026-06-04T12:00:00Z") },
+    );
+    const tool = BRAIN_TOOLS.find((t) => t.name === "brain_bridges")!;
+    const ctx: ServerContext = { vault, reach: TRANSPORT_REACH.local, configPath, repoRoot: null };
+    const out = (await tool.handler(ctx, { operation: "list" })) as Record<string, unknown>;
+    expect(out["exists"]).toBe(true);
+    expect(out["proposals"]).toBe(1);
   });
 });
 

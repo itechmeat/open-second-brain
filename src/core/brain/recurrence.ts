@@ -108,10 +108,11 @@ export interface RecurrenceCadence {
 export function listRecurrenceCadences(
   vault: string,
   thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,
+  opts: RecurrenceReadOptions = {},
 ): ReadonlyArray<RecurrenceCadence> {
-  const entries = listRecurrenceEntries(vault, thresholds);
+  const entries = listRecurrenceEntries(vault, thresholds, opts);
   if (entries.length === 0) return Object.freeze([]);
-  const events = readEvents(vault);
+  const events = readEvents(vault, opts);
   const purged = new Set(events.filter((e) => e.kind === "purge-source").map((e) => e.sourceId));
   const byHash = new Map<string, string[]>();
   for (const e of events) {
@@ -152,8 +153,9 @@ export function listRecurrenceCadences(
 export function listRecurrenceEntries(
   vault: string,
   thresholds: RecurrenceThresholds = DEFAULT_THRESHOLDS,
+  opts: RecurrenceReadOptions = {},
 ): ReadonlyArray<RecurrenceEntry> {
-  const events = readEvents(vault);
+  const events = readEvents(vault, opts);
   const state = new Map<string, { supportBySourceScope: Map<string, number> }>();
 
   for (const event of events) {
@@ -284,12 +286,33 @@ function parseEvent(line: string): RecurrenceEvent | null {
   }
 }
 
-function readEvents(vault: string): RecurrenceEvent[] {
+/**
+ * Read options for the recurrence fold. With `excludePrivateEvents`,
+ * every support event the writer classified private is dropped BEFORE
+ * the fold - the same verdicts the writer applied at append time
+ * ({@link claimSourceIsPrivate} on the source, {@link rowNamesPrivatePage}
+ * on the row) - so an entry's scopes, support count and commitment are
+ * built only from evidence the caller may be shown, and no private
+ * scope string survives into a projected title.
+ */
+export interface RecurrenceReadOptions {
+  readonly excludePrivateEvents?: boolean;
+}
+
+function readEvents(vault: string, opts: RecurrenceReadOptions = {}): RecurrenceEvent[] {
   // A store-only machine reads the `recurrence` ledger rows in fold order,
   // the one order every machine agrees on (design D3).
-  return readLedgerRows<RecurrenceEvent>(DUAL_WRITE_LEDGERS.recurrence, readLegacyEvents, {
+  const events = readLedgerRows<RecurrenceEvent>(DUAL_WRITE_LEDGERS.recurrence, readLegacyEvents, {
     vault,
   }).filter((event) => event !== null && typeof event === "object");
+  if (opts.excludePrivateEvents !== true) return events;
+  // Purge events carry no page name and only ever shrink the fold; the
+  // support events they purge are already judged individually.
+  return events.filter(
+    (event) =>
+      event.kind === "purge-source" ||
+      !(claimSourceIsPrivate(vault, event.sourceId) || rowNamesPrivatePage(vault, event)),
+  );
 }
 
 function readLegacyEvents(vault: string): RecurrenceEvent[] {

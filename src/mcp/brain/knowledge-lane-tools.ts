@@ -117,12 +117,18 @@ function parseBridgeProposalRows(content: string): ReadonlyArray<BridgeProposalR
     const trimmed = line.trim();
     if (trimmed === "") break;
     // A data row is
-    // `| [[<id>]] (<path>) | [[<id>]] (<path>) | <sim> | <in/out> |`;
-    // splitting on `|` leaves a leading empty cell.
+    // `| [[<id>]] (<path>) | [[<id>]] (<path>) | <sim> | <in/out> |`
+    // - the exact cell shape `writeBridgeProposals` emits - and a path
+    // may contain parentheses (`Notes/Design (v2).md`), so the path is
+    // taken as everything between the id's `]] (` and the cell's final
+    // `)`, not up to the first `)`. Splitting on `|` leaves a leading
+    // empty cell.
     const cells = trimmed.split("|").map((cell) => cell.trim());
     if (cells.length !== 6) return null;
-    const source = /\(([^)]+)\)\s*$/.exec(cells[1] ?? "")?.[1];
-    const target = /\(([^)]+)\)\s*$/.exec(cells[2] ?? "")?.[1];
+    const cellRef = (cell: string): string | undefined =>
+      /^\[\[.*?\]\]\s*\((.*)\)$/.exec(cell)?.[1];
+    const source = cellRef(cells[1] ?? "");
+    const target = cellRef(cells[2] ?? "");
     if (source === undefined || target === undefined || source === "" || target === "") {
       return null;
     }

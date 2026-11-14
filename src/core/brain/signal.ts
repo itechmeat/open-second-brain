@@ -673,9 +673,9 @@ function writeVaultlessSignal(
  * A vault signal is its page; a store-only signal is its record in the
  * fold. A signal that stayed alive but MOVED does not answer at its
  * original path any more - the dream pass moves inbox pages into
- * `Brain/inbox/processed/`, and applying a staged signal moves it out of
- * `Brain/pending/` - so the id is also looked up in those two folders
- * and found there counts as present. False for a record
+ * `Brain/inbox/processed/`, and applying a staged signal moves it out
+ * of `Brain/pending/` into `Brain/inbox/` - so the id is also looked up
+ * in those three folders and found there counts as present. False for a record
  * `deleteBySource` forgot (archived is not looked up: archived is
  * gone), for a receipt with no `ref` (empty id or path), and for
  * anything unresolvable - callers use it as positive evidence, so every
@@ -692,6 +692,7 @@ export function signalRecordExists(
     return storeSignal(id, configPath) !== undefined;
   if (existsSync(path)) return true;
   return (
+    memoryPageNamed(vault, "inbox", `${id}.md`, { configPath }) !== null ||
     memoryPageNamed(vault, "processed", `${id}.md`, { configPath }) !== null ||
     memoryPageNamed(vault, "pending", `${id}.md`, { configPath }) !== null
   );

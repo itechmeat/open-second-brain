@@ -407,6 +407,10 @@ test("slots, conflicts, aggregate and collisions fold only the claims the caller
     aspect: "employer",
     value: "Meta",
     quantity: { value: 5, unit: "k", action: null },
+    // A real quantity, so the private contribution is eligible for the
+    // aggregate fold at all: without `valueKind` the aggregate skips
+    // the claim and the remote assertions below pass even unfiltered.
+    valueKind: "quantity",
     source: "[[Brain/notes/private.md]]",
   });
   const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
@@ -424,9 +428,16 @@ test("slots, conflicts, aggregate and collisions fold only the claims the caller
   expect(JSON.stringify(conflicts)).not.toContain("private");
   const aggregate = (await call(remote, {
     operation: "aggregate",
+    entity: "alice mason",
+    unit: "k",
   })) as unknown as Record<string, unknown>;
   expect(JSON.stringify(aggregate)).not.toContain("Meta");
   expect(JSON.stringify(aggregate)).not.toContain("private");
+  // The withheld quantity must be aggregate-eligible: if the visibility
+  // filter were removed, the private contribution (5k) would show up
+  // here. Remote folds neither the contribution nor its total.
+  expect(aggregate["total"]).not.toBe(5);
+  expect(aggregate["contributions"]).toHaveLength(0);
   const collisions = (await call(remote, {
     operation: "collisions",
   })) as unknown as Record<string, unknown>;
@@ -446,6 +457,15 @@ test("slots, conflicts, aggregate and collisions fold only the claims the caller
   >;
   expect(JSON.stringify(localSlots)).toContain("Meta");
   expect(JSON.stringify(localSlots)).toContain("Google");
+  // Local reach keeps the whole ledger in every fold: the private 5k
+  // contribution lands in the aggregate and is the total.
+  const localAggregate = (await call(local, {
+    operation: "aggregate",
+    entity: "alice mason",
+    unit: "k",
+  })) as unknown as Record<string, unknown>;
+  expect(localAggregate["total"]).toBe(5);
+  expect(localAggregate["contributions"]).toHaveLength(1);
 });
 
 test("events refuses unparseable bounds and invalid limits as invalid params", async () => {

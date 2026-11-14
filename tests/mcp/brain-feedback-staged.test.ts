@@ -334,6 +334,68 @@ describe("brain_feedback staged receipt", () => {
     expect(existsSync(join(prefsDir, `${String(retry["preference_id"])}.md`))).toBe(true);
   });
 
+  test("a crash-window resume still fires after the staged signal was applied into the inbox", async () => {
+    // The apply pass files a staged signal out of `Brain/pending/` into
+    // `Brain/inbox/` - the destination an unswitched machine lands on.
+    // The signal is still alive there, so the resume must find it by id
+    // in the inbox folder and complete the capture instead of answering
+    // a dead no-op.
+    setGate(true);
+    const prefsDir = join(vault, "Brain", "preferences");
+    rmSync(prefsDir, { recursive: true, force: true });
+    writeFileSync(prefsDir, "not a directory");
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "applied-signal-resume-1",
+    };
+    await expect(handler(ctx, args)).rejects.toThrow();
+
+    // Apply the staged signal: out of the pending queue, into the inbox.
+    const signalFile = pendingFiles().find((f) => f.includes("staged-feedback"));
+    expect(signalFile).toBeDefined();
+    mkdirSync(join(vault, "Brain", "inbox"), { recursive: true });
+    renameSync(
+      join(brainDirs(vault).pending, signalFile!),
+      join(vault, "Brain", "inbox", signalFile!),
+    );
+
+    rmSync(prefsDir);
+    mkdirSync(prefsDir, { recursive: true });
+    const retry = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(retry["kind"]).toBe("preference");
+    expect(retry["deduped"]).toBe(true);
+    expect(existsSync(join(prefsDir, `${String(retry["preference_id"])}.md`))).toBe(true);
+  });
+
+  test("a crash-window resume matches a retry key spelled with surrounding whitespace", async () => {
+    // The ledger normalises the client key (trim) on every receipt, so
+    // the PENDING/DONE marker digests must be taken over the trimmed key
+    // too: a retry whose key only differs in surrounding whitespace
+    // dedupes the signal and must find the original capture's marker,
+    // not strand it behind a hash no retry can match.
+    const prefsDir = join(vault, "Brain", "preferences");
+    rmSync(prefsDir, { recursive: true, force: true });
+    writeFileSync(prefsDir, "not a directory");
+    const first = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: " trim-key-1 ",
+    };
+    await expect(handler(ctx, first)).rejects.toThrow();
+
+    rmSync(prefsDir);
+    mkdirSync(prefsDir, { recursive: true });
+    const retry = (await handler(ctx, {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "trim-key-1",
+    })) as Record<string, unknown>;
+    expect(retry["deduped"]).toBe(true);
+    expect(retry["kind"]).toBe("preference");
+    expect(existsSync(join(prefsDir, `${String(retry["preference_id"])}.md`))).toBe(true);
+  });
+
   test("a crash-window replay after the rule was retired writes nothing", async () => {
     // A completed forced capture whose DONE marker is then lost (the
     // crash window: PENDING without DONE) leaves a replay resumable - so
