@@ -35,6 +35,55 @@ HARNESS_ARGV: tuple[str, ...] = ("--harness", "hermes")
 CLIENT_NAME = "open-second-brain-hermes-provider"
 logger = logging.getLogger(__name__)
 
+# Purpose recorded in Hermes' spawn ledger (``hermes_cli.process_identity``) for
+# the long-lived ``o2b mcp`` child, so an operator reading the ledger can tell
+# which plugin owns a process group.
+SPAWN_PURPOSE = "open-second-brain-mcp-bridge"
+
+
+def _hermes_spawn_owned() -> Any:
+    """Hermes' owner-death spawner, when this host provides it.
+
+    Hermes 0.23 replaced the per-child ``tools.mcp_stdio_watchdog`` wrapper with
+    one owner-death supervisor per process (hermes-agent commit 2d783a15):
+    ``spawn_owned`` puts the child in a new process group and hands that group to
+    the supervisor, so the child and every descendant that stays in the group die
+    when the host dies by any cause, SIGKILL included. Older Hermes has only the
+    wrapper (see ``McpBrainBridge._watchdog_argv``); a standalone checkout has
+    neither and degrades to a plain spawn.
+
+    Returning ``None`` means "this host has no such seam". Any import failure is
+    that answer, not an error: an older or non-Hermes host raises ImportError,
+    and a broken Hermes import raises something else - neither may take the
+    bridge down.
+    """
+    try:
+        from hermes_cli.process_identity import spawn_owned
+    except Exception:  # noqa: BLE001 - absence is the expected answer, never fatal
+        return None
+    return spawn_owned
+
+
+def _release_owned_child(proc: Any) -> None:
+    """Hand a ``spawn_owned`` child's process group back after it was stopped.
+
+    Hermes prunes dead groups on its own, but that prune runs on the next
+    registration; releasing here closes the window in which a recycled pgid
+    could still be registered to a stranger's group. Best-effort by contract:
+    losing the bookkeeping must never fail a shutdown.
+    """
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int):
+        return
+    try:
+        from hermes_cli.process_identity import release_process_group_once_empty
+    except Exception:  # noqa: BLE001 - older host: no ledger to hand back
+        return
+    try:
+        release_process_group_once_empty(pid, proc=proc)
+    except Exception:  # noqa: BLE001 - shutdown is best-effort
+        return
+
 
 # A shared bridge is one stdio stream, so its calls are serialised: a child
 # that stops answering blocks every agent in the gateway rather than one
@@ -307,6 +356,9 @@ class McpBrainBridge:
         self._client: JsonRpcStdioClient | None = None
         self._tools: list[dict[str, Any]] = []
         self._started = False
+        # True when the child was spawned through Hermes' owner-death
+        # supervisor, so stop() hands its process group back.
+        self._spawned_owned = False
 
     def _argv(self) -> list[str]:
         argv = list(self._command)
@@ -368,11 +420,13 @@ class McpBrainBridge:
         # avoids the line-buffering deadlock that `text=True, bufsize=1`
         # classically triggers with Popen pipes: a fast child writer +
         # a slow parent reader fills the kernel buffer and both block.
-        # Hermes' watchdog owns the real child process group, forwards the
-        # stdio streams transparently, and kills the group when this gateway
-        # exits unexpectedly.
-        process = subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
-            self._watchdog_argv(argv),
+        #
+        # Parent-death protection has two shapes across Hermes versions, and
+        # whichever this host has is applied here rather than around the argv:
+        # `spawn_owned` (0.23+) owns the child's process group; the legacy
+        # `tools.mcp_stdio_watchdog` wrapped argv in a poller (see
+        # `_watchdog_argv`). A standalone checkout has neither.
+        popen_kwargs: dict[str, Any] = dict(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -384,6 +438,16 @@ class McpBrainBridge:
             # for the life of the bridge. No-op flag value on POSIX.
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        spawn_owned = _hermes_spawn_owned()
+        if spawn_owned is not None:
+            process = spawn_owned(argv, purpose=SPAWN_PURPOSE, **popen_kwargs)
+            self._spawned_owned = True
+        else:
+            self._spawned_owned = False
+            process = subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
+                self._watchdog_argv(argv),
+                **popen_kwargs,
+            )
         stderr_thread = threading.Thread(
             target=self._drain_stderr,
             args=(process,),
@@ -620,6 +684,9 @@ class McpBrainBridge:
                             close()
                         except Exception:  # noqa: BLE001
                             pass
+                if self._spawned_owned:
+                    _release_owned_child(proc)
+                    self._spawned_owned = False
                 logger.debug("open-second-brain MCP child stopped pid=%s", pid)
 
     def _ensure_started(self) -> None:
