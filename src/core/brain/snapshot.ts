@@ -2843,9 +2843,33 @@ function existingSpelling(dir: string, name: string, platform: NodeJS.Platform):
 }
 
 /**
+ * The directory entry a rename of `path` acts on: every ancestor resolved
+ * through symlinks, the last component itself not followed. Where the
+ * platform folds case, an existing entry takes its on-disk spelling.
+ */
+function entryPath(path: string, platform: NodeJS.Platform): string {
+  const abs = resolve(path);
+  const parent = dirname(abs);
+  if (parent === abs) return canonicalPath(abs, platform);
+  const canonicalParent = canonicalPath(parent, platform);
+  return join(canonicalParent, existingSpelling(canonicalParent, basename(abs), platform));
+}
+
+/**
  * Classify the store target against the live `Brain/` directory. The
  * containment test compares case-folded paths where the platform folds
  * case; the names it returns keep the target's canonical spelling.
+ *
+ * What is classified is the directory entry at the target path, not the
+ * file a symlink there points to: the store swap renames that entry (it
+ * stages `<target>.restore-*` beside it, moves it aside to `<target>.bak`
+ * and renames the staged file over it), so the Brain swap must judge the
+ * same entry. A `Brain/index.sqlite` that links to a database outside
+ * `Brain/` is a store directly under `Brain/`: the link and the staged
+ * file beside it stay out of the tree swap, and the store swap replaces
+ * the link with the restored database. Classifying the link's target
+ * instead called it `outside`, and the tree swap then moved the staged
+ * file away before the store swap could rename it.
  */
 export function storePlacement(
   liveBrain: string,
@@ -2853,7 +2877,12 @@ export function storePlacement(
   platform: NodeJS.Platform = process.platform,
 ): StorePlacement {
   const brain = canonicalPath(liveBrain, platform);
-  const store = canonicalPath(target, platform);
+  // A path that resolves to `Brain/` itself is refused whatever its last
+  // component is: a link to the directory is still the directory.
+  if (compareKey(canonicalPath(target, platform), platform) === compareKey(brain, platform)) {
+    return { kind: "brain" };
+  }
+  const store = entryPath(target, platform);
   const rel = relative(compareKey(brain, platform), compareKey(store, platform));
   if (rel === "") return { kind: "brain" };
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return { kind: "outside" };
@@ -3247,6 +3276,17 @@ class StoreSwapTornError extends Error {
  * If that second rename fails, the `.bak` is renamed back, so the live
  * store is untouched; a {@link StoreSwapTornError} means even that failed.
  *
+ * A rollback journal (`-journal`, DELETE journal mode, which the store
+ * uses on remote filesystems and SQLite leaves hot after a crash) belongs
+ * to the database it was written for and travels with it: it is moved to
+ * `.bak-journal` right after the outgoing store moves to `.bak`, and back
+ * before the store on every undo. Left at the live path, SQLite would
+ * replay the old database's journal over the replacement on its next
+ * open, which is the database/journal mismatch it documents as a cause of
+ * corruption. A journal with no live store beside it moves the same way.
+ * A journal that cannot be moved undoes the swap like any other failed
+ * step, so the replacement never lands beside it.
+ *
  * The WAL siblings of the OUTGOING file are removed after the swap. The
  * decompressed archive came from `VACUUM INTO` and is a complete
  * database on its own; an orphan `-wal` from the file it replaced would
@@ -3260,9 +3300,14 @@ class StoreSwapTornError extends Error {
 function commitDerivedStoreSwap(store: StagedDerivedStore): void {
   const { target, incoming } = store;
   const outgoing = `${target}${RESTORE_BACKUP_SUFFIX}`;
-  let movedAside = false;
+  const journal = `${target}${ROLLBACK_JOURNAL_SUFFIX}`;
+  const outgoingJournal = `${outgoing}${ROLLBACK_JOURNAL_SUFFIX}`;
+  const moved: MovedOutgoing = { target, outgoing, store: false, journal: false };
   try {
+    // A `.bak` and its journal from an earlier swap are replaced together:
+    // the earlier journal must not end up beside the store moved aside now.
     rmSync(outgoing, { force: true });
+    rmSync(outgoingJournal, { force: true });
     if (existsSync(target)) {
       try {
         renameWithRetry(target, outgoing);
@@ -3273,11 +3318,23 @@ function commitDerivedStoreSwap(store: StagedDerivedStore): void {
           { cause: err },
         );
       }
-      movedAside = true;
+      moved.store = true;
+    }
+    if (existsSync(journal)) {
+      try {
+        renameWithRetry(journal, outgoingJournal);
+      } catch (err) {
+        throw new Error(
+          `could not move the rollback journal ${journal} aside to ${outgoingJournal}: ` +
+            `${errorText(err)}; the restored store must not open beside it`,
+          { cause: err },
+        );
+      }
+      moved.journal = true;
     }
     renameWithRetry(incoming, target);
   } catch (err) {
-    if (movedAside) putBackOutgoingStore(target, outgoing, errorText(err), err);
+    putBackOutgoingStore(moved, errorText(err), err);
     throw err;
   }
   try {
@@ -3292,14 +3349,15 @@ function commitDerivedStoreSwap(store: StagedDerivedStore): void {
       throw new StoreSwapTornError(
         `${what}; the restored store could not be moved back off ${target} either ` +
           `(${errorText(backErr)})` +
-          (movedAside ? `, and the pre-restore store is at ${outgoing}` : ""),
+          (moved.store ? `, and the pre-restore store is at ${outgoing}` : "") +
+          (moved.journal ? `, its rollback journal at ${outgoingJournal}` : ""),
         { cause: err },
       );
     }
-    if (movedAside) putBackOutgoingStore(target, outgoing, what, err);
+    putBackOutgoingStore(moved, what, err);
     throw new Error(
       `${what}; the store swap was undone` +
-        (movedAside
+        (moved.store
           ? ", the pre-restore store is back in place"
           : ", and no store was live before it"),
       { cause: err },
@@ -3307,16 +3365,43 @@ function commitDerivedStoreSwap(store: StagedDerivedStore): void {
   }
 }
 
+/** What {@link commitDerivedStoreSwap} has moved aside so far. */
+interface MovedOutgoing {
+  readonly target: string;
+  readonly outgoing: string;
+  /** The live store is at `.bak`. */
+  store: boolean;
+  /** The live store's rollback journal is at `.bak-journal`. */
+  journal: boolean;
+}
+
 /**
- * Put the `.bak` store back at the live path after a failed swap step,
- * or throw a {@link StoreSwapTornError} naming where it was left.
+ * Put what a failed swap step moved aside back at the live path, or throw
+ * a {@link StoreSwapTornError} naming where it was left.
+ *
+ * The journal goes back first. A crash between the two renames then
+ * leaves the journal at the live path with no store and the store at
+ * `.bak`, which the crash-recovery preamble of every `Store.open` puts
+ * back beside it; the other order would leave the old store live without
+ * the journal it needs to roll back.
  */
-function putBackOutgoingStore(
-  target: string,
-  outgoing: string,
-  what: string,
-  cause: unknown,
-): void {
+function putBackOutgoingStore(moved: MovedOutgoing, what: string, cause: unknown): void {
+  const { target, outgoing } = moved;
+  if (moved.journal) {
+    const journal = `${target}${ROLLBACK_JOURNAL_SUFFIX}`;
+    const outgoingJournal = `${outgoing}${ROLLBACK_JOURNAL_SUFFIX}`;
+    try {
+      renameWithRetry(outgoingJournal, journal);
+    } catch (backErr) {
+      throw new StoreSwapTornError(
+        `${what}; the rollback journal of the pre-restore store could not be renamed back ` +
+          `(${errorText(backErr)}) and is at ${outgoingJournal}` +
+          (moved.store ? `; the pre-restore store is at ${outgoing}` : ""),
+        { cause },
+      );
+    }
+  }
+  if (!moved.store) return;
   try {
     renameWithRetry(outgoing, target);
   } catch (backErr) {
@@ -3356,6 +3441,8 @@ const RESTORE_STAGING_SUFFIX = ".restore";
  * it if a rollback dies between the two renames.
  */
 const RESTORE_BACKUP_SUFFIX = ".bak";
+/** SQLite's rollback journal of a database file (DELETE journal mode). */
+const ROLLBACK_JOURNAL_SUFFIX = "-journal";
 /** SQLite's write-ahead-log siblings of a database file. */
 const WAL_SIBLING_SUFFIXES: ReadonlyArray<string> = Object.freeze(["-wal", "-shm"]);
 

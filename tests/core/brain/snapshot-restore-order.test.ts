@@ -1276,6 +1276,11 @@ describe("the store family kept out of the tree swap is a closed list", () => {
     writeFileSync(join(brain, "index.sqlite"), "");
     const configured = join(brain, "Index.sqlite");
 
+    // Both hold on any host: only the ancestors go through the native
+    // realpath, and the last component is spelled by the platform the call
+    // names, so a case-folding filesystem under the test does not rewrite
+    // the `linux` answer to the on-disk `index.sqlite`.
+
     expect(storePlacement(brain, configured, "darwin")).toEqual({
       kind: "top",
       base: "index.sqlite",
@@ -1296,11 +1301,192 @@ describe("the store family kept out of the tree swap is a closed list", () => {
       kind: "top",
       base: "index.sqlite",
     });
-    expect(storePlacement(brain, join(upper, "index.sqlite"), "linux")).toEqual({
-      kind: "outside",
-    });
     expect(storePlacement(brain, join(root, "index.sqlite"), "darwin")).toEqual({
       kind: "outside",
     });
+  });
+
+  // Skipped where the filesystem under the test folds case (NTFS, default
+  // APFS): there `BRAIN` IS `Brain/`, and the native realpath answers with
+  // the on-disk spelling whatever platform the call names, so the
+  // case-sensitive comparison has two equal paths to compare. The
+  // platform-independent cases above still run on those hosts.
+  test.skipIf(filesystemFoldsCase(tmpdir()))(
+    "on a case-sensitive filesystem, Brain/ in another case is another directory",
+    () => {
+      const brain = brainDirs(vault).brain;
+      const upper = join(dirname(brain), basename(brain).toUpperCase());
+      expect(storePlacement(brain, join(upper, "index.sqlite"), "linux")).toEqual({
+        kind: "outside",
+      });
+    },
+  );
+});
+
+/**
+ * True when the filesystem under `dir` folds case, so `CASE-PROBE` names
+ * the file created as `case-probe`.
+ */
+function filesystemFoldsCase(dir: string): boolean {
+  const probeDir = mkdtempSync(join(dir, "o2b-case-probe-"));
+  try {
+    writeFileSync(join(probeDir, "case-probe"), "");
+    return existsSync(join(probeDir, "CASE-PROBE"));
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+}
+
+describe("the store target is one directory entry for the placement and the swap", () => {
+  // Symlinks need elevated rights on Windows; the other suites building
+  // symlink fixtures skip there for the same reason.
+  test.skipIf(process.platform === "win32")(
+    "a live Brain/index.sqlite linking to a database outside Brain/ is restored at the link",
+    () => {
+      const brain = brainDirs(vault).brain;
+      const external = storeAt(join(root, "external", "index.sqlite"));
+      // The snapshot predates the link: its store sat outside Brain/.
+      createSnapshot(vault, RUN_ID, {
+        reason: DREAM,
+        derivedStorePath: external,
+        derivedStore: COVERED,
+      });
+      const archived = tablesOf(external);
+      addTable(external, "late_marker");
+      const link = join(brain, "index.sqlite");
+      symlinkSync(external, link);
+
+      // The entry the swap renames is what is classified.
+      expect(storePlacement(brain, link)).toEqual({ kind: "top", base: "index.sqlite" });
+      // A link to Brain/ itself is still Brain/.
+      symlinkSync(brain, join(root, "brain-link"));
+      expect(storePlacement(brain, join(root, "brain-link"))).toEqual({ kind: "brain" });
+
+      const res = restoreSnapshot(vault, RUN_ID, { derivedStorePath: link });
+
+      expect(res.derived_store.replaced).toBe(true);
+      // The restored database replaced the link; the link went aside with
+      // the outgoing store's name, and the database it pointed to is as
+      // it was.
+      expect(lstatSync(link).isSymbolicLink()).toBe(false);
+      expect(tablesOf(link)).toEqual(archived);
+      expect(readlinkSync(`${link}.bak`)).toBe(external);
+      expect(tablesOf(external)).toContain("late_marker");
+      expect(readdirSync(brain).filter((e) => e.startsWith("index.sqlite.restore"))).toEqual([]);
+    },
+  );
+});
+
+/**
+ * {@link expectUntouched} without opening the store: SQLite would take a
+ * stand-in journal beside it for a hot one and try to roll it back.
+ */
+function expectUntouchedOnDisk(fn: () => unknown, message: RegExp): void {
+  const before = liveState();
+  expect(refusal(fn)).toMatch(message);
+  expect(liveState()).toEqual(before);
+}
+
+describe("the outgoing store's rollback journal moves with it", () => {
+  /**
+   * Stand-in for a hot rollback journal: the swap moves the file by name
+   * and never reads it, so its bytes only need to be recognisable.
+   */
+  const HOT_JOURNAL = "hot rollback journal of the pre-restore store\n";
+
+  test("a store outside Brain/: the journal does not stay beside the replacement", () => {
+    snapshotThenDiverge();
+    const journal = `${dbPath}-journal`;
+    writeFileSync(journal, HOT_JOURNAL);
+
+    restoreSnapshot(vault, RUN_ID);
+
+    expect(markerTableExists()).toBe(false);
+    expect(existsSync(journal)).toBe(false);
+    expect(readFileSync(`${dbPath}.bak-journal`, "utf8")).toBe(HOT_JOURNAL);
+  });
+
+  test("a store directly under Brain/: the journal does not stay beside the replacement", () => {
+    const brain = brainDirs(vault).brain;
+    const derivedStorePath = storeAt(join(brain, "index.sqlite"));
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStorePath, derivedStore: COVERED });
+    const archived = tablesOf(derivedStorePath);
+    addTable(derivedStorePath, "late_marker");
+    writeFileSync(`${derivedStorePath}-journal`, HOT_JOURNAL);
+
+    restoreSnapshot(vault, RUN_ID, { derivedStorePath });
+
+    expect(tablesOf(derivedStorePath)).toEqual(archived);
+    expect(existsSync(`${derivedStorePath}-journal`)).toBe(false);
+    expect(readFileSync(`${derivedStorePath}.bak-journal`, "utf8")).toBe(HOT_JOURNAL);
+  });
+
+  test("a journal with no live store beside it does not meet the replacement either", () => {
+    snapshotThenDiverge();
+    rmSync(dbPath);
+    const journal = `${dbPath}-journal`;
+    writeFileSync(journal, HOT_JOURNAL);
+
+    restoreSnapshot(vault, RUN_ID);
+
+    expect(existsSync(dbPath)).toBe(true);
+    expect(existsSync(journal)).toBe(false);
+    expect(readFileSync(`${dbPath}.bak-journal`, "utf8")).toBe(HOT_JOURNAL);
+  });
+
+  test("an undo puts the journal back beside the pre-restore store", () => {
+    snapshotThenDiverge();
+    writeFileSync(`${dbPath}-journal`, HOT_JOURNAL);
+    expectUntouchedOnDisk(
+      () =>
+        withFailingRename(
+          (from, to) => to === dbPath && from.startsWith(`${dbPath}.restore-`),
+          () => restoreSnapshot(vault, RUN_ID),
+        ),
+      /derived store swap failed.*as they were/u,
+    );
+    expect(readFileSync(`${dbPath}-journal`, "utf8")).toBe(HOT_JOURNAL);
+    expect(existsSync(`${dbPath}.bak-journal`)).toBe(false);
+  });
+
+  test("a journal that cannot be moved aside undoes the whole restore", () => {
+    snapshotThenDiverge();
+    const journal = `${dbPath}-journal`;
+    writeFileSync(journal, HOT_JOURNAL);
+    expectUntouchedOnDisk(
+      () =>
+        withFailingRename(
+          (from) => from === journal,
+          () => restoreSnapshot(vault, RUN_ID),
+        ),
+      /could not move the rollback journal .*the restored store must not open beside it.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
+    );
+    expect(readFileSync(journal, "utf8")).toBe(HOT_JOURNAL);
+  });
+
+  test("a journal that cannot be put back is reported as a torn store, with Brain/ undone", () => {
+    snapshotThenDiverge();
+    const journal = `${dbPath}-journal`;
+    const outgoingJournal = `${dbPath}.bak-journal`;
+    writeFileSync(journal, HOT_JOURNAL);
+    const before = liveState();
+    const message = refusal(() =>
+      withFailingRename(
+        (from, to) =>
+          (to === dbPath && from.startsWith(`${dbPath}.restore-`)) ||
+          (from === outgoingJournal && to === journal),
+        () => restoreSnapshot(vault, RUN_ID),
+      ),
+    );
+    expect(message).toMatch(
+      /the rollback journal of the pre-restore store could not be renamed back/u,
+    );
+    expect(message).toContain(`is at ${outgoingJournal}`);
+    expect(message).toMatch(
+      /Brain\/ is as it was before the restore, but the derived store is not/u,
+    );
+    expect(treeOf(brainDirs(vault).brain)).toEqual(before.brain);
+    expect(readFileSync(outgoingJournal, "utf8")).toBe(HOT_JOURNAL);
+    expect(sha256Hex(readFileSync(`${dbPath}.bak`))).toBe(before.store);
   });
 });
