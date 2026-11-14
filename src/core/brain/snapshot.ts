@@ -2929,13 +2929,23 @@ function assertRecoveryPointCoversTarget(
   runId: string,
 ): void {
   const record = readManifestSidecar(vault, evidence.runId)?.derived_store ?? null;
-  if (record === null || record.source_path === target) return;
-  throw new BrainSnapshotError(
-    `the recovery point ${evidence.runId} recorded the derived store at ${record.source_path}, ` +
-      `but this restore replaces ${target}; refusing before the Brain tree is touched, so the ` +
-      "store being discarded is not left without a copy",
-    runId,
-  );
+  if (record === null) return;
+  if (record.source_path !== target) {
+    throw new BrainSnapshotError(
+      `the recovery point ${evidence.runId} recorded the derived store at ${record.source_path}, ` +
+        `but this restore replaces ${target}; refusing before the Brain tree is touched, so the ` +
+        "store being discarded is not left without a copy",
+      runId,
+    );
+  }
+  if (!record.included) {
+    throw new BrainSnapshotError(
+      `the recovery point ${evidence.runId} did not include the derived store at ${target}, ` +
+        "which this restore replaces; refusing before the Brain tree is touched, so the store " +
+        "being discarded is not left without a copy",
+      runId,
+    );
+  }
 }
 
 /**

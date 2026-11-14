@@ -799,6 +799,46 @@ describe("the recovery point archives exactly the store the restore replaces", (
     expect(tablesOf(store.derivedStorePath)).toContain("override_marker");
   });
 
+  test("a store the restore replaces is archived even when the policy leaves it out", () => {
+    // The snapshot covered the store; the restore runs under the default
+    // policy, which would leave the store out of an ordinary snapshot.
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    addTable(dbPath, "late_marker");
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID, {
+      derivedStore: { include: false, maxBytes: COVERED.maxBytes },
+    });
+
+    expect(tablesOf(dbPath)).not.toContain("late_marker");
+    const recorded = JSON.parse(
+      readFileSync(manifestSidecarPath(vault, res.recoveryPoint.runId), "utf8"),
+    ) as { derived_store: { included: boolean } };
+    expect(recorded.derived_store.included).toBe(true);
+    restoreSnapshot(vault, res.recoveryPoint.runId);
+    expect(tablesOf(dbPath)).toContain("late_marker");
+  });
+
+  test("a recovery point that left the replaced store out refuses the swap", () => {
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    addTable(dbPath, "late_marker");
+    const storeBefore = sha256Hex(readFileSync(dbPath));
+
+    expect(() =>
+      restoreSnapshot(vault, RUN_ID, {
+        beforeDiscard: ({ heldStoreLock }) => {
+          const point = createSnapshot(vault, "manual-no-store", {
+            reason: BRAIN_SNAPSHOT_REASON.manual,
+            derivedStore: { include: false, maxBytes: COVERED.maxBytes },
+            ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+          });
+          return { runId: "manual-no-store", path: point.path };
+        },
+      }),
+    ).toThrow(/did not include the derived store/);
+    expect(sha256Hex(readFileSync(dbPath))).toBe(storeBefore);
+    expect(tablesOf(dbPath)).toContain("late_marker");
+  });
+
   test("a recovery point of another store refuses the swap before anything is touched", () => {
     const store = overrideStore();
     createSnapshot(vault, RUN_ID, { reason: DREAM, ...store });

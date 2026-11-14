@@ -481,6 +481,12 @@ export function restoreSnapshotWithRecoveryPoint(
         // left to resolve its own source, it would archive the configured
         // store while a `derivedStorePath` override names another.
         ...(storeTarget !== null ? { derivedStorePath: storeTarget } : {}),
+        // A store the swap replaces is always archived, whatever the
+        // vault's coverage policy or size cap: its only copy is about to be
+        // discarded. The restore refuses when the record says it was not.
+        ...(storeTarget !== null
+          ? { derivedStore: { include: true, maxBytes: Number.MAX_SAFE_INTEGER } }
+          : {}),
         // The restore holds the store writer lock from before this point
         // through the swap; the snapshot writes its store archive under it.
         ...(heldStoreLock !== null ? { heldStoreLock } : {}),
