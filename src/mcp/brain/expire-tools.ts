@@ -43,10 +43,13 @@ export async function toolBrainExpire(
   // The expiration's audit stamp names who set it; a token caller cannot
   // sign another agent's name to it.
   refuseAgentClaim(ctx.requestIdentity, agent, "brain_expire");
-  // A token caller that omits `agent` still stamps its own name: the
+  // A TOKEN caller that omits `agent` still stamps its own name: the
   // audit log would otherwise record the writer's DEFAULT_AGENT instead
-  // of the credential's agent.
-  const effectiveAgent = agent ?? ctx.requestIdentity?.agent;
+  // of the credential's agent. A SHARED-KEY caller keeps the historical
+  // config-path resolution: the shared key is the operator, whose
+  // identity is the config's to name.
+  const effectiveAgent =
+    agent ?? (ctx.requestIdentity?.via === "token" ? ctx.requestIdentity.agent : undefined);
   // A record the caller may not read is refused as an unknown id, before
   // anything is written.
   const readable = readableAtContextReachOrUndefined(ctx);

@@ -25,6 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startHttp, type HttpServerHandle } from "../../src/mcp/index.ts";
+import { FEEDBACK_TOOLS } from "../../src/mcp/brain/feedback-tools.ts";
+import { EXPIRE_TOOL } from "../../src/mcp/brain/expire-tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
@@ -270,6 +272,80 @@ describe("write-side decisions answer for the token's agent", () => {
     expect(body.error).toBeUndefined();
     // The expiration's audit event names who set it - the token's agent,
     // never the writer's default stamp nor the config identity.
+    const setRows = logRows().filter((row) => row["kind"] === "expiration-set");
+    expect(setRows).toHaveLength(1);
+    expect((setRows[0]!["payload"] as Record<string, unknown>)["agent"]).toBe("bob");
+  });
+});
+
+describe("the identity fallback answers for tokens only", () => {
+  let configHome: string;
+
+  afterEach(() => {
+    if (configHome !== undefined) {
+      rmSync(configHome, { recursive: true, force: true });
+      configHome = undefined as unknown as string;
+    }
+  });
+
+  test("a shared-key identity never stamps its own name over the config resolution", async () => {
+    // A non-default config identity: this is the name the config path
+    // resolves, and the name a shared-key write must keep carrying.
+    setEnv("VAULT_AGENT_NAME", "cfgagent");
+    configHome = mkdtempSync(join(tmpdir(), "o2b-identity-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: cfgagent\n`);
+    const noteTool = FEEDBACK_TOOLS.find((t) => t.name === "brain_note")!;
+    const ctx = {
+      vault,
+      configPath,
+      repoRoot: null,
+      // A shared-key caller's minted identity is the operator's, but the
+      // rule must not TRUST it for stamping: whatever it carries, the
+      // config-path resolution decides, as it did before the token
+      // fallback existed.
+      requestIdentity: { agent: "infiltrator", via: "shared-key" as const },
+    };
+    const res = (await noteTool.handler(ctx, { text: "shared key note" })) as Record<
+      string,
+      unknown
+    >;
+    expect(res["agent"]).toBe("cfgagent");
+    expect(logRows().filter((row) => row["kind"] === "note").length).toBeGreaterThan(0);
+    expect(JSON.stringify(logRows())).not.toContain("infiltrator");
+  });
+
+  test("a token identity still stamps the token's agent on a note and an expiration", async () => {
+    setEnv("VAULT_AGENT_NAME", "cfgagent");
+    configHome = mkdtempSync(join(tmpdir(), "o2b-identity-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: cfgagent\n`);
+    writePreference(vault, {
+      slug: "expire-token",
+      topic: "expire token",
+      principle: "prefer token expirations",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: "2026-05-02T00:00:00Z",
+    });
+    const tools = FEEDBACK_TOOLS;
+    const noteTool = tools.find((t) => t.name === "brain_note")!;
+    const expireTool = tools.find((t) => t.name === EXPIRE_TOOL)!;
+    const ctx = {
+      vault,
+      configPath,
+      repoRoot: null,
+      requestIdentity: { agent: "bob", via: "token" as const },
+    };
+    const note = (await noteTool.handler(ctx, { text: "token note" })) as Record<string, unknown>;
+    expect(note["agent"]).toBe("bob");
+    const res = (await expireTool.handler(ctx, {
+      id: "pref-expire-token",
+      expires: "2030-01-01",
+    })) as Record<string, unknown>;
+    expect(res["id"]).toBe("pref-expire-token");
     const setRows = logRows().filter((row) => row["kind"] === "expiration-set");
     expect(setRows).toHaveLength(1);
     expect((setRows[0]!["payload"] as Record<string, unknown>)["agent"]).toBe("bob");

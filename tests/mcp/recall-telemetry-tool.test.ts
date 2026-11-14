@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import {
   emitRecallTelemetry,
   RECALL_CHANNEL,
@@ -426,5 +427,100 @@ describe("brain_recall_telemetry channel dimension", () => {
     })) as { error?: { code: number; message: string } };
     expect(response.error?.code).toBe(INVALID_PARAMS);
     expect(response.error?.message).toContain("mcp, cli, hook");
+  });
+});
+
+describe("brain_recall_telemetry reach boundary on list, summary and gate ops", () => {
+  test("list, summary, gate_list and gate_summary drop withheld records at remote reach", async () => {
+    // Two pages: one the remote caller may read, one reserved.
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "open.md"), "---\nkind: note\n---\n\nopen\n");
+    writeFileSync(
+      join(vault, "notes", "closed.md"),
+      "---\nkind: note\nvisibility: [private]\n---\n\nclosed\n",
+    );
+
+    // Three recall records: one naming the open page, one naming the
+    // reserved page (both in its source refs and its top_artifacts), and
+    // one naming nothing.
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T18:00:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "search",
+      status: "ok",
+      durationMs: 2,
+      resultCount: 1,
+      topArtifacts: [{ id: "notes-open", path: "notes/open.md" }],
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T18:01:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "query",
+      status: "ok",
+      durationMs: 2,
+      resultCount: 0,
+      topArtifacts: [{ id: "notes-closed", path: "notes/closed.md" }],
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T18:02:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.hook,
+      mode: "query",
+      status: "ok",
+      durationMs: 1,
+      resultCount: 0,
+    });
+    // One gate record flagged private and one ordinary one. Gate records
+    // carry no artifact refs, so only the private flag can withhold them.
+    appendContinuityRecord(vault, {
+      kind: "gate_telemetry",
+      createdAt: "2026-05-20T18:03:00.000Z",
+      sourceRefs: [],
+      private: true,
+      payload: { host: "mcp-test", decision: "skip", reason: "private" },
+    });
+    appendContinuityRecord(vault, {
+      kind: "gate_telemetry",
+      createdAt: "2026-05-20T18:04:00.000Z",
+      sourceRefs: [],
+      payload: { host: "mcp-test", decision: "retrieve", reason: "threshold" },
+    });
+
+    // Local reach keeps everything, exactly as before this boundary.
+    const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+    await initialize(local);
+    expect((await callTelemetry(local, { operation: "summary" }))["total"]).toBe(3);
+    expect((await callTelemetry(local, { operation: "gate_summary" }))["total"]).toBe(2);
+
+    // Remote reach: the reserved page's record is dropped whole BEFORE
+    // total and before the summary counts, and the private gate record
+    // with it. No path of the reserved page appears anywhere.
+    const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    await initialize(remote);
+    const seen = await callTelemetry(remote, { operation: "list", mode: "search" });
+    expect(seen["total"]).toBe(1);
+    expect(JSON.stringify(seen)).not.toContain("notes/closed.md");
+
+    const summary = await callTelemetry(remote, { operation: "summary" });
+    expect(summary).toMatchObject({
+      total: 2,
+      by_mode: { search: 1, query: 1 },
+      by_channel: { hook: 1, mcp: 1 },
+      total_results: 1,
+    });
+
+    const gateList = await callTelemetry(remote, { operation: "gate_list" });
+    expect(gateList["total"]).toBe(1);
+    expect(JSON.stringify(gateList)).not.toContain('"reason":"private"');
+
+    const gateSummary = await callTelemetry(remote, { operation: "gate_summary" });
+    expect(gateSummary).toMatchObject({
+      total: 1,
+      retrieved: 1,
+      skipped: 0,
+      by_reason: { threshold: 1 },
+    });
   });
 });

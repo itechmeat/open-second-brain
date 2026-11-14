@@ -11,7 +11,10 @@ import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../../core/search/benchmark.ts";
 import { tuneRecall } from "../../core/search/tuning.ts";
 import { loadTunedParameters, resetTuning } from "../../core/search/tuning-store.ts";
-import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
+import {
+  listGateTelemetry,
+  summarizeGateTelemetryRecords,
+} from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import { computeDeadWeight, DEAD_WEIGHT_MAX_LIMIT } from "../../core/brain/dead-weight.ts";
@@ -19,7 +22,7 @@ import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import {
   listRecallTelemetry,
-  summarizeRecallTelemetry,
+  summarizeRecallTelemetryRecords,
 } from "../../core/brain/recall-telemetry.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
@@ -31,6 +34,45 @@ import { vaultPathField } from "../vault-path-field.ts";
 import { optionalStringArg } from "./shared.ts";
 import { unknownOperationError } from "../coerce.ts";
 import { coerceNonNegativeNumber, recallTelemetryFilter } from "./recall-coerce-tools.ts";
+import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
+
+/**
+ * The telemetry records this caller may see. A LOCAL caller filters
+ * nothing, by construction. Below local reach the records drop BEFORE any
+ * total or summary count is taken (the analytics rule - a count that
+ * still included a withheld record leaks its number):
+ *   - a `private` record is dropped whole;
+ *   - a record whose artifact refs (its `sourceRefs`, or the
+ *     `top_artifacts` in its payload) name anything the composed
+ *     request's reach and ownership view withholds is dropped whole -
+ *     the same view the `observed_reuse` and `dead_weight` operations
+ *     apply to the same keys, and the same drop-whole rule the cluster
+ *     batches follow for a subject that cannot be resolved.
+ * Gate telemetry carries no artifact refs, so only the private half
+ * applies to it.
+ */
+function callerVisibleTelemetry(
+  ctx: ServerContext,
+  records: ReadonlyArray<ContinuityRecord>,
+): ReadonlyArray<ContinuityRecord> {
+  if (contextReach(ctx) === TRANSPORT_REACH.local) return records;
+  const refs = everyArtifactRefView(
+    requestRefView(ctx),
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+  );
+  const hiddenPath = (path: unknown): boolean =>
+    typeof path === "string" && path !== "" && !refs.filtersNothing && !refs.visible(path);
+  return records.filter((record) => {
+    if (record.private) return false;
+    if (refs.filtersNothing) return true;
+    if (record.sourceRefs.some((ref) => hiddenPath(ref.path))) return false;
+    const top = record.payload["top_artifacts"];
+    return !(
+      Array.isArray(top) &&
+      top.some((artifact) => hiddenPath((artifact as { path?: unknown } | null)?.path))
+    );
+  });
+}
 
 /** Recall-quality benchmark over an inline dataset. */
 export async function toolBrainBenchmark(
@@ -171,30 +213,43 @@ export async function toolBrainRecallTelemetry(
   const filter = recallTelemetryFilter(args);
 
   if (operation === "list") {
-    const records = listRecallTelemetry(ctx.vault, filter);
+    const records = callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, filter));
     return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
-    const summary = summarizeRecallTelemetry(ctx.vault, filter);
+    // The summary counts the VISIBLE records: the filter drops withheld
+    // ones before the fold, so no count answers for a record the caller
+    // may not see.
+    const summary = summarizeRecallTelemetryRecords(
+      callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, filter)),
+    );
     return { ...summary };
   }
   // Gate-decision telemetry (Workspace Insight Suite, t_65036e02):
   // records emitted by brain_recall_gate when recall_gate_telemetry is on.
   if (operation === "gate_list") {
-    const records = listGateTelemetry(ctx.vault, {
-      ...(filter.host !== undefined ? { host: filter.host } : {}),
-      ...(filter.since !== undefined ? { since: filter.since } : {}),
-      ...(filter.until !== undefined ? { until: filter.until } : {}),
-      ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
-    });
+    const records = callerVisibleTelemetry(
+      ctx,
+      listGateTelemetry(ctx.vault, {
+        ...(filter.host !== undefined ? { host: filter.host } : {}),
+        ...(filter.since !== undefined ? { since: filter.since } : {}),
+        ...(filter.until !== undefined ? { until: filter.until } : {}),
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      }),
+    );
     return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "gate_summary") {
-    const summary = summarizeGateTelemetry(ctx.vault, {
-      ...(filter.host !== undefined ? { host: filter.host } : {}),
-      ...(filter.since !== undefined ? { since: filter.since } : {}),
-      ...(filter.until !== undefined ? { until: filter.until } : {}),
-    });
+    const summary = summarizeGateTelemetryRecords(
+      callerVisibleTelemetry(
+        ctx,
+        listGateTelemetry(ctx.vault, {
+          ...(filter.host !== undefined ? { host: filter.host } : {}),
+          ...(filter.since !== undefined ? { since: filter.since } : {}),
+          ...(filter.until !== undefined ? { until: filter.until } : {}),
+        }),
+      ),
+    );
     return { ...summary };
   }
   // Observed-use blend (t_65588d8b): the folded per-artifact

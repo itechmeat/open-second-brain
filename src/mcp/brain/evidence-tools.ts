@@ -186,11 +186,14 @@ export async function toolBrainNote(
   // A token caller's log line is attributed to the token's agent; a
   // claim on somebody else's name is refused before anything is written.
   refuseAgentClaim(ctx.requestIdentity, agentArg, "brain_note");
-  // A token caller that omits `agent` is attributed to the token's agent
+  // A TOKEN caller that omits `agent` is attributed to the token's agent
   // all the same: `appendBrainNote` would otherwise resolve the absent
   // name through the process config, stamping the config identity where
-  // the credential decided (the same fallback the sibling writers make).
-  const agent = agentArg ?? ctx.requestIdentity?.agent;
+  // the credential decided. A SHARED-KEY caller keeps the historical
+  // config-path resolution: the shared key is the operator, whose
+  // identity is the config's to name.
+  const agent =
+    agentArg ?? (ctx.requestIdentity?.via === "token" ? ctx.requestIdentity.agent : undefined);
 
   let res;
   try {

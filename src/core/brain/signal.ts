@@ -46,6 +46,7 @@ import { storeWrite } from "../store/store-write.ts";
 import { FileAlreadyExistsError } from "../fs-atomic.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
 import { signalsStoreOnly, storeSignal } from "./signal-state.ts";
+import { existsSync } from "node:fs";
 import { join, posix, relative, resolve } from "node:path";
 
 import type { WriteSubject } from "./write-disposition.ts";
@@ -663,6 +664,20 @@ function writeVaultlessSignal(
   );
   rememberSignalKey(null, idKey, contentHash, sanitised, id, path, privacy);
   return { path, id, staged };
+}
+
+/**
+ * Whether a signal write's record still exists, in the coordinates a
+ * deduped idempotency result carries (the receipt `ref`'s path and id).
+ * A vault signal is its page; a store-only signal is its record in the
+ * fold. False for a record `deleteBySource` forgot, for a receipt with
+ * no `ref` (empty id or path), and for anything unresolvable - callers
+ * use it as positive evidence, so every doubt answers "gone".
+ */
+export function signalRecordExists(vault: string | null, path: string, id: string): boolean {
+  if (path === "" || id === "") return false;
+  if (vault === null || signalsStoreOnly(vault)) return storeSignal(id) !== undefined;
+  return existsSync(path);
 }
 
 /** Device-local lock that serialises store-only signal id allocation on this machine. */

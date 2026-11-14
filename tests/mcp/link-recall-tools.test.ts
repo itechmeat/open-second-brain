@@ -203,9 +203,21 @@ test("brain_clusters run with batch_size returns per-batch results", async () =>
   await initialize(server);
 
   const run = await call(server, "brain_clusters", { operation: "run", batch_size: 1 });
-  const batches = run["batches"] as Array<{ index: number; start: number; end: number }>;
+  // The default server reach is below local, so the batches are the
+  // rebuilt-over-visible form: renumbered `index`, the notes this caller
+  // may see, and no `start`/`end` offsets - those count detected
+  // communities, which a restricted view never names.
+  const batches = run["batches"] as Array<{
+    index: number;
+    start?: number;
+    end?: number;
+    written: string[];
+  }>;
   expect(batches).toHaveLength(1);
-  expect(batches[0]).toMatchObject({ index: 0, start: 0, end: 1 });
+  expect(batches[0]!.index).toBe(0);
+  expect(batches[0]!.written.length).toBeGreaterThan(0);
+  expect(batches[0]!.start).toBeUndefined();
+  expect(batches[0]!.end).toBeUndefined();
 
   const badZero = await callError(server, "brain_clusters", { operation: "run", batch_size: 0 });
   expect(badZero.code).toBe(-32602);

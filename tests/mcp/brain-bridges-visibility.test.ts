@@ -128,13 +128,15 @@ describe("brain_clusters operation=run", () => {
     await writeCommunity();
     const remote = await clusters(TRANSPORT_REACH.remote);
     const body = JSON.stringify(remote);
-    // The community naming the reserved page is dropped whole, so no
-    // batch may name the cluster note its seed produced (or any stale
-    // removal) either - `batch_size` must not be the side door back in.
-    const batches = remote["batches"] as Array<Record<string, unknown>> | undefined;
-    expect(batches).toHaveLength(1);
-    expect(batches![0]!["written"]).toEqual([]);
-    expect(batches![0]!["removed"]).toEqual([]);
+    // Every detected community names the reserved page, so a remote
+    // caller sees no community and therefore NO batch: the offsets and
+    // index count detected communities, and a `{start: 0, end: 1}` beside
+    // an empty `communities` would show that a withheld community exists
+    // and how many there are. No batch may name the cluster note its
+    // seed produced (or any stale removal, or a raw write error's seed
+    // path) either - `batch_size` must not be the side door back in.
+    expect(remote["batches"]).toEqual([]);
+    expect(remote["communities"]).toEqual([]);
     expect(body).not.toContain("Brain/clusters/");
     expect(body).not.toContain(RESERVED);
 

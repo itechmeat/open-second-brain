@@ -9,7 +9,8 @@
 import { resolve } from "node:path";
 import { loadPermissionsDocumentFor } from "../../core/brain/permissions/document-source.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
+import { resolveEffectiveScope, signalRecordExists, writeSignal } from "../../core/brain/signal.ts";
+import { computePayloadHash, lookupKey, rememberKey } from "../../core/brain/idempotency-ledger.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../core/route-scope.ts";
 import {
   adviseIncomingFeedback,
@@ -19,7 +20,7 @@ import {
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
-import { writePreference, preferencePresence } from "../../core/brain/preference.ts";
+import { writePreference } from "../../core/brain/preference.ts";
 import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
@@ -84,6 +85,75 @@ export function deriveSlug(topic: string): string {
 
 /** How a result names a record written with no vault. */
 export const STORE_RECORD_PREFIX = "store:";
+
+/**
+ * The ledger namespace of the force-confirmed capture markers. A marker
+ * lives outside the shared key space so a client key reused across tools
+ * never collides with one.
+ */
+const PREFERENCE_MARKER_NAMESPACE = "brain-feedback-preference";
+
+/**
+ * Ledger keys of the force-confirmed capture marker: the PENDING marker
+ * is appended right before the confirmed preference write is attempted,
+ * the DONE marker right after it succeeded. The append-only ledger cannot
+ * update a receipt, so completion is a second receipt, and "unfinished"
+ * is positive evidence: PENDING present, DONE absent. Both carry the same
+ * capture hash, so a retry whose force flag or expiration differs from
+ * the original call never resumes the original's capture.
+ */
+const preferenceMarkerKey = (idempotencyKey: string): string => `${idempotencyKey}#preference`;
+const preferenceDoneKey = (idempotencyKey: string): string => `${idempotencyKey}#preference-done`;
+
+/**
+ * The payload identity of the force-confirmed preference write, hashed
+ * into the marker pair: WHAT is captured (topic, principle, agent,
+ * scope), THAT it is force-confirmed, and HOW LONG it lives. Two calls
+ * that differ in any of these are different payloads, so a forced retry
+ * of an unforced capture (no marker exists) and a forced retry with a
+ * different expiration (marker hash differs) both stay true no-ops.
+ * Old receipts stay readable: the marker namespace is new, so receipts
+ * written before it existed simply never resume.
+ */
+function preferenceCaptureHash(input: {
+  topic: string;
+  principle: string;
+  agent: string;
+  scope: string | undefined;
+  expires: string | undefined;
+}): string {
+  return computePayloadHash({
+    force_confirmed: true,
+    topic: input.topic,
+    principle: input.principle,
+    agent: input.agent,
+    scope: input.scope ?? undefined,
+    expiration_date: input.expires ?? undefined,
+  });
+}
+
+/** Append one capture-marker receipt, failing soft: the marker is a
+ * repair aid, so an unreadable key or a full disk must never break the
+ * capture it guards (the same policy the log appends follow). */
+function appendMarkerReceipt(
+  vault: string | null,
+  key: string,
+  captureHash: string,
+  createdAt: string,
+): void {
+  try {
+    rememberKey(vault, {
+      key,
+      namespace: PREFERENCE_MARKER_NAMESPACE,
+      contentHash: captureHash,
+      createdAt,
+    });
+  } catch (err) {
+    process.stderr.write(
+      `warning: record feedback capture marker failed: ${(err as Error).message}\n`,
+    );
+  }
+}
 
 export async function toolBrainFeedback(
   ctx: ServerContext,
@@ -243,14 +313,23 @@ export async function toolBrainFeedback(
   // A deduped signal means this whole feedback call is a retry of one
   // already recorded — skip the log event, the shared-namespace mirror,
   // and any force-confirmed pref so the retry stays a true no-op.
-  // EXCEPT one whose preference write never finished: the idempotency
-  // receipt was recorded before `writePreference` ran, so a first call
-  // that threw after the signal landed left the receipt without the rule,
-  // and this retry would answer `deduped` while the confirmed capture it
-  // stands for is still missing. The rule's absence is exactly the mark
-  // of an unfinished capture, so the retry resumes the write below; a
-  // capture that completed (the rule exists, active or retired) stays a
-  // true no-op.
+  // EXCEPT a capture the ledger shows is UNFINISHED: when the original
+  // call was force-confirmed, its signal landed, and its preference
+  // write never completed, the call leaves a PENDING capture marker in
+  // the idempotency ledger (below) and the retry that finds PENDING
+  // without DONE, with the same capture payload, and with the signal
+  // still present, completes the write. Everything else stays a true
+  // no-op:
+  //   - a completed capture (DONE exists),
+  //   - a capture whose signal delete-by-source later forgot (the
+  //     signal page / store record is gone - a user's forget must not
+  //     be undone by a replay),
+  //   - a first call made WITHOUT force_confirmed (no marker exists),
+  //   - a retry whose force flag or expiration differs from the
+  //     original (the marker hash names both, so it does not match).
+  // "The preference is absent" proves none of this - a preference the
+  // user removed by hand reads exactly like one never written - which is
+  // why the resume reads the marker pair instead.
   // The force-confirmed preference write, spelled once so the deduped
   // retry path can resume it: same payload, same stamps, same writer.
   const writeConfirmedPreference = (): { path: string; id: string } =>
@@ -315,12 +394,38 @@ export async function toolBrainFeedback(
       );
     }
   };
+  // The capture hash and marker keys, computed once: both the fresh
+  // path (before the write) and the deduped retry path (to decide the
+  // resume) read them.
+  const captureHash = preferenceCaptureHash({
+    topic: topic.trim(),
+    principle: principle.trim(),
+    agent,
+    scope: effectiveScope,
+    expires,
+  });
+  const markerKey =
+    idempotencyKey !== null && idempotencyKey !== undefined
+      ? preferenceMarkerKey(idempotencyKey)
+      : undefined;
+  const doneKey =
+    idempotencyKey !== null && idempotencyKey !== undefined
+      ? preferenceDoneKey(idempotencyKey)
+      : undefined;
   if (sigResult.deduped) {
-    if (
+    // Positive evidence this capture is unfinished: the marker pair from
+    // a force-confirmed original, with the same payload as THIS retry,
+    // and a signal that still exists on disk / in the store.
+    const resumable =
+      markerKey !== undefined &&
+      doneKey !== undefined &&
       forceConfirmed &&
-      preferencePresence(vault, slug, ctx.configPath ?? undefined) === "absent"
-    ) {
+      lookupKey(vault, markerKey, PREFERENCE_MARKER_NAMESPACE)?.contentHash === captureHash &&
+      lookupKey(vault, doneKey, PREFERENCE_MARKER_NAMESPACE) === null &&
+      signalRecordExists(vault, sigResult.path, sigResult.id);
+    if (resumable) {
       const resumed = writeConfirmedPreference();
+      if (doneKey !== undefined) appendMarkerReceipt(vault, doneKey, captureHash, createdAt);
       logConfirmedPreference(resumed.id);
       return {
         kind: "preference",
@@ -416,11 +521,20 @@ export async function toolBrainFeedback(
 
   let prefResult: { path: string; id: string } | null = null;
   if (forceConfirmed) {
+    // Leave the PENDING capture marker BEFORE the write: the signal and
+    // its own receipt have already landed, so a crash or refusal inside
+    // `writePreference` leaves PENDING without DONE - the positive mark
+    // a deduped retry reads to finish this capture (see the deduped
+    // branch above). Fail-soft: without a client key there is nothing to
+    // mark, and a marker that cannot be stored only costs the repair.
+    if (markerKey !== undefined) appendMarkerReceipt(vault, markerKey, captureHash, createdAt);
     // Escape hatch: skip the dream pass and create the confirmed rule now.
     // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
     // window collapses on inspection. The just-written signal is recorded
-    // as the rule's origin under `evidenced_by`.
+    // as the rule's origin under `evidenced_by`. A throw here leaves
+    // PENDING without DONE in the ledger - exactly the resume mark.
     prefResult = writeConfirmedPreference();
+    if (doneKey !== undefined) appendMarkerReceipt(vault, doneKey, captureHash, createdAt);
     logConfirmedPreference(prefResult.id);
   }
 
