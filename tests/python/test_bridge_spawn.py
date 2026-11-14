@@ -38,8 +38,11 @@ _MANAGED_MODULES = ("hermes_cli", "hermes_cli.process_identity", "tools", "tools
 class SpawnSeamTests(unittest.TestCase):
     def setUp(self) -> None:
         self._saved = {name: sys.modules.get(name) for name in _MANAGED_MODULES}
+        # A None entry makes the import raise ImportError even on a machine
+        # with Hermes installed, so "absent" means absent; a test that needs
+        # a host installs its fake modules over these entries.
         for name in _MANAGED_MODULES:
-            sys.modules.pop(name, None)
+            sys.modules[name] = None
         McpBrainBridge._watchdog_absent_warned = False
         self.bridge = McpBrainBridge(vault=None)
 
@@ -141,12 +144,17 @@ class SpawnSeamTests(unittest.TestCase):
 
 class SpawnOwnedProbeTests(unittest.TestCase):
     def test_probe_returns_none_without_the_host_module(self) -> None:
-        saved = {name: sys.modules.pop(name, None) for name in ("hermes_cli", "hermes_cli.process_identity")}
+        names = ("hermes_cli", "hermes_cli.process_identity")
+        saved = {name: sys.modules.get(name) for name in names}
+        for name in names:
+            sys.modules[name] = None  # blocks a real install too
         try:
             self.assertIsNone(bridge_mod._hermes_spawn_owned())
         finally:
             for name, module in saved.items():
-                if module is not None:
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
                     sys.modules[name] = module
 
     def test_probe_returns_the_host_callable(self) -> None:
@@ -162,9 +170,6 @@ class SpawnOwnedProbeTests(unittest.TestCase):
             sys.modules.pop("hermes_cli", None)
             sys.modules.pop("hermes_cli.process_identity", None)
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class _FakeProc:
@@ -225,3 +230,7 @@ class OwnedChildReleaseTests(unittest.TestCase):
         self.bridge._proc = _FakeProc()
         self.bridge.stop()
         self.assertEqual(self.released, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
