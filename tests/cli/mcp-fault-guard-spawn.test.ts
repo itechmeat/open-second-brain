@@ -12,13 +12,17 @@
  * directory, so no product code they run reaches the operator's config.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EXIT_INTERNAL_FAULT, FAULT_KIND } from "../../src/cli/mcp-fault-guard.ts";
 import { IS_WINDOWS, homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const FIXTURES = join(import.meta.dir, "../fixtures/mcp-fault-guard");

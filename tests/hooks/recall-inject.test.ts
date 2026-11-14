@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,6 +15,10 @@ import {
 } from "../../src/core/brain/recall-inject.ts";
 import { listRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
 import { homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -65,6 +69,16 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
   return { stdout, stderr, exit };
 }
 
+/**
+ * The retrieval budget the tests that assert a decision ran give the hook:
+ * the highest value the setting accepts. The default (2.5 s) is a product
+ * bound for an interactive prompt; on a loaded Windows runner the cold
+ * retrieval of a fresh vault outlived it and the hook rightly audited a
+ * `timeout` error, which failed tests that are about the cap settings, not
+ * about the clock. A valid value, so it never shows up in `config_invalid`.
+ */
+const ROOMY_TIME_BUDGET = { OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS: "6000" } as const;
+
 function auditRecords(): Array<Record<string, unknown>> {
   const dir = hookAuditDir(vault);
   if (!existsSync(dir)) return [];
@@ -101,6 +115,7 @@ describe("recall-inject hook", () => {
         VAULT_DIR: vault,
         OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
         OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES: "99",
+        ...ROOMY_TIME_BUDGET,
       },
     );
     expect(r.exit).toBe(0);
@@ -113,7 +128,7 @@ describe("recall-inject hook", () => {
   test("valid caps leave config_invalid off the audit line", async () => {
     await runHook(
       { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
-      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true", ...ROOMY_TIME_BUDGET },
     );
     const record = auditRecords().find((rec) => rec["actor"] === "recall-inject");
     expect(record).toBeDefined();

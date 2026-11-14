@@ -12,7 +12,7 @@
  * here rather than in a consumer.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +25,10 @@ import {
 import { charLengthOverTokenBudget } from "../../src/core/search/embeddings/signature.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

@@ -18,7 +18,7 @@
  * loosening.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -42,6 +42,10 @@ import { sessionMiningSurveysPath } from "../../src/core/brain/session-mining-su
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

@@ -18,7 +18,7 @@
  * is a pure function of a note's own frontmatter and body.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
@@ -29,6 +29,10 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The registered exit for an index holding unexamined documents. */
 const PENDING_CODE = "event-anchors-pending";

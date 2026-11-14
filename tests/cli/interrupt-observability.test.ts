@@ -25,7 +25,7 @@
  * which may be aimed at the test runner itself.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -35,6 +35,10 @@ import { interruptIsObservable, onInterrupt } from "../../src/cli/interrupt.ts";
 import { OPERATION, type Operation } from "../../src/core/brain/safeguard.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const SRC = resolve(import.meta.dir, "..", "..", "src");
 

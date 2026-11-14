@@ -12,7 +12,15 @@
  *  5. The commit accepts `source_turn` through the tool's input schema.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +39,10 @@ import {
   type FakeSystemOne,
 } from "../helpers/fake-decision-provider.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const TOOL = "brain_extract_signals";
 const SESSION = "sess-mcp-prefilter";

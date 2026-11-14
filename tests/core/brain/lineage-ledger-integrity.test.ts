@@ -19,7 +19,7 @@
  * cache and the lifecycle hook both depend on that.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   chmodSync,
@@ -46,6 +46,10 @@ import {
 import { verifyLineageLedger } from "../../../src/core/brain/lineage/verify.ts";
 import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 

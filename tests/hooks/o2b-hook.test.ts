@@ -8,7 +8,7 @@
  *      own (possibly stale-symlinked) location, so a stale ~/.local/bin link
  *      cannot strand the hook on an old plugin version.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -22,6 +22,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WRAPPER = join(REPO, "scripts", "o2b-hook");

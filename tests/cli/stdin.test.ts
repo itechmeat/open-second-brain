@@ -7,9 +7,13 @@
  * with a real pipe reproduces that, so this spawns one, on every platform.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const STDIN_MODULE = resolve(join(import.meta.dir, "..", "..", "src", "cli", "stdin.ts"));
 

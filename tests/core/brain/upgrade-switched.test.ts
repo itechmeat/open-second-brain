@@ -3,7 +3,7 @@
  * (design D14 item 1, task 2.10): `brain upgrade` refuses there, and the
  * session-start maintenance skips the managed-file upgrade.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 import {
@@ -21,6 +21,10 @@ import { digestVaultTree } from "../../helpers/vault-digest.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
 import { switchDevice as switchDeviceAt } from "./store-only/fixtures.ts";
 import { join } from "node:path";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

@@ -4,13 +4,17 @@
  * a background `o2b search index --freshen`; once that run has recorded
  * its outcome, the next search finds the note. No test seam is used.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { FRESHEN_CLAIM_FILE, readFreshenState } from "../../src/core/search/freshen.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;
@@ -44,8 +48,15 @@ test(
     expect(JSON.parse(first.stdout).results ?? []).toHaveLength(0);
 
     const derived = join(vault, ".open-second-brain");
+    // The run has ended once its outcome is recorded AND its claim is
+    // released. The child records the outcome first, then settles any
+    // pending marker, then releases, so waiting on the outcome alone left
+    // the claim assertion below racing the child's last steps.
+    const ended = (): boolean =>
+      readFreshenState(derived).lastOutcome !== null &&
+      !existsSync(join(derived, FRESHEN_CLAIM_FILE));
     const deadline = Date.now() + 30_000;
-    while (readFreshenState(derived).lastOutcome === null && Date.now() < deadline) {
+    while (!ended() && Date.now() < deadline) {
       await Bun.sleep(200);
     }
     const state = readFreshenState(derived);

@@ -26,7 +26,7 @@
  *   8. Both `o2b search check` shapes render the field in every state.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -46,6 +46,10 @@ import { runCli } from "../../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const VEC_LOADABLE = sqliteVecLoadable();
 

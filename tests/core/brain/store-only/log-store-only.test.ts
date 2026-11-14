@@ -6,7 +6,7 @@
  * legacy day files plus the dual write; the log reader facade returns the
  * event either way.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,6 +33,10 @@ import { runCli } from "../../../helpers/run-cli.ts";
 import { makeStoreEnv, type StoreEnv } from "../../store/fixtures/store-env.ts";
 import { brainTreeDigest, ledgerRows, partitionRecords, switchDevice } from "./fixtures.ts";
 import { digestVaultTree } from "../../../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const DATE = "2026-06-01";
 const TS = `${DATE}T10:00:00Z`;

@@ -6,7 +6,7 @@
  * Symlinks need no privilege on POSIX; on Windows creating one does, so
  * the symlink cases run where the fixture can be built.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   linkSync,
@@ -32,6 +32,10 @@ import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { blobPath, partitionDir, shardPath } from "../../../src/core/store/store-paths.ts";
 import { IS_WINDOWS } from "../../helpers/platform.ts";
 import { makeTempStore, type TempStore } from "./fixtures/temp-store.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOV_2026 = Date.UTC(2026, 10, 6, 12, 0, 0);
 const NOTE: AppendInput = {

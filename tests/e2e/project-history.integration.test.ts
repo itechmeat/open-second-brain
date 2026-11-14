@@ -5,7 +5,7 @@
  * edit survival.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,10 @@ import { generateArchDocs } from "../../src/core/brain/architect/generate.ts";
 import { mineCommitDecisions } from "../../src/core/brain/git/decisions.ts";
 import { ingestGitHistory } from "../../src/core/brain/git/ingest.ts";
 import { gitStoreDir, listGitCommits } from "../../src/core/brain/git/store.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let repo: string;

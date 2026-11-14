@@ -8,7 +8,7 @@
  * (and with it the whole upgrade) cannot proceed.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,6 +39,10 @@ import {
 } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 import { waitForSelfHealChildren } from "../../helpers/self-heal-children.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOUR = 60 * 60_000;
 const T0 = new Date("2026-09-28T10:00:00.000Z");
@@ -65,15 +69,27 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A detached worker releases the lock it was handed when it ends. */
+/**
+ * Wait for the detached worker to end: its outcome row is recorded and the
+ * lock it was handed is released.
+ *
+ * The row is what decides. Waiting on the lock file alone returned on a
+ * Windows runner about a second after the spawn, before a cold worker
+ * could have planned anything, and the test then read the upgrade as still
+ * pending. The worker writes its row before it exits and releases the lock
+ * on exit, so a run that has both is a run that ended.
+ */
 async function waitForWorker(budgetMs = 60_000): Promise<void> {
   const deadline = Date.now() + budgetMs;
-  while (existsSync(selfHealUpgradeLockPath(vault)) && Date.now() < deadline) {
+  const ended = (): boolean =>
+    upgradeRows().length > 0 && !existsSync(selfHealUpgradeLockPath(vault));
+  while (!ended() && Date.now() < deadline) {
     // Nothing in-process holds the detached worker; looking again is the
     // only way to learn it ended.
     // eslint-disable-next-line no-await-in-loop
     await Bun.sleep(50);
   }
+  if (upgradeRows().length === 0) throw new Error("worker recorded no outcome");
   if (existsSync(selfHealUpgradeLockPath(vault))) throw new Error("worker never released its lock");
 }
 
@@ -233,8 +249,12 @@ describe("ensureVaultCurrent in the background", () => {
     expect(r.brainUpgradeSpawn).toBe(SELF_HEAL_UPGRADE_SPAWN.spawned);
     expect(r.brainUpgraded).toEqual([]);
     await waitForWorker();
+    // The outcome first: a worker that did not apply says why in its row,
+    // which a bare "pending: 1" would hide.
+    expect(upgradeRows().map((row) => [row["outcome"], row["error"] ?? null])).toEqual([
+      [SELF_HEAL_UPGRADE_OUTCOME.applied, null],
+    ]);
     expect(planUpgrade(vault).pending).toBe(0);
-    expect(upgradeRows().map((row) => row["outcome"])).toEqual([SELF_HEAL_UPGRADE_OUTCOME.applied]);
   }, 60_000);
 
   test("starts nothing while a recorded failure is cooling down", async () => {

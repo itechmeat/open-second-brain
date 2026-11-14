@@ -17,7 +17,7 @@
  * Windows only; the POSIX launchers have no such lookup.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +26,10 @@ import { dirname, join, resolve } from "node:path";
 import { installCliWindows } from "../../src/cli/install-cli-windows.ts";
 import { launcherCommand, WINDOWS_LAUNCHER_ENV } from "../../src/core/install/payload.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO = resolve(import.meta.dir, "..", "..");
 const SCRIPTS = join(REPO, "scripts");

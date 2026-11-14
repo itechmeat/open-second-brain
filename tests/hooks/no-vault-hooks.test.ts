@@ -8,7 +8,7 @@
  * catch-up, gaps, sub-agent context) have a behaviour test each; the
  * matrix runs every hook `hooks/hooks.json` registers.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,6 +20,10 @@ import { STORE_DUAL_WRITE_ENV, STORE_ROOT_ENV } from "../../src/core/store/const
 import { readPartition } from "../../src/core/store/state-digest.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
 import { treeEntries } from "../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOKS = join(import.meta.dir, "..", "..", "hooks");
 

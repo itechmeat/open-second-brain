@@ -12,7 +12,7 @@
  * module surface.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -48,6 +48,10 @@ import { readScopedRules, scopedRuleKey } from "../../src/core/brain/scoped-rule
 import { STANDING_RULES_MAX_CHARS_DEFAULT } from "../../src/core/brain/standing-rules.ts";
 import { parseFrontmatterText } from "../../src/core/vault.ts";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),

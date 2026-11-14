@@ -6,7 +6,7 @@
  * wave plan pins for A1.
  */
 
-import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import {
   existsSync,
@@ -33,6 +33,10 @@ import {
 import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOW = new Date("2026-06-19T12:00:00Z");
 

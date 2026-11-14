@@ -28,7 +28,7 @@
  * only way to reach the codegraph resync recipe at all.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -40,6 +40,10 @@ import {
 } from "../../src/cli/command-manifest.ts";
 import { renderCompletions } from "../../src/cli/completions.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const CLI_ROOT = join(import.meta.dir, "..", "..", "src", "cli");
 

@@ -14,7 +14,7 @@
  *     not move a single write outside the throwaway directory.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -36,6 +36,10 @@ import {
 } from "../../src/core/doctor-selftest.ts";
 import { SearchError } from "../../src/core/search/search-error.ts";
 import { runCli, type RunResult } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let sandbox: string;
 let canaryVault: string;

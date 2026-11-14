@@ -5,10 +5,14 @@
  * exports them. Proved in a child `bun test` run so the variables are
  * really present at preload time.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CLI_SPAWN_BUDGET_MS } from "./helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const LEAKED = "OPEN_SECOND_BRAIN_EMBEDDING_MODEL";
 const KEEP_OPT_OUT = "O2B_TEST_KEEP_EMBEDDING_ENV";

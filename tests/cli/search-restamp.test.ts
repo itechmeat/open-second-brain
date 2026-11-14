@@ -24,7 +24,7 @@
  *   6. No path through the verb contacts an embedding provider.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 
@@ -40,6 +40,10 @@ import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const VEC_LOADABLE = sqliteVecLoadable();
 

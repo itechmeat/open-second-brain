@@ -6,7 +6,7 @@
  * returns a neighbour's record under its topic and scope after the
  * watermark it printed.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,6 +20,10 @@ import {
   type StoreIndexFixture,
 } from "../core/search/fixtures/brain-store-index.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let fx: StoreIndexFixture;
 let env: Record<string, string>;

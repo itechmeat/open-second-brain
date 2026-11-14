@@ -4,7 +4,7 @@
  * later write to another store at the same root, or as another device,
  * is refused with the `store-identity` reason; `o2b init` binds again.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -13,6 +13,10 @@ import { readStoreBindings, storeIdentityPath } from "../../../src/core/store/st
 import { initStore } from "../../../src/core/store/store-init.ts";
 import { StoreWriteError, storeWrite } from "../../../src/core/store/store-write.ts";
 import { makeStoreEnv, type StoreEnv } from "./fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

@@ -33,7 +33,7 @@
  * becoming understated.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,10 @@ import { runCli } from "../helpers/run-cli.ts";
 import { DISTILL_TOOLS } from "../../src/mcp/brain/distill-tools.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { UNTRUSTED_SOURCE_FRONTMATTER_KEY } from "../../src/core/brain/trust/untrusted-provenance.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The config key an operator sets to mount the retrieval trust gate. */
 const TRUST_GATE_CONFIG_KEY = "search_trust_gate_enabled";

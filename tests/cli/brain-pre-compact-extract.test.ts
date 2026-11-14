@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { runCli } from "../helpers/run-cli.ts";
 import { partitionRecords } from "../core/brain/store-only/fixtures.ts";
 import { makeTestStore, type TestStore } from "../helpers/test-store.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let vault: string;
 // A bare vault is store-only (design D14 item 1): the records land in a

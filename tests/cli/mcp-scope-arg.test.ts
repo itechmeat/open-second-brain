@@ -1,10 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { runCli } from "../helpers/run-cli.ts";
 import { INSTALL_TARGET_IDS, RUNTIME_FACTS } from "../../src/core/runtime/host-facts.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const ENV_SUPPLIED_KEY = fakeCredential("env-", "supplied-key");
 

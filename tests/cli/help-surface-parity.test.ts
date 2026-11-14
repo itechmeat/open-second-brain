@@ -18,7 +18,7 @@
  * fail here.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import {
   manifestForJson,
@@ -26,6 +26,10 @@ import {
   type CliRootManifest,
 } from "../../src/cli/command-manifest.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** `  <path>  <summary>` - two-space indent, two-or-more-space gutter. */
 const ENTRY_RE = /^ {2}(\S(?:.*?\S)?) {2,}(\S.*)$/;

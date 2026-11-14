@@ -4,7 +4,7 @@
  * the device-local state, nothing is written into the vault, and a second
  * Stop over the same findings reads it back and stays quiet.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,10 @@ import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
 import { HYGIENE_DIGEST_HASH_FILENAME } from "../../hooks/lib/hygiene-digest-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),

@@ -13,7 +13,7 @@
  * costs no disk in the fixture tree.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   closeSync,
@@ -38,6 +38,10 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { createSnapshot, extractSnapshotToTemp } from "../../../src/core/brain/snapshot.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** Above the 256 MB buffer the archive path used to be capped at. */
 const PRODUCED_BYTES = 300 * 1024 * 1024;

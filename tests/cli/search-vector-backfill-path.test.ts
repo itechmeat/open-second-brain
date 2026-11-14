@@ -17,7 +17,7 @@
  * (search-vector-backfill-price.test.ts).
  */
 
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
@@ -35,6 +35,10 @@ import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const VEC_LOADABLE = sqliteVecLoadable();
 const BELIEFS = "Brain/preferences/";

@@ -15,7 +15,7 @@
  * refusal (`no_trigger`, `no_match`, `ambiguous`), never a blanket one.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -37,6 +37,10 @@ import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts
 import { readBriefDelivered } from "../../hooks/lib/injection-ledger.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 

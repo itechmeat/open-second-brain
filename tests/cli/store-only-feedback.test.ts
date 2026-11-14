@@ -6,7 +6,7 @@
  * the first process remembered; a `Brain/` that appears in the vault
  * afterwards does not bring the legacy writer back.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,10 @@ import { join } from "node:path";
 import { readPartition } from "../../src/core/store/state-digest.ts";
 import { initStore } from "../../src/core/store/store-init.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let parent: string;
 let vault: string;

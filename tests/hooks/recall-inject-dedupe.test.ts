@@ -4,7 +4,7 @@
  * operator-declared slices from `_brain.yaml`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,10 @@ import { beginInjectionEpoch, readRecallInjected } from "../../hooks/lib/injecti
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),

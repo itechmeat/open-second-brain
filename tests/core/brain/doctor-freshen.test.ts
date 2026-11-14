@@ -3,7 +3,7 @@
  * failing: three in a row is a broken index, not a transient hiccup, and
  * until it is fixed every search answers from an ageing index.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +15,10 @@ import { writeFreshenState } from "../../../src/core/search/freshen.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { MCPServer } from "../../../src/mcp/server.ts";
 import { runCli } from "../../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

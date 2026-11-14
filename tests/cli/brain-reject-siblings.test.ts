@@ -7,7 +7,7 @@
  * the key off its output is exactly what it was before.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,10 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const FLAG_ENV = "OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED";
 const RULE = "always run the formatter before every commit in this repository";

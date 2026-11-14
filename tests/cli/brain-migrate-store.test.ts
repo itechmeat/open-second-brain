@@ -8,7 +8,7 @@
  * `--rollback` returns the machine to it (and is refused with no migration
  * on this machine). Conflicting flag combinations are usage errors.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -20,6 +20,10 @@ import {
   type LegacyVaultFixture,
 } from "../core/store-migration/fixtures/legacy-vault.ts";
 import { digestVaultTree } from "../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let fx: LegacyVaultFixture;
 let env: Record<string, string>;

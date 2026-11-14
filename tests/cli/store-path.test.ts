@@ -5,7 +5,7 @@
  * failure (exit 0, naming `o2b store init`, the way `o2b search status`
  * treats a missing index); a store root that cannot be used is exit 1.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,10 @@ import { NEXT_COMMAND_KEY } from "../../src/core/brain/next-step.ts";
 import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
 import { initStore } from "../../src/core/store/store-init.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let parent: string;
 let root: string;

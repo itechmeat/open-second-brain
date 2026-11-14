@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -33,6 +33,10 @@ import { brainGapTasksDir } from "../../src/core/brain/paths.ts";
 import { RETRIEVAL_DEGRADATION } from "../../src/core/search/retrieval-trail.ts";
 import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 import { homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 

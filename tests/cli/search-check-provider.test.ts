@@ -38,7 +38,7 @@
  * the `recommendations` block (`tests/core/search/check-recommendations.test.ts`).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 
 import { INSTALL_EXIT } from "../../src/cli/install/install.ts";
@@ -50,6 +50,10 @@ import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { FAKE_PROVIDER_KEY, fakeCredential } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** Short enough for a test, long enough that a healthy loopback answer beats it. */
 const SHORT_REQUEST_TIMEOUT_MS = 120;

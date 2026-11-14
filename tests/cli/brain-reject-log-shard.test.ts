@@ -19,7 +19,7 @@
  * file sets outlives a test.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -29,6 +29,10 @@ import { parseRetired, writePreference } from "../../src/core/brain/preference.t
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { tempDirs } from "../helpers/temp-dir.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const DEVICE_ID = "fixturedev";
 

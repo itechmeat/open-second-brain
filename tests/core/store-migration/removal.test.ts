@@ -5,7 +5,7 @@
  * closed, the dated device-local archive, the doctor naming devices still
  * on the legacy layout, and a legacy directory that comes back.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn } from "node:child_process";
 import {
   existsSync,
@@ -52,6 +52,10 @@ import {
 import { RollbackRefusedError } from "../../../src/core/store-migration/rollback.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
 import { moveNeverHeld } from "../../helpers/held-partitions.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const FAST = { settleMs: 0 } as const;
 

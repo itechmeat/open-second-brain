@@ -7,7 +7,7 @@
  * human text, and neither stream is assembled in this layer.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -18,6 +18,10 @@ import {
 } from "../../src/core/state/surfaces.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { tempDirs } from "../helpers/temp-dir.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const mkTemp = tempDirs();
 

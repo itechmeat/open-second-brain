@@ -15,7 +15,7 @@
  * release constant it renders without bumping the revision fails here.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +38,10 @@ import {
   SELF_HEAL_UPGRADE_OUTCOME,
 } from "../../../src/core/maintenance/self-heal-upgrade.ts";
 import { runCli } from "../../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const MANUAL = "Brain/_BRAIN.md";
 

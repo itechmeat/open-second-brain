@@ -3,7 +3,7 @@
  * with block-level provenance, supplied as JSON.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +21,10 @@ import { readExcerptSection } from "../../src/core/brain/provenance/capture-scop
 import { BRAIN_DISTILLATIONS_REL } from "../../src/core/brain/path-constants.ts";
 import { PAYLOAD_UNPARSEABLE_MESSAGE } from "../../src/core/brain/payload-json.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

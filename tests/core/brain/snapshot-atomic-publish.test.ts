@@ -13,7 +13,7 @@
  * on POSIX hosts only.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -32,9 +32,20 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { manifestSidecarPath } from "../../../src/core/brain/manifest.ts";
 import { snapshotPath, snapshotsDir } from "../../../src/core/brain/paths.ts";
-import { createSnapshot, listSnapshots, pruneSnapshots } from "../../../src/core/brain/snapshot.ts";
+import {
+  createSnapshot,
+  listSnapshots,
+  pruneSnapshots,
+  resolveSnapshotToolTimeoutMs,
+  SNAPSHOT_TOOL_TIMEOUT_ENV,
+  SNAPSHOT_TOOL_TIMEOUT_MS,
+} from "../../../src/core/brain/snapshot.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const RUN_ID = "upgrade-atomic-publish";
 
@@ -42,6 +53,7 @@ let root: string;
 let vault: string;
 let bin: string;
 let originalPath: string | undefined;
+let originalToolTimeout: string | undefined;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "o2b-snap-atomic-"));
@@ -56,10 +68,13 @@ beforeEach(() => {
   if (tar === null) throw new Error("test prerequisite missing from this machine: tar");
   symlinkSync(tar, join(bin, "tar"));
   originalPath = process.env["PATH"];
+  originalToolTimeout = process.env[SNAPSHOT_TOOL_TIMEOUT_ENV];
 });
 
 afterEach(() => {
   process.env["PATH"] = originalPath;
+  if (originalToolTimeout === undefined) delete process.env[SNAPSHOT_TOOL_TIMEOUT_ENV];
+  else process.env[SNAPSHOT_TOOL_TIMEOUT_ENV] = originalToolTimeout;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -177,5 +192,48 @@ describe.skipIf(process.platform === "win32")("publishing a zstd snapshot", () =
 
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("a compressor that never exits", () => {
+  test("is stopped at the tool timeout and the snapshot fails naming it", () => {
+    // `exec` so the killed process is the sleeper itself: a shell killed
+    // around a running child would leave that child holding stderr open.
+    const sleep = Bun.which("sleep");
+    if (sleep === null) throw new Error("test prerequisite missing from this machine: sleep");
+    fakeZstd(`printf 'torn' > "$out"\nexec '${sleep}' 30`);
+    process.env["PATH"] = bin;
+    process.env[SNAPSHOT_TOOL_TIMEOUT_ENV] = "300";
+
+    const started = Date.now();
+    expect(() => createSnapshot(vault, RUN_ID, { reason: BRAIN_SNAPSHOT_REASON.upgrade })).toThrow(
+      /zstd did not finish within 300 ms and was stopped/,
+    );
+
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(snapshotEntries()).toEqual([]);
+  });
+});
+
+describe("the snapshot tool timeout", () => {
+  test("defaults to fifteen minutes when unset or empty", () => {
+    expect(resolveSnapshotToolTimeoutMs({})).toBe(SNAPSHOT_TOOL_TIMEOUT_MS);
+    expect(resolveSnapshotToolTimeoutMs({ [SNAPSHOT_TOOL_TIMEOUT_ENV]: " " })).toBe(15 * 60 * 1000);
+  });
+
+  test("is the variable the test preload bounds the suite with", () => {
+    expect(SNAPSHOT_TOOL_TIMEOUT_ENV).toBe("OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS");
+  });
+
+  test("takes a whole number of milliseconds above zero", () => {
+    expect(resolveSnapshotToolTimeoutMs({ [SNAPSHOT_TOOL_TIMEOUT_ENV]: "60000" })).toBe(60_000);
+  });
+
+  test("refuses anything else instead of falling back", () => {
+    for (const bad of ["0", "-5", "1.5", "10s", "abc"]) {
+      expect(() => resolveSnapshotToolTimeoutMs({ [SNAPSHOT_TOOL_TIMEOUT_ENV]: bad })).toThrow(
+        SNAPSHOT_TOOL_TIMEOUT_ENV,
+      );
+    }
   });
 });

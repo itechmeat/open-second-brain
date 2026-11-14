@@ -6,7 +6,7 @@
  * Every test runs against its own temp HOME, state base, vault and store
  * root under one named parent, removed in teardown.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -70,6 +70,10 @@ import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { deviceStateDirFor, dualWriteStatusPath } from "../../../src/core/store/store-paths.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { forgetHeldPartitions, moveNeverHeld, neverHeld } from "../../helpers/held-partitions.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const ENV_KEYS = [
   STORE_DUAL_WRITE_ENV,

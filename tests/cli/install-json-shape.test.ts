@@ -23,13 +23,17 @@
  * rename a deliberate act rather than an accident.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { INSTALL_JSON_SCHEMA_VERSION } from "../../src/cli/install/render.ts";
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // Same reason as `install-verb.test.ts`: the adapters resolve the home
 // directory at module-load time, so each call needs a fresh process to

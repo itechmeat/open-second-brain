@@ -4,12 +4,16 @@
  * delta pass drain what was in flight, and every write that succeeded is
  * in the store. Three cold child processes, so the test is kept to one.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import { runMigration } from "../../../src/core/store-migration/migrate.ts";
 import { makeMigrationBench, type MigrationBench } from "./fixtures/migration-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let bench: MigrationBench;
 beforeEach(() => {

@@ -7,7 +7,7 @@
  * version, renames/removals bump it.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
@@ -28,6 +28,10 @@ import {
   metricsDir,
 } from "../../../src/core/brain/metrics.ts";
 import { useUnshardedLegacyLog } from "../../helpers/device-id.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // The legacy day log and ledgers are read under their un-sharded names.
 useUnshardedLegacyLog();

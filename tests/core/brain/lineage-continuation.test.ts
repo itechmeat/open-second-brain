@@ -13,7 +13,7 @@
  * never reaches a recorded field.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,6 +44,10 @@ import {
 import { captureSessionLifecycleEvent } from "../../../src/core/brain/session-lifecycle.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { tempDirs } from "../../helpers/temp-dir.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // Every test's throwaway workspace is minted through the tracked helper
 // so a directory is owned twice over: the afterEach removes the current

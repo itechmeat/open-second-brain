@@ -4,11 +4,15 @@
  * with no vault or refuse by name. An unswitched machine keeps its
  * output.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { brainTreeDigest, switchDevice } from "../core/brain/store-only/fixtures.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

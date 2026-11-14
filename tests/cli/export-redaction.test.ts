@@ -34,7 +34,7 @@
  * unit exists to stop making.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +46,10 @@ import { exportPreferencesLlmsTxt } from "../../src/core/brain/export.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
 import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** A vendor-prefixed credential token: caught by shape, not by a word list. */
 const VENDOR_TOKEN = FAKE_VENDOR_KEY;

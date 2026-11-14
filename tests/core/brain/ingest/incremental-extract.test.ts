@@ -28,7 +28,11 @@ import { mkdirSync, mkdtempSync, rmSync, appendFileSync, writeFileSync, statSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // Positioned-read observer for the delta pass. The ONLY positioned readSync
 // reachable from ingestSource is the append-proof snapshot's byte walk; the

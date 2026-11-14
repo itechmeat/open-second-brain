@@ -2,7 +2,7 @@
  * `o2b brain settings get|set|unset|list` and `o2b brain set-primary` on a
  * store-only machine (with and without a vault) and on an unswitched one.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
@@ -14,6 +14,10 @@ import {
   switchDevice,
 } from "../core/brain/store-only/fixtures.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

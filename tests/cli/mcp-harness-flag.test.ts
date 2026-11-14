@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { HARNESS_IDS } from "../../src/core/brain/scoped-rules.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
@@ -9,6 +9,10 @@ import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 import { tempDirs } from "../helpers/temp-dir.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** Whole tokens: `copilot-cli` contains `pi`, so containment over ids lies. */
 function tokensOf(text: string): ReadonlySet<string> {

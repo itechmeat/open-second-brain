@@ -6,7 +6,7 @@
  * the agent supplies the extraction and the summary prose.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -40,6 +40,10 @@ import { canonicalNotePath } from "../../../../src/core/path-safety.ts";
 import { queryDecisionLedger } from "../../../../src/core/brain/permissions/ledger.ts";
 import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
 import { readManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 function readManifestEntries(): string[] {
   return Object.keys(readManifest(vault).entries);

@@ -7,7 +7,7 @@
  * `visibility` on a summary page survives a re-ingest.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -30,6 +30,10 @@ import { createHash } from "node:crypto";
 
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
 import { redactRawOutput } from "../../../../src/core/redactor.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOW = new Date("2026-06-13T12:00:00Z");
 
