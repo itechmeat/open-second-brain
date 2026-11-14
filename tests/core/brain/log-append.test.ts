@@ -220,6 +220,7 @@ describe("log append", () => {
           "      break;",
           "    } catch (err) {",
           '      if (err?.code !== "ELOCKED" || Date.now() > giveUpAt) throw err;',
+          "      Bun.sleepSync(10 + Math.floor(Math.random() * 20));",
           "    }",
           "  }",
           "}",

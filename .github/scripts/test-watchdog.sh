@@ -38,7 +38,7 @@ esac
 
 dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/test-inflight"
 rm -rf "$dir"
-mkdir -p "$dir"
+mkdir -p "$dir" || echo "::warning::cannot create the in-flight record directory $dir" >&2
 export O2B_TEST_INFLIGHT_DIR="$dir"
 
 report() {
