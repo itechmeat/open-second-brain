@@ -658,3 +658,71 @@ describe("brain_recall_telemetry under integrity.owner_scope_delivery: fail", ()
     expect(list["total"]).toBe(1);
   });
 });
+
+/**
+ * The limit is the caller's page over what it may SEE, not over what the
+ * log holds: the visibility filter runs first, then the page is cut. A
+ * limit inside the reader would let the newest withheld record consume
+ * the page and hide an older visible one behind it.
+ */
+describe("brain_recall_telemetry limit applies after the visibility filter", () => {
+  test("list limit 1 with the newest record withheld returns the older visible one", async () => {
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "open.md"), "---\nkind: note\n---\n\nopen\n");
+    writeFileSync(
+      join(vault, "notes", "closed.md"),
+      "---\nkind: note\nvisibility: [private]\n---\n\nclosed\n",
+    );
+    // The OLDER record is visible, the NEWER one names a reserved page.
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T18:00:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "search",
+      status: "ok",
+      durationMs: 2,
+      resultCount: 1,
+      topArtifacts: [{ id: "notes-open", path: "notes/open.md" }],
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T18:01:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "search",
+      status: "ok",
+      durationMs: 2,
+      resultCount: 0,
+      topArtifacts: [{ id: "notes-closed", path: "notes/closed.md" }],
+    });
+
+    const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    await initialize(remote);
+    const page = await callTelemetry(remote, { operation: "list", limit: 1 });
+    expect(page["total"]).toBe(1);
+    expect(JSON.stringify(page)).toContain("notes/open.md");
+    expect(JSON.stringify(page)).not.toContain("notes/closed.md");
+  });
+
+  test("gate_list limit 1 with the newest record private returns the older visible one", async () => {
+    appendContinuityRecord(vault, {
+      kind: "gate_telemetry",
+      createdAt: "2026-05-20T18:00:00.000Z",
+      sourceRefs: [],
+      payload: { host: "mcp-test", decision: "retrieve", reason: "threshold" },
+    });
+    appendContinuityRecord(vault, {
+      kind: "gate_telemetry",
+      createdAt: "2026-05-20T18:01:00.000Z",
+      sourceRefs: [],
+      private: true,
+      payload: { host: "mcp-test", decision: "skip", reason: "private" },
+    });
+
+    const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    await initialize(remote);
+    const page = await callTelemetry(remote, { operation: "gate_list", limit: 1 });
+    expect(page["total"]).toBe(1);
+    expect(JSON.stringify(page)).toContain('"reason":"threshold"');
+    expect(JSON.stringify(page)).not.toContain('"reason":"private"');
+  });
+});

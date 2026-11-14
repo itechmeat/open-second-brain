@@ -243,4 +243,41 @@ describe("brain_bridges under integrity.owner_scope_delivery: fail", () => {
     })) as Record<string, unknown>;
     expect(asA["exists"]).toBe(true);
   });
+
+  test("list counts only the rows the caller may see when the artifact is visible", async () => {
+    // The artifact page itself carries no owner stamp, so the file-level
+    // check passes for both callers - the count is what would leak.
+    const bridges = bridgesTool();
+    await writeOwnedPair();
+    // A second, near-identical pair owned by the CALLER, so the shared
+    // artifact holds rows of both ownerships.
+    const sharedBody =
+      "Roll out the candidate build to one staging host, watch the error rate, expand the rollout step by step, roll back if it regresses.";
+    for (const name of ["canary-gamma.md", "canary-delta.md"]) {
+      writeFileSync(
+        join(vault, name),
+        `---\nowner: ${CALLER}\n---\n\n# ${name}\n\n${sharedBody}\n`,
+      );
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }), { embeddings: true });
+    setGateFail();
+    await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "discover",
+      min_similarity: 0.4,
+    });
+
+    const asA = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    const asB = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    // Both see the shared file; the owner counts every row, the other
+    // scope counts only rows naming pages it may see.
+    expect(asA["exists"]).toBe(true);
+    expect(asB["exists"]).toBe(true);
+    expect(Number(asA["proposals"])).toBeGreaterThan(0);
+    expect(Number(asB["proposals"])).toBeGreaterThan(0);
+    expect(Number(asB["proposals"])).toBeLessThan(Number(asA["proposals"]));
+  });
 });

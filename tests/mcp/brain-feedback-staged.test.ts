@@ -425,6 +425,42 @@ describe("brain_feedback staged receipt", () => {
     expect(again["kind"]).toBe("signal");
     expect(readdirSync(prefsDir).filter((f) => f.startsWith("pref-"))).toEqual([`${prefId}.md`]);
   });
+
+  test("a crash-window replay does not adopt a pre-existing rule this capture did not write", async () => {
+    // Same crash window, but the active rule under the capture's slug was
+    // written by something else: same payload, confirmed, yet its
+    // evidenced_by names another signal. The replay must not close the
+    // ledger on a rule this capture cannot prove it wrote - it falls
+    // through, and the conflicting rule surfaces instead of being
+    // silently adopted.
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "foreign-rule-in-crash-window-1",
+    };
+    const first = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(first["kind"]).toBe("preference");
+    const prefId = String(first["preference_id"]);
+    const prefPath = join(vault, "Brain", "preferences", `${prefId}.md`);
+
+    // Lose the DONE marker, then detach the rule from this capture's
+    // signal: the on-disk state of a same-slug same-payload rule whose
+    // evidence is somebody else's.
+    dropDoneMarker(vault, args.idempotency_key);
+    const before = readFileSync(prefPath, "utf8");
+    const after = before.replace(/_evidenced_by:.*\n/, '_evidenced_by: ["[[sig-elsewhere]]"]\n');
+    expect(after).not.toBe(before);
+    writeFileSync(prefPath, after);
+
+    // The replay falls through instead of adopting the rule, and the
+    // resume write refuses on the rule that is already there.
+    await expect(handler(ctx, args)).rejects.toThrow();
+    // The foreign rule is untouched and unclaimed by the replay.
+    expect(readFileSync(prefPath, "utf8")).toContain('_evidenced_by: ["[[sig-elsewhere]]"]');
+    expect(
+      readdirSync(join(vault, "Brain", "preferences")).filter((f) => f.startsWith("pref-")),
+    ).toEqual([`${prefId}.md`]);
+  });
 });
 
 /** Rewrite the idempotency ledger shards without this key's DONE marker. */

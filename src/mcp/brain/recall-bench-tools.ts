@@ -87,6 +87,20 @@ function callerVisibleTelemetry(
   });
 }
 
+/**
+ * The caller's `limit` page, applied AFTER the visibility filter: the
+ * `list` family asks the underlying readers for the full (filtered by
+ * kind/time/host) set, drops the withheld records, and only then cuts
+ * the page. A limit inside the reader would let a withheld newest
+ * record consume the page and hide an older visible one.
+ */
+function pageRecords(
+  records: ReadonlyArray<ContinuityRecord>,
+  limit: number | undefined,
+): ReadonlyArray<ContinuityRecord> {
+  return limit === undefined ? records : records.slice(0, Math.max(0, Math.floor(limit)));
+}
+
 /** Recall-quality benchmark over an inline dataset. */
 export async function toolBrainBenchmark(
   ctx: ServerContext,
@@ -226,7 +240,11 @@ export async function toolBrainRecallTelemetry(
   const filter = recallTelemetryFilter(args);
 
   if (operation === "list") {
-    const records = callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, filter));
+    const { limit, ...visibleFilter } = filter;
+    const records = pageRecords(
+      callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, visibleFilter)),
+      limit,
+    );
     return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
@@ -241,14 +259,17 @@ export async function toolBrainRecallTelemetry(
   // Gate-decision telemetry (Workspace Insight Suite, t_65036e02):
   // records emitted by brain_recall_gate when recall_gate_telemetry is on.
   if (operation === "gate_list") {
-    const records = callerVisibleTelemetry(
-      ctx,
-      listGateTelemetry(ctx.vault, {
-        ...(filter.host !== undefined ? { host: filter.host } : {}),
-        ...(filter.since !== undefined ? { since: filter.since } : {}),
-        ...(filter.until !== undefined ? { until: filter.until } : {}),
-        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
-      }),
+    const { limit, ...visibleFilter } = filter;
+    const records = pageRecords(
+      callerVisibleTelemetry(
+        ctx,
+        listGateTelemetry(ctx.vault, {
+          ...(visibleFilter.host !== undefined ? { host: visibleFilter.host } : {}),
+          ...(visibleFilter.since !== undefined ? { since: visibleFilter.since } : {}),
+          ...(visibleFilter.until !== undefined ? { until: visibleFilter.until } : {}),
+        }),
+      ),
+      limit,
     );
     return { vault_path: vaultPathField(ctx), total: records.length, records };
   }

@@ -455,8 +455,20 @@ export async function toolBrainFeedback(
       const existing = loadPreference(vault, slug, {
         ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
       });
+      // An active rule under this slug proves nothing on its own: a rule
+      // the caller wrote earlier under the same slug and payload would be
+      // adopted here without this capture ever having completed its own
+      // write. Only THIS capture's write closes it - the write at
+      // `writeConfirmedPreference` stamps the rule `confirmed` and names
+      // the deduped signal under `evidenced_by` - so both must be present
+      // before the ledger is closed on the existing rule.
       const captureMatches =
         existing !== null &&
+        existing.status === BRAIN_PREFERENCE_STATUS.confirmed &&
+        existing.evidenced_by.some(
+          (ref) =>
+            typeof ref === "string" && ref.replace(/^\[\[|\]\]$/g, "").trim() === sigResult.id,
+        ) &&
         existing.topic === topic.trim() &&
         existing.principle === principle.trim() &&
         existing.scope === effectiveScope &&

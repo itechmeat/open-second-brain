@@ -88,6 +88,49 @@ export const BRAIN_CLUSTERS_REL = "Brain/clusters";
 export const BRAIN_PROPOSALS_REL = "Brain/proposals";
 export const BRIDGE_PROPOSALS_FILE = "bridges.md";
 
+/**
+ * One row of the shared proposals artifact, as
+ * {@link writeBridgeProposals} spells it. Only the two named paths are
+ * asked of the caller's view.
+ */
+interface BridgeProposalRow {
+  readonly source: string;
+  readonly target: string;
+}
+
+/**
+ * The proposal rows of the artifact body, or `null` when the table cannot
+ * be read back into its rows - the shape {@link writeBridgeProposals}
+ * emits, and the only shape a per-caller count can be computed from. The
+ * table header starts the region: every line from there on is table, so
+ * a row edited away from the writer's shape makes the whole count
+ * unfilterable rather than silently skipped.
+ */
+function parseBridgeProposalRows(content: string): ReadonlyArray<BridgeProposalRow> | null {
+  const lines = content.split("\n");
+  const headerAt = lines.findIndex(
+    (line) => line.trim() === "| source | target | similarity | inbound (src/tgt) |",
+  );
+  if (headerAt === -1) return [];
+  const rows: BridgeProposalRow[] = [];
+  for (const line of lines.slice(headerAt + 2)) {
+    const trimmed = line.trim();
+    if (trimmed === "") break;
+    // A data row is
+    // `| [[<id>]] (<path>) | [[<id>]] (<path>) | <sim> | <in/out> |`;
+    // splitting on `|` leaves a leading empty cell.
+    const cells = trimmed.split("|").map((cell) => cell.trim());
+    if (cells.length !== 6) return null;
+    const source = /\(([^)]+)\)\s*$/.exec(cells[1] ?? "")?.[1];
+    const target = /\(([^)]+)\)\s*$/.exec(cells[2] ?? "")?.[1];
+    if (source === undefined || target === undefined || source === "" || target === "") {
+      return null;
+    }
+    rows.push({ source, target });
+  }
+  return rows;
+}
+
 /** Forward-looking projection envelope; read-only fold. */
 export function toolBrainForesight(
   ctx: ServerContext,
@@ -177,12 +220,31 @@ export async function toolBrainBridges(
     if (!lanePageExists(vault, path) || !laneVisible(ctx, vault)(rel)) {
       return { exists: false, proposals: 0 };
     }
-    const [meta] = parseLanePage(vault, path);
+    const [meta, content] = parseLanePage(vault, path);
+    // The artifact is ONE shared file written vault-wide by `discover`,
+    // so its frontmatter `proposals` count answers for rows the caller
+    // may not see. Every row names two pages by path, so the count is
+    // recomputed over the caller's composed owner and reach view, one
+    // visible row at a time. A row that cannot be read back (an artifact
+    // whose body was edited away from the known shape while its
+    // frontmatter still counts proposals) cannot be filtered, and an
+    // unfiltered answer would leak the number - so the artifact answers
+    // as an absent one instead.
+    const claimed = Number(meta["proposals"] ?? 0);
+    const rows = parseBridgeProposalRows(content);
+    if (claimed > 0 && rows === null) {
+      return { exists: false, proposals: 0 };
+    }
+    const view = everyArtifactRefView(
+      gatedOwnerScopeView(vault, ctx.agentName),
+      reachView(vault, contextReach(ctx)),
+    );
+    const visible = (rows ?? []).filter((row) => view.row(row.source, row.target)).length;
     return {
       exists: true,
       path: rel,
       generated_at: meta["generated_at"] ?? null,
-      proposals: Number(meta["proposals"] ?? 0),
+      proposals: visible,
     };
   }
   // discover
