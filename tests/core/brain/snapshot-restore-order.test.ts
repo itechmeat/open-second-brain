@@ -41,9 +41,11 @@ import { brainDirs, snapshotPath, snapshotStorePath } from "../../../src/core/br
 import {
   BrainSnapshotError,
   createSnapshot,
+  isStoreFamilyEntry,
   restoreSnapshot,
   SNAPSHOT_TOOL_TIMEOUT_ENV,
   StoreLockToken,
+  storePlacement,
 } from "../../../src/core/brain/snapshot.ts";
 import { restoreSnapshotWithRecoveryPoint } from "../../../src/core/brain/snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
@@ -1141,6 +1143,59 @@ describe("a derived store that lives inside Brain/", () => {
     expect(tablesOf(derivedStorePath)).toContain("late_marker");
   });
 
+  test("directly under Brain/, entries that only share the store's name prefix are restored", () => {
+    const brain = brainDirs(vault).brain;
+    const derivedStorePath = storeAt(join(brain, "index.sqlite"));
+    writeFileSync(join(brain, "index.sqlite-notes.md"), "# snapshot notes\n");
+    mkdirSync(join(brain, "index.sqlite-assets"));
+    writeFileSync(join(brain, "index.sqlite-assets", "a.md"), "# snapshot asset\n");
+    writeFileSync(join(brain, "index.sqlite.notes.md"), "# only in the snapshot\n");
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStorePath, derivedStore: COVERED });
+    writeFileSync(join(brain, "index.sqlite-notes.md"), "# changed after the snapshot\n");
+    writeFileSync(join(brain, "index.sqlite-assets", "b.md"), "# added after the snapshot\n");
+    rmSync(join(brain, "index.sqlite.notes.md"));
+
+    const res = restoreSnapshot(vault, RUN_ID, { derivedStorePath });
+
+    expect(readFileSync(join(brain, "index.sqlite-notes.md"), "utf8")).toBe("# snapshot notes\n");
+    expect(readdirSync(join(brain, "index.sqlite-assets"))).toEqual(["a.md"]);
+    expect(readFileSync(join(brain, "index.sqlite.notes.md"), "utf8")).toBe(
+      "# only in the snapshot\n",
+    );
+    // They count as restored Brain content; the store's own files (the
+    // store, its journals, the outgoing store parked at `.bak`) do not.
+    const restored = Object.keys(treeOf(brain)).filter(
+      (p) =>
+        !p.endsWith("/") &&
+        !p.startsWith(".snapshots") &&
+        !p.startsWith(BRAIN_ARTIFACTS_DIR) &&
+        !/^index\.sqlite(\.bak)?(-wal|-shm|-journal)?$/u.test(p),
+    );
+    expect(res.restored_files).toBe(restored.length);
+  });
+
+  test("a store path that is the Brain/ directory itself is refused before anything is touched", () => {
+    const brain = brainDirs(vault).brain;
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    writeFileSync(join(brain, "post-snapshot-marker.md"), "# only in the live tree\n");
+    const brainBefore = treeOf(brain);
+    const snapshotsBefore = readdirSync(brainDirs(vault).snapshots).toSorted();
+
+    let threw: unknown = null;
+    try {
+      restoreSnapshotWithRecoveryPoint(vault, RUN_ID, { derivedStorePath: brain });
+    } catch (err) {
+      threw = err;
+    }
+
+    expect(threw).toBeInstanceOf(BrainSnapshotError);
+    expect((threw as Error).message).toMatch(
+      /the derived store path .+ is the Brain\/ directory itself; refusing before anything is touched/u,
+    );
+    expect(treeOf(brain)).toEqual(brainBefore);
+    expect(readdirSync(brainDirs(vault).snapshots).toSorted()).toEqual(snapshotsBefore);
+  });
+
   test("nested inside a Brain/ directory, the restore refuses before anything is touched", () => {
     const brain = brainDirs(vault).brain;
     const derivedStorePath = storeAt(join(brain, "data", "index.sqlite"));
@@ -1164,5 +1219,88 @@ describe("a derived store that lives inside Brain/", () => {
     expect(treeOf(brain)).toEqual(brainBefore);
     expect(readdirSync(brainDirs(vault).snapshots).toSorted()).toEqual(snapshotsBefore);
     expect(tablesOf(derivedStorePath)).toContain("late_marker");
+  });
+});
+
+describe("the store family kept out of the tree swap is a closed list", () => {
+  test("the store's own artifacts match; other names sharing its prefix do not", () => {
+    const family = [
+      "index.sqlite",
+      "index.sqlite-wal",
+      "index.sqlite-shm",
+      "index.sqlite-journal",
+      "index.sqlite.new",
+      "index.sqlite.new-wal",
+      "index.sqlite.bak",
+      "index.sqlite.bak-shm",
+      "index.sqlite.old",
+      "index.sqlite.restore-4242-0a1b2c3d",
+      "index.sqlite.restore-4242-0a1b2c3d-wal",
+    ];
+    for (const name of family)
+      expect(isStoreFamilyEntry(name, "index.sqlite", false, "linux")).toBe(true);
+    expect(isStoreFamilyEntry("index.sqlite.lock", "index.sqlite", true, "linux")).toBe(true);
+
+    const content = [
+      "index.sqlite-notes.md",
+      "index.sqlite.notes.md",
+      "index.sqlite.old-notes",
+      "index.sqlite-wal-shm",
+      "index.sqlite.restore-notes",
+      "index.sqlite.lock",
+      "index.sqlite.takeover",
+      "index.sqlite.1234.tmp",
+    ];
+    for (const name of content) {
+      expect(isStoreFamilyEntry(name, "index.sqlite", false, "linux")).toBe(false);
+    }
+    // Directories are family only as the writer lock.
+    for (const name of ["index.sqlite", "index.sqlite-assets", "index.sqlite.bak"]) {
+      expect(isStoreFamilyEntry(name, "index.sqlite", true, "linux")).toBe(false);
+    }
+  });
+
+  test("names compare without case only where the platform folds case", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(isStoreFamilyEntry("index.sqlite-WAL", "Index.sqlite", false, platform)).toBe(true);
+      expect(isStoreFamilyEntry("INDEX.SQLITE.LOCK", "index.sqlite", true, platform)).toBe(true);
+      expect(isStoreFamilyEntry("index.SQLITE-notes.md", "Index.sqlite", false, platform)).toBe(
+        false,
+      );
+    }
+    expect(isStoreFamilyEntry("index.sqlite-wal", "Index.sqlite", false, "linux")).toBe(false);
+  });
+
+  test("an absent store takes the spelling of the entry beside it where case folds", () => {
+    const brain = brainDirs(vault).brain;
+    writeFileSync(join(brain, "index.sqlite"), "");
+    const configured = join(brain, "Index.sqlite");
+
+    expect(storePlacement(brain, configured, "darwin")).toEqual({
+      kind: "top",
+      base: "index.sqlite",
+    });
+    expect(storePlacement(brain, configured, "linux")).toEqual({
+      kind: "top",
+      base: "Index.sqlite",
+    });
+  });
+
+  test("Brain/ itself, an entry under it in another case, and paths outside are told apart", () => {
+    const brain = brainDirs(vault).brain;
+    const upper = join(dirname(brain), basename(brain).toUpperCase());
+
+    expect(storePlacement(brain, brain, "linux")).toEqual({ kind: "brain" });
+    expect(storePlacement(brain, upper, "darwin")).toEqual({ kind: "brain" });
+    expect(storePlacement(brain, join(upper, "index.sqlite"), "darwin")).toEqual({
+      kind: "top",
+      base: "index.sqlite",
+    });
+    expect(storePlacement(brain, join(upper, "index.sqlite"), "linux")).toEqual({
+      kind: "outside",
+    });
+    expect(storePlacement(brain, join(root, "index.sqlite"), "darwin")).toEqual({
+      kind: "outside",
+    });
   });
 });

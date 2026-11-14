@@ -2323,7 +2323,7 @@ export function restoreSnapshot(
   // the live answer is the one a restore must write to.
   const storeTarget = opts.derivedStorePath ?? liveDerivedStorePath(liveVault);
   const placement = storePlacement(dirs.brain, storeTarget);
-  refuseNestedStoreInBrain(placement, storeTarget, runId);
+  refuseStoreTheSwapCannotWriteAround(placement, storeTarget, runId);
   // Names the Brain swap leaves alone in both directions, beyond the
   // excluded entries: with the store directly under `Brain/`, its file
   // family. The live store, its journals and lock, and the staged
@@ -2332,8 +2332,8 @@ export function restoreSnapshot(
   // entry) is not restored over it, so the store is written once, by the
   // store swap, from the store archive - or not at all when the snapshot
   // did not cover it.
-  const keptOutOfSwap = (name: string): boolean =>
-    placement.kind === "top" && isStoreFamilyEntry(name, placement.base);
+  const keptOutOfSwap = (name: string, isDirectory: boolean): boolean =>
+    placement.kind === "top" && isStoreFamilyEntry(name, placement.base, isDirectory);
 
   const ext = extractSnapshotToTemp(vault, runId);
   let staged: StagedBrainTree | null = null;
@@ -2367,9 +2367,14 @@ export function restoreSnapshot(
     // out, and every staged one moved in. This makes restore
     // deterministic.
     const liveEntries = existsSync(dirs.brain)
-      ? readdirSync(dirs.brain).filter(
-          (e) => !isSnapshotExcludedEntry(e) && e !== staged!.name && !keptOutOfSwap(e),
-        )
+      ? readdirSync(dirs.brain, { withFileTypes: true })
+          .filter(
+            (e) =>
+              !isSnapshotExcludedEntry(e.name) &&
+              e.name !== staged!.name &&
+              !keptOutOfSwap(e.name, e.isDirectory()),
+          )
+          .map((e) => e.name)
       : [];
 
     // The writer lock is taken before the recovery point, not inside the
@@ -2505,7 +2510,7 @@ function stageBrainTree(
   liveBrain: string,
   snapshotsDirPath: string,
   runId: string,
-  keptOut: (name: string) => boolean,
+  keptOut: (name: string, isDirectory: boolean) => boolean,
 ): StagedBrainTree {
   mkdirSync(liveBrain, { recursive: true });
   const parent = sameDevice(snapshotsDirPath, liveBrain) ? snapshotsDirPath : liveBrain;
@@ -2533,9 +2538,9 @@ function stageBrainTree(
   try {
     const incoming = join(root, "incoming");
     mkdirSync(incoming);
-    const entries = readdirSync(extractedBrain).filter(
-      (e) => !isSnapshotExcludedEntry(e) && !keptOut(e),
-    );
+    const entries = readdirSync(extractedBrain, { withFileTypes: true })
+      .filter((e) => !isSnapshotExcludedEntry(e.name) && !keptOut(e.name, e.isDirectory()))
+      .map((e) => e.name);
     let files = 0;
     let expected = 0;
     for (const name of entries) {
@@ -2778,66 +2783,169 @@ function assertDerivedStoreRestorable(vault: string, runId: string): void {
  *
  *   - `outside`: the swap and the store never meet.
  *   - `top`: the store is a direct child of `Brain/`. The swap leaves its
- *     whole file family (see {@link isStoreFamilyEntry}) where it is, in
- *     both directions; the store is written only by the store swap.
+ *     file family (see {@link isStoreFamilyEntry}) where it is, in both
+ *     directions; the store is written only by the store swap.
  *   - `nested`: the store is deeper inside a top-level `Brain/` entry the
  *     swap replaces wholesale; `top` names that entry.
+ *   - `brain`: the store path is the `Brain/` directory itself.
  */
-type StorePlacement =
+export type StorePlacement =
   | { readonly kind: "outside" }
   | { readonly kind: "top"; readonly base: string }
-  | { readonly kind: "nested"; readonly top: string };
+  | { readonly kind: "nested"; readonly top: string }
+  | { readonly kind: "brain" };
 
-/** A path with every existing ancestor resolved through symlinks. */
-function canonicalPath(path: string): string {
+/**
+ * True where the filesystem compares names without case by default
+ * (APFS, HFS+, NTFS), so `Index.sqlite` and `index.sqlite` are one file.
+ */
+function foldsCase(platform: NodeJS.Platform): boolean {
+  return platform === "darwin" || platform === "win32";
+}
+
+/** `name` as the platform compares it. */
+function compareKey(name: string, platform: NodeJS.Platform): string {
+  return foldsCase(platform) ? name.toLowerCase() : name;
+}
+
+/**
+ * A path with every existing ancestor resolved through symlinks. Where the
+ * platform folds case, an absent component takes the spelling of the one
+ * entry of its parent that matches it without case, so a store configured
+ * as `Index.sqlite` is recognised as the `index.sqlite` on disk and in the
+ * archive.
+ */
+function canonicalPath(path: string, platform: NodeJS.Platform): string {
   const abs = resolve(path);
   try {
     return realpathSync.native(abs);
   } catch {
     const parent = dirname(abs);
-    return parent === abs ? abs : join(canonicalPath(parent), basename(abs));
+    if (parent === abs) return abs;
+    const canonicalParent = canonicalPath(parent, platform);
+    return join(canonicalParent, existingSpelling(canonicalParent, basename(abs), platform));
   }
 }
 
-function storePlacement(liveBrain: string, target: string): StorePlacement {
-  const rel = relative(canonicalPath(liveBrain), canonicalPath(target));
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    return { kind: "outside" };
+/** The spelling of `name` among `dir`'s entries where case is folded. */
+function existingSpelling(dir: string, name: string, platform: NodeJS.Platform): string {
+  if (!foldsCase(platform)) return name;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return name;
   }
-  const parts = rel.split(sep);
+  if (entries.includes(name)) return name;
+  const key = compareKey(name, platform);
+  const matches = entries.filter((e) => compareKey(e, platform) === key);
+  return matches.length === 1 ? matches[0]! : name;
+}
+
+/**
+ * Classify the store target against the live `Brain/` directory. The
+ * containment test compares case-folded paths where the platform folds
+ * case; the names it returns keep the target's canonical spelling.
+ */
+export function storePlacement(
+  liveBrain: string,
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): StorePlacement {
+  const brain = canonicalPath(liveBrain, platform);
+  const store = canonicalPath(target, platform);
+  const rel = relative(compareKey(brain, platform), compareKey(store, platform));
+  if (rel === "") return { kind: "brain" };
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return { kind: "outside" };
+  // The relative path's components, in the target's own spelling.
+  const parts = store.split(sep).slice(-rel.split(sep).length);
   // An entry the swap never touches (`.snapshots/`, `.artifacts/`) keeps
   // whatever it holds, so a store inside one does not meet the swap.
   if (isSnapshotExcludedEntry(parts[0]!)) return { kind: "outside" };
   return parts.length === 1 ? { kind: "top", base: parts[0]! } : { kind: "nested", top: parts[0]! };
 }
 
+/** SQLite's journal siblings of a database file: WAL mode and DELETE mode. */
+const STORE_JOURNAL_SUFFIXES: ReadonlyArray<string> = Object.freeze(["-wal", "-shm", "-journal"]);
+
+/**
+ * The database files the store layer keeps beside the store, as suffixes
+ * of its name: the store itself, the reindex staging file (`.new`), the
+ * parked previous index (`.bak`, also the restore's outgoing store, and
+ * `.old`).
+ */
+const STORE_DATABASE_SUFFIXES: ReadonlyArray<string> = Object.freeze(["", ".new", ".bak", ".old"]);
+
+/** The writer lock `proper-lockfile` takes on the store: a directory. */
+const STORE_LOCK_SUFFIX = ".lock";
+
+/** The restore's staged store: `<store>.restore-<pid>-<8 hex>`. */
+const STAGED_STORE_PATTERN = /^\.restore-\d+-[0-9a-f]{8}$/u;
+
 /**
  * True for a top-level `Brain/` entry that belongs to the store named
- * `base` when the store sits directly under `Brain/`: the store itself and
- * every name the store layer derives from it by suffix - the `-wal` and
- * `-shm` journals, the writer lock directory (`.lock`), the swap and
- * reindex files (`.bak`, `.old`, `.new`, `.takeover`, `.<token>.tmp`,
- * `.<id>.settle`) and the restore's own staged file (`.restore-*`).
- * Matched by prefix rather than listed, so a suffix the store layer adds
- * later is kept out of the Brain swap too.
+ * `base` when the store sits directly under `Brain/`. A closed list, so a
+ * note or directory that merely starts with the store's name is restored
+ * like any other entry:
+ *
+ *   - the store and each database file the store layer derives from it
+ *     (`.new`, `.bak`, `.old`), each with its journals (`-wal`, `-shm`,
+ *     `-journal`);
+ *   - the restore's staged store (`.restore-<pid>-<hex>`) with its
+ *     journals;
+ *   - the writer lock directory (`.lock`), the only directory in the
+ *     family.
+ *
+ * Names compare without case where the platform folds it. A suffix the
+ * store layer adds later must be listed here; until it is, the Brain swap
+ * treats that file as Brain content.
  */
-function isStoreFamilyEntry(name: string, base: string): boolean {
-  return name === base || name.startsWith(`${base}.`) || name.startsWith(`${base}-`);
+export function isStoreFamilyEntry(
+  name: string,
+  base: string,
+  isDirectory: boolean,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const key = compareKey(name, platform);
+  const stem = compareKey(base, platform);
+  if (!key.startsWith(stem)) return false;
+  const suffix = key.slice(stem.length);
+  if (isDirectory) return suffix === STORE_LOCK_SUFFIX;
+  // At most one journal suffix comes off: `-wal-shm` is not a journal.
+  const journal = STORE_JOURNAL_SUFFIXES.find((j) => suffix.endsWith(j));
+  const file = journal === undefined ? suffix : suffix.slice(0, -journal.length);
+  return STORE_DATABASE_SUFFIXES.includes(file) || STAGED_STORE_PATTERN.test(file);
 }
 
 /**
- * Refuse a restore whose store sits inside a top-level `Brain/` entry the
- * swap replaces wholesale, before anything is extracted or touched.
+ * Refuse a restore whose store target the swap cannot write around, before
+ * anything is extracted or touched.
  *
- * The Brain swap renames whole top-level entries; the store swap renames
- * one file. A store nested inside a renamed directory would be moved out
- * with the live directory, its staged replacement with it, and the
- * restored directory may not even contain the store's parent. Carving the
- * store out of that rename would add a third set of renames, each with its
- * own undo, to a swap whose whole contract is that every step can be
- * reversed; refusing up front keeps that contract and loses nothing.
+ * A store inside a top-level `Brain/` entry: the Brain swap renames whole
+ * top-level entries; the store swap renames one file. A store nested
+ * inside a renamed directory would be moved out with the live directory,
+ * its staged replacement with it, and the restored directory may not even
+ * contain the store's parent. Carving the store out of that rename would
+ * add a third set of renames, each with its own undo, to a swap whose
+ * whole contract is that every step can be reversed; refusing up front
+ * keeps that contract and loses nothing.
+ *
+ * A store target that is `Brain/` itself: the store swap would rename a
+ * database file over the directory the tree swap is restoring into.
  */
-function refuseNestedStoreInBrain(placement: StorePlacement, target: string, runId: string): void {
+function refuseStoreTheSwapCannotWriteAround(
+  placement: StorePlacement,
+  target: string,
+  runId: string,
+): void {
+  if (placement.kind === "brain") {
+    throw new BrainSnapshotError(
+      `the derived store path ${target} is the Brain/ directory itself; refusing before ` +
+        "anything is touched. Point search_db_path at a file, directly under Brain/ or " +
+        "outside it, then restore again",
+      runId,
+    );
+  }
   if (placement.kind !== "nested") return;
   throw new BrainSnapshotError(
     `the derived store ${target} is inside Brain/${placement.top}, which a restore replaces ` +
