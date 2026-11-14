@@ -1207,6 +1207,23 @@ function coverDerivedStore(
  * the first statement raises and the scanner classifies the raise as a
  * fault, which is the honest answer.
  */
+/**
+ * Whether the live store at `path` holds data a recovery point must keep:
+ * the file exists and passes the same integrity scan a snapshot runs. An
+ * absent store has nothing to lose, and a condemned one is what a restore
+ * replaces to heal it, so neither forces store coverage on a recovery
+ * point.
+ */
+export function liveStoreWorthPreserving(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    assertStoreIsSound(path, "recovery-point-probe");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function assertStoreIsSound(sourcePath: string, runId: string): void {
   let db: Database;
   try {
@@ -2938,7 +2955,7 @@ function assertRecoveryPointCoversTarget(
       runId,
     );
   }
-  if (!record.included) {
+  if (!record.included && liveStoreWorthPreserving(target)) {
     throw new BrainSnapshotError(
       `the recovery point ${evidence.runId} did not include the derived store at ${target}, ` +
         "which this restore replaces; refusing before the Brain tree is touched, so the store " +

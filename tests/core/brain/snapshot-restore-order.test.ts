@@ -818,6 +818,26 @@ describe("the recovery point archives exactly the store the restore replaces", (
     expect(tablesOf(dbPath)).toContain("late_marker");
   });
 
+  test("an absent live store does not block the restore that recreates it", () => {
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
+
+    restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+
+    expect(existsSync(dbPath)).toBe(true);
+    expect(tablesOf(dbPath).length).toBeGreaterThan(0);
+  });
+
+  test("a condemned live store is healed by the restore, not preserved by refusing it", () => {
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    for (const suffix of ["-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
+    writeFileSync(dbPath, "this is not a database");
+
+    restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+
+    expect(tablesOf(dbPath).length).toBeGreaterThan(0);
+  });
+
   test("a recovery point that left the replaced store out refuses the swap", () => {
     createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
     addTable(dbPath, "late_marker");

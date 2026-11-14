@@ -54,6 +54,7 @@ import {
   BrainSnapshotError,
   createSnapshot,
   pruneSnapshots,
+  liveStoreWorthPreserving,
   restoreSnapshot,
   type PruneSnapshotsResult,
   type RecoveryPointEvidence,
@@ -481,10 +482,12 @@ export function restoreSnapshotWithRecoveryPoint(
         // left to resolve its own source, it would archive the configured
         // store while a `derivedStorePath` override names another.
         ...(storeTarget !== null ? { derivedStorePath: storeTarget } : {}),
-        // A store the swap replaces is always archived, whatever the
+        // A sound store the swap replaces is always archived, whatever the
         // vault's coverage policy or size cap: its only copy is about to be
-        // discarded. The restore refuses when the record says it was not.
-        ...(storeTarget !== null
+        // discarded. An absent store has nothing to keep, and a condemned
+        // one is what the restore heals, so neither forces coverage. The
+        // restore refuses when a sound replaced store was left out.
+        ...(storeTarget !== null && liveStoreWorthPreserving(storeTarget)
           ? { derivedStore: { include: true, maxBytes: Number.MAX_SAFE_INTEGER } }
           : {}),
         // The restore holds the store writer lock from before this point
