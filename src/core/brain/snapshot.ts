@@ -128,6 +128,7 @@ import {
   type SnapshotStoreExclusionReason,
 } from "./manifest.ts";
 import {
+  BRAIN_RESTORE_STAGING_PREFIX,
   BRAIN_ROOT_REL,
   BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
   BRAIN_SNAPSHOTS_REL,
@@ -970,9 +971,16 @@ export function bufferEntryName(e: Uint8Array | Buffer): string {
   return Buffer.from(e).toString("utf8");
 }
 
-/** True for a top-level `Brain/` entry the snapshot family never touches. */
+/**
+ * True for a top-level `Brain/` entry the snapshot family never touches:
+ * the excluded entries, and a restore's staging directory left directly
+ * under `Brain/` (see {@link BRAIN_RESTORE_STAGING_PREFIX}), which must
+ * never be archived, nor moved aside and put back as Brain content.
+ */
 export function isSnapshotExcludedEntry(name: string): boolean {
-  return BRAIN_SNAPSHOT_EXCLUDED_ENTRIES.includes(name);
+  return (
+    BRAIN_SNAPSHOT_EXCLUDED_ENTRIES.includes(name) || name.startsWith(BRAIN_RESTORE_STAGING_PREFIX)
+  );
 }
 
 // ----- Derived-store coverage ----------------------------------------------
@@ -2210,6 +2218,12 @@ export function restoreSnapshot(
     // away from losing their forward path. `.artifacts/` is excluded for
     // the opposite reason - it is not in the archive at all, so deleting
     // the live copy would restore nothing over it.
+    //
+    // `.snapshots/` is created first, as `createSnapshot` does: the
+    // staging directory goes there when it shares `Brain/`'s device, and
+    // a missing one would otherwise read as "another device" and send the
+    // staging directory into `Brain/` itself.
+    ensureSnapshotsDirectory(dirs.snapshots, runId);
     staged = stageBrainTree(ext.brainRoot, dirs.brain, dirs.snapshots, runId);
 
     // The derived store is decompressed and verified here, before the
@@ -2263,7 +2277,7 @@ export function restoreSnapshot(
       const swap = swapBrainTree(staged, dirs.brain, liveEntries, runId, evidence);
       if (store !== null) {
         try {
-          commitDerivedStoreSwap(store, runId);
+          commitDerivedStoreSwap(store);
         } catch (err) {
           throw swap.fail(`the derived store swap failed (${errorText(err)})`, err, {
             storeIntact: !(err instanceof StoreSwapTornError),
@@ -2321,9 +2335,6 @@ interface StagedBrainTree {
   cleanup(): void;
 }
 
-/** Prefix of a restore's staging directory, beside the entries it swaps. */
-const RESTORE_TREE_STAGING_PREFIX = ".restore-staging-";
-
 /**
  * Copy the extracted tree to a staging directory on the live tree's
  * filesystem and verify the copy.
@@ -2346,7 +2357,7 @@ function stageBrainTree(
   const parent = sameDevice(snapshotsDirPath, liveBrain) ? snapshotsDirPath : liveBrain;
   let root: string;
   try {
-    root = mkdtempSync(join(parent, `${RESTORE_TREE_STAGING_PREFIX}${runId}-`));
+    root = mkdtempSync(join(parent, `${BRAIN_RESTORE_STAGING_PREFIX}${runId}-`));
   } catch (err) {
     throw new BrainSnapshotError(
       `cannot create a restore staging directory under ${parent}: ${errorText(err)}`,
@@ -2792,36 +2803,94 @@ class StoreSwapTornError extends Error {
  * database on its own; an orphan `-wal` from the file it replaced would
  * make the next open fail with SQLITE_IOERR_SHORT_READ, which is the
  * exact failure `consolidateWal` exists to prevent on the reindex path.
+ * A removal that still fails after the Windows retry budget (a reader
+ * holding the file) is not a warning: the swap is undone, the new store
+ * back at its staging name and the `.bak` back at the live path, and the
+ * error is thrown so the caller undoes the Brain/ renames too.
  */
-function commitDerivedStoreSwap(store: StagedDerivedStore, runId: string): void {
+function commitDerivedStoreSwap(store: StagedDerivedStore): void {
   const { target, incoming } = store;
   const outgoing = `${target}${RESTORE_BACKUP_SUFFIX}`;
-  rmSync(outgoing, { force: true });
-  const hadLive = existsSync(target);
-  if (hadLive) renameWithRetry(target, outgoing);
+  let movedAside = false;
   try {
+    rmSync(outgoing, { force: true });
+    if (existsSync(target)) {
+      try {
+        renameWithRetry(target, outgoing);
+      } catch (err) {
+        throw new Error(
+          `could not move the live store ${target} aside to ${outgoing}: ${errorText(err)}; ` +
+            "the live store was not touched",
+          { cause: err },
+        );
+      }
+      movedAside = true;
+    }
     renameWithRetry(incoming, target);
   } catch (err) {
-    if (!hadLive) throw err;
+    if (movedAside) putBackOutgoingStore(target, outgoing, errorText(err), err);
+    throw err;
+  }
+  try {
+    removeWalSiblings(target);
+  } catch (err) {
+    const what =
+      `could not remove ${errorText(err)} beside the restored store, and an orphan ` +
+      "write-ahead log would corrupt the next open";
     try {
-      renameWithRetry(outgoing, target);
+      renameWithRetry(target, incoming);
     } catch (backErr) {
       throw new StoreSwapTornError(
-        `${errorText(err)}; the pre-restore store could not be renamed back either ` +
-          `(${errorText(backErr)}) and is at ${outgoing}, where the next store open restores it`,
+        `${what}; the restored store could not be moved back off ${target} either ` +
+          `(${errorText(backErr)})` +
+          (movedAside ? `, and the pre-restore store is at ${outgoing}` : ""),
         { cause: err },
       );
     }
-    throw err;
+    if (movedAside) putBackOutgoingStore(target, outgoing, what, err);
+    throw new Error(`${what}; the store swap was undone, the pre-restore store is back in place`, {
+      cause: err,
+    });
   }
-  for (const sidecar of WAL_SIBLING_SUFFIXES) {
+}
+
+/**
+ * Put the `.bak` store back at the live path after a failed swap step,
+ * or throw a {@link StoreSwapTornError} naming where it was left.
+ */
+function putBackOutgoingStore(
+  target: string,
+  outgoing: string,
+  what: string,
+  cause: unknown,
+): void {
+  try {
+    renameWithRetry(outgoing, target);
+  } catch (backErr) {
+    throw new StoreSwapTornError(
+      `${what}; the pre-restore store could not be renamed back either ` +
+        `(${errorText(backErr)}) and is at ${outgoing}, where the next store open restores it`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * Remove the WAL siblings the outgoing store left at `target`, throwing
+ * the path that could not be removed.
+ *
+ * `-shm` goes first: it is only an index of the `-wal` and SQLite
+ * rebuilds it, so when the `-wal` removal then fails, the swap can still
+ * be undone in full - the pre-restore store returns beside its own log.
+ */
+function removeWalSiblings(target: string): void {
+  for (const sidecar of ["-shm", "-wal"] as const) {
+    const path = `${target}${sidecar}`;
     try {
-      rmSync(`${target}${sidecar}`, { force: true });
+      unlinkWithRetry(path);
     } catch (err) {
-      console.error(
-        `snapshot[${runId}]: warning: could not remove ${target}${sidecar} after the restore: ` +
-          errorText(err),
-      );
+      if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") continue;
+      throw new Error(`${path} (${errorText(err)})`, { cause: err });
     }
   }
 }

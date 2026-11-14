@@ -200,6 +200,16 @@ export const BRAIN_SNAPSHOT_EXCLUDED_ENTRIES: ReadonlyArray<string> = Object.fre
 ]);
 
 /**
+ * Name prefix of a restore's staging directory. It normally lives under
+ * `.snapshots/`, but sits directly under `Brain/` when `.snapshots/` is on
+ * another device, and a restore killed mid-swap leaves it there. Such a
+ * top-level entry is restore plumbing, never Brain content: the archiver,
+ * the manifest walker and the restore all skip it, like
+ * {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}.
+ */
+export const BRAIN_RESTORE_STAGING_PREFIX = ".restore-staging-";
+
+/**
  * The DERIVED store: `<vault>/.open-second-brain/brain.sqlite`.
  *
  * A sibling of `Brain/`, not a member of it, and the only file in that

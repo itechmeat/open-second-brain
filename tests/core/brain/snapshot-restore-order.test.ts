@@ -13,8 +13,9 @@
  * exactly what they were before the call, and no staging file is left.
  */
 
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
 import {
   chmodSync,
   existsSync,
@@ -301,6 +302,184 @@ describe.skipIf(CHMOD_CANNOT_DENY)("a rename that fails during the swap", () => 
       () => restoreSnapshot(vault, RUN_ID),
       /failed during the swap.*every Brain\/ rename was undone.*as they were/u,
     );
+  });
+});
+
+/** An errno-shaped error, as a failing `rename(2)` or `unlink(2)` raises it. */
+function fsError(code: string, path: string): Error {
+  return Object.assign(new Error(`${code}: simulated by the test, ${path}`), { code });
+}
+
+/**
+ * Run `fn` with `renameSync` failing wherever `failOn` returns true. The
+ * real rename runs otherwise, so every other step of the restore is real.
+ * `renameWithRetry` (`src/core/fs-atomic.ts`) calls the namespace's
+ * `renameSync`, which is what the spy replaces.
+ */
+function withFailingRename<T>(failOn: (from: string, to: string) => boolean, fn: () => T): T {
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (failOn(String(from), String(to))) throw fsError("EIO", String(to));
+    realRename(from, to);
+  });
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** True for a rename of a staged Brain/ entry into the live `Brain/`. */
+function isMoveIn(from: string, to: string): boolean {
+  return (
+    from.includes(".restore-staging-") &&
+    basename(dirname(from)) === "incoming" &&
+    dirname(to) === brainDirs(vault).brain
+  );
+}
+
+/** Run `fn` expecting a {@link BrainSnapshotError}; return its message. */
+function refusal(fn: () => unknown): string {
+  let threw: unknown = null;
+  try {
+    fn();
+  } catch (err) {
+    threw = err;
+  }
+  expect(threw).toBeInstanceOf(BrainSnapshotError);
+  return (threw as Error).message;
+}
+
+describe("a failure in the middle of the swap", () => {
+  test("a later move-in failing undoes the entries moved both ways, in reverse", () => {
+    snapshotThenDiverge();
+    let moveIns = 0;
+    expectUntouched(
+      () =>
+        withFailingRename(
+          (from, to) => isMoveIn(from, to) && ++moveIns === 2,
+          () => restoreSnapshot(vault, RUN_ID),
+        ),
+      // Every live entry was out and one restored entry in when it failed.
+      /(\d+) of \1 live Brain\/ top-level entries had been moved aside and 1 of \d+ restored ones moved in; every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
+    );
+    expect(moveIns).toBe(2);
+    expect(readdirSync(brainDirs(vault).snapshots).some((n) => n.startsWith(".restore-"))).toBe(
+      false,
+    );
+  });
+
+  test("an undo that also fails keeps the staging directory and says Brain/ is mixed", () => {
+    snapshotThenDiverge();
+    const dirs = brainDirs(vault);
+    let moveIns = 0;
+    let firstIn = "";
+    const message = refusal(() =>
+      withFailingRename(
+        (from, to) => {
+          if (isMoveIn(from, to)) {
+            moveIns += 1;
+            if (moveIns === 1) firstIn = basename(to);
+            return moveIns === 2;
+          }
+          // The undo of the one entry that made it in.
+          return from === join(dirs.brain, firstIn) && basename(dirname(to)) === "incoming";
+        },
+        () => restoreSnapshot(vault, RUN_ID),
+      ),
+    );
+    expect(message).toMatch(/undoing it also failed \(could not move the restored /u);
+    expect(message).toMatch(/Brain\/ is a mix of the restored and the pre-restore tree/u);
+    // The staging directory outlived the restore, with the pre-restore
+    // entries put back and the stuck restored one still live.
+    const staging = readdirSync(dirs.snapshots).filter((n) => n.startsWith(".restore-staging-"));
+    expect(staging).toHaveLength(1);
+    const kept = join(dirs.snapshots, staging[0]!);
+    expect(message).toContain(join(kept, "outgoing"));
+    expect(existsSync(join(kept, "outgoing"))).toBe(true);
+    expect(existsSync(join(dirs.brain, firstIn))).toBe(true);
+    expect(existsSync(join(dirs.brain, "post-snapshot-marker.md"))).toBe(true);
+  });
+
+  test("a failing store rename-back is reported as a torn store, with Brain/ undone", () => {
+    snapshotThenDiverge();
+    const before = liveState();
+    const backup = `${dbPath}.bak`;
+    const message = refusal(() =>
+      withFailingRename(
+        (from, to) => to === dbPath && (from.startsWith(`${dbPath}.restore-`) || from === backup),
+        () => restoreSnapshot(vault, RUN_ID),
+      ),
+    );
+    expect(message).toMatch(/the pre-restore store could not be renamed back either/u);
+    expect(message).toContain(`is at ${backup}`);
+    expect(message).toMatch(
+      /Brain\/ is as it was before the restore, but the derived store is not/u,
+    );
+    expect(treeOf(brainDirs(vault).brain)).toEqual(before.brain);
+    expect(existsSync(dbPath)).toBe(false);
+    expect(sha256Hex(readFileSync(backup))).toBe(before.store);
+  });
+
+  test("a live store that cannot be moved aside fails with the store-swap context", () => {
+    snapshotThenDiverge();
+    expectUntouched(
+      () =>
+        withFailingRename(
+          (from, to) => from === dbPath && to === `${dbPath}.bak`,
+          () => restoreSnapshot(vault, RUN_ID),
+        ),
+      /derived store swap failed \(could not move the live store .* aside .*the live store was not touched\).*as they were/u,
+    );
+  });
+
+  test("a -wal that cannot be removed after the store swap undoes the whole restore", () => {
+    snapshotThenDiverge();
+    // A log left beside the live store, held open the way a Windows
+    // reader holds it: the removal fails on every attempt.
+    const wal = `${dbPath}-wal`;
+    writeFileSync(wal, "");
+    const realUnlink = fs.unlinkSync;
+    const spy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
+      if (String(path) === wal) throw fsError("EBUSY", wal);
+      realUnlink(path);
+    });
+    try {
+      expectUntouched(
+        () => restoreSnapshot(vault, RUN_ID),
+        /could not remove .*-wal .*the store swap was undone.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(existsSync(wal)).toBe(true);
+  });
+});
+
+describe("a restore staging directory left under Brain/", () => {
+  test("is neither archived nor swapped by a later restore", () => {
+    const dirs = brainDirs(vault);
+    // What a restore killed mid-swap leaves when it staged under Brain/.
+    const leftover = join(dirs.brain, ".restore-staging-killed-abc123");
+    mkdirSync(join(leftover, "incoming"), { recursive: true });
+    writeFileSync(join(leftover, "incoming", "half.md"), "half-written\n");
+
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    expect(readFileSync(manifestSidecarPath(vault, RUN_ID), "utf8")).not.toContain(
+      ".restore-staging-",
+    );
+    diverge();
+    writeFileSync(join(leftover, "incoming", "half.md"), "changed after the snapshot\n");
+
+    restoreSnapshot(vault, RUN_ID);
+
+    // Left exactly where and as it was: not moved aside, not replaced by
+    // an archived copy.
+    expect(readFileSync(join(leftover, "incoming", "half.md"), "utf8")).toBe(
+      "changed after the snapshot\n",
+    );
+    expect(readdirSync(leftover)).toEqual(["incoming"]);
+    expect(markerTableExists()).toBe(false);
   });
 });
 
