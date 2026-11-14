@@ -1197,17 +1197,6 @@ function coverDerivedStore(
 }
 
 /**
- * Refuse a condemned store rather than archiving it over a good
- * snapshot.
- *
- * This runs the integrity scanner the previous release already shipped -
- * `PRAGMA quick_check`, classified by {@link runIntegrityCheck} - rather
- * than inventing a second gate with its own opinion. A file that is not
- * a SQLite database at all fails here too: `new Database` is lazy, so
- * the first statement raises and the scanner classifies the raise as a
- * fault, which is the honest answer.
- */
-/**
  * Whether the live store at `path` holds data a recovery point must keep:
  * the file exists and passes the same integrity scan a snapshot runs. An
  * absent store has nothing to lose, and a condemned one is what a restore
@@ -1224,6 +1213,17 @@ export function liveStoreWorthPreserving(path: string): boolean {
   }
 }
 
+/**
+ * Refuse a condemned store rather than archiving it over a good
+ * snapshot.
+ *
+ * This runs the integrity scanner the previous release already shipped -
+ * `PRAGMA quick_check`, classified by {@link runIntegrityCheck} - rather
+ * than inventing a second gate with its own opinion. A file that is not
+ * a SQLite database at all fails here too: `new Database` is lazy, so
+ * the first statement raises and the scanner classifies the raise as a
+ * fault, which is the honest answer.
+ */
 function assertStoreIsSound(sourcePath: string, runId: string): void {
   let db: Database;
   try {
