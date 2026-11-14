@@ -369,7 +369,7 @@ function storeAttestationEntries(vault: string): AttestationEntry[] {
     const gone = protectionStoreUnavailable();
     return gone === null
       ? []
-      : [{ path: "", name: `${UNREADABLE_NAME_PREFIX}store`, unreadable: gone.message }];
+      : [{ path: "", name: `${UNREADABLE_NAME_PREFIX}store`, unreadable: gone.publicMessage }];
   }
   const root = source.store.root;
   const found: { record: StoreRecord; path: string }[] = [];

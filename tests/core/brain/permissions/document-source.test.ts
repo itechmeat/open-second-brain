@@ -119,6 +119,27 @@ describe("permissions.document setting", () => {
     expect(refusal(() => resolveWriteDisposition(env!.vault, "notes"))).toBe("WriteRefusedError");
   });
 
+  test("a lost private partition stays out of the write gate's refusal text", () => {
+    env = makeStoreEnv("osb-perm-src-lost-private-");
+    switchDevice(env.storeRoot);
+    // A read on the switched machine records the partitions it holds.
+    expect(loadPermissionsDocumentFor(env.vault).document).toBeNull();
+    rmSync(join(env.storeRoot, "private", "store.json"));
+    let caught: unknown = null;
+    try {
+      resolveWriteDisposition(env.vault, "notes");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(PermissionsDocumentError);
+    const err = caught as PermissionsDocumentError;
+    expect(err.message).toContain(PERMISSIONS_SETTING_LABEL);
+    expect(err.message).not.toContain("private/");
+    expect(err.message).not.toContain("partition leave");
+    // The raw cause rides along for the operator's own doctor.
+    expect((err.cause as Error).message).toContain("private/store.json");
+  });
+
   test("with no vault the deny still holds", () => {
     env = makeStoreEnv("osb-perm-src-novault-", { legacyTree: false, configureVault: false });
     expect(refusal(() => resolveWriteDisposition(null, "signals"))).toBe("none");

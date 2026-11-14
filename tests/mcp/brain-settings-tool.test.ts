@@ -256,7 +256,7 @@ describe("brain_settings on a switched machine whose store cannot be opened", ()
     expect(sets(env)).toHaveLength(before);
   });
 
-  test("a remote write the permissions gate refuses names neither the lost partition nor the remedy", async () => {
+  test("a refused remote note write names neither the lost partition nor the remedy", async () => {
     env = makeStoreEnv("osb-settool-remote-permissions-");
     switchDevice(env.storeRoot);
     setBrainSetting(
@@ -264,9 +264,11 @@ describe("brain_settings on a switched machine whose store cannot be opened", ()
       "dream.heal_enrich_enabled",
       true,
     );
-    // The same state as above, reached through the permissions document
-    // gate: `brain_create_note` is refused before any write, and the
-    // refusal must not carry the store-open cause's raw text.
+    // The same state as above, reached through a note write:
+    // `brain_create_note` is refused before any write (the settings read
+    // refuses first), and the refusal must not carry the store-open
+    // cause's raw text. The permissions gate's own text is pinned in
+    // `tests/core/brain/permissions/document-source.test.ts`.
     rmSync(join(env.storeRoot, "private", "store.json"));
     const server = await serverFor(env.vault, env.configPath, TRANSPORT_REACH.remote);
     const reply = await server.handleRequest({
@@ -278,8 +280,10 @@ describe("brain_settings on a switched machine whose store cannot be opened", ()
         arguments: { path: "Notes/Blocked.md", content: "never written" },
       },
     });
-    expect(JSON.stringify(reply)).not.toContain("private/");
-    expect(JSON.stringify(reply)).not.toContain("partition leave");
+    const text = JSON.stringify(reply);
+    expect(text).toContain("could not be opened");
+    expect(text).not.toContain("private/");
+    expect(text).not.toContain("partition leave");
     expect(existsSync(join(env.vault, "Notes", "Blocked.md"))).toBe(false);
   });
 });
