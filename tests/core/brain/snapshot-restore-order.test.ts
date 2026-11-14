@@ -545,6 +545,25 @@ describe("a successful restore", () => {
     expect(readlinkSync(link)).toBe("pref-foo.md");
     expect(readFileSync(link, "utf8")).toContain("seed");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "keeps a top-level link to another top-level entry that is staged after it",
+    () => {
+      // `aa-link.md` sorts before `zz-target.md`, so it is staged first; the
+      // staged link resolves only once its target is staged too.
+      writeFileSync(join(vault, "Brain", "zz-target.md"), "target\n");
+      symlinkSync("zz-target.md", join(vault, "Brain", "aa-link.md"));
+      createSnapshot(vault, RUN_ID, { reason: DREAM });
+      rmSync(join(vault, "Brain", "aa-link.md"));
+      rmSync(join(vault, "Brain", "zz-target.md"));
+
+      restoreSnapshot(vault, RUN_ID);
+
+      const link = join(vault, "Brain", "aa-link.md");
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(link, "utf8")).toBe("target\n");
+    },
+  );
 });
 
 /** A {@link treeOf} result without the entries a restore never touches. */
@@ -894,6 +913,39 @@ describe("createSnapshot skips its own store lock only for the restore's live to
     } finally {
       release();
     }
+  });
+
+  test("a token whose path getter is shadowed does not skip another store's lock", () => {
+    const store = overrideStore();
+    createSnapshot(vault, RUN_ID, { reason: DREAM, ...store });
+
+    restoreSnapshot(vault, RUN_ID, {
+      ...store,
+      beforeDiscard: ({ heldStoreLock }) => {
+        expect(heldStoreLock).not.toBeNull();
+        // Redirect the genuine token to the configured store, which another
+        // writer holds: the module reads the path it minted, not the getter.
+        Object.defineProperty(heldStoreLock, "path", { value: dbPath });
+        const release = acquireWriterLockSync(dbPath);
+        try {
+          expect(() =>
+            createSnapshot(vault, "dream-shadowed-token", {
+              reason: DREAM,
+              derivedStore: COVERED,
+              ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+            }),
+          ).toThrow(LOCKED);
+        } finally {
+          release();
+        }
+        const point = createSnapshot(vault, "manual-shadow-point", {
+          reason: BRAIN_SNAPSHOT_REASON.manual,
+          ...store,
+          ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+        });
+        return { runId: "manual-shadow-point", path: point.path };
+      },
+    });
   });
 
   test("a live token on another store does not skip the lock of this one", () => {

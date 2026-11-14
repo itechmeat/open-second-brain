@@ -312,7 +312,9 @@ const STORE_LOCK_TOKEN_MINT: unique symbol = Symbol("store-lock-token-mint");
  * The tokens whose lock is still held. A token leaves the set when its
  * lock is released, so a kept reference stops counting at that moment.
  */
-const liveStoreLockTokens = new WeakSet<StoreLockToken>();
+// Live token -> the store path its lock is held on. The path is read from
+// here, never from the token, so a caller cannot redirect a genuine token.
+const liveStoreLockTokens = new WeakMap<StoreLockToken, string>();
 
 /**
  * Proof that this module holds the derived store's writer lock on
@@ -338,7 +340,7 @@ export class StoreLockToken {
 
 /** True only for a minted, unreleased token on exactly `path`. */
 function isLiveStoreLockToken(token: unknown, path: string): boolean {
-  return token instanceof StoreLockToken && liveStoreLockTokens.has(token) && token.path === path;
+  return token instanceof StoreLockToken && liveStoreLockTokens.get(token) === path;
 }
 
 export interface SnapshotInfo {
@@ -2498,8 +2500,12 @@ function stageBrainTree(
       const from = join(extractedBrain, name);
       const to = join(incoming, name);
       cpSync(from, to, { recursive: true, verbatimSymlinks: true });
-      expected += countFiles(from);
-      files += countFiles(to);
+    }
+    // Counted only once every entry is staged: a top-level link to another
+    // top-level entry resolves in the staged copy only after its target is.
+    for (const name of entries) {
+      expected += countFiles(join(extractedBrain, name));
+      files += countFiles(join(incoming, name));
     }
     if (files !== expected) {
       throw new BrainSnapshotError(
@@ -2892,7 +2898,7 @@ function acquireStoreLockForRestore(
     );
   }
   const token = new StoreLockToken(STORE_LOCK_TOKEN_MINT, target);
-  liveStoreLockTokens.add(token);
+  liveStoreLockTokens.set(token, target);
   return {
     token,
     release: (): void => {
@@ -2959,6 +2965,10 @@ function releaseStoreLockAfterRestore(
       // finally returns; it only gains the release failure as a line.
       if (primary.err instanceof Error) {
         primary.err.message += `\nalso: ${what}`;
+      } else {
+        // A non-Error throw has no message to extend; the release failure
+        // still must not vanish.
+        console.error(`warning: ${what}`);
       }
       return;
     }
