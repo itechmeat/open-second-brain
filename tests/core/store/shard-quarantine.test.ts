@@ -34,6 +34,7 @@ import { brainSettingKey } from "../../../src/core/store-migration/brain-setting
 import { readHeldRecords } from "../../../src/core/store-migration/journal.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { laneStoreFold } from "../../../src/core/store/lane-fold-cache.ts";
+import { laneStoreStamp } from "../../../src/core/store/lane-pages.ts";
 import {
   PINNED_SET_KIND,
   SETTING_SET_KIND,
@@ -818,6 +819,27 @@ describe("the entity index on a store-only machine", () => {
     ).path;
   }
 
+  /** A lane entry whose record lands in the month `ms` falls in. */
+  function laneEntryIn(e: StoreEnv, entry: string, text: string, ms: number): string {
+    return appendRecord(
+      openStore({ root: e.storeRoot, device: "dev-b" }),
+      {
+        partition: "shared",
+        stream: "events",
+        kind: LANE_ENTRY_KIND,
+        agent: "t",
+        body: {
+          authority: "agent",
+          lane: "entities",
+          entry,
+          fields: { ...ENTITY_FIELDS, entity_id: entry.split("/")[1] },
+          text,
+        },
+      },
+      { now: () => ms },
+    ).path;
+  }
+
   test("a lane update's pending blob arriving moves the index stamp", () => {
     env = makeStoreEnv("osb-quarantine-index-blob-", { legacyTree: false });
     switchDevice(env.storeRoot);
@@ -841,5 +863,60 @@ describe("the entity index on a store-only machine", () => {
     // The blob's arrival moves the lane stamp, so the memo no longer
     // serves the old build.
     expect(body()).toBe(BIG);
+  });
+
+  test("an unreadable shard leaves a deterministic stamp, so the index memo keeps hitting", () => {
+    env = makeStoreEnv("osb-quarantine-index-incomplete-", { legacyTree: false });
+    switchDevice(env.storeRoot);
+    const october = laneEntry(env, "org/e1", "v1 body");
+    // A second entity whose winning record survives on the November
+    // shard, so the degraded index still has a page to serve.
+    laneEntryIn(env, "org/e2", "e2 body", NOV);
+    __clearEntityIndexCache();
+    const body = (): string =>
+      buildEntityIndex(env!.vault).entities.find((entity) => entity.id === "e2")?.body ?? "missing";
+    // The first build warms the memo and the seen-shard tracking.
+    expect(body()).toBe("e2 body");
+    // A shard this machine read and that is gone now leaves the fold
+    // uncached - but its stamp is deterministic and carries the
+    // `incomplete` prefix: no healthy stamp can match it.
+    const octoberBytes = readFileSync(october);
+    rmSync(october);
+    const degraded = laneStoreStamp(env!.vault);
+    expect(degraded).toContain("incomplete");
+    const open = spyOn(fs, "openSync");
+    const readFile = spyOn(fs, "readFileSync");
+    const shardReads = (): string[] =>
+      [...open.mock.calls, ...readFile.mock.calls]
+        .map((call) => String(call[0]))
+        .filter((p) => p.startsWith(env!.storeRoot) && p.endsWith(".jsonl"));
+    try {
+      // The degraded build is stable: the same stamp, the same answer.
+      // The signature's stamp still costs one fold rebuild (the fold
+      // itself stays uncached), but the memo absorbs the rest: a cold
+      // build parses every entity page, one fold per page, a warm one
+      // pays only the signature. Before the deterministic stamp the
+      // memo never hit, so every build paid the cold price.
+      expect(laneStoreStamp(env!.vault)).toBe(degraded);
+      __clearEntityIndexCache();
+      expect(body()).toBe("e2 body");
+      const cold = shardReads().length;
+      expect(cold).toBeGreaterThan(0);
+      expect(body()).toBe("e2 body");
+      const warm = shardReads().length - cold;
+      expect(warm).toBeGreaterThan(0);
+      expect(warm).toBeLessThan(cold);
+      // Once the shard reads again (sync delivers it back), the stamp
+      // moves, the incomplete prefix is gone, and the next build is a
+      // fresh, healthy one.
+      writeFileSync(october, octoberBytes);
+      expect(laneStoreStamp(env!.vault)).not.toBe(degraded);
+      expect(laneStoreStamp(env!.vault)).not.toContain("incomplete");
+      expect(body()).toBe("e2 body");
+      expect(shardReads().length).toBeGreaterThan(cold + warm);
+    } finally {
+      open.mockRestore();
+      readFile.mockRestore();
+    }
   });
 });

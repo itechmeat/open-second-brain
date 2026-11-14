@@ -100,6 +100,20 @@ test("a removal while a shard of the signal is gone since this machine read it r
   expect(() => removeStoreSignal(env!.vault, id)).toThrow(StoreWriteError);
   expect(tombstonesIn("shared")).toBe(0);
   expect(tombstonesIn("private")).toBe(0);
+  // The refusal carries no caller reach, so it never names the private
+  // shard's path (which names the device that wrote it): it counts it.
+  let refused: unknown;
+  try {
+    removeStoreSignal(env!.vault, id);
+  } catch (err) {
+    refused = err;
+  }
+  expect(refused).toBeInstanceOf(StoreWriteError);
+  const message = (refused as Error).message;
+  expect(message).toContain("1 private events shard");
+  expect(message).not.toContain("private/");
+  expect(message).not.toContain(".jsonl");
+  expect(message).not.toContain("dev-b");
 });
 
 test("a removal whose shared tombstone failed is finished by a retry", () => {

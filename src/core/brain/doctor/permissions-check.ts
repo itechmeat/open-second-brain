@@ -90,18 +90,20 @@ export const permissionsDocumentCheck: DoctorCheck = {
       // A non-document failure is not this check's finding; the pass's
       // fail-soft wrapper records those its own way.
       if (!(err instanceof PermissionsDocumentError)) throw err;
-      // The loader's error can carry the `protectionStore` reason, whose
-      // store-open error names a held partition's file. Below local reach
-      // the finding keeps its code and the source it names (`where`) and
-      // redacts the cause the way the store check's own findings are
-      // (`storeOpenFailureDetail`): the operator's own doctor reads the
-      // cause. A document fault or an unreadable shared shard names
-      // neither a partition nor a private path, so it keeps its text.
+      // The loader's error carries the `protectionStore` reason as its
+      // cause; its text holds only the reach-safe twin. Below local
+      // reach the finding keeps its code and the source it names
+      // (`where`) and redacts the cause the way the store check's own
+      // findings are (`storeOpenFailureDetail`). At local reach the
+      // operator's own doctor reads the cause itself, whose message
+      // names the held partition's file and the remedy.
       const cause = err.cause instanceof StoreUnavailableError ? err.cause : null;
       const detail =
-        cause !== null && withholdsPrivate(ctx)
-          ? storeOpenFailureDetail(cause, cause.root, ctx)
-          : err.message;
+        cause === null
+          ? err.message
+          : withholdsPrivate(ctx)
+            ? storeOpenFailureDetail(cause, cause.root, ctx)
+            : cause.message;
       out.issues.push({
         severity: "error",
         code: PERMISSIONS_UNREADABLE_CODE,

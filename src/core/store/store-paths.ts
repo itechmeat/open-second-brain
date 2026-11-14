@@ -304,10 +304,14 @@ function lstatIdentity(path: string): string {
  * identity of the blob file plus that of its `blobs/<ab>` folder, or
  * `"absent"`. `lstat`, not `stat`: the reader accepts a blob only as a
  * regular file of the recorded size and sha (and its folder only as a real
- * folder), so the stamp must move when an identity changes without size or
- * mtime moving - a symlink replaced by the real file or folder (`mv`,
- * `cp -p`, `rsync -a` keeps both), or a same-size blob repaired in place
- * with its mtime kept, where only ctime moves. A malformed sha reads as
+ * folder). The identity is never stored - it is compared only inside
+ * fingerprints. `pendingBlobStampLines` keeps the `"absent"` lines of a
+ * cached read, so there a stamp moves whenever an identity changes without
+ * size or mtime moving - a symlink replaced by the real file or folder
+ * (`mv`, `cp -p`, `rsync -a` keeps both), or a same-size blob repaired in
+ * place with its mtime kept, where only ctime moves. The incomplete-fold
+ * stamp (`lane-fold-cache.ts`) uses the full identity itself, so its memo
+ * moves with a refused blob's repair too. A malformed sha reads as
  * absent, like a blob that is not there.
  */
 export function blobStamp(partitionRoot: string, sha: string): string {

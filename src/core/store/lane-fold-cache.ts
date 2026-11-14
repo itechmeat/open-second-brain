@@ -40,7 +40,7 @@ import { quarantineStamp } from "./shard-quarantine.ts";
 import { protectionStore, StoreUnavailableError } from "./read/protection-store.ts";
 import { listShards } from "./shard-list.ts";
 import type { StoreInspection } from "./store-open.ts";
-import { partitionDir, pendingBlobStampLines } from "./store-paths.ts";
+import { partitionDir, blobStamp, pendingBlobStampLines } from "./store-paths.ts";
 
 export interface LaneFolded {
   readonly fingerprint: string;
@@ -157,10 +157,15 @@ export function laneStoreFold(): LaneFolded {
   // refused), so no stored stamp can describe the fold - it is left
   // uncached and rebuilt on the next read. A shard that reads again after
   // a permission change keeps its size and mtime, so an incomplete fold
-  // is never reused either.
+  // is never reused either. An uncached fold still carries a
+  // deterministic stamp (`incompleteFingerprint`), so the memos keyed by
+  // `laneStoreStamp` keep hitting while the degraded state stays the same
+  // instead of forcing a full rebuild on every read.
   const blobLines = pendingBlobStampLines(store.root, pendingBlobs);
   const storedFingerprint =
-    blobLines === null ? `${Date.now()}:${Math.random()}` : `${shardStamp}\n${blobLines}`;
+    blobLines === null || unreadable.length > 0
+      ? incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs)
+      : `${shardStamp}\n${blobLines}`;
   const folded = {
     fingerprint: storedFingerprint,
     entries,
@@ -172,6 +177,33 @@ export function laneStoreFold(): LaneFolded {
   if (unreadable.length === 0 && blobLines !== null) cache.set(store.root, folded);
   else cache.delete(store.root);
   return folded;
+}
+
+/**
+ * The deterministic fingerprint of a fold that is left uncached (an
+ * `events` shard this machine cannot read or read before and that is gone,
+ * or a skipped blob that is present but refused): an `incomplete` prefix -
+ * which no healthy fold's fingerprint can carry - then the shard stamp,
+ * the shards the fold could not see, and one full `lstat` identity
+ * (`blobStamp`) per refused blob. It moves when a shard reads again or a
+ * refused blob's identity changes, and never collides with a stored
+ * fingerprint, so a memo keyed by it serves the same degraded build while
+ * the state lasts and drops it the moment it lifts.
+ */
+function incompleteFingerprint(
+  store: StoreInspection,
+  shardStamp: string,
+  unreadable: ReadonlyArray<string>,
+  pendingBlobs: ReadonlyArray<string>,
+): string {
+  const parts = ["incomplete", shardStamp, `unreadable=${unreadable.toSorted().join(",")}`];
+  for (const identity of pendingBlobs.toSorted()) {
+    const slashAt = identity.indexOf("/");
+    const partition = identity.slice(0, slashAt) as (typeof STORE_PARTITIONS)[number];
+    const sha = identity.slice(slashAt + 1);
+    parts.push(`blob ${identity}=${blobStamp(partitionDir(store.root, partition), sha)}`);
+  }
+  return parts.join("\n");
 }
 
 /**

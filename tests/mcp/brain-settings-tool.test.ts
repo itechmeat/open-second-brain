@@ -5,7 +5,7 @@
  * key, the settings file edited on an unswitched machine.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
@@ -229,10 +229,11 @@ describe("brain_settings on a switched machine whose store cannot be opened", ()
       "dream.heal_enrich_enabled",
       true,
     );
-    // A switched machine that lost identity files of the partitions it
-    // holds: the store-open error names `private/store.json` and the
-    // leave verb, but none of that may reach the remote caller.
-    rmSync(join(env.storeRoot, "shared", "store.json"));
+    // A switched machine that lost the identity file of the private
+    // partition it holds: the store-open error names `private/store.json`
+    // and the leave verb, but none of that may reach the remote caller.
+    // Only `private/store.json` is removed: the raw text keeps the leave
+    // remedy here, so the assertions below have something to catch.
     rmSync(join(env.storeRoot, "private", "store.json"));
     const before = sets(env).length;
     const server = await serverFor(env.vault, env.configPath, TRANSPORT_REACH.remote);
@@ -253,5 +254,32 @@ describe("brain_settings on a switched machine whose store cannot be opened", ()
     expect(err?.data?.["code"]).toBe("settings_unreadable");
     expect(err?.message).toContain("dream.heal_enrich_enabled cannot be changed by an agent");
     expect(sets(env)).toHaveLength(before);
+  });
+
+  test("a remote write the permissions gate refuses names neither the lost partition nor the remedy", async () => {
+    env = makeStoreEnv("osb-settool-remote-permissions-");
+    switchDevice(env.storeRoot);
+    setBrainSetting(
+      { vault: env.vault, authority: "human", agent: "u" },
+      "dream.heal_enrich_enabled",
+      true,
+    );
+    // The same state as above, reached through the permissions document
+    // gate: `brain_create_note` is refused before any write, and the
+    // refusal must not carry the store-open cause's raw text.
+    rmSync(join(env.storeRoot, "private", "store.json"));
+    const server = await serverFor(env.vault, env.configPath, TRANSPORT_REACH.remote);
+    const reply = await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 5,
+      method: "tools/call",
+      params: {
+        name: "brain_create_note",
+        arguments: { path: "Notes/Blocked.md", content: "never written" },
+      },
+    });
+    expect(JSON.stringify(reply)).not.toContain("private/");
+    expect(JSON.stringify(reply)).not.toContain("partition leave");
+    expect(existsSync(join(env.vault, "Notes", "Blocked.md"))).toBe(false);
   });
 });
