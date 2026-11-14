@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +21,10 @@ import {
 } from "../../src/core/brain/doctor/git-tracked-state-check.ts";
 import { DEFAULT_BEGIN_MARKER, DEFAULT_END_MARKER } from "../../src/core/install/managed-block.ts";
 import { cmdBrainInit } from "../../src/cli/brain/verbs/init.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // Shared temp scratch for both vault and machine-config directories.
 // Tests that need to assert the "missing machine config" path can

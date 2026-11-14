@@ -5,7 +5,7 @@
  * `o2b search` finds the records. A second machine sharing the store sees
  * them once its own index catches up.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,6 +16,10 @@ import {
 import { forgetMachineStateCache } from "../../src/core/state/machine-state.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

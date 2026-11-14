@@ -87,7 +87,7 @@
  * enclosing-function scan that follows.
  */
 
-import { beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -101,6 +101,10 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { progressRecords } from "../helpers/progress-records.ts";
 import { runCli, type RunResult } from "../helpers/run-cli.ts";
 import { lexCode } from "../helpers/source-lexer.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const SRC = resolve(import.meta.dir, "..", "..", "src");
 

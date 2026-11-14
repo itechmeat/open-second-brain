@@ -10,7 +10,7 @@
  * holder that releases a marked lock steps back before it re-acquires.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
@@ -31,6 +31,10 @@ import {
   LOCK_WAIT_BUDGET_MS,
   resolveLockWaitBudgetMs,
 } from "../../../src/core/brain/sync-lockfile.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let root: string;
 let savedEnv: string | undefined;

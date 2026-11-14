@@ -1,8 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { nestedCommandGroups } from "../../src/cli/command-manifest.ts";
 import { renderCompletions } from "../../src/cli/completions.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 describe("CLI command manifest", () => {
   test("help --json lists root commands, nested verbs, and inherited json flag", async () => {

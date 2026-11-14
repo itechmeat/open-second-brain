@@ -7,7 +7,7 @@
  * key. Ambient mining never writes an entity page - only promote does.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
@@ -34,6 +34,10 @@ import {
   __clearEntityLexiconCache,
 } from "../../src/core/brain/entities/lexicon.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

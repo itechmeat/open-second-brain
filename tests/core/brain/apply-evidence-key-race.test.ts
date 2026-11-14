@@ -7,7 +7,7 @@
  * shared instant, the discipline of `pinned-concurrency.test.ts`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -15,6 +15,10 @@ import { writePreference } from "../../../src/core/brain/preference.ts";
 import { readPreferences } from "../../../src/core/store/read/preferences.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
 import { switchDevice } from "./store-only/fixtures.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const WRITERS = 4;
 const KEYS = 12;

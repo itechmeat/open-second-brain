@@ -6,7 +6,7 @@
  * back with `icacls` itself.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -38,6 +38,10 @@ import {
 } from "../../../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
 

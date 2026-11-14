@@ -3,7 +3,7 @@
  * human view, prints nothing and exits 0; a failure is one line in the
  * device-local hook audit, and the hook still exits 0.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +16,10 @@ import { VIEW_AUTO_PASS_FILE, VIEW_STATE_DIR } from "../../src/core/view/constan
 import { runViewPass } from "../../src/core/view/render.ts";
 import { claimViewWriter } from "../../src/core/view/writer.ts";
 import { homeEnv } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 

@@ -7,11 +7,15 @@
  * form is forbidden because it relies solely on a PATH symlink that goes stale
  * across plugin updates.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOKS_JSON = join(REPO, "hooks", "hooks.json");

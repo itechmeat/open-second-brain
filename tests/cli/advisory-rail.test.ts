@@ -13,7 +13,7 @@
  * is the reason its raw-argv scan had to become grammar-faithful.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,10 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // The legacy day log and ledgers are read under their un-sharded names.
 useUnshardedLegacyLog();

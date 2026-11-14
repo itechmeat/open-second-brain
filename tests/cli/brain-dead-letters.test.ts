@@ -21,7 +21,7 @@
  *     diagnostic entry resolves to the verb.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -55,6 +55,10 @@ import {
 import { buildReconciliationReport } from "../../src/core/reconciliation-report.ts";
 import { sessionMiningLedgerPath } from "../../src/core/brain/session-mining-ledger.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOW = new Date("2026-08-23T10:15:00Z");
 const SESSION = "sess-cli-recover";

@@ -59,7 +59,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.4
 
       - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -144,8 +144,19 @@ jobs:
       # implies `--isolate`): serially the suite was five to seven minutes,
       # the whole length of this job. The run rewrites the timings file the
       # next runs on main and on pull requests start from.
+      #
+      # The watchdog bounds the suite at 25 minutes (a healthy run is about
+      # 8) and, past it, prints which test file and test every worker was
+      # still running before it stops the run: a test that blocks its worker
+      # synchronously is out of reach of bun's per-test timeout, and four
+      # runs on Bun 1.4.0 sat silent until the 45-minute job timeout that
+      # way (a `spawnSync` that spun forever under `--isolate`, fixed in Bun
+      # 1.4.3). The step bound is the backstop if the wrapper itself sticks.
       - name: TypeScript test suite
-        run: bun test --parallel --timings=.bun-timings.json --update-timings
+        timeout-minutes: 30
+        run: >-
+          .github/scripts/test-watchdog.sh 1500
+          bun test --parallel --timings=.bun-timings.json --update-timings
 
       - name: Wait for the Python plugin tests
         wait: python-tests
@@ -202,7 +213,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.4
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -278,7 +289,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.4
 
       - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -360,6 +371,8 @@ jobs:
       - name: Hang watchdog
         id: watchdog
         background: true
+        env:
+          O2B_TEST_INFLIGHT_DIR: ${{ runner.temp }}/test-inflight
         # `cancel` may end it with exit code 1; a diagnostic must never fail the job.
         continue-on-error: true
         shell: pwsh
@@ -367,13 +380,18 @@ jobs:
           Start-Sleep -Seconds 720
           $out = Join-Path $env:RUNNER_TEMP 'telemetry\hang-dump.txt'
           New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+          # The test preload keeps one line per test process naming the
+          # file and test it is running (`tests/helpers/inflight-recorder.ts`).
+          Get-ChildItem -Path $env:O2B_TEST_INFLIGHT_DIR -Filter '*.txt' -ErrorAction SilentlyContinue |
+            ForEach-Object { "test process $($_.BaseName): $(Get-Content -Raw $_.FullName)" } |
+            Tee-Object -FilePath $out
           Get-CimInstance Win32_Process |
             Where-Object { $_.Name -match '^(bun|node|python)' } |
             Select-Object ProcessId, ParentProcessId,
               @{ n = 'Minutes'; e = { [int]((Get-Date) - $_.CreationDate).TotalMinutes } },
               CommandLine |
             Format-Table -AutoSize -Wrap | Out-String -Width 400 |
-            Tee-Object -FilePath $out
+            Tee-Object -FilePath $out -Append
           "::warning::shard still running after 12 minutes; process dump in the windows-telemetry artifact"
 
       - name: Wait for Defender to be off
@@ -383,6 +401,8 @@ jobs:
       # so Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
       # times out tests that pass locally. Tests with their own timeout keep it.
       - name: TypeScript test suite (shard ${{ matrix.shard }}/10)
+        env:
+          O2B_TEST_INFLIGHT_DIR: ${{ runner.temp }}/test-inflight
         run: >-
           bun test --shard=${{ matrix.shard }}/10
           --timings=${{ runner.temp }}/timings/windows-timings.json --update-timings

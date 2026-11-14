@@ -29,7 +29,7 @@
  *     assert a rule was exercised against work that never happened.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,10 @@ import { parsePreference, writePreference } from "../../../src/core/brain/prefer
 import { resetVaultIdentityPins } from "../../../src/core/brain/vault-identity.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 import { runCli } from "../../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const LOW_EVIDENCE_CODE = "low-evidence-confirmed";
 

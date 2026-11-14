@@ -10,7 +10,7 @@
  * same closed tuple, so the two surfaces cannot drift.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,10 @@ import { RECEIPT_TOOLS } from "../../../../src/mcp/brain/receipt-tools.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { runCli } from "../../../helpers/run-cli.ts";
 import { digestVaultTree } from "../../../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The ledger month the fixtures write; safely past any fold cutoff. */
 const LEDGER_MONTH = "2026-08";

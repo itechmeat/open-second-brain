@@ -2,7 +2,7 @@
  * `o2b brain foresight` CLI surface (t_08a79c81).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,10 @@ import { applyRecurrenceEvidence } from "../../src/core/brain/recurrence.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { switchDevice } from "../core/brain/store-only/fixtures.ts";
 import { makeStoreEnv } from "../core/store/fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

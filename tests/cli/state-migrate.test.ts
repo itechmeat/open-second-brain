@@ -12,7 +12,7 @@
  * supervisor that cannot tell them apart retries the wrong one.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -28,6 +28,10 @@ import { dirname, join } from "node:path";
 import { MIGRATION_MANIFEST_FILE, type MigrationPlan } from "../../src/core/state/migrate.ts";
 import { STATE_SURFACE_ID, STATE_SURFACES } from "../../src/core/state/surfaces.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const temps: string[] = [];
 

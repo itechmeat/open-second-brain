@@ -13,7 +13,7 @@
  * after and requires them to be the same.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,10 @@ import {
   renderMaintenanceCronTemplate,
 } from "../../src/cli/maintenance-cron.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The heredoc body: the script exactly as the operator's host will run it. */
 function scriptBody(out: string): string {

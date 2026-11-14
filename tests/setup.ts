@@ -57,6 +57,7 @@ import { clearOriginChannel } from "../src/core/origin-channel.ts";
 import { MARKDOWN_NEUTRALIZE_MODE_ENV } from "../src/core/brain/text/neutralize-markdown.ts";
 import { forgetMachineStateCache } from "../src/core/state/machine-state.ts";
 import { storeWriteStatusPath } from "../src/core/store/store-write.ts";
+import { installInflightRecorder } from "./helpers/inflight-recorder.ts";
 import { DEFAULT_STORE_ROOT_ENV } from "./helpers/test-store.ts";
 import { TEST_DEVICE_ID } from "./helpers/test-vault.ts";
 
@@ -101,6 +102,24 @@ const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 1
 // into.
 if (process.env["O2B_DEVICE_ID"] === undefined) {
   process.env["O2B_DEVICE_ID"] = TEST_DEVICE_ID;
+}
+
+// Under CI's test watchdog, every process writes down which file and test
+// it is running, so a run that stops making progress names the test that
+// held it (`tests/helpers/inflight-recorder.ts`). Off for a local run.
+installInflightRecorder();
+
+// A snapshot shells out to `tar` and `zstd` synchronously, and a child that
+// never reports back blocks the whole test process: bun's per-test timeout
+// cannot fire on a blocked thread, so the run went silent until the CI job
+// timeout. The product bound is fifteen minutes (sized for a large vault);
+// the suite's trees are tiny, so a minute here turns such a hang into a
+// failure that names the tool. A test of the bound sets it itself. The name
+// is spelled out rather than imported, so the preload every file pays for
+// does not load the snapshot module's import graph; the snapshot tests pin
+// it to `SNAPSHOT_TOOL_TIMEOUT_ENV`.
+if (process.env["OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS"] === undefined) {
+  process.env["OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS"] = "60000";
 }
 
 // Freshen-on-read starts a detached `o2b search index` whenever a search

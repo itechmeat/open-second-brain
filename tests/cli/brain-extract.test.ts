@@ -6,7 +6,7 @@
  * answer exits 0.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +16,10 @@ import { CLI_COMMAND_MANIFEST, type CliCommandManifest } from "../../src/cli/com
 import { HTML_EXTRACT_MAX_SOURCE_BYTES } from "../../src/core/brain/ingest/extract-html.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The fixture files of the expected-output document. */
 const PAGE_HTML =

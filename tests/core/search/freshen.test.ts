@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -35,6 +35,10 @@ import { acquireWriterLockSync } from "../../../src/core/search/store/writer-loc
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import type { FreshenPending } from "../../../src/core/search/freshen.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
 const ago = (s: number): string => new Date(NOW - s * 1000).toISOString();

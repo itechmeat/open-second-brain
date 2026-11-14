@@ -28,7 +28,7 @@
  *      the environment variable underneath the same call.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -58,6 +58,10 @@ import { BrainConfigError } from "../../src/core/brain/policy.ts";
 import { validateBrainConfig } from "../../src/core/brain/policy.ts";
 import { parseBrainYaml } from "../../src/core/brain/yaml-parse.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** A caller-named note path that no declared prefix in these tests admits. */
 const OUTSIDE_PATH = "Elsewhere/Note.md";

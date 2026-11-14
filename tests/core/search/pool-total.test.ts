@@ -10,6 +10,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { utimesSync } from "node:fs";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -103,23 +104,35 @@ function withRecall(
 const CROWDED_HOT_NOTES = 6;
 const CROWDED_QUERY = "widget calibration";
 
+/**
+ * One modification time for every crowded note. The hot notes tie on score,
+ * and the ranker's tie-break ladder reaches `mtime` (newest first) before
+ * the chunk id. Written back to back, the six files got one coarse clock
+ * tick on Linux and so fell through to the chunk id, but straddled ticks on
+ * a Windows runner, which then answered with the newest notes first. A
+ * fixed time makes the fixture as clock-free as its config claims.
+ */
+const CROWDED_MTIME = new Date("2026-01-01T00:00:00Z");
+
 function writeCrowdedVault(vaultDir: string): void {
   for (let i = 0; i < CROWDED_HOT_NOTES; i += 1) {
-    writeMd(
+    const path = writeMd(
       vaultDir,
       `a-${i}.md`,
       `---\ntitle: Crowded ${i}\nsession_ref: sess-a\n---\n\n# Crowded ${i}\n\n` +
         `The widget calibration routine number ${i}. Widget calibration is repeated here. ` +
         `Widget calibration matters to this note.\n`,
     );
+    utimesSync(path, CROWDED_MTIME, CROWDED_MTIME);
   }
   for (const session of ["b", "c", "d"]) {
-    writeMd(
+    const path = writeMd(
       vaultDir,
       `${session}.md`,
       `---\ntitle: Other ${session}\nsession_ref: sess-${session}\n---\n\n# Other ${session}\n\n` +
         `The widget calibration routine of session ${session}.\n`,
     );
+    utimesSync(path, CROWDED_MTIME, CROWDED_MTIME);
   }
 }
 

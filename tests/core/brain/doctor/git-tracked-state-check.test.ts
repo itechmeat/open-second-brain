@@ -10,7 +10,7 @@
  * answer, and it never edits anything.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,10 @@ import {
 } from "../../../../src/core/brain/doctor/git-tracked-state-check.ts";
 import { ensureVaultGitignoreEntries } from "../../../../src/core/brain/gitignore-guard.ts";
 import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

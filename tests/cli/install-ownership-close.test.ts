@@ -14,12 +14,16 @@
  * surface and not the other, which is exactly how the two drifted before.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 function runCli(args: ReadonlyArray<string>, opts: RunCliOptions = {}): Promise<RunResult> {
   return baseRunCli(args, { ...opts, subprocess: true });

@@ -22,7 +22,16 @@
  * revision one higher, run in its own process.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import {
   cpSync,
   existsSync,
@@ -49,6 +58,10 @@ import {
   runSelfHealUpgrade,
   SELF_HEAL_UPGRADE_OUTCOME,
 } from "../../../src/core/maintenance/self-heal-upgrade.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let root: string;
 let mac: string;

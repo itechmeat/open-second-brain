@@ -17,7 +17,7 @@
  * renderers.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -35,6 +35,10 @@ import { runCli } from "../helpers/run-cli.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
 import { regenerateActive } from "../../src/core/brain/active.ts";
 import { hookAuditDir } from "../../src/core/brain/paths.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

@@ -13,11 +13,15 @@
  * one into a report.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { OPEN_SECOND_BRAIN_VERSION } from "../../src/core/version.ts";
 import { CLI_COMMAND_MANIFEST, allFlagNames } from "../../src/cli/command-manifest.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The verb under test, and the root flag that is its synonym. */
 const VERSION_COMMAND = "version";

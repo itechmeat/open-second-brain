@@ -25,7 +25,7 @@
  *      statement, not a fault.
  */
 
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
@@ -34,6 +34,10 @@ import {
   callableVisibilitySurfaces,
   excludedCallableVisibilitySurfaces,
 } from "../../src/core/search/visibility-surface-registry.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 test("a vault that never uses visibility: renders neither the JSON key nor the human line", async () => {
   const { vault, dbPath, cleanup } = createTempVault("check-visibility-honesty-absent");

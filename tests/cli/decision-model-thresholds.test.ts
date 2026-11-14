@@ -6,7 +6,7 @@
  * vault's continuity log. No network, no credentials.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,10 @@ import {
 } from "../../src/core/decision-model/thresholds.ts";
 import { emitDecisionModelCall } from "../../src/core/decision-model/record.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const KEY_VAR = "O2B_TEST_THR_CLI_KEY";
 const MODEL = "self-hosted-cli-1";

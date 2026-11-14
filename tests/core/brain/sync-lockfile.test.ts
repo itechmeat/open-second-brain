@@ -5,7 +5,7 @@
  * txn layer maps that to a `BrainCollisionError({ kind: 'SourceLock' })`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   lstatSync,
@@ -37,6 +37,10 @@ import {
   scanStaleLocks,
   TAKEOVER_CLAIM_STALE_MS,
 } from "../../../src/core/brain/sync-lockfile.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmpRoot: string;
 

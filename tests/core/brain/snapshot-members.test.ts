@@ -15,7 +15,7 @@
  *    and GNU tar refused the whole archive.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -43,6 +43,10 @@ import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 import { extractSnapshotArchive, listSnapshotArchive } from "../../helpers/snapshot-archive.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const DREAM = BRAIN_SNAPSHOT_REASON.dream;
 

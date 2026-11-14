@@ -4,8 +4,12 @@
  *  #2 `brain forget-source --json` must emit a JSON error envelope (not
  *     plain-text) when a runtime failure is caught, so automation can parse it.
  */
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 test("batch-plan without <source-dir> exits 2 (usage error) — CR #127.1", async () => {
   const r = await runCli(["brain", "batch-plan"]);

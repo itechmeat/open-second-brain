@@ -5,7 +5,7 @@
  * as unreadable here exactly as it does on every read surface.
  */
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -16,6 +16,10 @@ import { readableAtContextReach } from "../../src/mcp/brain/reach-readable.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
 import { pinHome, tempDirs } from "../helpers/temp-dir.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const mkTemp = tempDirs();
 pinHome("o2b-reach-readable-home-");

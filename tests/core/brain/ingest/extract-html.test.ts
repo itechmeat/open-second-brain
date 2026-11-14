@@ -5,7 +5,7 @@
  * whitespace, line breaks), the refusals and the bound on running time.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 
 import { SOURCE_HASH_MAX_BYTES } from "../../../../src/core/brain/intake/source-trust.ts";
@@ -26,6 +26,10 @@ import {
 import { extractTagValues, stripCode } from "../../../../src/core/tags.ts";
 import { extractWikilinks } from "../../../../src/core/vault.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const encoder = new TextEncoder();
 

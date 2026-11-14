@@ -16,13 +16,17 @@
  * reason the `*Safe` readers exist.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** Parses as YAML, fails validation, in a block neither verb reads. */
 const BROKEN_CONFIG = `schema_version: 1\ndream:\n  candidate_threshold: 0\n`;

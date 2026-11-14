@@ -5,7 +5,7 @@
  * read. The rebuild is the self-heal one an index chunked by older rules
  * gets, and the new index carries the store from its first read.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +25,10 @@ import {
   REMOTE_DEVICE,
   type StoreIndexFixture,
 } from "./fixtures/brain-store-index.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOTES = 400;
 const WORKER = join(import.meta.dir, "fixtures", "store-rebuild-worker.ts");

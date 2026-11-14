@@ -12,7 +12,7 @@
  * mechanics (search-vector-backfill.test.ts) and the plan arithmetic
  * (embedding-spend-preview.test.ts).
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
@@ -22,6 +22,10 @@ import { startFakeHttp } from "../helpers/fake-http.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const VEC_LOADABLE = sqliteVecLoadable();
 const UNPRICED_MODEL = "zembed-1";

@@ -6,7 +6,7 @@
  * missing payloads, and a gc whose default is a dry run.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,10 @@ import { payloadPath, payloadsDir } from "../../src/core/brain/paths.ts";
 import { PAYLOAD_GC_GRACE_MS, PayloadRegistry } from "../../src/core/brain/payload-registry.ts";
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

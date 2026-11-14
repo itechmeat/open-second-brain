@@ -5,7 +5,7 @@
  * order; kinds with no legacy form stay in the store and are reported; a
  * resumed rollback duplicates nothing; the device is no longer switched.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   chmodSync,
@@ -38,6 +38,10 @@ import { readVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const FAST = { settleMs: 0 } as const;
 const KILL_CHILD = join(import.meta.dir, "fixtures", "kill-child.ts");

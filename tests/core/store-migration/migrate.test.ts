@@ -4,7 +4,7 @@
  * with identical content, a file that grows during conversion, a
  * verification gap and a backup failure.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -65,6 +65,10 @@ import {
 import { forgetMachineStateCache } from "../../../src/core/state/machine-state.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let bench: MigrationBench;
 beforeEach(() => {

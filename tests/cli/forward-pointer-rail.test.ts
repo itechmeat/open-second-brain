@@ -48,7 +48,7 @@
  * rail.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -57,6 +57,10 @@ import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const CLI_ROOT = join(REPO_ROOT, "src", "cli");

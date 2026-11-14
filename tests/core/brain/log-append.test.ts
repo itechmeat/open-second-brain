@@ -9,7 +9,7 @@
  * markdown view's bytes, and correctness under concurrent processes.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   mkdirSync,
@@ -26,6 +26,10 @@ import { verifyLogChain } from "../../../src/core/brain/log-chain.ts";
 import { readLogDay } from "../../../src/core/brain/log-jsonl.ts";
 import { appendLogEvent, LOG_CHAIN_FIELDS } from "../../../src/core/brain/log.ts";
 import { logJsonlPath, logPath } from "../../../src/core/brain/paths.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const DATE = "2026-06-01";
 const SPAWN_TIMEOUT_MS = 60_000;
@@ -197,12 +201,28 @@ describe("log append", () => {
           `import { appendLogEvent } from ${JSON.stringify(logModule)};`,
           "const [vault, tag, count, startAt] = process.argv.slice(2);",
           "while (Date.now() < Number(startAt)) Bun.sleepSync(1);",
+          // Four writers each firing 25 appends back to back is far more
+          // contention than the log lock's two-second wait is sized for
+          // (several agents, not a tight loop), and on a slow Windows disk a
+          // writer lost every round past it with ELOCKED. The refusal tells
+          // the caller to retry the write, so the writer does, within a
+          // bound: what this test proves is the chain under concurrency.
+          "const RETRY_UNTIL_MS = 30_000;",
           "for (let i = 0; i < Number(count); i++) {",
-          "  appendLogEvent(",
-          "    vault,",
-          `    { timestamp: "${DATE}T11:00:00Z", eventType: "note", body: { text: \`\${tag}-\${i}\` } },`,
-          '    { deviceId: "" },',
-          "  );",
+          "  const giveUpAt = Date.now() + RETRY_UNTIL_MS;",
+          "  for (;;) {",
+          "    try {",
+          "      appendLogEvent(",
+          "        vault,",
+          `        { timestamp: "${DATE}T11:00:00Z", eventType: "note", body: { text: \`\${tag}-\${i}\` } },`,
+          '        { deviceId: "" },',
+          "      );",
+          "      break;",
+          "    } catch (err) {",
+          '      if (err?.code !== "ELOCKED" || Date.now() > giveUpAt) throw err;',
+          "      Bun.sleepSync(10 + Math.floor(Math.random() * 20));",
+          "    }",
+          "  }",
           "}",
         ].join("\n"),
         "utf8",

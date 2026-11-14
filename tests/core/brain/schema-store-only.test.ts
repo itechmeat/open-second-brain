@@ -5,7 +5,7 @@
  * readers see the stored pack, and nothing under `Brain/` changes. An
  * unswitched machine keeps writing `_brain.yaml`.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
@@ -25,6 +25,10 @@ import {
   partitionRecords,
   switchDevice,
 } from "./store-only/fixtures.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

@@ -4,7 +4,7 @@
  * must not alarm on a quiet hour), status renders lease + journal.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -54,6 +54,10 @@ import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { useUnshardedLegacyLog } from "../helpers/device-id.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 // The legacy day log and ledgers are read under their un-sharded names.
 useUnshardedLegacyLog();

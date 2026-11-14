@@ -56,4 +56,4 @@ bun run scripts/sync-version.ts --check
 ```
 
 When `src/` code that the OpenClaw bundle includes changes, rebuild it with
-`bunx bun@1.4.0 run build:openclaw` and commit `openclaw/index.js`.
+`bunx bun@1.4.4 run build:openclaw` (the Bun version CI pins) and commit `openclaw/index.js`.

@@ -8,7 +8,7 @@
  * failure, and the whole process group killed on timeout or abort.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -47,6 +47,10 @@ import {
 } from "../../../../src/core/brain/safeguard.ts";
 import { MAINTENANCE_LEASE_TTL_MS } from "../../../../src/core/brain/maintenance/lane.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let dir: string;
 let configPath: string;

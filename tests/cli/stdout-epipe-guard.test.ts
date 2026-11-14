@@ -8,10 +8,14 @@
  * so guarding that entry covers both CLIs.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 
 import { handleStdoutError, isEpipeError } from "../../src/cli/stdout-guard.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const ROOT = join(import.meta.dir, "..", "..");
 

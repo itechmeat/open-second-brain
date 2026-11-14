@@ -32,7 +32,7 @@
  *     writes and reads the surface back off the probe.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,10 @@ import { CONFIG_ORIGIN } from "../../../src/core/validate.ts";
 import { evaluateToolCapabilities } from "../../../src/mcp/capabilities.ts";
 import { resolveToolSurface } from "../../../src/mcp/profiles.ts";
 import { buildToolTable } from "../../../src/mcp/tools.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let vault: string;
 let home: string;

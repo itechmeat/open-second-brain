@@ -7,7 +7,7 @@
  * record is still left out until the blob arrives, and the migration's
  * refusals still see it.
  */
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import {
   chmodSync,
@@ -64,6 +64,10 @@ import { partitionDir } from "../../../src/core/store/store-paths.ts";
 import { switchDevice } from "../brain/store-only/fixtures.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { makeStoreEnv, type StoreEnv } from "./fixtures/store-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let env: StoreEnv | null = null;
 afterEach(() => {

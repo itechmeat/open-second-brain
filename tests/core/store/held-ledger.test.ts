@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { lostHeldPartitions, recordHeldPartitions } from "../../../src/core/store/held-ledger.ts";
 import type { PlatformDirsEnv } from "../../../src/core/platform-dirs.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const LEDGER = join(import.meta.dir, "../../../src/core/store/held-ledger.ts");
 const dirs: string[] = [];

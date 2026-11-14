@@ -15,7 +15,7 @@
  *     compared, not merely its size or the fact that something moved.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
@@ -26,6 +26,10 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { changedPaths, treeEntries, digestVaultTree } from "../helpers/vault-digest.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

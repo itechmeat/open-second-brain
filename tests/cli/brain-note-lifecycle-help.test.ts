@@ -18,12 +18,16 @@
  * the verb alone turns this red.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 
 import { nestedCommand } from "../../src/cli/command-manifest.ts";
 import { parsedFlagSchema } from "../helpers/parsed-flag-schema.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const VERBS = ["note-lifecycle", "scaffold-stub"] as const;
 

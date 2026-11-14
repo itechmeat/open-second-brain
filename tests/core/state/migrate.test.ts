@@ -25,7 +25,7 @@
  *     code.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -57,6 +57,10 @@ import {
 } from "../../../src/core/state/migrate.ts";
 import { STATE_SURFACE_ID, STATE_SURFACES } from "../../../src/core/state/surfaces.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const temps: string[] = [];
 

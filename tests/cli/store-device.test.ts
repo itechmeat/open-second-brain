@@ -4,7 +4,7 @@
  * `device-retire` record that takes a gone machine off the digest roster
  * and out of the removal gate. This machine's own id is refused.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,10 @@ import { initStore } from "../../src/core/store/store-init.ts";
 import { openStore } from "../../src/core/store/store-open.ts";
 import { partitionDir } from "../../src/core/store/store-paths.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let parent: string;
 let root: string;

@@ -1809,13 +1809,15 @@ For the two verbs that do hold a handle, a second interrupt is not intercepted a
 
 ## Lock and cache overrides (since v1.61.0)
 
-Three environment variables tune how long a writer waits for a shared lock
-and where the machine-local dedup cache lives. None of them has a
+Four environment variables tune how long a writer waits for a shared lock,
+how long a snapshot tool may run, and where the machine-local dedup cache
+lives. None of them has a
 `_brain.yaml` key: they describe the host, not the vault.
 
 | Variable                            | Default                                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`    | `5000`                                                     | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
+| `OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS` | `900000` (fifteen minutes) | How long one `tar` or `zstd` run of a Brain snapshot, a derived-store archive or a restore may take before it is killed and the snapshot fails naming the tool. A whole number of milliseconds above zero; anything else is an error. |
 | `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` | the user cache directory, `open-second-brain/dedup-index/` | Where the signal dedup index cache is kept, one `<vault-digest>.json` per vault, outside the vault.                                                                                                                                                                                                                                                                                                    |
 | `OPEN_SECOND_BRAIN_DEDUP_CACHE`     | on                                                         | `0` turns the dedup index cache off; every capture then walks the inbox, `processed/` and `archived/` in full.                                                                                                                                                                                                                                                                                         |
 

@@ -12,7 +12,7 @@
  * override run too, not only the default arm's.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,10 @@ import {
   CONTENT_CLASS_FIELD,
 } from "../../src/core/brain/provenance/content-class.ts";
 import { EGRESS_CONTENT_CLASS_INCLUDE_NOTICE } from "../../src/core/egress/guard.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;

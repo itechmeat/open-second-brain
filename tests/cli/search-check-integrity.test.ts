@@ -24,7 +24,7 @@
  * off, so no provider is constructed and no ping is sent.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { closeSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -38,6 +38,10 @@ import {
 } from "../../src/core/search/store/state.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** The registered exit a structural fault names. */
 const INDEX_CORRUPT_CODE = "search-index-corrupt";

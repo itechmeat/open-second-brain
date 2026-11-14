@@ -10,7 +10,16 @@
  * timeout never turns an injection into an empty one.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +32,10 @@ import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { FAKE_DECISION_KEY } from "../helpers/fake-credentials.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),

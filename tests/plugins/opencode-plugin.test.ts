@@ -9,7 +9,7 @@
  * into opencode.
  */
 
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,10 @@ import OpenSecondBrain from "../../plugins/opencode/open-second-brain.ts";
 import { detectHookRuntime } from "../../hooks/lib/detect.ts";
 import { decideOrient } from "../../src/core/brain/pretool-orient.ts";
 import { decideHostBackup } from "../../src/core/brain/pretool-host-backup.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let spoolDir: string;
 let binDir: string;

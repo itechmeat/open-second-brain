@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -25,6 +25,10 @@ import {
 import { openStore } from "../../../src/core/store/store-open.ts";
 import { ensureStore, makeTempStore, type TempStore } from "./fixtures/temp-store.ts";
 import { neverHeld } from "../../helpers/held-partitions.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const NOV_2026 = Date.UTC(2026, 10, 6, 12, 0, 0);
 

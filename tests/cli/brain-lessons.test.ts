@@ -15,7 +15,7 @@
  *     lesson by name, and stamps `lastPromotedAt` on what it wrote.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +34,10 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const SCOPE_ENV = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES";
 const PRINCIPLE = "Always run the full test suite before pushing to main";

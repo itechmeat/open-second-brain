@@ -85,7 +85,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import {
@@ -1488,6 +1488,72 @@ type CompressionSource = { readonly kind: "file"; readonly path: string };
  */
 const SUBPROCESS_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
+/** Environment variable that overrides {@link SNAPSHOT_TOOL_TIMEOUT_MS}. */
+export const SNAPSHOT_TOOL_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS";
+
+/**
+ * How long one `tar` or `zstd` run of a snapshot or a restore may take
+ * before it is killed and the snapshot fails.
+ *
+ * The whole module is synchronous by contract, so a child that never
+ * exits used to block the calling process forever: nothing else in the
+ * process can run, not even a timer that would notice. Fifteen minutes is
+ * far above what `zstd -19` needs for a `Brain/` tree of a few hundred
+ * megabytes, and finite, so a wedged tool turns into a named failure
+ * instead of a frozen hook, CLI or MCP call.
+ */
+export const SNAPSHOT_TOOL_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * The tool timeout in force: {@link SNAPSHOT_TOOL_TIMEOUT_ENV} when it is a
+ * whole number of milliseconds above zero, {@link SNAPSHOT_TOOL_TIMEOUT_MS}
+ * when it is unset or empty. Any other value is an error rather than a
+ * silent fallback, so a typo cannot quietly change the bound.
+ */
+export function resolveSnapshotToolTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[SNAPSHOT_TOOL_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim() === "") return SNAPSHOT_TOOL_TIMEOUT_MS;
+  const text = raw.trim();
+  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `${SNAPSHOT_TOOL_TIMEOUT_ENV}=${raw} is not a timeout; set it to a whole number of ` +
+        `milliseconds > 0 (the default is ${SNAPSHOT_TOOL_TIMEOUT_MS}), or unset it`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * `spawnSync` with the snapshot tool timeout. A run that hits it is killed
+ * (SIGKILL: a tool that ignored its input closing will not honour a polite
+ * signal either) and reported as a {@link BrainSnapshotError} that names
+ * the tool and the bound. Every other outcome is returned unchanged for
+ * the caller's own status handling.
+ */
+function spawnSnapshotTool(
+  cmd: string,
+  args: ReadonlyArray<string>,
+  options: SpawnSyncOptions,
+  runId: string,
+): SpawnSyncReturns<Buffer> {
+  const timeoutMs = resolveSnapshotToolTimeoutMs();
+  const r = spawnSync(cmd, [...args], {
+    ...options,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  }) as SpawnSyncReturns<Buffer>;
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    throw new BrainSnapshotError(
+      `${cmd} did not finish within ${timeoutMs} ms and was stopped; ` +
+        `no archive was published (raise ${SNAPSHOT_TOOL_TIMEOUT_ENV} for a very large tree)`,
+      runId,
+      { cause: r.error },
+    );
+  }
+  return r;
+}
+
 /**
  * Run one compressor that writes the destination named after its `-o`
  * itself, so only its stderr is captured. Every destination handed to it
@@ -1496,10 +1562,12 @@ const SUBPROCESS_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
  * name is detected by {@link publishArchive}, not here.
  */
 function runCompressor(cmd: string, args: ReadonlyArray<string>, runId: string): void {
-  const r = spawnSync(cmd, [...args], {
-    stdio: ["ignore", "ignore", "pipe"],
-    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
-  });
+  const r = spawnSnapshotTool(
+    cmd,
+    args,
+    { stdio: ["ignore", "ignore", "pipe"], maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES },
+    runId,
+  );
   if (r.error) {
     throw new BrainSnapshotError(`${cmd} failed to start: ${r.error.message}`, runId);
   }
@@ -1536,12 +1604,14 @@ function runArchiveProducer(
   runId: string,
 ): void {
   const fd = openSync(outFile, "wx");
-  let r: ReturnType<typeof spawnSync>;
+  let r: SpawnSyncReturns<Buffer>;
   try {
-    r = spawnSync(cmd, [...args], {
-      maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
-      stdio: ["ignore", fd, "pipe"],
-    });
+    r = spawnSnapshotTool(
+      cmd,
+      args,
+      { maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES, stdio: ["ignore", fd, "pipe"] },
+      runId,
+    );
   } finally {
     closeSync(fd);
   }
@@ -1928,14 +1998,17 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
         const tarball = join(staging, "brain.tar");
         runCompressor("zstd", ["-d", "-q", "-o", tarball, archive], runId);
         const input = openSync(tarball, "r");
-        let tar: ReturnType<typeof spawnSync>;
+        let tar: SpawnSyncReturns<Buffer>;
         try {
           // `-f -` is explicit stdin: GNU tar defaults to stdin without
           // it, but BSD tar and busybox tar do not, so passing the flag
           // keeps the extraction portable across hosts.
-          tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
-            stdio: [input, "inherit", "pipe"],
-          });
+          tar = spawnSnapshotTool(
+            "tar",
+            ["-x", "-f", "-", "-C", tarPathArg(tmp)],
+            { stdio: [input, "inherit", "pipe"] },
+            runId,
+          );
         } finally {
           closeSync(input);
         }
@@ -1964,10 +2037,12 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
           runId,
         );
       }
-      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
-        input: tarball,
-        stdio: ["pipe", "inherit", "pipe"],
-      });
+      const tar = spawnSnapshotTool(
+        "tar",
+        ["-x", "-f", "-", "-C", tarPathArg(tmp)],
+        { input: tarball, stdio: ["pipe", "inherit", "pipe"] },
+        runId,
+      );
       if (tar.error || tar.status !== 0) {
         const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
         throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);

@@ -6,7 +6,7 @@
  * releases only its own gate, and the operator's forced release refuses
  * only a holder that is provably alive.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,10 @@ import {
 } from "../../../src/core/store-migration/quiesce.ts";
 import { processStartIdentity } from "../../../src/core/store-migration/process-identity.ts";
 import { IS_WINDOWS } from "../../helpers/platform.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let parent: string;
 let vault: string;

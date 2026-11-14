@@ -8,7 +8,7 @@
  * nothing else - no second search, no clock drift, no tolerance.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,10 @@ import {
 } from "../../src/core/brain/trust/retrieval-receipts.ts";
 import type { BrainSearchResult, SearchOutcome } from "../../src/core/search/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const QUERY = "widget calibration";
 

@@ -29,13 +29,17 @@
  * would serialize them by accident and pass against the defect.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
 import { repoKey } from "../../../src/core/brain/git/identity.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 /** Enough notes that one run's write loop outlasts another run's plan. */
 const MODULES = 40;

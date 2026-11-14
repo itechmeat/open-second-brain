@@ -4,12 +4,16 @@
  * the "exists" answer (`EEXIST`) an unswitched machine's exclusive create
  * gives, in every mode.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { readLanePage } from "../../../src/core/store/lane-pages.ts";
 import { LANE_MODES, makeLaneEnv, type LaneEnv } from "./fixtures/lane-env.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here spawn processes; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let lane: LaneEnv | null = null;
 afterEach(() => {
