@@ -8,7 +8,8 @@
  * for the go file the parent writes when all are ready, so they append at
  * the same time rather than one after another as each process happens to
  * start, however slowly the runner starts them. A go file that never
- * comes ends the worker after 30 s instead of leaving it behind.
+ * comes ends the worker after 30 s instead of leaving it behind. A store
+ * lock refusal (ELOCKED) is retried within a bound; see the append loop.
  *
  * argv: <root> <device> <stateHome> <worker> <count> <ready dir> <go file>
  */
@@ -48,12 +49,33 @@ while (!existsSync(goFile)) {
   }
   Bun.sleepSync(1);
 }
+// Six workers each firing their appends back to back is far more contention
+// than the store lock's wait budget is sized for (one append per agent
+// action, not a tight loop), and on a slow Windows runner a worker could
+// lose every round past it with `store lock busy` (ELOCKED). That refusal
+// is documented as retryable ("retry once the other writer finishes"), and
+// it arrives before the record's line is written: the clock tick it may
+// have spent is never reused and a spilled blob is content-addressed, so a
+// retried append writes the same blob name and one new line. The worker
+// therefore retries the refused append with a short randomized backoff,
+// within a bound; what the test proves is the shard under concurrency
+// (every record present once, unique ids and clocks, one blob, interleaving).
+const RETRY_UNTIL_MS = 30_000;
 for (let i = 0; i < Number(countText); i++) {
-  appendRecord(store, {
-    partition: "shared",
-    stream: "events",
-    kind: "feedback",
-    agent: `worker-${worker}`,
-    body: i % 3 === 0 ? { large } : { worker, i },
-  });
+  const giveUpAt = Date.now() + RETRY_UNTIL_MS;
+  for (;;) {
+    try {
+      appendRecord(store, {
+        partition: "shared",
+        stream: "events",
+        kind: "feedback",
+        agent: `worker-${worker}`,
+        body: i % 3 === 0 ? { large } : { worker, i },
+      });
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() > giveUpAt) throw err;
+      Bun.sleepSync(10 + Math.floor(Math.random() * 20));
+    }
+  }
 }
