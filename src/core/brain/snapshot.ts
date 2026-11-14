@@ -109,7 +109,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { FileAlreadyExistsError, renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
@@ -2254,12 +2254,14 @@ function refuseEscapingSymlinks(root: string, runId: string): void {
  * the derived store exactly as they were:
  *
  *   1. Pre-flight the derived-store records: refuse an unreadable record
- *      or a recorded archive that is not on disk.
+ *      or a recorded archive that is not on disk, and refuse a live store
+ *      nested inside a top-level `Brain/` directory the swap replaces.
  *   2. Extract the archive into a private temp dir and verify it has a
  *      `Brain/` root with no symlink escaping it.
  *   3. Stage the extracted top-level entries (minus
- *      {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}) on the live tree's own
- *      filesystem, and verify the staged copy holds every file.
+ *      {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}, and minus the store's file
+ *      family when the store sits directly under `Brain/`) on the live
+ *      tree's own filesystem, and verify the staged copy holds every file.
  *   4. When the manifest says the snapshot included the derived store:
  *      check the archive against the recorded digest, decompress it
  *      beside the live store, and run the integrity check on the result.
@@ -2313,6 +2315,26 @@ export function restoreSnapshot(
   // The records the pre-flight just validated, as one comparable value.
   const storeStateBefore = derivedStoreRestoreState(vault, runId);
 
+  // The live store target, resolved once: the store step writes to it,
+  // and the Brain swap must keep out of its way when it sits inside
+  // `Brain/`. The manifest's `source_path` is where the store WAS; the
+  // live target is where it is now. They differ when the operator moved
+  // the vault or set a `search_db_path` override after the snapshot, and
+  // the live answer is the one a restore must write to.
+  const storeTarget = opts.derivedStorePath ?? liveDerivedStorePath(liveVault);
+  const placement = storePlacement(dirs.brain, storeTarget);
+  refuseNestedStoreInBrain(placement, storeTarget, runId);
+  // Names the Brain swap leaves alone in both directions, beyond the
+  // excluded entries: with the store directly under `Brain/`, its file
+  // family. The live store, its journals and lock, and the staged
+  // replacement stay where the store swap expects them, and the raw copy
+  // of the store the Brain archive carries (it archives every top-level
+  // entry) is not restored over it, so the store is written once, by the
+  // store swap, from the store archive - or not at all when the snapshot
+  // did not cover it.
+  const keptOutOfSwap = (name: string): boolean =>
+    placement.kind === "top" && isStoreFamilyEntry(name, placement.base);
+
   const ext = extractSnapshotToTemp(vault, runId);
   let staged: StagedBrainTree | null = null;
   let store: StagedDerivedStore | null = null;
@@ -2330,14 +2352,14 @@ export function restoreSnapshot(
     // a missing one would otherwise read as "another device" and send the
     // staging directory into `Brain/` itself.
     ensureSnapshotsDirectory(dirs.snapshots, runId);
-    staged = stageBrainTree(ext.brainRoot, dirs.brain, dirs.snapshots, runId);
+    staged = stageBrainTree(ext.brainRoot, dirs.brain, dirs.snapshots, runId, keptOutOfSwap);
 
     // The derived store is decompressed and verified here, before the
     // recovery point and before the Brain tree is touched. It used to be
     // decompressed only after the tree had been replaced, so a `zstd`
     // timeout, a corrupt payload or a full disk left a rolled-back tree
     // beside the store it was meant to replace.
-    const plan = stageDerivedStore(vault, liveVault, runId, opts);
+    const plan = stageDerivedStore(vault, storeTarget, runId);
     store = plan.staged;
 
     // The correct semantics are "live tree == snapshot tree minus the
@@ -2345,7 +2367,9 @@ export function restoreSnapshot(
     // out, and every staged one moved in. This makes restore
     // deterministic.
     const liveEntries = existsSync(dirs.brain)
-      ? readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e) && e !== staged!.name)
+      ? readdirSync(dirs.brain).filter(
+          (e) => !isSnapshotExcludedEntry(e) && e !== staged!.name && !keptOutOfSwap(e),
+        )
       : [];
 
     // The writer lock is taken before the recovery point, not inside the
@@ -2471,12 +2495,17 @@ interface StagedBrainTree {
  * directory), a rename from it into `Brain/` would fail mid-swap with
  * EXDEV, so the staging directory goes directly under `Brain/` instead
  * and the swap leaves it alone.
+ *
+ * Entries `keptOut` names (the store's file family, when the store sits
+ * directly under `Brain/`) are neither staged nor counted: the swap leaves
+ * the live ones in place, and the store is restored by the store swap.
  */
 function stageBrainTree(
   extractedBrain: string,
   liveBrain: string,
   snapshotsDirPath: string,
   runId: string,
+  keptOut: (name: string) => boolean,
 ): StagedBrainTree {
   mkdirSync(liveBrain, { recursive: true });
   const parent = sameDevice(snapshotsDirPath, liveBrain) ? snapshotsDirPath : liveBrain;
@@ -2504,7 +2533,9 @@ function stageBrainTree(
   try {
     const incoming = join(root, "incoming");
     mkdirSync(incoming);
-    const entries = readdirSync(extractedBrain).filter((e) => !isSnapshotExcludedEntry(e));
+    const entries = readdirSync(extractedBrain).filter(
+      (e) => !isSnapshotExcludedEntry(e) && !keptOut(e),
+    );
     let files = 0;
     let expected = 0;
     for (const name of entries) {
@@ -2741,6 +2772,81 @@ function assertDerivedStoreRestorable(vault: string, runId: string): void {
   }
 }
 
+/**
+ * Where the derived store sits relative to `Brain/`, which decides how the
+ * Brain swap must treat it.
+ *
+ *   - `outside`: the swap and the store never meet.
+ *   - `top`: the store is a direct child of `Brain/`. The swap leaves its
+ *     whole file family (see {@link isStoreFamilyEntry}) where it is, in
+ *     both directions; the store is written only by the store swap.
+ *   - `nested`: the store is deeper inside a top-level `Brain/` entry the
+ *     swap replaces wholesale; `top` names that entry.
+ */
+type StorePlacement =
+  | { readonly kind: "outside" }
+  | { readonly kind: "top"; readonly base: string }
+  | { readonly kind: "nested"; readonly top: string };
+
+/** A path with every existing ancestor resolved through symlinks. */
+function canonicalPath(path: string): string {
+  const abs = resolve(path);
+  try {
+    return realpathSync.native(abs);
+  } catch {
+    const parent = dirname(abs);
+    return parent === abs ? abs : join(canonicalPath(parent), basename(abs));
+  }
+}
+
+function storePlacement(liveBrain: string, target: string): StorePlacement {
+  const rel = relative(canonicalPath(liveBrain), canonicalPath(target));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return { kind: "outside" };
+  }
+  const parts = rel.split(sep);
+  // An entry the swap never touches (`.snapshots/`, `.artifacts/`) keeps
+  // whatever it holds, so a store inside one does not meet the swap.
+  if (isSnapshotExcludedEntry(parts[0]!)) return { kind: "outside" };
+  return parts.length === 1 ? { kind: "top", base: parts[0]! } : { kind: "nested", top: parts[0]! };
+}
+
+/**
+ * True for a top-level `Brain/` entry that belongs to the store named
+ * `base` when the store sits directly under `Brain/`: the store itself and
+ * every name the store layer derives from it by suffix - the `-wal` and
+ * `-shm` journals, the writer lock directory (`.lock`), the swap and
+ * reindex files (`.bak`, `.old`, `.new`, `.takeover`, `.<token>.tmp`,
+ * `.<id>.settle`) and the restore's own staged file (`.restore-*`).
+ * Matched by prefix rather than listed, so a suffix the store layer adds
+ * later is kept out of the Brain swap too.
+ */
+function isStoreFamilyEntry(name: string, base: string): boolean {
+  return name === base || name.startsWith(`${base}.`) || name.startsWith(`${base}-`);
+}
+
+/**
+ * Refuse a restore whose store sits inside a top-level `Brain/` entry the
+ * swap replaces wholesale, before anything is extracted or touched.
+ *
+ * The Brain swap renames whole top-level entries; the store swap renames
+ * one file. A store nested inside a renamed directory would be moved out
+ * with the live directory, its staged replacement with it, and the
+ * restored directory may not even contain the store's parent. Carving the
+ * store out of that rename would add a third set of renames, each with its
+ * own undo, to a swap whose whole contract is that every step can be
+ * reversed; refusing up front keeps that contract and loses nothing.
+ */
+function refuseNestedStoreInBrain(placement: StorePlacement, target: string, runId: string): void {
+  if (placement.kind !== "nested") return;
+  throw new BrainSnapshotError(
+    `the derived store ${target} is inside Brain/${placement.top}, which a restore replaces ` +
+      "as a whole; refusing before anything is touched. Move the store (search_db_path) " +
+      "directly under Brain/ or outside it, then restore again",
+    runId,
+  );
+}
+
 /** A decompressed and verified store, waiting beside its live target. */
 interface StagedDerivedStore {
   /** The live store path the staged file is renamed over. */
@@ -2778,9 +2884,8 @@ interface StagedDerivedStore {
  */
 function stageDerivedStore(
   vault: string,
-  liveVault: string,
+  target: string,
   runId: string,
-  opts: SnapshotStoreOptions,
 ): { readonly result: RestoreDerivedStoreResult; readonly staged: StagedDerivedStore | null } {
   const record = readManifestSidecar(vault, runId)?.derived_store ?? null;
   // Probed once, for every branch, and deliberately independent of the
@@ -2832,11 +2937,6 @@ function stageDerivedStore(
       );
     }
   }
-  // The manifest's `source_path` is where the store WAS; the live target
-  // is where it is now. They differ when the operator moved the vault or
-  // set a `search_db_path` override after the snapshot, and the live
-  // answer is the one a restore must write to.
-  const target = opts.derivedStorePath ?? liveDerivedStorePath(liveVault);
   mkdirSync(dirname(target), { recursive: true });
   // A name of this process's own: two restores staging at once must not
   // write into one file, and neither is under the lock yet.

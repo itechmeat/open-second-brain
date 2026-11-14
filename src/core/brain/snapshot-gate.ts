@@ -485,10 +485,18 @@ export function restoreSnapshotWithRecoveryPoint(
         // A sound store the swap replaces is always archived, whatever the
         // vault's coverage policy or size cap: its only copy is about to be
         // discarded. An absent store has nothing to keep, and a condemned
-        // one is what the restore heals, so neither forces coverage. The
-        // restore refuses when a sound replaced store was left out.
-        ...(storeTarget !== null && liveStoreWorthPreserving(storeTarget)
-          ? { derivedStore: { include: true, maxBytes: Number.MAX_SAFE_INTEGER } }
+        // one is what the restore heals, so for either the recovery point
+        // explicitly leaves the store out: left to the vault's policy, a
+        // policy that asks for coverage would refuse the absent store and
+        // fail the integrity scan on the condemned one, and the restore
+        // could never recreate or heal it. The restore refuses when a
+        // sound replaced store was left out.
+        ...(storeTarget !== null
+          ? {
+              derivedStore: liveStoreWorthPreserving(storeTarget)
+                ? { include: true, maxBytes: Number.MAX_SAFE_INTEGER }
+                : { include: false, maxBytes: 0 },
+            }
           : {}),
         // The restore holds the store writer lock from before this point
         // through the swap; the snapshot writes its store archive under it.

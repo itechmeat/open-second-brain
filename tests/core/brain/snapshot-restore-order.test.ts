@@ -838,6 +838,37 @@ describe("the recovery point archives exactly the store the restore replaces", (
     expect(tablesOf(dbPath).length).toBeGreaterThan(0);
   });
 
+  test("with coverage on by the vault's policy, an absent live store is recreated", () => {
+    coverStoreByPolicy();
+    createSnapshot(vault, RUN_ID, { reason: DREAM });
+    const archived = tablesOf(dbPath);
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+
+    expect(tablesOf(dbPath)).toEqual(archived);
+    expect(recordedStore(res.recoveryPoint.runId)).toEqual({
+      included: false,
+      exclusion_reason: "not-requested",
+    });
+  });
+
+  test("with coverage on by the vault's policy, a condemned live store is healed", () => {
+    coverStoreByPolicy();
+    createSnapshot(vault, RUN_ID, { reason: DREAM });
+    const archived = tablesOf(dbPath);
+    for (const suffix of ["-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
+    writeFileSync(dbPath, "this is not a database");
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+
+    expect(tablesOf(dbPath)).toEqual(archived);
+    expect(recordedStore(res.recoveryPoint.runId)).toEqual({
+      included: false,
+      exclusion_reason: "not-requested",
+    });
+  });
+
   test("a recovery point that left the replaced store out refuses the swap", () => {
     createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
     addTable(dbPath, "late_marker");
@@ -1040,5 +1071,98 @@ describe("createSnapshot skips its own store lock only for the restore's live to
       },
     });
     expect(tablesOf(store.derivedStorePath)).not.toContain("override_marker");
+  });
+});
+
+/** The derived-store record a snapshot's manifest carries. */
+function recordedStore(runId: string): { included: boolean; exclusion_reason: string | null } {
+  const { derived_store } = JSON.parse(readFileSync(manifestSidecarPath(vault, runId), "utf8")) as {
+    derived_store: { included: boolean; exclusion_reason: string | null };
+  };
+  return { included: derived_store.included, exclusion_reason: derived_store.exclusion_reason };
+}
+
+/** A copy of the configured store at `path`, as a `derivedStorePath` override. */
+function storeAt(path: string): string {
+  mkdirSync(dirname(path), { recursive: true });
+  const live = new Database(dbPath);
+  live.exec(`VACUUM INTO '${path.replaceAll("'", "''")}'`);
+  live.close();
+  return path;
+}
+
+describe("a derived store that lives inside Brain/", () => {
+  test("directly under Brain/, it is restored by the store swap and kept out of the tree swap", () => {
+    const brain = brainDirs(vault).brain;
+    const derivedStorePath = storeAt(join(brain, "index.sqlite"));
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStorePath, derivedStore: COVERED });
+    const archived = tablesOf(derivedStorePath);
+    writeFileSync(join(brain, "post-snapshot-marker.md"), "# only in the live tree\n");
+    addTable(derivedStorePath, "late_marker");
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID, { derivedStorePath });
+
+    expect(res.derived_store.replaced).toBe(true);
+    expect(tablesOf(derivedStorePath)).toEqual(archived);
+    expect(existsSync(join(brain, "post-snapshot-marker.md"))).toBe(false);
+    expect(readdirSync(brain).filter((e) => e.startsWith("index.sqlite.restore"))).toEqual([]);
+    // The store family is not counted as restored Brain content.
+    const restored = Object.keys(treeOf(brain)).filter(
+      (p) =>
+        !p.endsWith("/") &&
+        !p.startsWith(".snapshots") &&
+        !p.startsWith(BRAIN_ARTIFACTS_DIR) &&
+        !p.startsWith("index.sqlite"),
+    );
+    expect(res.restored_files).toBe(restored.length);
+
+    // The recovery point holds the store the restore discarded.
+    restoreSnapshot(vault, res.recoveryPoint.runId, { derivedStorePath });
+    expect(tablesOf(derivedStorePath)).toContain("late_marker");
+  });
+
+  test("directly under Brain/ and not covered, the Brain archive's copy is not restored over it", () => {
+    const brain = brainDirs(vault).brain;
+    const derivedStorePath = storeAt(join(brain, "index.sqlite"));
+    // The Brain archive still holds a raw copy of the store as a top-level
+    // entry; the store record says the store was left out.
+    createSnapshot(vault, RUN_ID, {
+      reason: DREAM,
+      derivedStorePath,
+      derivedStore: { include: false, maxBytes: COVERED.maxBytes },
+    });
+    addTable(derivedStorePath, "late_marker");
+    const storeBefore = sha256Hex(readFileSync(derivedStorePath));
+
+    const res = restoreSnapshot(vault, RUN_ID, { derivedStorePath });
+
+    expect(res.derived_store.replaced).toBe(false);
+    expect(sha256Hex(readFileSync(derivedStorePath))).toBe(storeBefore);
+    expect(tablesOf(derivedStorePath)).toContain("late_marker");
+  });
+
+  test("nested inside a Brain/ directory, the restore refuses before anything is touched", () => {
+    const brain = brainDirs(vault).brain;
+    const derivedStorePath = storeAt(join(brain, "data", "index.sqlite"));
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStorePath, derivedStore: COVERED });
+    writeFileSync(join(brain, "post-snapshot-marker.md"), "# only in the live tree\n");
+    addTable(derivedStorePath, "late_marker");
+    const brainBefore = treeOf(brain);
+    const snapshotsBefore = readdirSync(brainDirs(vault).snapshots).toSorted();
+
+    let threw: unknown = null;
+    try {
+      restoreSnapshotWithRecoveryPoint(vault, RUN_ID, { derivedStorePath });
+    } catch (err) {
+      threw = err;
+    }
+
+    expect(threw).toBeInstanceOf(BrainSnapshotError);
+    expect((threw as Error).message).toMatch(
+      /the derived store .+ is inside Brain\/data, which a restore replaces as a whole; refusing before anything is touched/u,
+    );
+    expect(treeOf(brain)).toEqual(brainBefore);
+    expect(readdirSync(brainDirs(vault).snapshots).toSorted()).toEqual(snapshotsBefore);
+    expect(tablesOf(derivedStorePath)).toContain("late_marker");
   });
 });
