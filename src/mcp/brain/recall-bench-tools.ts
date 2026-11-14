@@ -201,7 +201,17 @@ export async function toolBrainRecallTelemetry(
   // USED/IGNORED/CONTRADICTED reuse signal that recall ranking prefers over
   // predicted importance. Exposed here so the blend is inspectable.
   if (operation === "observed_reuse") {
-    const artifacts = [...observedReuseRates(ctx.vault).entries()]
+    // The keys are artifact references - a vault-relative path or a bare
+    // Brain id - so the request's reach/ownership view filters them, the
+    // same view the dead_weight branch applies. A key the caller cannot
+    // see is dropped BEFORE `total`, per the views' identical-to-absent
+    // rule: a total that still counted it would leak its number.
+    const refs = everyArtifactRefView(
+      requestRefView(ctx),
+      gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    );
+    const rates = [...observedReuseRates(ctx.vault).entries()];
+    const artifacts = (refs.filtersNothing ? rates : rates.filter(([key]) => refs.visible(key)))
       .map(([key, r]) => ({ key, ...r }))
       .toSorted((a, b) => (a.score !== b.score ? b.score - a.score : a.key < b.key ? -1 : 1));
     return { vault_path: vaultPathField(ctx), total: artifacts.length, artifacts };

@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,5 +99,42 @@ describe("brain_feedback staged receipt", () => {
     expect(second["signal_id"]).toBe(first["signal_id"]);
     // The retry consumed nothing: the queue still holds exactly the original.
     expect(pendingFiles()).toEqual([`${String(first["signal_id"])}.md`]);
+  });
+
+  test("a retry after a failed force-confirmed write resumes the preference", async () => {
+    // Block the preferences lane so the first call's force-confirmed write
+    // throws AFTER the signal (and its idempotency receipt) landed.
+    const prefsDir = join(vault, "Brain", "preferences");
+    rmSync(prefsDir, { recursive: true, force: true });
+    writeFileSync(prefsDir, "not a directory");
+    const args = {
+      ...ARGS,
+      force_confirmed: true,
+      idempotency_key: "resume-key-1",
+    };
+    await expect(handler(ctx, args)).rejects.toThrow();
+
+    // Unblock the lane and retry with the same key and payload: the
+    // receipt dedupes the signal, but the confirmed rule is still absent,
+    // so the retry must complete the capture instead of answering deduped.
+    rmSync(prefsDir);
+    mkdirSync(prefsDir, { recursive: true });
+    const retry = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(retry["kind"]).toBe("preference");
+    expect(retry["deduped"]).toBe(true);
+    const prefId = String(retry["preference_id"]);
+    expect(prefId).toMatch(/^pref-/);
+    expect(existsSync(join(prefsDir, `${prefId}.md`))).toBe(true);
+    // The signal was not duplicated by the resume: exactly one capture.
+    expect(
+      readdirSync(brainDirs(vault).inbox).filter((f) => f.includes("staged-feedback")),
+    ).toHaveLength(1);
+
+    // A further retry against the COMPLETED capture stays a true no-op:
+    // deduped, and the preference is not rewritten.
+    const again = (await handler(ctx, args)) as Record<string, unknown>;
+    expect(again["deduped"]).toBe(true);
+    expect(again["kind"]).toBe("signal");
+    expect(existsSync(join(prefsDir, `${prefId}.md`))).toBe(true);
   });
 });

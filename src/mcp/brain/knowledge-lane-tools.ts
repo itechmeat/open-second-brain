@@ -97,7 +97,17 @@ export function toolBrainForesight(
     }
     horizonDays = horizonRaw;
   }
-  return { ...buildForesight(ctx.vault, { now: new Date(), horizonDays }) };
+  // A private continuity record is withheld below local reach, the same
+  // withholding flag every other report fold here takes: its text is the
+  // item title and its refs the sources, so an unfiltered fold would read
+  // the private partition back to a remote caller.
+  return {
+    ...buildForesight(ctx.vault, {
+      now: new Date(),
+      horizonDays,
+      withholdsPrivate: contextReach(ctx) !== TRANSPORT_REACH.local,
+    }),
+  };
 }
 
 // ----- brain_labels (t_7a41f42d) ---------------------------------------------
@@ -370,7 +380,19 @@ export async function toolBrainClusters(
       // subject cannot be resolved, and a `removed` entry naming a hidden
       // seed is the same disclosure as a `written` one.
       removed: view.filtersNothing ? materialized.removed : [],
-      ...(materialized.batches ? { batches: materialized.batches } : {}),
+      // Each batch repeats the same disclosure in miniature: its `written`
+      // names the notes it materialised and its last `removed` the stale
+      // sweep's full list, so the same two rules filter every batch too.
+      // An unrestricted view keeps the batches verbatim.
+      ...(materialized.batches
+        ? {
+            batches: materialized.batches.map((batch) => ({
+              ...batch,
+              written: batch.written.filter((p) => visibleNotes.has(p)),
+              removed: view.filtersNothing ? batch.removed : [],
+            })),
+          }
+        : {}),
     };
   } finally {
     await store.close();

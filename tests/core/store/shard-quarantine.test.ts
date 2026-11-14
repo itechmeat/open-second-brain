@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -61,6 +62,7 @@ import {
 import { inspectStore, openStore } from "../../../src/core/store/store-open.ts";
 import { partitionDir } from "../../../src/core/store/store-paths.ts";
 import { switchDevice } from "../brain/store-only/fixtures.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { makeStoreEnv, type StoreEnv } from "./fixtures/store-env.ts";
 
 let env: StoreEnv | null = null;
@@ -919,4 +921,48 @@ describe("the entity index on a store-only machine", () => {
       readFile.mockRestore();
     }
   });
+
+  // The transient-unreadable state is a permission denial, which chmod
+  // cannot produce everywhere (root reads through any mode, Windows maps
+  // it to read-only), so the pair-of-states fixture skips there.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable shard's stamp moves when the records the fold saw change",
+    () => {
+      env = makeStoreEnv("osb-quarantine-stamp-records-", { legacyTree: false });
+      switchDevice(env.storeRoot);
+      // Three lane entries in ONE shard: the two degraded states below share
+      // that shard's stamp, its `unreadable` name and its pending blobs -
+      // only the records the fold managed to read differ.
+      const shard = laneEntry(env, "org/e1", "v1 body");
+      laneEntry(env, "org/e2", "v2 body");
+      laneEntry(env, "org/e3", "v3 body");
+      // A corrupt middle line, rewritten at an equal length and stamped back
+      // to the shard's original mtime, so the shard's size and mtime are
+      // frozen across both states.
+      const identity = statSync(shard);
+      editLine(shard, 1, (line) => "x".repeat(line.length));
+      utimesSync(shard, identity.atime, identity.mtime);
+
+      // State A: a transient open failure - the shard is unreadable and the
+      // fold saw NONE of its records.
+      chmodSync(shard, 0o000);
+      let unseen: string;
+      try {
+        unseen = laneStoreStamp(env!.vault);
+        expect(unseen).toContain("incomplete");
+        // The same degraded state stamps the same way twice.
+        expect(laneStoreStamp(env!.vault)).toBe(unseen);
+      } finally {
+        chmodSync(shard, 0o644);
+      }
+      // State B: the same bytes, now read in part - the corrupt line is a
+      // read gap and the fold carries the two records around it. Without the
+      // contributing records in the fingerprint this stamp equals state A's,
+      // and a memo keyed by it would serve the record-less build.
+      const gapped = laneStoreStamp(env!.vault);
+      expect(gapped).toContain("incomplete");
+      expect(gapped).not.toBe(unseen);
+      expect(laneStoreStamp(env!.vault)).toBe(gapped);
+    },
+  );
 });

@@ -164,7 +164,7 @@ export function laneStoreFold(): LaneFolded {
   const blobLines = pendingBlobStampLines(store.root, pendingBlobs);
   const storedFingerprint =
     blobLines === null || unreadable.length > 0
-      ? incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs)
+      ? incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs, records)
       : `${shardStamp}\n${blobLines}`;
   const folded = {
     fingerprint: storedFingerprint,
@@ -184,19 +184,37 @@ export function laneStoreFold(): LaneFolded {
  * `events` shard this machine cannot read or read before and that is gone,
  * or a skipped blob that is present but refused): an `incomplete` prefix -
  * which no healthy fold's fingerprint can carry - then the shard stamp,
- * the shards the fold could not see, and one full `lstat` identity
- * (`blobStamp`) per refused blob. It moves when a shard reads again or a
- * refused blob's identity changes, and never collides with a stored
- * fingerprint, so a memo keyed by it serves the same degraded build while
- * the state lasts and drops it the moment it lifts.
+ * the shards the fold could not see, a digest of the records the fold
+ * DID see, and one full `lstat` identity (`blobStamp`) per refused blob.
+ * The record digest is what lets two degraded folds over identically
+ * stamped shards disagree: a transient read failure of a shard and a read
+ * gap inside it (one corrupt line) both name that shard `unreadable`
+ * while its size and mtime stay put, but the first leaves the fold with
+ * none of its records and the second with its readable ones - so the
+ * stamp moves the moment the contributing records change, and a memo
+ * keyed by it never serves a fold built over different records. It moves
+ * when a shard reads again or a refused blob's identity changes, and
+ * never collides with a stored fingerprint, so a memo keyed by it serves
+ * the same degraded build while the state lasts and drops it the moment
+ * it lifts.
  */
 function incompleteFingerprint(
   store: StoreInspection,
   shardStamp: string,
   unreadable: ReadonlyArray<string>,
   pendingBlobs: ReadonlyArray<string>,
+  records: ReadonlyArray<StoreRecord>,
 ): string {
-  const parts = ["incomplete", shardStamp, `unreadable=${unreadable.toSorted().join(",")}`];
+  const recordDigest = createHash("sha256");
+  for (const record of records) {
+    recordDigest.update(`${record.id}\u0000${record.hlc}\u0001`);
+  }
+  const parts = [
+    "incomplete",
+    shardStamp,
+    `unreadable=${unreadable.toSorted().join(",")}`,
+    `records=${recordDigest.digest("hex")}`,
+  ];
   for (const identity of pendingBlobs.toSorted()) {
     const slashAt = identity.indexOf("/");
     const partition = identity.slice(0, slashAt) as (typeof STORE_PARTITIONS)[number];

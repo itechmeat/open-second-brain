@@ -25,7 +25,7 @@ import { coerceStr, coerceStrList, coerceInt } from "../coerce.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { pageSlice } from "../../core/brain/offset-cursor.ts";
-import { deliveryView } from "./reach-events.ts";
+import { deliveryView, recordReadable, requestRefView } from "./reach-events.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { cursorOffsetArg } from "./pagination.ts";
 import { shapeContribution } from "./query-serialize.ts";
@@ -188,6 +188,14 @@ export async function toolBrainAudit(
     throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
   }
   const prefId = `pref-${slug}`;
+  // The mutation history is the trail of a private page and is private
+  // with it, so it is read only when the preference's page is one this
+  // caller may see: the same view every sibling reader asks, over every
+  // spelling the record answers to. A withheld trail answers as an absent
+  // one - the empty history - never as a refusal that would prove the id.
+  if (!recordReadable(requestRefView(ctx), prefId)) {
+    return { pref_id: prefId, count: 0, records: [], warnings: [] };
+  }
   const { records, warnings } = readPrefAudit(ctx.vault, prefId);
   return {
     pref_id: prefId,

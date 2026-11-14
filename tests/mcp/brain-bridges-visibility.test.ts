@@ -98,3 +98,52 @@ describe("brain_bridges operation=discover", () => {
     expect(remote.scanned_candidates).toBe(local.scanned_candidates);
   });
 });
+
+describe("brain_clusters operation=run", () => {
+  /** Four mutually linked pages, one of them the reserved one. */
+  async function writeCommunity(): Promise<void> {
+    const group = ["team-a", "team-b", "team-c", RESERVED];
+    for (const name of group) {
+      const others = group
+        .filter((g) => g !== name)
+        .map((g) => `[[${g}]]`)
+        .join(" ");
+      const frontmatter =
+        name === RESERVED ? `---\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n---\n\n` : "";
+      writeFileSync(join(vault, `${name}.md`), `${frontmatter}# ${name}\n\nSee ${others}.\n`);
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }));
+  }
+
+  async function clusters(reach: TransportReach): Promise<Record<string, unknown>> {
+    const tool = BRAIN_TOOLS.find((t) => t.name === "brain_clusters")!;
+    const ctx: ServerContext = { vault, reach, configPath, repoRoot: null };
+    return (await tool.handler(ctx, { operation: "run", batch_size: 1 })) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  test("each batch is filtered by the same visibility rules as the top-level result", async () => {
+    await writeCommunity();
+    const remote = await clusters(TRANSPORT_REACH.remote);
+    const body = JSON.stringify(remote);
+    // The community naming the reserved page is dropped whole, so no
+    // batch may name the cluster note its seed produced (or any stale
+    // removal) either - `batch_size` must not be the side door back in.
+    const batches = remote["batches"] as Array<Record<string, unknown>> | undefined;
+    expect(batches).toHaveLength(1);
+    expect(batches![0]!["written"]).toEqual([]);
+    expect(batches![0]!["removed"]).toEqual([]);
+    expect(body).not.toContain("Brain/clusters/");
+    expect(body).not.toContain(RESERVED);
+
+    // The unrestricted view keeps the batches verbatim: the note this run
+    // materialised is reported.
+    const local = await clusters(TRANSPORT_REACH.local);
+    const localBatches = local["batches"] as Array<Record<string, unknown>> | undefined;
+    expect(localBatches).toHaveLength(1);
+    expect((localBatches as Array<{ written: string[] }>)[0]!.written.length).toBeGreaterThan(0);
+    expect(JSON.stringify(local)).toContain("Brain/clusters/");
+  });
+});

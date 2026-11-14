@@ -304,7 +304,13 @@ describe("store in use", () => {
       // resolves under `/private/var`, and the redacted finding keeps the
       // store root).
       const whole = JSON.stringify(runDoctor(vault, { now: new Date(NOW), ...opts }));
-      expect(whole).not.toContain("private/");
+      // The redacted finding keeps the store root, and the temporary store
+      // root itself may resolve under a private partition on some hosts
+      // (macOS `/private/var`): the allowed root is cut out before the
+      // check, so only a `private/` spelling OUTSIDE the permitted root
+      // still fails.
+      const outsideRoot = whole.split(storeRoot).join("");
+      expect(outsideRoot).not.toContain("private/");
       expect(whole).not.toContain("partition leave private");
     }
   });

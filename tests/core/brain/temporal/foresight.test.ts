@@ -114,4 +114,25 @@ describe("buildForesight", () => {
     expect(a.upcoming.length).toBeLessThanOrEqual(FORESIGHT_MAX_ITEMS);
     expect(a).toEqual(b);
   });
+
+  test("withholdsPrivate drops private extracts and keeps the readable ones", () => {
+    seedExtract("commitment", "A private promise nobody may see", "2026-06-01T10:00:00Z");
+    appendContinuityRecord(vault, {
+      kind: "pre_compact_extract",
+      createdAt: "2026-06-02T10:00:00Z",
+      sourceRefs: [{ id: "sess-private", kind: "session" }],
+      payload: { extract_type: "commitment", text: "An open commitment marked private" },
+      private: true,
+    });
+
+    // Local reach: the fold is unfiltered and carries both.
+    const local = buildForesight(vault, { now: NOW });
+    expect(local.upcoming.find((u) => u.title.includes("marked private"))).toBeDefined();
+
+    // Below local reach: the private record is dropped whole - its text
+    // and its source refs with it - and the readable extract stays.
+    const remote = buildForesight(vault, { now: NOW, withholdsPrivate: true });
+    expect(remote.upcoming.find((u) => u.title.includes("marked private"))).toBeUndefined();
+    expect(remote.upcoming.find((u) => u.title.includes("private promise"))).toBeDefined();
+  });
 });

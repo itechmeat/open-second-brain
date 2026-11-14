@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ import { recordHostMemoryWrite } from "../../src/core/brain/host-memory-write.ts
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
@@ -292,13 +293,19 @@ describe("brain_recall_telemetry tool", () => {
 
 describe("brain_observed_use tool (t_65588d8b)", () => {
   test("records verdicts and surfaces them via observed_reuse", async () => {
+    // The keys are page references, so both pages exist: a key whose page
+    // the caller cannot read is withheld from the fold (see the reach
+    // test below).
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "a.md"), "---\nkind: note\n---\n\na\n");
+    writeFileSync(join(vault, "notes", "b.md"), "---\nkind: note\n---\n\nb\n");
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
 
     const rec = await callTool(server, "brain_observed_use", {
       entries: [
-        { id: "1", path: "a.md", verdict: "USED" },
-        { id: "2", path: "b.md", verdict: "CONTRADICTED" },
+        { id: "1", path: "notes/a.md", verdict: "USED" },
+        { id: "2", path: "notes/b.md", verdict: "CONTRADICTED" },
       ],
     });
     expect(rec.recorded).toBe(2);
@@ -306,9 +313,9 @@ describe("brain_observed_use tool (t_65588d8b)", () => {
     const reuse = await callTelemetry(server, { operation: "observed_reuse" });
     expect(reuse.total).toBe(2);
     const artifacts = reuse.artifacts as Array<Record<string, unknown>>;
-    const a = artifacts.find((x) => x.key === "a.md");
+    const a = artifacts.find((x) => x.key === "notes/a.md");
     expect(a?.score).toBe(1);
-    const b = artifacts.find((x) => x.key === "b.md");
+    const b = artifacts.find((x) => x.key === "notes/b.md");
     expect(b?.score).toBe(0);
   });
 
@@ -325,6 +332,38 @@ describe("brain_observed_use tool (t_65588d8b)", () => {
       },
     })) as { error?: { code: number } };
     expect(response.error?.code).toBe(INVALID_PARAMS);
+  });
+
+  test("observed_reuse answers at the caller's reach", async () => {
+    // One key the caller can read and one whose page is reserved against
+    // remote reads; the write path accepts any path unchecked, so the log
+    // holds both.
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "visible.md"), "---\nkind: note\n---\n\nvisible\n");
+    writeFileSync(
+      join(vault, "notes", "hidden.md"),
+      "---\nkind: note\nvisibility: [private]\n---\n\nhidden\n",
+    );
+    await callTool(new MCPServer({ vault, configPath }), "brain_observed_use", {
+      entries: [
+        { id: "1", path: "notes/visible.md", verdict: "USED" },
+        { id: "2", path: "notes/hidden.md", verdict: "USED" },
+      ],
+    });
+
+    const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    await initialize(remote);
+    const seen = await callTelemetry(remote, { operation: "observed_reuse" });
+    const keys = (seen["artifacts"] as Array<{ key: string }>).map((a) => a.key);
+    expect(keys).toEqual(["notes/visible.md"]);
+    // Dropped BEFORE total, so the withheld key's number is not leaked.
+    expect(seen["total"]).toBe(1);
+
+    // Local reach keeps both keys.
+    const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+    await initialize(local);
+    const all = await callTelemetry(local, { operation: "observed_reuse" });
+    expect(all["total"]).toBe(2);
   });
 });
 

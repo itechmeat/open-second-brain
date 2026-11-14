@@ -28,6 +28,9 @@ import {
   readClaimEvents,
 } from "../../core/brain/truth/store.ts";
 import { claimEventLimit } from "../../core/brain/truth/events-window.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach, contextVault } from "../tool-contract.ts";
 import type { ServerContext } from "../tool-contract.ts";
@@ -278,7 +281,21 @@ export function toolBrainTruth(
     }
   }
 
-  const events = readClaimEvents(ctx.vault).events;
+  // The fold operations answer at the caller's view, the same one the
+  // events operation applies to its rows: slots, conflicts, aggregates
+  // and collisions all name claim values, quantities, agents and source
+  // paths, so an unfiltered fold would hand a narrower caller what
+  // `events` withholds. The filter is applied BEFORE the fold - the
+  // identical-to-absent convention the views hold everywhere else - so a
+  // claim from a source the caller cannot read is absent from the slots,
+  // the totals and the collision pairs alike, exactly as it is from the
+  // event list.
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, contextReach(ctx)),
+  );
+  const allEvents = readClaimEvents(ctx.vault).events;
+  const events = view.filtersNothing ? allEvents : allEvents.filter((e) => view.row(e.source));
   if (op === "slots" || op === "conflicts") {
     const state = computeTruthStateWithConflicts(events);
     if (op === "conflicts") return { events: state.events, conflicts: state.conflicts };

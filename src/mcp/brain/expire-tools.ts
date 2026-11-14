@@ -43,12 +43,16 @@ export async function toolBrainExpire(
   // The expiration's audit stamp names who set it; a token caller cannot
   // sign another agent's name to it.
   refuseAgentClaim(ctx.requestIdentity, agent, "brain_expire");
+  // A token caller that omits `agent` still stamps its own name: the
+  // audit log would otherwise record the writer's DEFAULT_AGENT instead
+  // of the credential's agent.
+  const effectiveAgent = agent ?? ctx.requestIdentity?.agent;
   // A record the caller may not read is refused as an unknown id, before
   // anything is written.
   const readable = readableAtContextReachOrUndefined(ctx);
   try {
     const res = setExpiration(ctx.vault, id, expires, {
-      ...(agent ? { agent } : {}),
+      ...(effectiveAgent ? { agent: effectiveAgent } : {}),
       ...(readable !== undefined ? { readable } : {}),
     });
     return {

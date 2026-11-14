@@ -186,13 +186,18 @@ export async function toolBrainNote(
   // A token caller's log line is attributed to the token's agent; a
   // claim on somebody else's name is refused before anything is written.
   refuseAgentClaim(ctx.requestIdentity, agentArg, "brain_note");
+  // A token caller that omits `agent` is attributed to the token's agent
+  // all the same: `appendBrainNote` would otherwise resolve the absent
+  // name through the process config, stamping the config identity where
+  // the credential decided (the same fallback the sibling writers make).
+  const agent = agentArg ?? ctx.requestIdentity?.agent;
 
   let res;
   try {
     res = appendBrainNote({
       vault: vault,
       text: rawText,
-      ...(agentArg ? { agent: agentArg } : {}),
+      ...(agent ? { agent } : {}),
       ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     });
   } catch (err) {

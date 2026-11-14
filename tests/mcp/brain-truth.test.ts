@@ -113,6 +113,9 @@ async function callRaw(
 test("ingest then slots round-trips one claim through the fold", async () => {
   const server = new MCPServer({ vault, configPath });
   await initialize(server);
+  // The source page exists: a claim whose source the caller cannot read
+  // is withheld from the fold, exactly as it is from `events`.
+  writeSourcePage("standup.md");
   const ingested = await call(server, {
     operation: "ingest",
     entity: "Alice Mason",
@@ -131,6 +134,8 @@ test("ingest then slots round-trips one claim through the fold", async () => {
 });
 
 test("conflicts and aggregate read the same ledger", async () => {
+  // Every claim's source page exists, so the fold sees all three.
+  for (const name of ["a.md", "b.md", "c.md"]) writeSourcePage(name);
   appendClaimEvent(vault, {
     ts: "2026-06-01T10:00:00Z",
     agent: "claude",
@@ -382,6 +387,65 @@ test("events answers a caller denied a source page exactly as if the row were ab
   } finally {
     rmSync(b.configHome, { recursive: true, force: true });
   }
+});
+
+test("slots, conflicts, aggregate and collisions fold only the claims the caller may read", async () => {
+  writeSourcePage("public.md");
+  writeSourcePage("private.md", `\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`);
+  appendClaimEvent(vault, {
+    ts: "2026-06-01T10:00:00Z",
+    agent: "claude",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/public.md]]",
+  });
+  appendClaimEvent(vault, {
+    ts: "2026-06-02T10:00:00Z",
+    agent: "other-agent",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Meta",
+    quantity: { value: 5, unit: "k", action: null },
+    source: "[[Brain/notes/private.md]]",
+  });
+  const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+  await initialize(remote);
+  // Every fold operation answers only the readable claim: no withheld
+  // value, quantity, agent or source path, directly or derived.
+  const slots = (await call(remote, { operation: "slots" })) as unknown as Record<string, unknown>;
+  expect(JSON.stringify(slots)).not.toContain("Meta");
+  expect(JSON.stringify(slots)).not.toContain("other-agent");
+  expect(JSON.stringify(slots)).not.toContain("private");
+  const conflicts = (await call(remote, {
+    operation: "conflicts",
+  })) as unknown as Record<string, unknown>;
+  expect(JSON.stringify(conflicts)).not.toContain("Meta");
+  expect(JSON.stringify(conflicts)).not.toContain("private");
+  const aggregate = (await call(remote, {
+    operation: "aggregate",
+  })) as unknown as Record<string, unknown>;
+  expect(JSON.stringify(aggregate)).not.toContain("Meta");
+  expect(JSON.stringify(aggregate)).not.toContain("private");
+  const collisions = (await call(remote, {
+    operation: "collisions",
+  })) as unknown as Record<string, unknown>;
+  expect(JSON.stringify(collisions)).not.toContain("other-agent");
+  expect(JSON.stringify(collisions)).not.toContain("Meta");
+  expect(JSON.stringify(collisions)).not.toContain("private");
+  // The visible claim still folds: one slot for the readable value.
+  const slotRows = slots["slots"] as Array<Record<string, unknown>>;
+  expect(slotRows).toHaveLength(1);
+  expect(JSON.stringify(slotRows)).toContain("Google");
+  // Local reach keeps the whole ledger in every fold.
+  const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+  await initialize(local);
+  const localSlots = (await call(local, { operation: "slots" })) as unknown as Record<
+    string,
+    unknown
+  >;
+  expect(JSON.stringify(localSlots)).toContain("Meta");
+  expect(JSON.stringify(localSlots)).toContain("Google");
 });
 
 test("events refuses unparseable bounds and invalid limits as invalid params", async () => {

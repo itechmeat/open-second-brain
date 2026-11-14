@@ -19,7 +19,7 @@ import {
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
-import { writePreference } from "../../core/brain/preference.ts";
+import { writePreference, preferencePresence } from "../../core/brain/preference.ts";
 import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
@@ -243,7 +243,107 @@ export async function toolBrainFeedback(
   // A deduped signal means this whole feedback call is a retry of one
   // already recorded — skip the log event, the shared-namespace mirror,
   // and any force-confirmed pref so the retry stays a true no-op.
+  // EXCEPT one whose preference write never finished: the idempotency
+  // receipt was recorded before `writePreference` ran, so a first call
+  // that threw after the signal landed left the receipt without the rule,
+  // and this retry would answer `deduped` while the confirmed capture it
+  // stands for is still missing. The rule's absence is exactly the mark
+  // of an unfinished capture, so the retry resumes the write below; a
+  // capture that completed (the rule exists, active or retired) stays a
+  // true no-op.
+  // The force-confirmed preference write, spelled once so the deduped
+  // retry path can resume it: same payload, same stamps, same writer.
+  const writeConfirmedPreference = (): { path: string; id: string } =>
+    timeStageSync(ROUTE_STAGE.preferenceWrite, () =>
+      writePreference(
+        vault,
+        {
+          slug,
+          topic: topic.trim(),
+          principle: principle.trim(),
+          created_at: createdAt,
+          unconfirmed_until: createdAt,
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [`[[${sigResult.id}]]`],
+          confirmed_at: createdAt,
+          // Issue #149: an explicit zero, not an absent value. The
+          // on-disk encoding of "absent" is the literal `null`, and two
+          // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
+          // `null` to negative infinity before sorting - so a rule
+          // force-confirmed a second ago would sort BELOW every rule
+          // that has a number, including one measured at zero. Zero is
+          // also the true Wilson lower bound on no evidence, which is
+          // why the dream pass already pre-seeds it for new
+          // preferences. This writer now matches it.
+          confidence_value: 0,
+          ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+          // The same lifetime the signal carries: a rule confirmed from an
+          // observation that expires on a date does not outlive it.
+          ...(expires !== undefined ? { expiration_date: expires } : {}),
+        },
+        // Ownership is resolved by the writer, never echoed from `agent`:
+        // that argument is caller-supplied, and a caller must not be able to
+        // name whose memory this becomes. The server's config path is handed
+        // over rather than a resolved name for the same reason, and the
+        // transport-minted identity rides as the credential-minted subject
+        // (write-side-trust, Task 7) so the gate and the stamp answer for
+        // the token's agent.
+        {
+          ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+          ...(identity !== undefined ? { subject: identity } : {}),
+        },
+      ),
+    );
+  const logConfirmedPreference = (preferenceId: string): void => {
+    try {
+      // Offset by 1s so the force-confirmed event sorts after the feedback
+      // event on the same UTC second (parseLogDay is stable on ties, but a
+      // visible chronology reads cleaner).
+      timeStageSync(ROUTE_STAGE.logAppend, () =>
+        appendLogEvent(vault, {
+          timestamp: isoSecond(new Date(now.getTime() + 1000)),
+          eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
+          body: {
+            preference: `[[${preferenceId}]]`,
+            agent,
+          },
+        }),
+      );
+    } catch (err) {
+      process.stderr.write(
+        `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
+      );
+    }
+  };
   if (sigResult.deduped) {
+    if (
+      forceConfirmed &&
+      preferencePresence(vault, slug, ctx.configPath ?? undefined) === "absent"
+    ) {
+      const resumed = writeConfirmedPreference();
+      logConfirmedPreference(resumed.id);
+      return {
+        kind: "preference",
+        deduped: true,
+        // The signal was deduped, so the retry staged nothing new.
+        staged: false,
+        signal_path:
+          vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
+        signal_absolute_path:
+          vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+        signal_id: sigResult.id,
+        preference_path:
+          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : toolPath(ctx, resumed.path),
+        preference_absolute_path:
+          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : resolve(resumed.path),
+        preference_id: resumed.id,
+        path: vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : toolPath(ctx, resumed.path),
+        absolute_path:
+          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : resolve(resumed.path),
+        id: resumed.id,
+        agent,
+      };
+    }
     return {
       kind: "signal",
       deduped: true,
@@ -320,66 +420,8 @@ export async function toolBrainFeedback(
     // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
     // window collapses on inspection. The just-written signal is recorded
     // as the rule's origin under `evidenced_by`.
-    prefResult = timeStageSync(ROUTE_STAGE.preferenceWrite, () =>
-      writePreference(
-        vault,
-        {
-          slug,
-          topic: topic.trim(),
-          principle: principle.trim(),
-          created_at: createdAt,
-          unconfirmed_until: createdAt,
-          status: BRAIN_PREFERENCE_STATUS.confirmed,
-          evidenced_by: [`[[${sigResult.id}]]`],
-          confirmed_at: createdAt,
-          // Issue #149: an explicit zero, not an absent value. The
-          // on-disk encoding of "absent" is the literal `null`, and two
-          // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
-          // `null` to negative infinity before sorting - so a rule
-          // force-confirmed a second ago would sort BELOW every rule
-          // that has a number, including one measured at zero. Zero is
-          // also the true Wilson lower bound on no evidence, which is
-          // why the dream pass already pre-seeds it for new
-          // preferences. This writer now matches it.
-          confidence_value: 0,
-          ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
-          // The same lifetime the signal carries: a rule confirmed from an
-          // observation that expires on a date does not outlive it.
-          ...(expires !== undefined ? { expiration_date: expires } : {}),
-        },
-        // Ownership is resolved by the writer, never echoed from `agent`:
-        // that argument is caller-supplied, and a caller must not be able to
-        // name whose memory this becomes. The server's config path is handed
-        // over rather than a resolved name for the same reason, and the
-        // transport-minted identity rides as the credential-minted subject
-        // (write-side-trust, Task 7) so the gate and the stamp answer for
-        // the token's agent.
-        {
-          ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
-          ...(identity !== undefined ? { subject: identity } : {}),
-        },
-      ),
-    );
-    try {
-      // Offset by 1s so the force-confirmed event sorts after the feedback
-      // event on the same UTC second (parseLogDay is stable on ties, but a
-      // visible chronology reads cleaner).
-      const preferenceId = prefResult.id;
-      timeStageSync(ROUTE_STAGE.logAppend, () =>
-        appendLogEvent(vault, {
-          timestamp: isoSecond(new Date(now.getTime() + 1000)),
-          eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
-          body: {
-            preference: `[[${preferenceId}]]`,
-            agent,
-          },
-        }),
-      );
-    } catch (err) {
-      process.stderr.write(
-        `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
-      );
-    }
+    prefResult = writeConfirmedPreference();
+    logConfirmedPreference(prefResult.id);
   }
 
   // With no vault the records have no file: both fields name the record
