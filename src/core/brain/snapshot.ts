@@ -289,16 +289,56 @@ export interface CreateSnapshotOptions extends SnapshotStoreOptions {
    */
   readonly now?: Date;
   /**
-   * Absolute path of a live derived store whose writer lock the CALLER
-   * already holds. When it names the store this snapshot archives, the
-   * archive is written under that lock instead of acquiring it again
+   * The token of a derived-store writer lock the CALLER already holds.
+   * When it is a live token on exactly the store this snapshot archives,
+   * the archive is written under that lock instead of acquiring it again
    * (the lock is not re-entrant, so a second acquire would refuse).
+   * Anything else - a released token, a token on another path, a string
+   * naming the path, an object that merely looks like a token - takes
+   * the lock as usual. A token is minted only where the restore acquires
+   * the lock, so naming the store is not enough to skip it.
    *
    * One caller needs it: the gated restore takes the lock before its
    * recovery point and keeps it through the swap, so no write lands
-   * between the two. Any other path, or absent, takes the lock as usual.
+   * between the two.
    */
-  readonly heldStoreLock?: string;
+  readonly heldStoreLock?: StoreLockToken;
+}
+
+/** Mints {@link StoreLockToken}s; never leaves this module. */
+const STORE_LOCK_TOKEN_MINT: unique symbol = Symbol("store-lock-token-mint");
+
+/**
+ * The tokens whose lock is still held. A token leaves the set when its
+ * lock is released, so a kept reference stops counting at that moment.
+ */
+const liveStoreLockTokens = new WeakSet<StoreLockToken>();
+
+/**
+ * Proof that this module holds the derived store's writer lock on
+ * {@link StoreLockToken.path}. Constructed only with the module-private
+ * mint symbol, by the restore's lock acquisition, and honoured only
+ * while the lock is held (see {@link isLiveStoreLockToken}).
+ */
+export class StoreLockToken {
+  readonly #path: string;
+
+  constructor(mint: symbol, path: string) {
+    if (mint !== STORE_LOCK_TOKEN_MINT) {
+      throw new TypeError("a store lock token is minted only by the restore's lock acquisition");
+    }
+    this.#path = path;
+  }
+
+  /** The live store path the lock is held on. */
+  get path(): string {
+    return this.#path;
+  }
+}
+
+/** True only for a minted, unreleased token on exactly `path`. */
+function isLiveStoreLockToken(token: unknown, path: string): boolean {
+  return token instanceof StoreLockToken && liveStoreLockTokens.has(token) && token.path === path;
 }
 
 export interface SnapshotInfo {
@@ -586,14 +626,22 @@ export interface RecoveryPointEvidence {
  */
 export interface BeforeDiscardContext {
   /**
-   * The live derived store whose writer lock the restore already holds,
-   * or null when the restore does not replace the store (and holds no
-   * lock). The lock is taken before the callback and kept through the
-   * swap, so a recovery point taken here sees every commit the swap
-   * replaces. A snapshot taken in the callback passes this path as
-   * `heldStoreLock`, or its own acquire of the same lock refuses.
+   * The live derived store the restore will replace, or null when it
+   * does not replace the store. A recovery point taken here archives
+   * exactly this path (`derivedStorePath`), and the restore refuses when
+   * the recovery point's manifest records another source.
    */
-  readonly heldStoreLock: string | null;
+  readonly storeTarget: string | null;
+  /**
+   * The token of the writer lock the restore holds on
+   * {@link storeTarget}, or null when it holds none. The lock is taken
+   * before the callback and kept through the swap, so a recovery point
+   * taken here sees every commit the swap replaces. A snapshot taken in
+   * the callback passes it as `heldStoreLock`, or its own acquire of the
+   * same lock refuses. The token stops counting once the restore
+   * releases the lock.
+   */
+  readonly heldStoreLock: StoreLockToken | null;
 }
 
 export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
@@ -1058,7 +1106,7 @@ function coverDerivedStore(
   liveVault: string,
   runId: string,
   tools: ToolAvailability,
-  opts: SnapshotStoreOptions & { readonly heldStoreLock?: string },
+  opts: SnapshotStoreOptions & { readonly heldStoreLock?: StoreLockToken },
 ): BrainManifestDerivedStore {
   // The policy and the live store are the caller's vault's (the search
   // index is keyed by the real vault), never the mapped state root's; the
@@ -1101,10 +1149,12 @@ function coverDerivedStore(
   // scan and the copy, so an index run cannot mutate the file underneath
   // the snapshot. It is the same lock every other writer serialises on,
   // taken synchronously because this whole module is synchronous. A
-  // caller that already holds it on this exact path (the gated restore)
-  // says so, and the archive is written under the caller's lock.
-  const release =
-    opts.heldStoreLock === sourcePath ? (): void => {} : acquireWriterLockSync(sourcePath);
+  // caller that holds it on this exact path (the gated restore) hands
+  // down the live token the acquisition minted, and the archive is
+  // written under the caller's lock.
+  const release = isLiveStoreLockToken(opts.heldStoreLock, sourcePath)
+    ? (): void => {}
+    : acquireWriterLockSync(sourcePath);
   try {
     assertStoreIsSound(sourcePath, runId);
 
@@ -2286,7 +2336,7 @@ export function restoreSnapshot(
     // point never saw. Taken before the first rename because an index run
     // holding it is a refusal like any other, and it must arrive while
     // nothing has been replaced yet.
-    const release = store === null ? null : acquireStoreLockForRestore(store.target, runId);
+    const lock = store === null ? null : acquireStoreLockForRestore(store.target, runId);
     let evidence: RecoveryPointEvidence | null = null;
     let committed = false;
     let primary: { readonly err: unknown } | null = null;
@@ -2294,7 +2344,14 @@ export function restoreSnapshot(
       // The last moment at which the live state still exists. A throw
       // here propagates and nothing has been replaced yet, which is the
       // same abort-before-the-operation rule the destructive gate applies.
-      evidence = opts.beforeDiscard?.({ heldStoreLock: store?.target ?? null }) ?? null;
+      evidence =
+        opts.beforeDiscard?.({
+          storeTarget: store?.target ?? null,
+          heldStoreLock: lock?.token ?? null,
+        }) ?? null;
+      if (store !== null && evidence !== null) {
+        assertRecoveryPointCoversTarget(vault, evidence, store.target, runId);
+      }
 
       // The callback is the one step that can change `.snapshots/` between
       // the pre-flight and the store swap - it takes a recovery point, and
@@ -2334,8 +2391,8 @@ export function restoreSnapshot(
       primary = { err };
       throw err;
     } finally {
-      if (release !== null)
-        releaseStoreLockAfterRestore(release, runId, committed, primary, evidence);
+      if (lock !== null)
+        releaseStoreLockAfterRestore(lock.release, runId, committed, primary, evidence);
     }
 
     const derivedStore = plan.result;
@@ -2812,10 +2869,20 @@ function stageDerivedStore(
  * across the renames is what stops an index run from writing into the
  * file being replaced; taking it BEFORE the first rename is what turns
  * contention into a refusal rather than a half-finished restore.
+ *
+ * The acquisition is the only place a {@link StoreLockToken} is minted:
+ * the recovery point skips its own acquire for that token, live and on
+ * the same path, and for nothing that merely names the path. The token
+ * stops counting before the lock is released, so a reference kept past
+ * the restore never stands in for a lock nobody holds.
  */
-function acquireStoreLockForRestore(target: string, runId: string): () => void {
+function acquireStoreLockForRestore(
+  target: string,
+  runId: string,
+): { readonly token: StoreLockToken; readonly release: () => void } {
+  let unlock: () => void;
   try {
-    return acquireWriterLockSync(target);
+    unlock = acquireWriterLockSync(target);
   } catch (err) {
     throw new BrainSnapshotError(
       `cannot take the derived store's writer lock (${errorText(err)}); refusing before the ` +
@@ -2824,6 +2891,45 @@ function acquireStoreLockForRestore(target: string, runId: string): () => void {
       { cause: err },
     );
   }
+  const token = new StoreLockToken(STORE_LOCK_TOKEN_MINT, target);
+  liveStoreLockTokens.add(token);
+  return {
+    token,
+    release: (): void => {
+      liveStoreLockTokens.delete(token);
+      unlock();
+    },
+  };
+}
+
+/**
+ * Refuse a swap whose recovery point archived a different store than the
+ * one the swap replaces.
+ *
+ * The restore writes the snapshot's store to the live target it resolved
+ * (an explicit `derivedStorePath`, or the search layer's answer). A
+ * recovery point that resolved its own source - the configured store
+ * rather than the override - would archive one file while the swap
+ * discards another, and the discarded store would have no copy anywhere.
+ * The manifest's `source_path` is what the recovery point actually
+ * archived (or declined to), so that is what is compared. A recovery
+ * point with no readable manifest is left to the recoverability verdict,
+ * which already reads it as unproven.
+ */
+function assertRecoveryPointCoversTarget(
+  vault: string,
+  evidence: RecoveryPointEvidence,
+  target: string,
+  runId: string,
+): void {
+  const record = readManifestSidecar(vault, evidence.runId)?.derived_store ?? null;
+  if (record === null || record.source_path === target) return;
+  throw new BrainSnapshotError(
+    `the recovery point ${evidence.runId} recorded the derived store at ${record.source_path}, ` +
+      `but this restore replaces ${target}; refusing before the Brain tree is touched, so the ` +
+      "store being discarded is not left without a copy",
+    runId,
+  );
 }
 
 /**

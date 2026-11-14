@@ -41,7 +41,7 @@
 
 import { existsSync } from "node:fs";
 
-import { loadSnapshotRetentionSafe } from "./policy.ts";
+import { loadSnapshotRetentionSafe, type BrainDerivedStorePolicy } from "./policy.ts";
 import { isFileAlreadyExistsAt } from "../fs-atomic.ts";
 import {
   classifyRecoverability,
@@ -59,6 +59,7 @@ import {
   type RecoveryPointEvidence,
   type RestoreSnapshotOptions,
   type RestoreSnapshotResult,
+  type StoreLockToken,
 } from "./snapshot.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 import { compactRunStamp } from "./time.ts";
@@ -137,7 +138,11 @@ export interface WithDestructiveSnapshotOptions {
    */
   readonly available?: (runId: string) => boolean;
   /** Forwarded to {@link CreateSnapshotOptions.heldStoreLock}. */
-  readonly heldStoreLock?: string;
+  readonly heldStoreLock?: StoreLockToken;
+  /** Forwarded to {@link SnapshotStoreOptions.derivedStorePath}. */
+  readonly derivedStorePath?: string;
+  /** Forwarded to {@link SnapshotStoreOptions.derivedStore}. */
+  readonly derivedStore?: BrainDerivedStorePolicy;
   /**
    * Archives the retention pass behind this snapshot must not remove, on
    * top of the snapshot itself (which is always protected).
@@ -307,6 +312,8 @@ export function takeSnapshot(
         now,
         ...(opts.lane ? { lane: opts.lane } : {}),
         ...(opts.heldStoreLock !== undefined ? { heldStoreLock: opts.heldStoreLock } : {}),
+        ...(opts.derivedStorePath !== undefined ? { derivedStorePath: opts.derivedStorePath } : {}),
+        ...(opts.derivedStore !== undefined ? { derivedStore: opts.derivedStore } : {}),
       }).path,
     MAX_SNAPSHOT_ID_ATTEMPTS,
     opts.available,
@@ -466,9 +473,14 @@ export function restoreSnapshotWithRecoveryPoint(
   let recoveryPoint: DestructiveSnapshot | null = null;
   const result = restoreSnapshot(vault, runId, {
     ...opts,
-    beforeDiscard: ({ heldStoreLock }): RecoveryPointEvidence => {
+    beforeDiscard: ({ storeTarget, heldStoreLock }): RecoveryPointEvidence => {
       const point = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual, {
         ...opts,
+        // The recovery point archives exactly the store the swap replaces,
+        // under the restore's coverage policy (spread from `opts` above):
+        // left to resolve its own source, it would archive the configured
+        // store while a `derivedStorePath` override names another.
+        ...(storeTarget !== null ? { derivedStorePath: storeTarget } : {}),
         // The restore holds the store writer lock from before this point
         // through the swap; the snapshot writes its store archive under it.
         ...(heldStoreLock !== null ? { heldStoreLock } : {}),

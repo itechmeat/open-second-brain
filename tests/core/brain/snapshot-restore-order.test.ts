@@ -43,6 +43,7 @@ import {
   createSnapshot,
   restoreSnapshot,
   SNAPSHOT_TOOL_TIMEOUT_ENV,
+  StoreLockToken,
 } from "../../../src/core/brain/snapshot.ts";
 import { restoreSnapshotWithRecoveryPoint } from "../../../src/core/brain/snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
@@ -740,5 +741,192 @@ describe("a -wal removal failure with no live store before the restore", () => {
     expect(message).toMatch(/the store swap was undone, and no store was live before it/u);
     expect(message).not.toMatch(/back in place/u);
     expect(existsSync(dbPath)).toBe(false);
+  });
+});
+
+/** A store at an override path, distinct from the configured one. */
+function overrideStore(): { derivedStorePath: string; derivedStore: typeof COVERED } {
+  const override = join(root, "override", "index.sqlite");
+  mkdirSync(dirname(override), { recursive: true });
+  const live = new Database(dbPath);
+  live.exec(`VACUUM INTO '${override.replaceAll("'", "''")}'`);
+  live.close();
+  return { derivedStorePath: override, derivedStore: COVERED };
+}
+
+function addTable(path: string, name: string): void {
+  const db = new Database(path);
+  db.exec(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY)`);
+  db.close();
+}
+
+describe("the recovery point archives exactly the store the restore replaces", () => {
+  test("with a derivedStorePath override, the recovery point holds the override store", () => {
+    const store = overrideStore();
+    createSnapshot(vault, RUN_ID, { reason: DREAM, ...store });
+    addTable(store.derivedStorePath, "override_marker");
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID, store);
+
+    expect(tablesOf(store.derivedStorePath)).not.toContain("override_marker");
+    const recorded = JSON.parse(
+      readFileSync(manifestSidecarPath(vault, res.recoveryPoint.runId), "utf8"),
+    ) as { derived_store: { included: boolean; source_path: string } };
+    expect(recorded.derived_store.included).toBe(true);
+    expect(recorded.derived_store.source_path).toBe(store.derivedStorePath);
+
+    // The discarded override store comes back from the recovery point.
+    restoreSnapshot(vault, res.recoveryPoint.runId, store);
+    expect(tablesOf(store.derivedStorePath)).toContain("override_marker");
+  });
+
+  test("a recovery point of another store refuses the swap before anything is touched", () => {
+    const store = overrideStore();
+    createSnapshot(vault, RUN_ID, { reason: DREAM, ...store });
+    addTable(store.derivedStorePath, "override_marker");
+    // Read after the recovery point lands: its log lines are the only
+    // change to the tree the refused restore may leave.
+    let brainBefore: Record<string, string> = {};
+
+    let threw: unknown = null;
+    try {
+      restoreSnapshot(vault, RUN_ID, {
+        ...store,
+        beforeDiscard: () => {
+          // Resolves its own source: the configured store, not the override.
+          const point = createSnapshot(vault, "manual-wrong-store", {
+            reason: BRAIN_SNAPSHOT_REASON.manual,
+            derivedStore: COVERED,
+          });
+          brainBefore = treeOf(brainDirs(vault).brain);
+          return { runId: "manual-wrong-store", path: point.path };
+        },
+      });
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(BrainSnapshotError);
+    expect((threw as Error).message).toMatch(
+      /recorded the derived store at .+, but this restore replaces .+override.+refusing before the Brain tree is touched/u,
+    );
+    expect(tablesOf(store.derivedStorePath)).toContain("override_marker");
+    expect(withoutExcluded(treeOf(brainDirs(vault).brain))).toEqual(withoutExcluded(brainBefore));
+  });
+});
+
+describe("createSnapshot skips its own store lock only for the restore's live token on that store", () => {
+  const LOCKED = /another writer holds the search index lock/u;
+
+  test("the restore's token is used; a path string, a look-alike or a hand-made token is not", () => {
+    coverStoreByPolicy();
+    snapshotThenDiverge();
+    let seen: { storeTarget: string | null; token: StoreLockToken | null } | null = null;
+
+    const res = restoreSnapshot(vault, RUN_ID, {
+      beforeDiscard: ({ storeTarget, heldStoreLock }) => {
+        seen = { storeTarget, token: heldStoreLock };
+        // The old hint: a string naming the locked path. The restore still
+        // holds the lock, so the snapshot's own acquire refuses.
+        expect(() =>
+          createSnapshot(vault, "dream-string-hint", {
+            reason: DREAM,
+            heldStoreLock: dbPath as unknown as StoreLockToken,
+          }),
+        ).toThrow(LOCKED);
+        // Objects that look like a token without being minted by the restore.
+        expect(() =>
+          createSnapshot(vault, "dream-look-alike", {
+            reason: DREAM,
+            heldStoreLock: { path: dbPath } as unknown as StoreLockToken,
+          }),
+        ).toThrow(LOCKED);
+        expect(() =>
+          createSnapshot(vault, "dream-prototype-forgery", {
+            reason: DREAM,
+            heldStoreLock: Object.create(StoreLockToken.prototype) as StoreLockToken,
+          }),
+        ).toThrow(LOCKED);
+        // A token cannot be constructed without the module-private mint.
+        expect(() => new StoreLockToken(Symbol("store-lock-token-mint"), dbPath)).toThrow(
+          TypeError,
+        );
+
+        const point = createSnapshot(vault, "manual-under-token", {
+          reason: BRAIN_SNAPSHOT_REASON.manual,
+          ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+        });
+        expect(point.derived_store.included).toBe(true);
+        return { runId: "manual-under-token", path: point.path };
+      },
+    });
+
+    expect(res.derived_store.replaced).toBe(true);
+    expect(seen).not.toBeNull();
+    expect(seen!.storeTarget).toBe(dbPath);
+    expect(seen!.token).toBeInstanceOf(StoreLockToken);
+    expect(seen!.token!.path).toBe(dbPath);
+    expect(markerTableExists()).toBe(false);
+  });
+
+  test("a token kept past the restore no longer skips the lock", () => {
+    coverStoreByPolicy();
+    snapshotThenDiverge();
+    let kept: StoreLockToken | null = null;
+    restoreSnapshot(vault, RUN_ID, {
+      beforeDiscard: ({ heldStoreLock }) => {
+        kept = heldStoreLock;
+        const point = createSnapshot(vault, "manual-before-keep", {
+          reason: BRAIN_SNAPSHOT_REASON.manual,
+          ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+        });
+        return { runId: "manual-before-keep", path: point.path };
+      },
+    });
+    expect(kept).toBeInstanceOf(StoreLockToken);
+
+    // Another writer holds the lock now; the released token must not
+    // stand in for it.
+    const release = acquireWriterLockSync(dbPath);
+    try {
+      expect(() =>
+        createSnapshot(vault, "dream-released-token", { reason: DREAM, heldStoreLock: kept! }),
+      ).toThrow(LOCKED);
+    } finally {
+      release();
+    }
+  });
+
+  test("a live token on another store does not skip the lock of this one", () => {
+    const store = overrideStore();
+    createSnapshot(vault, RUN_ID, { reason: DREAM, ...store });
+    addTable(store.derivedStorePath, "override_marker");
+
+    restoreSnapshot(vault, RUN_ID, {
+      ...store,
+      beforeDiscard: ({ heldStoreLock }) => {
+        expect(heldStoreLock?.path).toBe(store.derivedStorePath);
+        // The configured store is held by another writer; the restore's
+        // live token names the override store, so it does not count here.
+        const release = acquireWriterLockSync(dbPath);
+        try {
+          expect(() =>
+            createSnapshot(vault, "dream-other-store-token", {
+              reason: DREAM,
+              derivedStore: COVERED,
+              ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+            }),
+          ).toThrow(LOCKED);
+        } finally {
+          release();
+        }
+        const point = createSnapshot(vault, "manual-override-point", {
+          reason: BRAIN_SNAPSHOT_REASON.manual,
+          ...store,
+          ...(heldStoreLock !== null ? { heldStoreLock } : {}),
+        });
+        return { runId: "manual-override-point", path: point.path };
+      },
+    });
+    expect(tablesOf(store.derivedStorePath)).not.toContain("override_marker");
   });
 });
