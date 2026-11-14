@@ -29,32 +29,50 @@ import { resolveConfiguredStoreRoot } from "../store-paths.ts";
 /**
  * The store of a switched machine cannot be opened, so its rules are
  * unknown. `root` is the store root the open failed for, when it was
- * resolved before the failure: a caller that serves the reason below
- * local reach redacts the reason to the root and a pointer at the local
- * doctor (`storeOpenFailureDetail` in the doctor's store check), since
- * the reason embeds the store-open error, which can name a held
- * partition's file.
+ * resolved before the failure. `message` carries the raw cause (it can
+ * name a held partition's file, so only a caller at local reach may show
+ * it); `publicMessage` is the same sentence with the cause replaced, and
+ * `safeDetail` is the redacted detail the doctor's findings carry below
+ * local reach (`storeOpenFailureDetail` in the doctor's store check) -
+ * neither names a partition's file, the store ids or the leave remedy, so
+ * any consumer may embed them in what it hands a caller at remote reach.
  */
 export class StoreUnavailableError extends Error {
   override readonly name = "StoreUnavailableError";
   constructor(
     message: string,
     readonly root: string | null = null,
+    readonly publicMessage: string = message,
+    readonly safeDetail: string = "",
   ) {
     super(message);
   }
 }
 
+const DETAIL_TAIL =
+  ", so every protection fails closed. Run `o2b brain doctor` on this machine " +
+  "for the cause and the remedy";
+
 function unavailable(
   reason: string,
-  switched = true,
-  root: string | null = null,
+  switched: boolean,
+  root: string | null,
+  safeReason: string,
+  safeDetail: string,
 ): StoreUnavailableError {
-  return new StoreUnavailableError(
-    `this machine ${switched ? "switched to" : "writes to"} the brain store and ${reason}; the ` +
-      "rules stored there are unknown until it opens again. Run `o2b brain doctor`",
-    root,
-  );
+  const frame = (cause: string): string =>
+    `this machine ${switched ? "switched to" : "writes to"} the brain store and ${cause}; the ` +
+    "rules stored there are unknown until it opens again. Run `o2b brain doctor`";
+  return new StoreUnavailableError(frame(reason), root, frame(safeReason), safeDetail);
+}
+
+/** The store-open cause, phrased for a caller this machine does not trust. */
+function openSafe(root: string | null): { safeReason: string; safeDetail: string } {
+  const at = root === null ? "" : ` at ${root}`;
+  return {
+    safeReason: `the store${at} could not be opened`,
+    safeDetail: `the brain store${at} could not be opened${DETAIL_TAIL}`,
+  };
 }
 
 /**
@@ -78,6 +96,8 @@ export function protectionStore(
 ): StoreInspection | null {
   let store: StoreInspection | null = null;
   let reason = "";
+  let safeReason = "";
+  let safeDetail = "";
   let lost = false;
   let openError = false;
   let root: string | null = null;
@@ -85,28 +105,36 @@ export function protectionStore(
     const resolved = resolveConfiguredStoreRoot(configPath);
     root = resolved.root;
     store = inspectStore(resolved.root);
-    if (store === null) reason = `the store at ${root} cannot be found (no store.json)`;
+    if (store === null) {
+      reason = `the store at ${root} cannot be found (no store.json)`;
+      safeReason = reason;
+      safeDetail = `the brain store at ${root} cannot be found (no store.json)${DETAIL_TAIL}`;
+    }
   } catch (err) {
     lost = err instanceof HeldPartitionLostError;
     openError = true;
     reason = `the store cannot be opened (${(err as Error).message})`;
+    ({ safeReason, safeDetail } = openSafe(root));
   }
   const context = configPath !== undefined ? { configPath } : {};
   const switched = (): boolean => markedSwitched(context);
   if (store === null) {
-    if (switched()) throw unavailable(reason, true, root);
+    if (switched()) throw unavailable(reason, true, root, safeReason, safeDetail);
     const storeOnly = (): boolean =>
       isStoreOnly(options.vault !== undefined ? { ...context, vault: options.vault } : context);
     if ((lost || (openError && options.openErrorFails === true)) && storeOnly()) {
-      throw unavailable(reason, false, root);
+      throw unavailable(reason, false, root, safeReason, safeDetail);
     }
     return null;
   }
   if (options.needShared === true && !store.partitions.has("shared") && switched()) {
+    const sharedReason = `the shared partition of the store at ${store.root} cannot be found`;
     throw unavailable(
-      `the shared partition of the store at ${store.root} cannot be found`,
+      sharedReason,
       true,
       store.root,
+      sharedReason,
+      `the shared partition of the brain store at ${store.root} cannot be found${DETAIL_TAIL}`,
     );
   }
   return store;

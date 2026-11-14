@@ -46,7 +46,7 @@ import {
 import { foldPreferences, type PreferenceState } from "../fold-preferences.ts";
 import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
-import { blobPath, partitionDir, resolveConfiguredStoreRoot } from "../store-paths.ts";
+import { partitionDir, pendingBlobStampLines, resolveConfiguredStoreRoot } from "../store-paths.ts";
 import { readStreamRecords } from "./stream-read.ts";
 import { quarantineStamp } from "../shard-quarantine.ts";
 
@@ -90,8 +90,6 @@ export interface StoreEntities {
    * stat each, instead of rescanning the shards).
    */
   readonly pendingBlobs: ReadonlyArray<string>;
-  /** Whether a skipped pending record named no blob, so the read has no arrival stamp. */
-  readonly pendingUnkeyed: boolean;
 }
 
 interface Cached {
@@ -104,13 +102,13 @@ const cache = new Map<string, Cached>();
 const EVENTS = { stream: "events" } as const;
 
 /**
- * What a read depends on: every `events` shard, the quarantine ledger,
- * which decides whether a shard reads whole without changing its bytes,
- * and the availability of the blobs a previous read skipped (`pending`,
- * `<partition>/<sha>` composites): a stat per skipped blob, so the stamp
- * moves the moment one is delivered and stays put while it is absent.
+ * What a read depends on: every `events` shard and the quarantine ledger,
+ * which decides whether a shard reads whole without changing its bytes.
+ * The availability of the blobs a read skipped is stamped when the read is
+ * stored (`pendingBlobStampLines`), so the stored stamp moves the moment
+ * one is delivered and stays put while it is absent.
  */
-function fingerprintOf(store: StoreInspection, pending: ReadonlyArray<string>): string {
+function fingerprintOf(store: StoreInspection): string {
   const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
     let shards: ReturnType<typeof listShards>;
@@ -133,22 +131,6 @@ function fingerprintOf(store: StoreInspection, pending: ReadonlyArray<string>): 
       parts.push(`${partition}/${shard.rel}=${stamp}`);
     }
   }
-  // The blobs the last read skipped: a quarantined pending blob opens no
-  // gap and moves no shard stamp, so their availability is the stamp the
-  // fingerprint compares. A stat per blob, no shard is read.
-  for (const identity of pending.toSorted()) {
-    const slashAt = identity.indexOf("/");
-    const partition = identity.slice(0, slashAt) as StorePartition;
-    const sha = identity.slice(slashAt + 1);
-    let stamp = "absent";
-    try {
-      const stat = statSync(blobPath(partitionDir(store.root, partition), sha));
-      stamp = `${stat.size}:${stat.mtimeMs}`;
-    } catch {
-      // absent: the stamp that lets the read stay cached
-    }
-    parts.push(`blob ${identity}=${stamp}`);
-  }
   return parts.join("\n");
 }
 
@@ -169,12 +151,10 @@ function build(store: StoreInspection): StoreEntities {
   const pinned = new Map<StorePartition, PinnedFold>();
   let skippedPending = false;
   const pendingBlobs: string[] = [];
-  let pendingUnkeyed = false;
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS);
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
-    if (read.pendingUnkeyed) pendingUnkeyed = true;
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records) all.push({ record, partition });
     pinned.set(
@@ -244,25 +224,33 @@ function build(store: StoreInspection): StoreEntities {
     unreadable,
     skippedPending,
     pendingBlobs,
-    pendingUnkeyed,
   };
 }
 
 /** The entities of the store at `store.root`, cached until an `events` shard changes. */
 export function readEntitiesOf(store: StoreInspection): StoreEntities {
   const cached = cache.get(store.root);
-  const fingerprint = fingerprintOf(store, cached?.entities.pendingBlobs ?? []);
+  // The stamp a stored read must still match: the shard part plus the
+  // availability of the blobs that read skipped (one stat each, no shard
+  // is read). A read whose stored stamp lists no blob lines is uncached.
+  const cachedLines =
+    cached === undefined ? null : pendingBlobStampLines(store.root, cached.entities.pendingBlobs);
+  const shardStamp = fingerprintOf(store);
+  const fingerprint = cachedLines === null ? null : `${shardStamp}\n${cachedLines}`;
   if (cached !== undefined && cached.fingerprint === fingerprint) return cached.entities;
   const entities = build(store);
   // A shard unreadable for a moment (a Windows sharing violation) keeps its
-  // size and mtime, so a cached incomplete read would never be retried. A
-  // read that left out a pending record is cached against the availability
-  // of every blob it skipped: the stamp moves the moment a blob arrives, so
-  // the read is rebuilt then (a quarantined pending blob opens no gap, so it
-  // is not in `unreadable`). A skipped record that names no blob has no such
-  // stamp, so that read is not cached.
-  if (entities.unreadable.length === 0 && !entities.pendingUnkeyed)
-    cache.set(store.root, { fingerprint, entities });
+  // size and mtime, so a cached incomplete read would never be retried, and
+  // an incomplete read is never cached. The read is cached against the
+  // availability of every blob it skipped, stamped now: a blob absent after
+  // the build was absent during it, so the skip was correct and those lines
+  // belong with the shard part (a quarantined pending blob opens no gap, so
+  // it is not in `unreadable`). A blob present after the build arrived
+  // during it, or is there but refused, so the read is left uncached and
+  // rebuilt on the next read.
+  const blobLines = pendingBlobStampLines(store.root, entities.pendingBlobs);
+  if (entities.unreadable.length === 0 && blobLines !== null)
+    cache.set(store.root, { fingerprint: `${shardStamp}\n${blobLines}`, entities });
   else cache.delete(store.root);
   return entities;
 }

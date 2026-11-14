@@ -16,7 +16,7 @@
  * running process.
  */
 
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, posix, win32 } from "node:path";
 
@@ -291,6 +291,59 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 export function blobPath(partitionRoot: string, sha: string): string {
   if (!SHA256_RE.test(sha)) throw new Error(`"${sha}" is not a sha256 hex digest`);
   return join(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
+}
+
+/** The `lstat` identity a stamp reads off one fs entry (`bigint`, so ctime is ns). */
+function lstatIdentity(path: string): string {
+  const st = lstatSync(path, { bigint: true });
+  return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+}
+
+/**
+ * Availability stamp of the blob `sha` under `partitionRoot`: the `lstat`
+ * identity of the blob file plus that of its `blobs/<ab>` folder, or
+ * `"absent"`. `lstat`, not `stat`: the reader accepts a blob only as a
+ * regular file of the recorded size and sha (and its folder only as a real
+ * folder), so the stamp must move when an identity changes without size or
+ * mtime moving - a symlink replaced by the real file or folder (`mv`,
+ * `cp -p`, `rsync -a` keeps both), or a same-size blob repaired in place
+ * with its mtime kept, where only ctime moves. A malformed sha reads as
+ * absent, like a blob that is not there.
+ */
+export function blobStamp(partitionRoot: string, sha: string): string {
+  try {
+    const blob = lstatIdentity(blobPath(partitionRoot, sha));
+    const folder = lstatIdentity(join(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2)));
+    return `${blob};${folder}`;
+  } catch {
+    return "absent";
+  }
+}
+
+/**
+ * The fingerprint lines for the `<partition>/<sha>` identities a cached
+ * read or fold skipped: one `"blob <identity>=<stamp>"` line each, or
+ * `null` when any of them is present. Callers stamp after the build: a
+ * blob absent then was absent during it, so the skip was correct and the
+ * lines belong with the shard part of the fingerprint. A blob present
+ * after the build arrived during it (or is there but refused), so no line
+ * a later read could match exists - `null` tells the caller to leave the
+ * read uncached.
+ */
+export function pendingBlobStampLines(
+  root: string,
+  identities: ReadonlyArray<string>,
+): string | null {
+  let lines = "";
+  for (const identity of identities.toSorted()) {
+    const slashAt = identity.indexOf("/");
+    const partition = identity.slice(0, slashAt) as StorePartition;
+    const sha = identity.slice(slashAt + 1);
+    const stamp = blobStamp(partitionDir(root, partition), sha);
+    if (stamp === "absent") lines += `blob ${identity}=absent\n`;
+    else return null;
+  }
+  return lines;
 }
 
 /** Device-local lock target of one shard (the lock is `<target>.lock`, never in the store). */

@@ -13,14 +13,20 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import {
+  buildEntityIndex,
+  __clearEntityIndexCache,
+} from "../../../src/core/brain/entities/index-builder.ts";
 import { buildCaptureBoundary } from "../../../src/core/brain/capture-boundary.ts";
 import { BrainSettingsUnreadableError } from "../../../src/core/brain/policy/errors.ts";
 import { readBrainSettingsFromStore } from "../../../src/core/brain/policy/settings-source.ts";
@@ -34,6 +40,7 @@ import {
   STORE_LINE_CAP_BYTES,
 } from "../../../src/core/store/constants.ts";
 import { LANE_ENTRY_KIND } from "../../../src/core/store/lane-records.ts";
+import { BRAIN_ENTITY_KIND } from "../../../src/core/brain/entities/types.ts";
 import { readEntitiesOf } from "../../../src/core/store/read/store-entities.ts";
 import { readStreamRecords } from "../../../src/core/store/read/stream-read.ts";
 import { readShard, shardReadGap } from "../../../src/core/store/reader.ts";
@@ -685,12 +692,9 @@ describe("a cached read that skipped a quarantined pending record", () => {
     });
     const pinned = () =>
       readEntitiesOf(inspectStore(env!.storeRoot)!).pinned.get("shared")?.content ?? null;
-    // The first read builds; the second warms the cache with the skipped
-    // blob's availability stamp (absent).
+    // The first read builds and stores its fingerprint with the skipped
+    // blob's absence stamp, so the next read is already a cache hit.
     expect(pinned()).toBeNull();
-    expect(pinned()).toBeNull();
-    // The third read is served from the cache while the blob stays absent:
-    // no shard file is opened for it.
     const open = spyOn(fs, "openSync");
     const readFile = spyOn(fs, "readFileSync");
     const shardReads = (): string[] =>
@@ -700,14 +704,17 @@ describe("a cached read that skipped a quarantined pending record", () => {
     try {
       expect(pinned()).toBeNull();
       expect(shardReads()).toEqual([]);
+      deliver();
+      // The blob's arrival moves the fingerprint's blob stamp, so the
+      // next read rebuilds - and a rebuild is seen by the same spies,
+      // which proves the empty list above is the cache and not a blind
+      // spy.
+      expect(pinned()).toBe(BIG);
+      expect(shardReads().length).toBeGreaterThan(0);
     } finally {
       open.mockRestore();
       readFile.mockRestore();
     }
-    deliver();
-    // The blob's arrival moves the fingerprint's blob stamp, so the first
-    // read after it rebuilds and holds the record.
-    expect(pinned()).toBe(BIG);
   });
 
   test("the lane fold is served from the cache while the blob is absent, and folds the entry once it arrives", () => {
@@ -724,9 +731,8 @@ describe("a cached read that skipped a quarantined pending record", () => {
       [...laneStoreFold().entries.values()].find((v) => v.text === BIG)?.text ?? null;
     expect(laneStoreFold().unreadable).toEqual([]);
     expect(text()).toBeNull();
-    expect(text()).toBeNull();
-    // The third fold is served from the cache while the blob stays absent:
-    // no shard file is opened for it.
+    // The fold is stored with the skipped blob's absence stamp, so the
+    // next fold is already a cache hit.
     const open = spyOn(fs, "openSync");
     const readFile = spyOn(fs, "readFileSync");
     const shardReads = (): string[] =>
@@ -736,13 +742,104 @@ describe("a cached read that skipped a quarantined pending record", () => {
     try {
       expect(text()).toBeNull();
       expect(shardReads()).toEqual([]);
+      deliver();
+      // The blob's arrival moves the fingerprint's blob stamp, so the
+      // next fold rebuilds - seen by the same spies, which proves the
+      // empty list above is the cache and not a blind spy.
+      expect(text()).toBe(BIG);
+      expect(shardReads().length).toBeGreaterThan(0);
     } finally {
       open.mockRestore();
       readFile.mockRestore();
     }
+  });
+
+  test("a same-size blob repaired in place with its mtime kept is picked up", () => {
+    env = makeStoreEnv("osb-quarantine-entities-repair-", { legacyTree: false });
+    const deliver = quarantinedPending(env, PINNED_SET_KIND, {
+      authority: "human",
+      content: BIG,
+    });
     deliver();
-    // The blob's arrival moves the fingerprint's blob stamp, so the first
-    // fold after it rebuilds and folds the entry.
-    expect(text()).toBe(BIG);
+    const blobsDir = join(shared(env), "blobs");
+    const [ab] = readdirSync(blobsDir);
+    const [name] = readdirSync(join(blobsDir, ab!));
+    const blobFile = join(blobsDir, ab!, name!);
+    const good = readFileSync(blobFile);
+    const stat = statSync(blobFile);
+    const pinned = () =>
+      readEntitiesOf(inspectStore(env!.storeRoot)!).pinned.get("shared")?.content ?? null;
+    // Corrupt the blob in place at the same size and put the mtime back:
+    // only the reader's own hash check refuses it now.
+    writeFileSync(
+      blobFile,
+      Buffer.concat([good.subarray(0, -1), Buffer.from([good[good.length - 1]! ^ 0xff])]),
+    );
+    utimesSync(blobFile, stat.atime, stat.mtime);
+    expect(pinned()).toBeNull();
+    // The repair also keeps size and mtime; only the content and the
+    // blob's ctime move, so the refused-blob state was never cached and
+    // the next read picks the repaired blob up.
+    writeFileSync(blobFile, good);
+    utimesSync(blobFile, stat.atime, stat.mtime);
+    expect(pinned()).toBe(BIG);
+  });
+});
+
+describe("the entity index on a store-only machine", () => {
+  const ENTITY_FIELDS = {
+    kind: BRAIN_ENTITY_KIND,
+    entity_id: "e1",
+    category: "org",
+    name: "Acme",
+    status: "active",
+    created_at: "2026-11-06T09:00:00Z",
+  };
+
+  function laneEntry(e: StoreEnv, entry: string, text: string): string {
+    return appendRecord(
+      openStore({ root: e.storeRoot, device: "dev-b" }),
+      {
+        partition: "shared",
+        stream: "events",
+        kind: LANE_ENTRY_KIND,
+        agent: "t",
+        body: {
+          authority: "agent",
+          lane: "entities",
+          entry,
+          fields: ENTITY_FIELDS,
+          text,
+        },
+      },
+      // An October shard: the quarantined update below lands alone in its
+      // own November shard, at the line offset the helper expects.
+      { now: () => Date.UTC(2026, 9, 6, 9) },
+    ).path;
+  }
+
+  test("a lane update's pending blob arriving moves the index stamp", () => {
+    env = makeStoreEnv("osb-quarantine-index-blob-", { legacyTree: false });
+    switchDevice(env.storeRoot);
+    laneEntry(env, "org/e1", "v1 body");
+    __clearEntityIndexCache();
+    const body = (): string =>
+      buildEntityIndex(env!.vault).entities.find((entity) => entity.id === "e1")?.body ?? "missing";
+    // The first build warms the index memo on the page as it is.
+    expect(body()).toBe("v1 body");
+    // An update of the same page lands with its body as a quarantined
+    // pending blob: the page list and every shard stamp stay the same.
+    const deliver = quarantinedPending(env, LANE_ENTRY_KIND, {
+      authority: "agent",
+      lane: "entities",
+      entry: "org/e1",
+      fields: ENTITY_FIELDS,
+      text: BIG,
+    });
+    expect(body()).toBe("v1 body");
+    deliver();
+    // The blob's arrival moves the lane stamp, so the memo no longer
+    // serves the old build.
+    expect(body()).toBe(BIG);
   });
 });

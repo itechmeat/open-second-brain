@@ -211,9 +211,12 @@ function partitionsShowingSignal(id: string, configPath?: string): StorePartitio
     store = protectionStore(configPath, { needShared: true });
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
+    // The reach-safe twin of the error's message: the raw one can name a
+    // held partition's file, and this refusal reaches callers at remote
+    // reach.
     throw new StoreWriteError(
       "store-error",
-      `the signal ${id} cannot be forgotten: ${err.message}`,
+      `the signal ${id} cannot be forgotten: ${err.publicMessage}`,
     );
   }
   if (store === null) return [];

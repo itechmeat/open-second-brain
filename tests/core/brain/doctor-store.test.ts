@@ -299,9 +299,13 @@ describe("store in use", () => {
       // store check's own redacted detail.
       expect(remote[0]!.message).toContain("could not be opened");
       expect(remote[0]!.message).not.toContain("private");
-      // The whole serialized answer names no partition.
+      // The whole serialized answer names no partition and no remedy
+      // (`private/`, not the bare word: on macOS the temp root itself
+      // resolves under `/private/var`, and the redacted finding keeps the
+      // store root).
       const whole = JSON.stringify(runDoctor(vault, { now: new Date(NOW), ...opts }));
-      expect(whole).not.toContain("private");
+      expect(whole).not.toContain("private/");
+      expect(whole).not.toContain("partition leave private");
     }
   });
 

@@ -150,8 +150,10 @@ function sharedRead(ctx: BrainSettingsReadContext): SharedRead {
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
     // A switched machine whose store cannot be opened: the operator's
-    // value is unknown, as with an unseen shard.
-    return { fold: foldSettings([]), unseen: [err.message] };
+    // value is unknown, as with an unseen shard. The reach-safe twin of
+    // the error's message goes out, not the raw one: it can name a held
+    // partition's file, and this list reaches callers at remote reach.
+    return { fold: foldSettings([]), unseen: [err.publicMessage] };
   }
   if (store === null || !store.partitions.has("shared")) {
     return { fold: foldSettings([]), unseen: [] };

@@ -245,7 +245,10 @@ function settingsStore(configPath: string | undefined): StoreInspection | null {
     return protectionStore(configPath, { needShared: true });
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
-    throw new BrainSettingsUnreadableError(err.message, STORE_SETTINGS_SOURCE);
+    // The reach-safe twin of the error's message: the raw one can name a
+    // held partition's file, and this error travels to callers at remote
+    // reach (every policy load on a switched machine raises it).
+    throw new BrainSettingsUnreadableError(err.publicMessage, STORE_SETTINGS_SOURCE);
   }
 }
 

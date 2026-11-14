@@ -50,7 +50,7 @@ import {
   type WriteFrontmatterAtomicOptions,
 } from "../vault.ts";
 import { type DualWriteContext } from "./dual-write.ts";
-import { laneFingerprintOf, laneLockTarget } from "./lane-fold-cache.ts";
+import { laneLockTarget, laneStoreFold } from "./lane-fold-cache.ts";
 import {
   brainRelOf,
   entryRecord,
@@ -73,7 +73,6 @@ import {
 } from "./lane-entry-store.ts";
 import { rawParsesBack, rawToKeep, renderLaneText } from "./lane-raw.ts";
 import { brainRelOfEntry, lanePlaceOf } from "./lane-paths.ts";
-import { configuredStore } from "./read/store-entities.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS, withLocalLock } from "./local-lock.ts";
 import { assertNoteVaultForWrite } from "../vault-adapter/index.ts";
 import { withOperationPrivacy } from "./operation-scope.ts";
@@ -331,12 +330,16 @@ export function listLaneTree(vault: string, dir: string, ext = ".md"): string[] 
 /**
  * A change stamp of the lane entries a store-only machine reads: it moves
  * whenever a lane record lands, so a reader's memo (the entity index) keyed
- * by it never serves a stale build. Empty on an unswitched machine.
+ * by it never serves a stale build. The stamp is the stored lane fold's
+ * fingerprint, which includes the availability of the blobs a fold skipped
+ * (`lane-fold-cache.ts`): a lane update whose body is a pending blob keeps
+ * the stamp until its blob arrives, and moves it then, so a memo warmed on
+ * the old page is not served after the update becomes readable. Empty on
+ * an unswitched machine.
  */
 export function laneStoreStamp(vault: string): string {
   if (!lanePagesInStore(vault)) return "";
-  const store = configuredStore();
-  return store === null ? "" : laneFingerprintOf(store);
+  return laneStoreFold().fingerprint;
 }
 
 // ----- Writes -------------------------------------------------------------------

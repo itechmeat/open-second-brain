@@ -20,7 +20,6 @@
 
 import { BLOB_REF_KEY, type StorePartition } from "../constants.ts";
 import type { StoreRecord } from "../envelope.ts";
-import { isBlobRef } from "../envelope.ts";
 import { readShard, replacedShards, shardReadGap, type Compaction } from "../reader.ts";
 import { trackSeenShards } from "../seen-shards.ts";
 import { listShards } from "../shard-list.ts";
@@ -53,12 +52,6 @@ export interface StreamRead {
    * record, instead of rescanning the shards.
    */
   readonly pendingBlobs: ReadonlyArray<string>;
-  /**
-   * Whether a skipped pending record named no blob (`pendingBlobs` cannot
-   * cover it), so a caching caller has no stamp for its arrival and must
-   * not cache the read.
-   */
-  readonly pendingUnkeyed: boolean;
 }
 
 export interface StreamReadOptions {
@@ -76,13 +69,12 @@ function monthOf(rel: string): string {
 
 /**
  * The blob name a pending record's body still holds (the sha the blob is
- * stored under), or `null` when the pending body is no blob reference
- * (a partition root the read could not resolve bodies against).
+ * stored under). `resolveBody` marks a body pending only for a blob
+ * reference, whose key is always a string (`isBlobRef`), so every pending
+ * entry has one.
  */
-function blobRefSha(body: StoreRecord["body"]): string | null {
-  if (!isBlobRef(body)) return null;
-  const sha = body[BLOB_REF_KEY];
-  return typeof sha === "string" ? sha : null;
+function blobRefSha(body: StoreRecord["body"]): string {
+  return body[BLOB_REF_KEY] as string;
 }
 
 /** The partition-relative folder of a stream: `events`, `ledgers/<name>`. */
@@ -113,12 +105,11 @@ export function readStreamRecords(
       unreadable: [streamPrefix(ref)],
       skippedPending: false,
       pendingBlobs: [],
-      pendingUnkeyed: false,
     };
   }
   const compactions: Compaction[] = [];
   let skippedPending = false;
-  let pendingUnkeyed = false;
+  const seenBlobs = new Set<string>();
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device) continue;
     if (options.month !== undefined && !options.month(monthOf(shard.rel))) continue;
@@ -144,8 +135,10 @@ export function readStreamRecords(
       // the blob the caller stats for availability.
       skippedPending = true;
       const sha = blobRefSha(entry.record.body);
-      if (sha === null) pendingUnkeyed = true;
-      else if (!pendingBlobs.includes(sha)) pendingBlobs.push(sha);
+      if (!seenBlobs.has(sha)) {
+        seenBlobs.add(sha);
+        pendingBlobs.push(sha);
+      }
     }
   }
   const gone = trackSeenShards(
@@ -163,6 +156,5 @@ export function readStreamRecords(
     unreadable: [...unreadable, ...gone],
     skippedPending,
     pendingBlobs,
-    pendingUnkeyed,
   };
 }

@@ -79,6 +79,7 @@ import {
   type StoreInspection,
 } from "../../store/store-open.ts";
 import { isStoreOnly } from "../../store/store-only.ts";
+import { StoreUnavailableError } from "../../store/read/protection-store.ts";
 import { removalBacklog } from "../../store/removal-backlog.ts";
 import { readStoreWriteStatus, storeWriteStatusPath } from "../../store/store-write.ts";
 import {
@@ -586,6 +587,10 @@ export function storeOpenFailureDetail(
   ctx: Pick<DoctorCheckContext, "reach" | "withholdsPrivate">,
 ): string {
   if (!withholdsPrivate(ctx)) return err instanceof Error ? err.message : String(err);
+  // A `protectionStore` failure that is not an open failure at all (the
+  // shared partition is gone) carries its own redacted detail; the generic
+  // wording below would wrongly say "could not be opened".
+  if (err instanceof StoreUnavailableError && err.safeDetail !== "") return err.safeDetail;
   const at = root === null ? "" : ` at ${root}`;
   return (
     `the brain store${at} could not be opened, so every protection fails closed. ` +
