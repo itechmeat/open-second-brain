@@ -4402,7 +4402,7 @@ var init_safe_fs = __esm(() => {
 });
 
 // src/core/store/store-paths.ts
-import { realpathSync as realpathSync2 } from "node:fs";
+import { lstatSync as lstatSync3, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join9, posix as posix4, win32 as win322 } from "node:path";
 function pathsFor(platform) {
@@ -4522,6 +4522,34 @@ function blobPath(partitionRoot, sha) {
   if (!SHA256_RE2.test(sha))
     throw new Error(`"${sha}" is not a sha256 hex digest`);
   return join9(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
+}
+function lstatIdentity(path) {
+  const st = lstatSync3(path, { bigint: true });
+  return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+}
+function blobStamp(partitionRoot, sha) {
+  try {
+    const blob = lstatIdentity(blobPath(partitionRoot, sha));
+    const folder = lstatIdentity(join9(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2)));
+    return `${blob};${folder}`;
+  } catch {
+    return "absent";
+  }
+}
+function pendingBlobStampLines(root, identities) {
+  let lines = "";
+  for (const identity of identities.toSorted()) {
+    const slashAt = identity.indexOf("/");
+    const partition = identity.slice(0, slashAt);
+    const sha = identity.slice(slashAt + 1);
+    const stamp = blobStamp(partitionDir(root, partition), sha);
+    if (stamp === "absent")
+      lines += `blob ${identity}=absent
+`;
+    else
+      return null;
+  }
+  return lines;
 }
 function shardLockTarget(deviceStateDir, partition, rel) {
   return join9(deviceStateDir, STORE_LOCKS_DIR, partition, ...rel.split("/"));
@@ -6093,6 +6121,9 @@ function monthOf2(rel) {
   const name = rel.slice(rel.lastIndexOf("/") + 1);
   return name.slice(0, 7);
 }
+function blobRefSha(body) {
+  return body[BLOB_REF_KEY];
+}
 function streamPrefix(ref) {
   return ref.ledger !== undefined ? `${ref.stream}/${ref.ledger}` : ref.stream;
 }
@@ -6100,14 +6131,21 @@ function readStreamRecords(root, partition, ref, options = {}) {
   const partitionRoot = partitionDir(root, partition);
   const records = [];
   const unreadable = [];
+  const pendingBlobs = [];
   let shards;
   try {
     shards = listShards(partitionRoot, ref);
   } catch {
-    return { records, unreadable: [streamPrefix(ref)], skippedPending: false };
+    return {
+      records,
+      unreadable: [streamPrefix(ref)],
+      skippedPending: false,
+      pendingBlobs: []
+    };
   }
   const compactions = [];
   let skippedPending = false;
+  const seenBlobs = new Set;
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device)
       continue;
@@ -6128,10 +6166,16 @@ function readStreamRecords(root, partition, ref, options = {}) {
       unreadable.push(shard.rel);
     compactions.push(...read.compactions);
     for (const entry of read.records) {
-      if (entry.bodyState !== "pending")
+      if (entry.bodyState !== "pending") {
         records.push(entry.record);
-      else
-        skippedPending = true;
+        continue;
+      }
+      skippedPending = true;
+      const sha = blobRefSha(entry.record.body);
+      if (!seenBlobs.has(sha)) {
+        seenBlobs.add(sha);
+        pendingBlobs.push(sha);
+      }
     }
   }
   const gone = trackSeenShards(partitionRoot, {
@@ -6139,9 +6183,15 @@ function readStreamRecords(root, partition, ref, options = {}) {
     ...options.device !== undefined ? { device: options.device } : {},
     ...options.month !== undefined ? { month: options.month } : {}
   }, shards.map((shard) => shard.rel), replacedShards(compactions));
-  return { records, unreadable: [...unreadable, ...gone], skippedPending };
+  return {
+    records,
+    unreadable: [...unreadable, ...gone],
+    skippedPending,
+    pendingBlobs
+  };
 }
 var init_stream_read = __esm(() => {
+  init_constants();
   init_reader();
   init_seen_shards();
   init_shard_list();
@@ -6420,7 +6470,7 @@ import {
   fsyncSync as fsyncSync4,
   openSync as openSync6,
   linkSync as linkSync3,
-  lstatSync as lstatSync3,
+  lstatSync as lstatSync4,
   mkdirSync as mkdirSync12,
   readdirSync as readdirSync3,
   readFileSync as readFileSync13,
@@ -6435,7 +6485,7 @@ import { basename as basename7, dirname as dirname13, join as join19, relative a
 function filesBelow(path) {
   let stat;
   try {
-    stat = lstatSync3(path);
+    stat = lstatSync4(path);
   } catch {
     return [];
   }
@@ -6511,7 +6561,7 @@ function copyNoClobber(file, target) {
 function removeEmptyDirs(dir) {
   let stat;
   try {
-    stat = lstatSync3(dir);
+    stat = lstatSync4(dir);
   } catch {
     return;
   }
@@ -7756,10 +7806,13 @@ function build(store) {
   const unreadable = [];
   const pinned = new Map;
   let skippedPending = false;
+  const pendingBlobs = [];
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS);
     if (read.skippedPending)
       skippedPending = true;
+    for (const sha of read.pendingBlobs)
+      pendingBlobs.push(`${partition}/${sha}`);
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records)
       all.push({ record, partition });
@@ -7790,16 +7843,29 @@ function build(store) {
       partitions: new Set(entry.history.map((r) => partitionOf.get(r.id) ?? "shared"))
     });
   }
-  return { store, preferences, signals, pinned, unreadable, skippedPending };
+  return {
+    store,
+    preferences,
+    signals,
+    pinned,
+    unreadable,
+    skippedPending,
+    pendingBlobs
+  };
 }
 function readEntitiesOf(store) {
-  const fingerprint = fingerprintOf(store);
   const cached = cache.get(store.root);
+  const cachedLines = cached === undefined ? null : pendingBlobStampLines(store.root, cached.entities.pendingBlobs);
+  const shardStamp = fingerprintOf(store);
+  const fingerprint = cachedLines === null ? null : `${shardStamp}
+${cachedLines}`;
   if (cached !== undefined && cached.fingerprint === fingerprint)
     return cached.entities;
   const entities = build(store);
-  if (entities.unreadable.length === 0 && !entities.skippedPending)
-    cache.set(store.root, { fingerprint, entities });
+  const blobLines = pendingBlobStampLines(store.root, entities.pendingBlobs);
+  if (entities.unreadable.length === 0 && blobLines !== null)
+    cache.set(store.root, { fingerprint: `${shardStamp}
+${blobLines}`, entities });
   else
     cache.delete(store.root);
   return entities;

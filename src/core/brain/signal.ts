@@ -46,6 +46,8 @@ import { storeWrite } from "../store/store-write.ts";
 import { FileAlreadyExistsError } from "../fs-atomic.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
 import { signalsStoreOnly, storeSignal } from "./signal-state.ts";
+import { memoryPageNamed } from "./memory-pages.ts";
+import { existsSync } from "node:fs";
 import { join, posix, relative, resolve } from "node:path";
 
 import type { WriteSubject } from "./write-disposition.ts";
@@ -663,6 +665,37 @@ function writeVaultlessSignal(
   );
   rememberSignalKey(null, idKey, contentHash, sanitised, id, path, privacy);
   return { path, id, staged };
+}
+
+/**
+ * Whether a signal write's record still exists, in the coordinates a
+ * deduped idempotency result carries (the receipt `ref`'s path and id).
+ * A vault signal is its page; a store-only signal is its record in the
+ * fold. A signal that stayed alive but MOVED does not answer at its
+ * original path any more - the dream pass moves inbox pages into
+ * `Brain/inbox/processed/`, and applying a staged signal moves it out
+ * of `Brain/pending/` into `Brain/inbox/` - so the id is also looked up
+ * in those three folders and found there counts as present. False for a record
+ * `deleteBySource` forgot (archived is not looked up: archived is
+ * gone), for a receipt with no `ref` (empty id or path), and for
+ * anything unresolvable - callers use it as positive evidence, so every
+ * doubt answers "gone".
+ */
+export function signalRecordExists(
+  vault: string | null,
+  path: string,
+  id: string,
+  configPath?: string,
+): boolean {
+  if (path === "" || id === "") return false;
+  if (vault === null || signalsStoreOnly(vault, configPath))
+    return storeSignal(id, configPath) !== undefined;
+  if (existsSync(path)) return true;
+  return (
+    memoryPageNamed(vault, "inbox", `${id}.md`, { configPath }) !== null ||
+    memoryPageNamed(vault, "processed", `${id}.md`, { configPath }) !== null ||
+    memoryPageNamed(vault, "pending", `${id}.md`, { configPath }) !== null
+  );
 }
 
 /** Device-local lock that serialises store-only signal id allocation on this machine. */

@@ -19,11 +19,13 @@
  */
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
+import { writeBridgeProposals } from "../../src/core/brain/link-graph/bridge-discovery.ts";
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -96,5 +98,216 @@ describe("brain_bridges operation=discover", () => {
     const local = JSON.parse(await discover(TRANSPORT_REACH.local));
     const remote = JSON.parse(await discover(TRANSPORT_REACH.remote));
     expect(remote.scanned_candidates).toBe(local.scanned_candidates);
+  });
+});
+
+describe("brain_bridges list reads the artifact discover wrote", () => {
+  test("a proposal path containing parentheses round-trips writer to parser", async () => {
+    // `writeBridgeProposals` emits the path unchanged inside the source
+    // cell - `[[Design (v2)]] (Notes/Design (v2).md)` - so the parser
+    // must take the path up to the cell's final parenthesis, not the
+    // first one. A parser that stops early cannot read the row back,
+    // and the whole artifact then answers as absent even at local reach.
+    const source = "Notes/Design (v2).md";
+    const target = "Notes/Spec (v2).md";
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(join(vault, source), "# Design\n\nSee [[Spec (v2)]].\n");
+    writeFileSync(join(vault, target), "# Spec\n\nSee [[Design (v2)]].\n");
+    writeBridgeProposals(
+      vault,
+      {
+        proposals: [{ source, target, similarity: 0.8, sourceInbound: 1, targetInbound: 1 }],
+        scannedCandidates: 2,
+        vecAvailable: true,
+      },
+      { now: new Date("2026-06-04T12:00:00Z") },
+    );
+    const tool = BRAIN_TOOLS.find((t) => t.name === "brain_bridges")!;
+    const ctx: ServerContext = { vault, reach: TRANSPORT_REACH.local, configPath, repoRoot: null };
+    const out = (await tool.handler(ctx, { operation: "list" })) as Record<string, unknown>;
+    expect(out["exists"]).toBe(true);
+    expect(out["proposals"]).toBe(1);
+  });
+});
+
+describe("brain_clusters operation=run", () => {
+  /** Four mutually linked pages, one of them the reserved one. */
+  async function writeCommunity(): Promise<void> {
+    const group = ["team-a", "team-b", "team-c", RESERVED];
+    for (const name of group) {
+      const others = group
+        .filter((g) => g !== name)
+        .map((g) => `[[${g}]]`)
+        .join(" ");
+      const frontmatter =
+        name === RESERVED ? `---\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n---\n\n` : "";
+      writeFileSync(join(vault, `${name}.md`), `${frontmatter}# ${name}\n\nSee ${others}.\n`);
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }));
+  }
+
+  async function clusters(reach: TransportReach): Promise<Record<string, unknown>> {
+    const tool = BRAIN_TOOLS.find((t) => t.name === "brain_clusters")!;
+    const ctx: ServerContext = { vault, reach, configPath, repoRoot: null };
+    return (await tool.handler(ctx, { operation: "run", batch_size: 1 })) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  test("each batch is filtered by the same visibility rules as the top-level result", async () => {
+    await writeCommunity();
+    const remote = await clusters(TRANSPORT_REACH.remote);
+    const body = JSON.stringify(remote);
+    // Every detected community names the reserved page, so a remote
+    // caller sees no community and therefore NO batch: the offsets and
+    // index count detected communities, and a `{start: 0, end: 1}` beside
+    // an empty `communities` would show that a withheld community exists
+    // and how many there are. No batch may name the cluster note its
+    // seed produced (or any stale removal, or a raw write error's seed
+    // path) either - `batch_size` must not be the side door back in.
+    expect(remote["batches"]).toEqual([]);
+    expect(remote["communities"]).toEqual([]);
+    expect(body).not.toContain("Brain/clusters/");
+    expect(body).not.toContain(RESERVED);
+
+    // The unrestricted view keeps the batches verbatim: the note this run
+    // materialised is reported.
+    const local = await clusters(TRANSPORT_REACH.local);
+    const localBatches = local["batches"] as Array<Record<string, unknown>> | undefined;
+    expect(localBatches).toHaveLength(1);
+    expect((localBatches as Array<{ written: string[] }>)[0]!.written.length).toBeGreaterThan(0);
+    expect(JSON.stringify(local)).toContain("Brain/clusters/");
+  });
+});
+
+/**
+ * The ownership half of the same root closure: a proposal names two pages
+ * by path, so under `integrity.owner_scope_delivery: fail` a proposal
+ * naming another owner's page is dropped whole, and a lane page carrying
+ * an owner is answered only to that owner - the same composed view every
+ * sibling reader asks.
+ */
+describe("brain_bridges under integrity.owner_scope_delivery: fail", () => {
+  const OWNER_A = "agent-a";
+  const CALLER = "agent-b";
+  const OWNED_A = "canary-alpha.md";
+  const OWNED_B = "canary-beta.md";
+
+  /** A near-identical pair owned by `OWNER_A`, indexed into the vec store. */
+  async function writeOwnedPair(): Promise<void> {
+    const body =
+      "Release the candidate build to staging, watch error rates closely, expand gradually, roll back on regression.";
+    for (const name of [OWNED_A, OWNED_B]) {
+      writeFileSync(join(vault, name), `---\nowner: ${OWNER_A}\n---\n\n# ${name}\n\n${body}\n`);
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }), { embeddings: true });
+  }
+
+  function setGateFail(): void {
+    writeFileSync(
+      brainConfigPath(vault),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+    );
+  }
+
+  function ctxFor(reach: TransportReach, agentName?: string): ServerContext {
+    return { vault, reach, configPath, repoRoot: null, agentName };
+  }
+
+  function bridgesTool() {
+    return BRAIN_TOOLS.find((t) => t.name === "brain_bridges")!;
+  }
+
+  test("discover drops a pair that names another owner's pages, whole", async () => {
+    await writeOwnedPair();
+    setGateFail();
+
+    // The owner sees its own pair.
+    const asA = (
+      (await bridgesTool().handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+        operation: "discover",
+        min_similarity: 0.5,
+      })) as { proposals: ReadonlyArray<{ source: string; target: string }> }
+    ).proposals;
+    expect(
+      asA.some((p) => p.source === OWNED_A || p.target === OWNED_A || p.source === OWNED_B),
+    ).toBe(true);
+
+    // Another scope sees neither end - the proposal is gone whole, not
+    // reported with one end missing.
+    const asB = (
+      (await bridgesTool().handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+        operation: "discover",
+        min_similarity: 0.5,
+      })) as { proposals: ReadonlyArray<{ source: string; target: string }> }
+    ).proposals;
+    expect(
+      asB.some((p) => p.source === OWNED_A || p.target === OWNED_A || p.source === OWNED_B),
+    ).toBe(false);
+  });
+
+  test("list answers an owner-stamped proposals artifact only to its owner", async () => {
+    await writeOwnedPair();
+    setGateFail();
+    // Produce the shared artifact, then stamp the page with an owner - the
+    // state a writer resolved under an enforced identity leaves.
+    const bridges = bridgesTool();
+    await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "discover",
+      min_similarity: 0.5,
+    });
+    const artifact = join(vault, "Brain", "proposals", "bridges.md");
+    const text = readFileSync(artifact, "utf8");
+    writeFileSync(artifact, text.replace("---\n", `---\nowner: ${OWNER_A}\n`));
+
+    const asB = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    // A withheld lane page answers exactly as an absent one.
+    expect(asB["exists"]).toBe(false);
+    expect(asB["proposals"]).toBe(0);
+
+    const asA = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    expect(asA["exists"]).toBe(true);
+  });
+
+  test("list counts only the rows the caller may see when the artifact is visible", async () => {
+    // The artifact page itself carries no owner stamp, so the file-level
+    // check passes for both callers - the count is what would leak.
+    const bridges = bridgesTool();
+    await writeOwnedPair();
+    // A second, near-identical pair owned by the CALLER, so the shared
+    // artifact holds rows of both ownerships.
+    const sharedBody =
+      "Roll out the candidate build to one staging host, watch the error rate, expand the rollout step by step, roll back if it regresses.";
+    for (const name of ["canary-gamma.md", "canary-delta.md"]) {
+      writeFileSync(
+        join(vault, name),
+        `---\nowner: ${CALLER}\n---\n\n# ${name}\n\n${sharedBody}\n`,
+      );
+    }
+    await indexVault(resolveSearchConfig({ vault, configPath }), { embeddings: true });
+    setGateFail();
+    await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "discover",
+      min_similarity: 0.4,
+    });
+
+    const asA = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, OWNER_A), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    const asB = (await bridges.handler(ctxFor(TRANSPORT_REACH.local, CALLER), {
+      operation: "list",
+    })) as Record<string, unknown>;
+    // Both see the shared file; the owner counts every row, the other
+    // scope counts only rows naming pages it may see.
+    expect(asA["exists"]).toBe(true);
+    expect(asB["exists"]).toBe(true);
+    expect(Number(asA["proposals"])).toBeGreaterThan(0);
+    expect(Number(asB["proposals"])).toBeGreaterThan(0);
+    expect(Number(asB["proposals"])).toBeLessThan(Number(asA["proposals"]));
   });
 });

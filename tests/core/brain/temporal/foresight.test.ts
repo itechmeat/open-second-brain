@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,5 +113,68 @@ describe("buildForesight", () => {
     const b = buildForesight(vault, { now: NOW });
     expect(a.upcoming.length).toBeLessThanOrEqual(FORESIGHT_MAX_ITEMS);
     expect(a).toEqual(b);
+  });
+
+  test("withholdsPrivate drops private extracts and keeps the readable ones", () => {
+    seedExtract("commitment", "A private promise nobody may see", "2026-06-01T10:00:00Z");
+    appendContinuityRecord(vault, {
+      kind: "pre_compact_extract",
+      createdAt: "2026-06-02T10:00:00Z",
+      sourceRefs: [{ id: "sess-private", kind: "session" }],
+      payload: { extract_type: "commitment", text: "An open commitment marked private" },
+      private: true,
+    });
+
+    // Local reach: the fold is unfiltered and carries both.
+    const local = buildForesight(vault, { now: NOW });
+    expect(local.upcoming.find((u) => u.title.includes("marked private"))).toBeDefined();
+
+    // Below local reach: the private record is dropped whole - its text
+    // and its source refs with it - and the readable extract stays.
+    const remote = buildForesight(vault, { now: NOW, withholdsPrivate: true });
+    expect(remote.upcoming.find((u) => u.title.includes("marked private"))).toBeUndefined();
+    expect(remote.upcoming.find((u) => u.title.includes("private promise"))).toBeDefined();
+  });
+
+  test("withholdsPrivate drops recurrence support from private-classified events; local keeps it", () => {
+    // A recurrence event whose scope names a private page is classified
+    // private by the writer's own checks, and that scope is what the
+    // projected item title carries - so below local reach the private
+    // event's support is dropped before the cadences are built, and the
+    // routine does not surface (nor does a residual support count or
+    // commitment). Local reach keeps the unfiltered projection.
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Notes", "secret.md"),
+      "---\nvisibility: [private]\n---\n\n# secret\n",
+    );
+    applyRecurrenceEvidence(vault, {
+      contentHash: "privcd",
+      scope: "[[Notes/secret]]",
+      sourceId: "session-priv-a",
+      action: "learn",
+      at: "2026-05-28T09:00:00Z",
+    });
+    applyRecurrenceEvidence(vault, {
+      contentHash: "privcd",
+      scope: "[[Notes/secret]]",
+      sourceId: "session-priv-b",
+      action: "learn",
+      at: "2026-06-03T09:00:00Z",
+    });
+
+    // Local reach: the routine projects, named by its (here readable)
+    // scope.
+    const local = buildForesight(vault, { now: NOW });
+    const localRecurring = local.upcoming.filter((u) => u.kind === "recurring");
+    expect(localRecurring).toHaveLength(1);
+    expect(localRecurring[0]!.title).toContain("Notes/secret");
+    expect(localRecurring[0]!.sources).toContain("recurrence:privcd");
+
+    // Below local reach: the whole routine is withheld - no title, no
+    // due date, no support count, no commitment.
+    const remote = buildForesight(vault, { now: NOW, withholdsPrivate: true });
+    expect(remote.upcoming.filter((u) => u.kind === "recurring")).toHaveLength(0);
+    expect(JSON.stringify(remote)).not.toContain("secret");
   });
 });

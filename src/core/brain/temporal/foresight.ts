@@ -47,11 +47,29 @@ export interface ForesightEnvelope {
 export interface BuildForesightOptions {
   readonly now: Date;
   readonly horizonDays?: number;
+  /**
+   * Withhold private material from the whole fold: continuity records
+   * flagged `private` from the extract fold, and support that comes
+   * from private-classified recurrence events from the recurring
+   * projection (the event's scope can name a private page, and that
+   * scope becomes the item title). The MCP handler sets it for every
+   * caller below local reach, the same withholding flag the other
+   * report surfaces hand their folds; local reach keeps the unfiltered
+   * output. Absent means false.
+   */
+  readonly withholdsPrivate?: boolean;
 }
 
-function recurringItems(vault: string, nowMs: number, horizonDays: number): ForesightItem[] {
+function recurringItems(
+  vault: string,
+  nowMs: number,
+  horizonDays: number,
+  withholdsPrivate: boolean,
+): ForesightItem[] {
   const out: Array<{ item: ForesightItem; dueMs: number }> = [];
-  for (const cadence of listRecurrenceCadences(vault)) {
+  for (const cadence of listRecurrenceCadences(vault, undefined, {
+    excludePrivateEvents: withholdsPrivate,
+  })) {
     if (cadence.meanIntervalDays === null) continue;
     const lastMs = Date.parse(cadence.lastAt);
     if (!Number.isFinite(lastMs)) continue;
@@ -77,11 +95,16 @@ function recurringItems(vault: string, nowMs: number, horizonDays: number): Fore
   return out.map((x) => x.item);
 }
 
-function extractItems(vault: string, nowMs: number): ForesightItem[] {
+function extractItems(vault: string, nowMs: number, withholdsPrivate: boolean): ForesightItem[] {
   const since = isoSecond(new Date(nowMs - FORESIGHT_EXTRACT_LOOKBACK_DAYS * DAY_MS));
   const records = listContinuityRecords(vault, { kind: "pre_compact_extract", since });
   const out: Array<{ item: ForesightItem; createdAt: string }> = [];
   for (const record of records) {
+    // The fold reads the raw store, not the read model's private-record
+    // masking, so the withholding flag is applied here: a private
+    // record's text is the item title and its refs the sources, and a
+    // caller it is withheld from must not receive either.
+    if (withholdsPrivate && record.private === true) continue;
     const extractType = record.payload["extract_type"];
     if (extractType !== "commitment" && extractType !== "open_question") continue;
     const text = record.payload["text"];
@@ -114,7 +137,10 @@ function extractItems(vault: string, nowMs: number): ForesightItem[] {
 export function buildForesight(vault: string, opts: BuildForesightOptions): ForesightEnvelope {
   const horizonDays = opts.horizonDays ?? FORESIGHT_HORIZON_DAYS;
   const nowMs = opts.now.getTime();
-  const upcoming = [...recurringItems(vault, nowMs, horizonDays), ...extractItems(vault, nowMs)];
+  const upcoming = [
+    ...recurringItems(vault, nowMs, horizonDays, opts.withholdsPrivate === true),
+    ...extractItems(vault, nowMs, opts.withholdsPrivate === true),
+  ];
   return Object.freeze({
     version: FORESIGHT_SCHEMA_VERSION,
     generatedAt: isoSecond(opts.now),

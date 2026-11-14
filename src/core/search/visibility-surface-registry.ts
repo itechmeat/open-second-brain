@@ -481,7 +481,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.excluded,
     reason:
-      "swept into population because admin-tools.ts (its home file) also imports parseFrontmatter " +
+      "swept into population because admin-policy-tools.ts, which admin-tools.ts (its home file) " +
+      "imports, also imports parseFrontmatter " +
       "and Store for brain_labels/brain_tiers/brain_maintenance beside it - the handler itself " +
       "returns only secret names and run results, never a note path, title, or body. Listed for " +
       "completeness of the file-level population rule rather than as a real disclosure.",

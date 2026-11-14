@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { STORE_ROOT_CONFIG_KEY, STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import {
   blobPath,
+  blobStamp,
   deviceStateDirFor,
   isPathInside,
   partitionDir,
@@ -198,5 +208,61 @@ describe("store layout paths", () => {
     expect(() =>
       deviceStateDirFor("../../x", { platform: "linux", home: "/h", env: {} }),
     ).toThrow();
+  });
+});
+
+describe("the blob availability stamp", () => {
+  const SHA = "ab".padEnd(64, "0");
+  const BLOB = "hello";
+
+  let root = "";
+  let partitionRoot = "";
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "o2b-blobstamp-"));
+    partitionRoot = partitionDir(root, "shared");
+    mkdirSync(join(partitionRoot, "blobs", "ab"), { recursive: true });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  test("an absent blob reads as absent, a present one by its identity", () => {
+    expect(blobStamp(partitionRoot, SHA)).toBe("absent");
+    writeFileSync(blobPath(partitionRoot, SHA), BLOB);
+    expect(blobStamp(partitionRoot, SHA)).not.toBe("absent");
+    expect(blobStamp(partitionRoot, "zz")).toBe("absent");
+  });
+
+  test("a link swapped for the real file moves the stamp at a standstill of size and mtime", () => {
+    writeFileSync(blobPath(partitionRoot, SHA), BLOB);
+    const blobFile = blobPath(partitionRoot, SHA);
+    const before = blobStamp(partitionRoot, SHA);
+    // A twin of the same size, its mtime set back to the original's, with
+    // the blob path turned into a link to it: the reader refuses the link,
+    // and a size:mtime stamp would not notice the swap.
+    const twin = join(root, "twin");
+    writeFileSync(twin, BLOB);
+    const stat = statSync(blobFile);
+    utimesSync(twin, stat.atime, stat.mtime);
+    rmSync(blobFile);
+    symlinkSync(twin, blobFile, "file");
+    expect(blobStamp(partitionRoot, SHA)).not.toBe(before);
+    // The operator repairs the link in place (`mv`, `cp -p`): the size and
+    // the mtime stay, only ctime moves.
+    rmSync(blobFile);
+    writeFileSync(blobFile, BLOB);
+    utimesSync(blobFile, stat.atime, stat.mtime);
+    expect(blobStamp(partitionRoot, SHA)).not.toBe(before);
+  });
+
+  test("the blobs/<ab> folder's identity is stamped too", () => {
+    writeFileSync(blobPath(partitionRoot, SHA), BLOB);
+    const abDir = join(partitionRoot, "blobs", "ab");
+    const before = blobStamp(partitionRoot, SHA);
+    // The blob's own folder arrives as a link (a synced move): the blob
+    // file keeps its identity, the folder's does not, and the reader
+    // refuses a blob whose fan-out folder is a link.
+    const kept = join(root, "ab-real");
+    renameSync(abDir, kept);
+    symlinkSync(kept, abDir, "dir");
+    expect(blobStamp(partitionRoot, SHA)).not.toBe(before);
   });
 });

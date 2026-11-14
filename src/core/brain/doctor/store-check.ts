@@ -79,6 +79,7 @@ import {
   type StoreInspection,
 } from "../../store/store-open.ts";
 import { isStoreOnly } from "../../store/store-only.ts";
+import { StoreUnavailableError } from "../../store/read/protection-store.ts";
 import { removalBacklog } from "../../store/removal-backlog.ts";
 import { readStoreWriteStatus, storeWriteStatusPath } from "../../store/store-write.ts";
 import {
@@ -95,7 +96,12 @@ import {
   looseModeIssues,
   reservedDeviceDirIssues,
 } from "./store-trust-check.ts";
-import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
+import type {
+  DoctorFindings,
+  DoctorCheckContext,
+  StoreSideCheckContext,
+  StoreSideDoctorCheck,
+} from "./check.ts";
 import { returnedRetiredIssues } from "./device-retire-check.ts";
 import {
   STORE_SHARD_UNREADABLE_CODE,
@@ -419,9 +425,13 @@ function heldTailFindings(
  * Whether the caller is below local reach: a wire surface that names its
  * reach (`brain_doctor`) or one that only marks the caller as withheld from
  * private data (`brain_brief view=operator`, `brain_status`, the repair
- * pass). Neither set reads as the operator's own shell.
+ * pass). Neither set reads as the operator's own shell. Shared with the
+ * other doctor checks whose findings can carry a store-unavailable reason
+ * (`permissions-check.ts`), so the redaction of such a reason has one gate.
  */
-function withholdsPrivate(ctx: StoreSideCheckContext): boolean {
+export function withholdsPrivate(
+  ctx: Pick<DoctorCheckContext, "reach" | "withholdsPrivate">,
+): boolean {
   return (
     ctx.withholdsPrivate === true ||
     (ctx.reach !== undefined && ctx.reach !== TRANSPORT_REACH.local)
@@ -566,11 +576,24 @@ function lostPartitionFinding(
  * `private/store.json`) or the store ids that disagree, so below local
  * reach the finding keeps its code and the store root and says only that
  * the store did not open; the operator's own doctor reads the cause.
+ * Exported for the other checks whose finding can be caused by the same
+ * store-open failure (`permissions-check.ts` carries the
+ * `protectionStore` reason in its `permissions-unreadable` finding), so
+ * the redacted wording has one definition.
  */
-function storeOpenFailureDetail(err: unknown, root: string, ctx: StoreSideCheckContext): string {
+export function storeOpenFailureDetail(
+  err: unknown,
+  root: string | null,
+  ctx: Pick<DoctorCheckContext, "reach" | "withholdsPrivate">,
+): string {
   if (!withholdsPrivate(ctx)) return err instanceof Error ? err.message : String(err);
+  // A `protectionStore` failure that is not an open failure at all (the
+  // shared partition is gone) carries its own redacted detail; the generic
+  // wording below would wrongly say "could not be opened".
+  if (err instanceof StoreUnavailableError && err.safeDetail !== "") return err.safeDetail;
+  const at = root === null ? "" : ` at ${root}`;
   return (
-    `the brain store at ${root} could not be opened, so every protection fails closed. ` +
+    `the brain store${at} could not be opened, so every protection fails closed. ` +
     "Run `o2b brain doctor` on this machine for the cause and the remedy"
   );
 }

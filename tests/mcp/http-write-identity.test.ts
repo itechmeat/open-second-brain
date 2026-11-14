@@ -12,13 +12,25 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startHttp, type HttpServerHandle } from "../../src/mcp/index.ts";
+import { FEEDBACK_TOOLS } from "../../src/mcp/brain/feedback-tools.ts";
+import { EXPIRE_TOOL } from "../../src/mcp/brain/expire-tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
+import { writePreference } from "../../src/core/brain/preference.ts";
+import { BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { queryDecisionLedger } from "../../src/core/brain/permissions/ledger.ts";
 import { mintAgentToken } from "../../src/core/brain/secrets/token-store.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
@@ -90,6 +102,22 @@ function setGate(mode: string): void {
 function inboxEntries(): string[] {
   const dir = join(vault, "Brain", "inbox");
   return existsSync(dir) ? readdirSync(dir).filter((n) => n.includes("prefer-tests")) : [];
+}
+
+/** Every parsed JSONL row of the audit log, newest file last. */
+function logRows(): Array<Record<string, unknown>> {
+  const dir = join(vault, "Brain", "log");
+  const rows: Array<Record<string, unknown>> = [];
+  if (!existsSync(dir)) return rows;
+  for (const name of readdirSync(dir)
+    .filter((n) => n.endsWith(".jsonl"))
+    .toSorted()) {
+    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      rows.push(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+  return rows;
 }
 
 describe("write-side decisions answer for the token's agent", () => {
@@ -198,5 +226,128 @@ describe("write-side decisions answer for the token's agent", () => {
       target: "Notes/Bob Ask.md",
       source: "default",
     });
+  });
+
+  test("a token caller's brain_note without agent is attributed to the token's agent", async () => {
+    const { tokenMaterial } = mintAgentToken(vault, "mcp_token_bob", "bob");
+    await start();
+    const body = await postJson(
+      rpc("tools/call", 1, {
+        name: "brain_note",
+        arguments: { text: "shipped the thing" },
+      }),
+      tokenMaterial,
+    );
+    const result = (body.result as Record<string, any>).structuredContent as Record<string, any>;
+    expect(body.error).toBeUndefined();
+    // The receipt and the log line name the credential's agent: the
+    // process config identity (operator) must never appear there.
+    expect(result["agent"]).toBe("bob");
+    const noteRows = logRows().filter((row) => row["kind"] === "note");
+    expect(noteRows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(noteRows)).toContain("bob");
+    expect(JSON.stringify(noteRows)).not.toContain("operator");
+  });
+
+  test("a token caller's brain_expire without agent stamps the token's agent in the audit log", async () => {
+    const { tokenMaterial } = mintAgentToken(vault, "mcp_token_bob", "bob");
+    writePreference(vault, {
+      slug: "expire-me",
+      topic: "expire me",
+      principle: "prefer expiring rules",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: "2026-05-02T00:00:00Z",
+    });
+    await start();
+    const body = await postJson(
+      rpc("tools/call", 1, {
+        name: "brain_expire",
+        arguments: { id: "pref-expire-me", expires: "2030-01-01" },
+      }),
+      tokenMaterial,
+    );
+    expect(body.error).toBeUndefined();
+    // The expiration's audit event names who set it - the token's agent,
+    // never the writer's default stamp nor the config identity.
+    const setRows = logRows().filter((row) => row["kind"] === "expiration-set");
+    expect(setRows).toHaveLength(1);
+    expect((setRows[0]!["payload"] as Record<string, unknown>)["agent"]).toBe("bob");
+  });
+});
+
+describe("the identity fallback answers for tokens only", () => {
+  let configHome: string;
+
+  afterEach(() => {
+    if (configHome !== undefined) {
+      rmSync(configHome, { recursive: true, force: true });
+      configHome = undefined as unknown as string;
+    }
+  });
+
+  test("a shared-key identity never stamps its own name over the config resolution", async () => {
+    // A non-default config identity: this is the name the config path
+    // resolves, and the name a shared-key write must keep carrying.
+    setEnv("VAULT_AGENT_NAME", "cfgagent");
+    configHome = mkdtempSync(join(tmpdir(), "o2b-identity-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: cfgagent\n`);
+    const noteTool = FEEDBACK_TOOLS.find((t) => t.name === "brain_note")!;
+    const ctx = {
+      vault,
+      configPath,
+      repoRoot: null,
+      // A shared-key caller's minted identity is the operator's, but the
+      // rule must not TRUST it for stamping: whatever it carries, the
+      // config-path resolution decides, as it did before the token
+      // fallback existed.
+      requestIdentity: { agent: "infiltrator", via: "shared-key" as const },
+    };
+    const res = (await noteTool.handler(ctx, { text: "shared key note" })) as Record<
+      string,
+      unknown
+    >;
+    expect(res["agent"]).toBe("cfgagent");
+    expect(logRows().filter((row) => row["kind"] === "note").length).toBeGreaterThan(0);
+    expect(JSON.stringify(logRows())).not.toContain("infiltrator");
+  });
+
+  test("a token identity still stamps the token's agent on a note and an expiration", async () => {
+    setEnv("VAULT_AGENT_NAME", "cfgagent");
+    configHome = mkdtempSync(join(tmpdir(), "o2b-identity-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: cfgagent\n`);
+    writePreference(vault, {
+      slug: "expire-token",
+      topic: "expire token",
+      principle: "prefer token expirations",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      confirmed_at: "2026-05-02T00:00:00Z",
+    });
+    const tools = FEEDBACK_TOOLS;
+    const noteTool = tools.find((t) => t.name === "brain_note")!;
+    const expireTool = tools.find((t) => t.name === EXPIRE_TOOL)!;
+    const ctx = {
+      vault,
+      configPath,
+      repoRoot: null,
+      requestIdentity: { agent: "bob", via: "token" as const },
+    };
+    const note = (await noteTool.handler(ctx, { text: "token note" })) as Record<string, unknown>;
+    expect(note["agent"]).toBe("bob");
+    const res = (await expireTool.handler(ctx, {
+      id: "pref-expire-token",
+      expires: "2030-01-01",
+    })) as Record<string, unknown>;
+    expect(res["id"]).toBe("pref-expire-token");
+    const setRows = logRows().filter((row) => row["kind"] === "expiration-set");
+    expect(setRows).toHaveLength(1);
+    expect((setRows[0]!["payload"] as Record<string, unknown>)["agent"]).toBe("bob");
   });
 });

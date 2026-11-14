@@ -170,8 +170,10 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/state/surfaces.ts": TEXT,
   "src/core/write-binding/index.ts": TEXT,
   "src/mcp/brain/context-tools.ts": NOTE_WALL,
-  "src/mcp/brain/feedback-tools.ts": TEXT,
-  "src/mcp/brain/knowledge-tools.ts": LANE,
+  // Task 3.19 moved the handlers with the literals into sibling modules;
+  // the entries follow the code they excuse.
+  "src/mcp/brain/dream-tools.ts": TEXT,
+  "src/mcp/brain/knowledge-lane-tools.ts": LANE,
   "src/mcp/brain/procedure-tools.ts": LANE,
   "src/mcp/skill-tools.ts": TEXT,
 });

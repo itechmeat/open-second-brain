@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { PERMISSIONS_UNREADABLE_CODE } from "../../../src/core/brain/doctor/permissions-check.ts";
 import { nextCommandField } from "../../../src/core/brain/next-step.ts";
 import {
   STORE_CLOCK_AHEAD_CODE,
@@ -53,6 +54,7 @@ import { publishStateDigest } from "../../../src/core/store/state-digest.ts";
 import { inspectStore, openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
 import { ensureStore } from "../store/fixtures/temp-store.ts";
+import { switchDevice } from "./store-only/fixtures.ts";
 import {
   STORE_SHARD_BLOB_PENDING_CODE,
   STORE_SHARD_CORRUPT_LINE_CODE,
@@ -273,6 +275,43 @@ describe("store in use", () => {
         expect(remote[0]!.message).not.toContain(sharedId);
         expect(remote[0]!.message).not.toContain(otherId);
       }
+    }
+  });
+
+  test("below local reach the permissions-unreadable finding keeps its code without the lost partition's name", () => {
+    process.env[STORE_ROOT_ENV] = storeRoot;
+    process.env["O2B_DEVICE_ID"] = "dev-a";
+    ensureStore(storeRoot);
+    switchDevice(storeRoot);
+    rmSync(join(storeRoot, "private", "store.json"));
+    const unreadableOf = (opts: { withholdsPrivate?: true; reach?: "remote" }) =>
+      runDoctor(vault, { now: new Date(NOW), ...opts }).errors.filter(
+        (i) => i.code === PERMISSIONS_UNREADABLE_CODE,
+      );
+    const local = unreadableOf({});
+    expect(local).toHaveLength(1);
+    // Local reach names the cause: the held partition's lost identity file.
+    expect(local[0]!.message).toContain("private/store.json");
+    for (const opts of [{ withholdsPrivate: true } as const, { reach: "remote" } as const]) {
+      const remote = unreadableOf(opts);
+      expect(remote).toHaveLength(1);
+      // The finding keeps its code and its source label; the cause is the
+      // store check's own redacted detail.
+      expect(remote[0]!.message).toContain("could not be opened");
+      expect(remote[0]!.message).not.toContain("private");
+      // The whole serialized answer names no partition and no remedy
+      // (`private/`, not the bare word: on macOS the temp root itself
+      // resolves under `/private/var`, and the redacted finding keeps the
+      // store root).
+      const whole = JSON.stringify(runDoctor(vault, { now: new Date(NOW), ...opts }));
+      // The redacted finding keeps the store root, and the temporary store
+      // root itself may resolve under a private partition on some hosts
+      // (macOS `/private/var`): the allowed root is cut out before the
+      // check, so only a `private/` spelling OUTSIDE the permitted root
+      // still fails.
+      const outsideRoot = whole.split(storeRoot).join("");
+      expect(outsideRoot).not.toContain("private/");
+      expect(whole).not.toContain("partition leave private");
     }
   });
 

@@ -211,9 +211,12 @@ function partitionsShowingSignal(id: string, configPath?: string): StorePartitio
     store = protectionStore(configPath, { needShared: true });
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
+    // The reach-safe twin of the error's message: the raw one can name a
+    // held partition's file, and this refusal reaches callers at remote
+    // reach.
     throw new StoreWriteError(
       "store-error",
-      `the signal ${id} cannot be forgotten: ${err.message}`,
+      `the signal ${id} cannot be forgotten: ${err.publicMessage}`,
     );
   }
   if (store === null) return [];
@@ -221,10 +224,17 @@ function partitionsShowingSignal(id: string, configPath?: string): StorePartitio
     if (!store.partitions.has(partition)) return false;
     const read = readStreamRecords(store.root, partition, { stream: "events" });
     if (read.unreadable.length > 0) {
+      // The same publicMessage approach the store-open refusal above
+      // takes: this path carries no caller reach, so the private
+      // partition's shard paths (which name a device) never go into the
+      // message, at any reach. A shared shard names nothing private.
+      const listed =
+        partition === "private"
+          ? `${read.unreadable.length} private events shard${read.unreadable.length === 1 ? "" : "s"}`
+          : read.unreadable.map((rel) => `${partition}/${rel}`).join(", ");
       throw new StoreWriteError(
         "store-error",
-        `the signal ${id} cannot be forgotten while an events shard cannot be read ` +
-          `(${read.unreadable.map((rel) => `${partition}/${rel}`).join(", ")})`,
+        `the signal ${id} cannot be forgotten while an events shard cannot be read (${listed})`,
       );
     }
     return foldSignals(read.records).signals.has(id);

@@ -489,7 +489,19 @@ export function summarizeRecallTelemetry(
   vault: string | null,
   filter: RecallTelemetryFilter = {},
 ): RecallTelemetrySummary {
-  const records = listRecallTelemetry(vault, filter);
+  return summarizeRecallTelemetryRecords(listRecallTelemetry(vault, filter));
+}
+
+/**
+ * The summary fold over an already-listed set of records. Split from
+ * {@link summarizeRecallTelemetry} so a reader that must apply its own
+ * record boundary first (the MCP tool applies the caller's reach and
+ * ownership view, dropping withheld records BEFORE the counts) folds the
+ * same numbers over the same shape without a second disk read.
+ */
+export function summarizeRecallTelemetryRecords(
+  records: ReadonlyArray<ContinuityRecord>,
+): RecallTelemetrySummary {
   const byMode: Partial<Record<RecallTelemetryMode, number>> = {};
   const byStatus: Partial<Record<RecallTelemetryStatus, number>> = {};
   const byChannel: Partial<Record<RecallChannel, number>> = {};

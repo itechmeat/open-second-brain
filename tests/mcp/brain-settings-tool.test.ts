@@ -5,10 +5,12 @@
  * key, the settings file edited on an unswitched machine.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { setBrainSetting } from "../../src/core/brain/policy/settings-write.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { SETTING_SET_KIND } from "../../src/core/store/constants.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import {
@@ -45,8 +47,16 @@ async function call(server: MCPServer, args: Record<string, unknown>): Promise<A
   return { result: JSON.parse(text) as Record<string, unknown> };
 }
 
-async function serverFor(vault: string | null, configPath: string): Promise<MCPServer> {
-  const server = new MCPServer({ vault, configPath });
+async function serverFor(
+  vault: string | null,
+  configPath: string,
+  reach?: TransportReach,
+): Promise<MCPServer> {
+  const server = new MCPServer({
+    vault,
+    configPath,
+    ...(reach !== undefined ? { reach } : {}),
+  });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,
@@ -207,5 +217,73 @@ describe("brain_settings on an unswitched machine", () => {
     expect(error?.data?.["code"]).toBe("operator_only_setting");
     expect(error?.message).toContain("o2b brain settings set integrity.owner_scope_delivery");
     expect(readFileSync(brainConfigPath(env.vault), "utf8")).toBe(before);
+  });
+});
+
+describe("brain_settings on a switched machine whose store cannot be opened", () => {
+  test("a remote agent's refusal names neither the lost partition nor the leave remedy", async () => {
+    env = makeStoreEnv("osb-settool-remote-redact-");
+    switchDevice(env.storeRoot);
+    setBrainSetting(
+      { vault: env.vault, authority: "human", agent: "u" },
+      "dream.heal_enrich_enabled",
+      true,
+    );
+    // A switched machine that lost the identity file of the private
+    // partition it holds: the store-open error names `private/store.json`
+    // and the leave verb, but none of that may reach the remote caller.
+    // Only `private/store.json` is removed: the raw text keeps the leave
+    // remedy here, so the assertions below have something to catch.
+    rmSync(join(env.storeRoot, "private", "store.json"));
+    const before = sets(env).length;
+    const server = await serverFor(env.vault, env.configPath, TRANSPORT_REACH.remote);
+    const reply = await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "brain_settings",
+        arguments: { action: "set", name: "dream.heal_enrich_enabled", value: false },
+      },
+    });
+    // The write fails closed; the whole answer - prose, codes, data -
+    // names neither the partition's identity file nor the remedy.
+    expect(JSON.stringify(reply)).not.toContain("private/");
+    expect(JSON.stringify(reply)).not.toContain("partition leave private");
+    const err = (reply as { error?: { message: string; data?: Record<string, unknown> } }).error;
+    expect(err?.data?.["code"]).toBe("settings_unreadable");
+    expect(err?.message).toContain("dream.heal_enrich_enabled cannot be changed by an agent");
+    expect(sets(env)).toHaveLength(before);
+  });
+
+  test("a refused remote note write names neither the lost partition nor the remedy", async () => {
+    env = makeStoreEnv("osb-settool-remote-permissions-");
+    switchDevice(env.storeRoot);
+    setBrainSetting(
+      { vault: env.vault, authority: "human", agent: "u" },
+      "dream.heal_enrich_enabled",
+      true,
+    );
+    // The same state as above, reached through a note write:
+    // `brain_create_note` is refused before any write (the settings read
+    // refuses first), and the refusal must not carry the store-open
+    // cause's raw text. The permissions gate's own text is pinned in
+    // `tests/core/brain/permissions/document-source.test.ts`.
+    rmSync(join(env.storeRoot, "private", "store.json"));
+    const server = await serverFor(env.vault, env.configPath, TRANSPORT_REACH.remote);
+    const reply = await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 5,
+      method: "tools/call",
+      params: {
+        name: "brain_create_note",
+        arguments: { path: "Notes/Blocked.md", content: "never written" },
+      },
+    });
+    const text = JSON.stringify(reply);
+    expect(text).toContain("could not be opened");
+    expect(text).not.toContain("private/");
+    expect(text).not.toContain("partition leave");
+    expect(existsSync(join(env.vault, "Notes", "Blocked.md"))).toBe(false);
   });
 });

@@ -195,7 +195,18 @@ export function summarizeGateTelemetry(
   vault: string,
   filter: GateTelemetryFilter = {},
 ): GateTelemetrySummary {
-  const records = listGateTelemetry(vault, filter);
+  return summarizeGateTelemetryRecords(listGateTelemetry(vault, filter));
+}
+
+/**
+ * The summary fold over an already-listed set of gate records. Split from
+ * {@link summarizeGateTelemetry} for the same reason its recall-telemetry
+ * sibling is: a reader that must drop withheld records BEFORE the counts
+ * folds those counts over the filtered set without re-reading disk.
+ */
+export function summarizeGateTelemetryRecords(
+  records: ReadonlyArray<ContinuityRecord>,
+): GateTelemetrySummary {
   let retrieved = 0;
   const byReason: Record<string, number> = {};
   const byTier: Record<string, number> = {};

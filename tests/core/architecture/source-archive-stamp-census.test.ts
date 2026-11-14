@@ -65,7 +65,9 @@ const STAMP_KEY_FILES: ReadonlyArray<string> = Object.freeze([
   posix.join("core", "brain", "ingest", "ingest.ts"),
   posix.join("core", "brain", "provenance", "source-archive.ts"),
   posix.join("mcp", "brain", "hygiene-tools.ts"),
-  posix.join("mcp", "brain", "ingest-tools.ts"),
+  // The ingest cleanup moved out of `ingest-tools.ts` in the 700-line
+  // split (task 3.19); the entry follows the code that names the key.
+  posix.join("mcp", "brain", "ingest-source-tools.ts"),
 ]);
 
 /** The one writer among them - the ingest lane's stamp site. */

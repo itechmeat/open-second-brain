@@ -34,6 +34,8 @@ import { join } from "node:path";
 import { resolveAgentName } from "../../config.ts";
 import { canonicalJson } from "../../integrity/digest.ts";
 import { isStoreOnly } from "../../store/store-only.ts";
+import { StoreUnavailableError } from "../../store/read/protection-store.ts";
+import { storeOpenFailureDetail, withholdsPrivate } from "./store-check.ts";
 import {
   loadPermissionsDocumentFor,
   PERMISSIONS_SETTING_LABEL,
@@ -88,13 +90,27 @@ export const permissionsDocumentCheck: DoctorCheck = {
       // A non-document failure is not this check's finding; the pass's
       // fail-soft wrapper records those its own way.
       if (!(err instanceof PermissionsDocumentError)) throw err;
+      // The loader's error carries the `protectionStore` reason as its
+      // cause; its text holds only the reach-safe twin. Below local
+      // reach the finding keeps its code and the source it names
+      // (`where`) and redacts the cause the way the store check's own
+      // findings are (`storeOpenFailureDetail`). At local reach the
+      // operator's own doctor reads the cause itself, whose message
+      // names the held partition's file and the remedy.
+      const cause = err.cause instanceof StoreUnavailableError ? err.cause : null;
+      const detail =
+        cause === null
+          ? err.message
+          : withholdsPrivate(ctx)
+            ? storeOpenFailureDetail(cause, cause.root, ctx)
+            : cause.message;
       out.issues.push({
         severity: "error",
         code: PERMISSIONS_UNREADABLE_CODE,
         path: at,
         message:
           `${where} could not be read, so its policy is not in force and ` +
-          `every gate fails closed until it is repaired (${err.message})`,
+          `every gate fails closed until it is repaired (${detail})`,
       } satisfies DoctorIssue);
       return;
     }
