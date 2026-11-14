@@ -251,8 +251,13 @@ export async function toolBrainRecallTelemetry(
     // The summary counts the VISIBLE records: the filter drops withheld
     // ones before the fold, so no count answers for a record the caller
     // may not see.
+    // The limit, like the list's, is cut after the visibility filter.
+    const { limit, ...visibleFilter } = filter;
     const summary = summarizeRecallTelemetryRecords(
-      callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, filter)),
+      pageRecords(
+        callerVisibleTelemetry(ctx, listRecallTelemetry(ctx.vault, visibleFilter)),
+        limit,
+      ),
     );
     return { ...summary };
   }

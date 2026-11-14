@@ -701,6 +701,9 @@ describe("brain_recall_telemetry limit applies after the visibility filter", () 
     expect(page["total"]).toBe(1);
     expect(JSON.stringify(page)).toContain("notes/open.md");
     expect(JSON.stringify(page)).not.toContain("notes/closed.md");
+    // The summary cuts its limit after the same filter.
+    const summary = await callTelemetry(remote, { operation: "summary", limit: 1 });
+    expect(summary["total"]).toBe(1);
   });
 
   test("gate_list limit 1 with the newest record private returns the older visible one", async () => {

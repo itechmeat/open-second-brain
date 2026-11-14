@@ -232,7 +232,9 @@ export async function toolBrainBridges(
     // as an absent one instead.
     const claimed = Number(meta["proposals"] ?? 0);
     const rows = parseBridgeProposalRows(content);
-    if (claimed > 0 && rows === null) {
+    // A positive claim with no rows read back (a missing table header
+    // included) is just as unfilterable.
+    if (claimed > 0 && (rows === null || rows.length === 0)) {
       return { exists: false, proposals: 0 };
     }
     const view = everyArtifactRefView(
