@@ -17,6 +17,7 @@ Hermes checkout, and the same code runs on the CI Python that has no host at all
 """
 
 import logging
+import os
 import subprocess
 import sys
 import types
@@ -88,6 +89,7 @@ class SpawnSeamTests(unittest.TestCase):
         self.assertIn("cwd", popen_kwargs)
         self.assertIn("env", popen_kwargs)
 
+    @unittest.skipIf(os.name != "posix", "the legacy watchdog wraps POSIX children only; Windows relies on the layer-3 job object")
     def test_legacy_watchdog_wraps_argv_when_spawn_owned_is_absent(self) -> None:
         self._install_legacy_watchdog()
         with mock.patch("subprocess.Popen", return_value=mock.sentinel.process) as popen:
@@ -101,13 +103,14 @@ class SpawnSeamTests(unittest.TestCase):
                 sys.executable,
                 "/host/tools/mcp_stdio_watchdog.py",
                 "--ppid",
-                str(__import__("os").getpid()),
+                str(os.getpid()),
                 "--",
                 "o2b",
                 "mcp",
             ],
         )
 
+    @unittest.skipIf(os.name != "posix", "the legacy watchdog wraps POSIX children only; Windows relies on the layer-3 job object")
     def test_plain_spawn_warns_once_when_no_host_seam_exists(self) -> None:
         with mock.patch("subprocess.Popen", return_value=mock.sentinel.process) as popen:
             with self.assertLogs(bridge_mod.logger, level=logging.WARNING) as logs:
