@@ -17,6 +17,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { pathCovers } from "../vault-scope/defaults.ts";
 import {
+  BRAIN_RESTORE_STAGING_PREFIX,
   BRAIN_ROOT_REL,
   BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
   snapshotsDir,
@@ -261,6 +262,9 @@ export function buildManifest(brainRoot: string, opts: BuildManifestOptions = {}
       if (BRAIN_SNAPSHOT_EXCLUDED_ENTRIES.some((entry) => pathCovers(entry, rel))) {
         continue;
       }
+      // A restore's leftover staging directory, which the archive never
+      // holds either (see BRAIN_RESTORE_STAGING_PREFIX).
+      if (dir === brainRoot && name.startsWith(BRAIN_RESTORE_STAGING_PREFIX)) continue;
       // Defense-in-depth: a `..` path *segment* cannot legitimately
       // appear inside a sane Brain tree. `pathCovers` anchors on the
       // segment boundary, so an otherwise-valid filename like
