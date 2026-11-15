@@ -19,7 +19,7 @@ import {
   type WritePreferenceInput,
 } from "../../../src/core/brain/preference.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
-import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../../src/core/brain/query.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
@@ -81,7 +81,7 @@ describe("writePreference — expiration_date frontmatter", () => {
   });
 });
 
-describe("queryByTopic — default drops expired, showExpired re-includes", () => {
+describe("queryByRuleTopic — default drops expired, showExpired re-includes", () => {
   const now = new Date("2026-08-01T00:00:00Z");
 
   function seedExpiredPreference(): void {
@@ -100,27 +100,27 @@ describe("queryByTopic — default drops expired, showExpired re-includes", () =
 
   test("default query drops a preference past its expiration_date", () => {
     seedExpiredPreference();
-    const res = queryByTopic(vault, "deploy", { now });
+    const res = queryByRuleTopic(vault, "deploy", { now });
     expect(res.preference).toBeNull();
   });
 
   test("showExpired: true re-includes the expired preference (audit path)", () => {
     seedExpiredPreference();
-    const res = queryByTopic(vault, "deploy", { now, showExpired: true });
+    const res = queryByRuleTopic(vault, "deploy", { now, showExpired: true });
     expect(res.preference).not.toBeNull();
     expect(res.preference?.id).toBe("pref-expired-rule");
   });
 
   test("a still-live preference is returned by the default query", () => {
     writePreference(vault, basePref("live-rule", { expiration_date: "2026-12-31" }));
-    const res = queryByTopic(vault, "deploy", { now });
+    const res = queryByRuleTopic(vault, "deploy", { now });
     expect(res.preference?.id).toBe("pref-live-rule");
   });
 
   test("an expired preference is FILTERED, not moved to Brain/retired/ (audit trail preserved)", () => {
     seedExpiredPreference();
     // A read that drops the expired preference must not touch disk.
-    queryByTopic(vault, "deploy", { now });
+    queryByRuleTopic(vault, "deploy", { now });
     expect(existsSync(join(vault, "Brain", "preferences", "pref-expired-rule.md"))).toBe(true);
     expect(existsSync(join(vault, "Brain", "retired", "ret-expired-rule.md"))).toBe(false);
   });

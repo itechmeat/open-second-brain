@@ -135,7 +135,8 @@ describe("MCP resources — capabilities and discovery", () => {
       "osb://backlinks/{id}",
       "osb://log/{date}",
       "osb://preference/{id}",
-      "osb://topic/{slug}",
+      "osb://rule-topic/{slug}",
+      "osb://topic/{id}",
     ]);
   });
 });
@@ -295,7 +296,25 @@ Body.
   });
 });
 
-describe("MCP resources — read osb://topic/{slug}", () => {
+describe("MCP resources — read osb://rule-topic/{slug} and its alias osb://topic/{slug}", () => {
+  test("a rule-topic slug shaped like a topic id still answers through the old name", async () => {
+    const slug = "01KA0000000000000000000000";
+    writeSignal(vault, {
+      topic: slug,
+      signal: "positive",
+      agent: "claude",
+      principle: "Keep ids short",
+      created_at: "2026-05-14T10:00:00Z",
+      date: "2026-05-14",
+      slug: "ulid-like",
+      scope: "writing",
+    });
+    const server = makeServer();
+    await initialize(server);
+    const r = await read(server, `osb://topic/${slug}`);
+    expect(r.result.contents[0].text).toContain(`# Brain topic: ${slug}`);
+  });
+
   test("returns a markdown summary of signals + current preference", async () => {
     writeSignal(vault, {
       topic: "tidy",
@@ -318,8 +337,11 @@ describe("MCP resources — read osb://topic/{slug}", () => {
     });
     const server = makeServer();
     await initialize(server);
-    const r = await read(server, "osb://topic/tidy");
+    const r = await read(server, "osb://rule-topic/tidy");
     const text = r.result.contents[0].text as string;
+    // The old name answers the same body for one minor version.
+    const alias = await read(server, "osb://topic/tidy");
+    expect(alias.result.contents[0].text).toBe(text);
     expect(text).toContain("# Brain topic: tidy");
     expect(text).toContain("pref-tidy");
     expect(text).toContain("sig-2026-05-14-first");

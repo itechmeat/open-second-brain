@@ -3,9 +3,9 @@
  * task J).
  *
  * The expiry filter has taken an as-of instant since C5 - `filterExpired`
- * defaults `now` to the wall clock and `queryByTopic` threads a `now`
+ * defaults `now` to the wall clock and `queryByRuleTopic` threads a `now`
  * option straight into it - and no surface ever passed one. The CLI
- * called `queryByTopic(vault, topic)` with no options object at all, so
+ * called `queryByRuleTopic(vault, topic)` with no options object at all, so
  * "what did the brain hold as of last month" was unaskable from the one
  * surface that enforces expiry, and `--show-expired` (which MCP has had
  * since C5) did not exist on the CLI either.

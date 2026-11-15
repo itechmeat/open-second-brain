@@ -9,6 +9,11 @@
  * primary subtag, so `pt-BR` would use a `pt` table.
  */
 
+import type { TopicLogClass, TopicStatus } from "../topics/constants.ts";
+
+/** Log classes a topic page shows (every class but `routine`). */
+export type EarnedLogClass = Exclude<TopicLogClass, "routine">;
+
 export interface ViewStrings {
   readonly aboutTitle: string;
   readonly aboutIntro: string;
@@ -25,6 +30,37 @@ export interface ViewStrings {
   readonly historyRetired: (text: string) => string;
   /** Monday first, as ISO weeks count. */
   readonly weekdays: ReadonlyArray<string>;
+  readonly topicStatus: Readonly<Record<TopicStatus, string>>;
+  /** The status line of a topic page; `resolved` for a done topic. */
+  readonly statusLine: (label: string, resolved: string | null) => string;
+  /** The label before the status on its line, as {@link statusLine} writes it. */
+  readonly statusLabel: string;
+  readonly topicNoDescription: string;
+  readonly topicGoal: string;
+  readonly topicMilestones: string;
+  readonly topicDecisions: string;
+  readonly topicQuestions: string;
+  readonly topicResolvedQuestions: string;
+  readonly topicLog: string;
+  readonly topicRelated: string;
+  readonly milestoneDone: (day: string) => string;
+  readonly milestoneLooksDone: string;
+  readonly questionLooksAnswered: string;
+  readonly questionAnswer: (answer: string) => string;
+  readonly goalProposal: (agent: string, goal: string) => string;
+  readonly serves: (list: string) => string;
+  readonly logClass: Readonly<Record<EarnedLogClass, string>>;
+  readonly because: (reason: string) => string;
+  readonly scopePersonal: string;
+  readonly scopeProject: (project: string) => string;
+  readonly mergedFrom: (title: string) => string;
+  readonly archiveLink: string;
+  readonly archiveTitle: (title: string) => string;
+  readonly archiveIntro: string;
+  readonly archiveBack: string;
+  readonly reportIntro: (day: string) => string;
+  readonly sourceTitle: (source: string) => string;
+  readonly sourceIntro: (day: string) => string;
 }
 
 const EN: ViewStrings = {
@@ -44,6 +80,50 @@ const EN: ViewStrings = {
   historyRule: (text) => `New rule: ${text}`,
   historyRetired: (text) => `You retired a rule: ${text}`,
   weekdays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  topicStatus: {
+    active: "Active",
+    waiting: "Waiting",
+    blocked: "Blocked",
+    "on-hold": "On hold",
+    done: "Done",
+    closed: "Closed",
+  },
+  statusLine: (label, resolved) =>
+    resolved === null ? `Status: ${label}` : `Status: ${label} (resolved ${resolved})`,
+  statusLabel: "Status",
+  topicNoDescription: "No description yet.",
+  topicGoal: "Goal",
+  topicMilestones: "Milestones",
+  topicDecisions: "Decisions",
+  topicQuestions: "Open questions",
+  topicResolvedQuestions: "Resolved questions",
+  topicLog: "Log",
+  topicRelated: "Related",
+  milestoneDone: (day) => `done ${day}`,
+  milestoneLooksDone: "looks done, confirm",
+  questionLooksAnswered: "looks answered, confirm",
+  questionAnswer: (answer) => `answer: ${answer}`,
+  goalProposal: (agent, goal) => `Goal proposed by ${agent}: ${goal}`,
+  serves: (list) => `serves: ${list}`,
+  logClass: {
+    correction: "correction",
+    decision: "decision",
+    blocker: "blocker",
+    reframing: "reframing",
+    rejected: "rejected approach",
+    note: "note",
+  },
+  because: (reason) => `because ${reason}`,
+  scopePersonal: "Personal matter",
+  scopeProject: (project) => `Project: ${project}`,
+  mergedFrom: (title) => `Merged from: ${title}`,
+  archiveLink: "Older entries",
+  archiveTitle: (title) => `${title}: archive`,
+  archiveIntro: "Entries that moved off the topic page, newest first.",
+  archiveBack: "Back to the topic",
+  reportIntro: (day) => `Research report of ${day}.`,
+  sourceTitle: (source) => `Source: ${source}`,
+  sourceIntro: (day) => `Summary of a source, updated ${day}.`,
 };
 
 const RU: ViewStrings = {
@@ -63,6 +143,50 @@ const RU: ViewStrings = {
   historyRule: (text) => `Новое правило: ${text}`,
   historyRetired: (text) => `Вы сняли правило: ${text}`,
   weekdays: ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"],
+  topicStatus: {
+    active: "Активна",
+    waiting: "Ожидает",
+    blocked: "Заблокирована",
+    "on-hold": "Отложена",
+    done: "Готова",
+    closed: "Закрыта",
+  },
+  statusLine: (label, resolved) =>
+    resolved === null ? `Статус: ${label}` : `Статус: ${label} (решена ${resolved})`,
+  statusLabel: "Статус",
+  topicNoDescription: "Описания пока нет.",
+  topicGoal: "Цель",
+  topicMilestones: "Вехи",
+  topicDecisions: "Решения",
+  topicQuestions: "Открытые вопросы",
+  topicResolvedQuestions: "Решённые вопросы",
+  topicLog: "Журнал",
+  topicRelated: "Связанное",
+  milestoneDone: (day) => `готово ${day}`,
+  milestoneLooksDone: "похоже, готово, подтвердите",
+  questionLooksAnswered: "похоже, есть ответ, подтвердите",
+  questionAnswer: (answer) => `ответ: ${answer}`,
+  goalProposal: (agent, goal) => `Цель, предложенная ${agent}: ${goal}`,
+  serves: (list) => `служит: ${list}`,
+  logClass: {
+    correction: "исправление",
+    decision: "решение",
+    blocker: "блокер",
+    reframing: "переосмысление",
+    rejected: "отвергнутый подход",
+    note: "заметка",
+  },
+  because: (reason) => `потому что ${reason}`,
+  scopePersonal: "Личное дело",
+  scopeProject: (project) => `Проект: ${project}`,
+  mergedFrom: (title) => `Объединена из: ${title}`,
+  archiveLink: "Старые записи",
+  archiveTitle: (title) => `${title}: архив`,
+  archiveIntro: "Записи, ушедшие со страницы темы, сначала новые.",
+  archiveBack: "Назад к теме",
+  reportIntro: (day) => `Исследовательский отчёт от ${day}.`,
+  sourceTitle: (source) => `Источник: ${source}`,
+  sourceIntro: (day) => `Сводка источника, обновлена ${day}.`,
 };
 
 const TABLES: Readonly<Record<string, ViewStrings>> = { en: EN, ru: RU };
@@ -76,6 +200,11 @@ export const DEFAULT_VIEW_LANGUAGE = "en";
 /** Whether `tag` names a language the view has strings for (by its primary subtag). */
 export function isViewLanguage(tag: string): boolean {
   return Object.hasOwn(TABLES, tag.split("-")[0]!.toLowerCase());
+}
+
+/** The strings of every language the view has, English first. */
+export function allViewStrings(): ReadonlyArray<ViewStrings> {
+  return Object.values(TABLES);
 }
 
 /** The strings for language tag `tag` (`null`: English). */

@@ -19,7 +19,7 @@ import {
   validateSlug,
   BRAIN_PREFERENCES_REL,
 } from "../core/brain/paths.ts";
-import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
+import { BrainNotFoundError, queryByPreference, queryByRuleTopic } from "../core/brain/query.ts";
 import { type ArtifactRefView } from "../core/brain/artifact-ref-view.ts";
 import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
 import {
@@ -117,7 +117,7 @@ export function readPreference(
   };
 }
 
-export function readTopic(
+export function readRuleTopic(
   ctx: ResourceContext,
   uri: string,
   rawSlug: string,
@@ -133,7 +133,7 @@ export function readTopic(
     // to one preference and several may carry it, so filtering afterwards
     // would report the topic as having no rule whenever another owner's
     // preference happened to sort first.
-    result = queryByTopic(ctx.vault, rawSlug, {
+    result = queryByRuleTopic(ctx.vault, rawSlug, {
       ownerScope: view.ownerScope,
       transportReach: view.reach,
     });
@@ -165,19 +165,19 @@ export function readTopic(
   const preferenceRel = result.preference
     ? deliveryRelForBrainArtifact(ctx.vault, result.preference.id)
     : `${BRAIN_PREFERENCES_REL}/pref-${rawSlug}.md`;
-  const objection = topicObjectionSection(ctx.vault, scoped);
+  const objection = ruleTopicObjectionSection(ctx.vault, scoped);
   let text: string;
   if (objection.rel === null) {
     // The block quotes the governing preference itself (or no page at
     // all): one document, one probe. The trailing newline keeps the
     // unfenced bytes identical to the pre-shaping document.
     text = delivery.shape(
-      `${renderTopicMarkdown(rawSlug, scoped)}\n${objection.text}\n`,
+      `${renderRuleTopicMarkdown(rawSlug, scoped)}\n${objection.text}\n`,
       preferenceRel,
     );
   } else {
     text =
-      `${delivery.shape(renderTopicMarkdown(rawSlug, scoped), preferenceRel)}\n` +
+      `${delivery.shape(renderRuleTopicMarkdown(rawSlug, scoped), preferenceRel)}\n` +
       `${delivery.shape(objection.text, objection.rel)}\n`;
   }
   return { uri, mimeType: MIME_MARKDOWN, text };
@@ -257,7 +257,10 @@ export function shardAtReach(
   return [head.trimEnd(), ...blocks].join(LOG_BLOCK_SEPARATOR) + "\n";
 }
 
-export function renderTopicMarkdown(slug: string, result: ReturnType<typeof queryByTopic>): string {
+export function renderRuleTopicMarkdown(
+  slug: string,
+  result: ReturnType<typeof queryByRuleTopic>,
+): string {
   const lines: string[] = [];
   lines.push(`# Brain topic: ${slug}`);
   lines.push("");
@@ -311,11 +314,11 @@ export function renderTopicMarkdown(slug: string, result: ReturnType<typeof quer
  * the document's treatment, which brain_query's signal payloads shape
  * at the same page.
  */
-export function topicObjectionSection(
+export function ruleTopicObjectionSection(
   vault: string,
-  result: ReturnType<typeof queryByTopic>,
+  result: ReturnType<typeof queryByRuleTopic>,
 ): { readonly text: string; readonly rel: string | null } {
-  const sentence = buildTopicObjection(vault, result);
+  const sentence = buildRuleTopicObjection(vault, result);
   const text = `## Strongest objection\n\n- ${sentence.sentence}`;
   return { text, rel: sentence.rel };
 }
@@ -328,9 +331,9 @@ export function topicObjectionSection(
  * objection" sentence when none applies. The rel names the page the
  * sentence quotes, for the section renderer to probe.
  */
-export function buildTopicObjection(
+export function buildRuleTopicObjection(
   vault: string,
-  result: ReturnType<typeof queryByTopic>,
+  result: ReturnType<typeof queryByRuleTopic>,
 ): { readonly sentence: string; readonly rel: string | null } {
   const pref = result.preference;
   if (pref && pref.id.startsWith("ret-")) {

@@ -226,7 +226,7 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     identifiers: ["buildConceptCluster"],
   },
   { specifierIncludes: "/brain/portability/sources.ts", identifiers: ["aggregateSources"] },
-  { specifierIncludes: "/brain/query.ts", identifiers: ["queryByPreference", "queryByTopic"] },
+  { specifierIncludes: "/brain/query.ts", identifiers: ["queryByPreference", "queryByRuleTopic"] },
   { specifierIncludes: "/brain/pref-audit.ts", identifiers: ["readPrefAudit"] },
   {
     specifierIncludes: "/brain/link-graph/bridge-discovery.ts",
@@ -663,7 +663,7 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  */
 const MCP_TOOL_POPULATION_SIZE = 89;
 /** Measured: MCP resources + templates. */
-const MCP_RESOURCE_POPULATION_SIZE = 8;
+const MCP_RESOURCE_POPULATION_SIZE = 9;
 /**
  * Measured: hand-enumerated CLI verb mirrors. 20 -> 21: `brain attest`
  * (delivery trust) joins as the CLI mirror of `brain_attestations`; the
@@ -818,7 +818,8 @@ describe("visibility surface census", () => {
         "osb://log/{date}",
         "osb://preference/{id}",
         "osb://preferences/active",
-        "osb://topic/{slug}",
+        "osb://rule-topic/{slug}",
+        "osb://topic/{id}",
       ]);
       expect(byCategory(VISIBILITY_SURFACE_CATEGORY.excluded)).toEqual(["osb://status"]);
     });

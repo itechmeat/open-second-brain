@@ -176,7 +176,7 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.covered,
     reason:
-      "queryByPreference / queryByTopic (core/brain/query.ts) return Brain records by id, so this " +
+      "queryByPreference / queryByRuleTopic (core/brain/query.ts) return Brain records by id, so this " +
       "is root C over reference-shaped rows. The topic mode carries the reach into the SELECTION, " +
       "because a topic resolves to exactly one preference and filtering afterwards would report a " +
       "topic as having no rule whenever a reserved one sorted first; the signals, the log events " +
@@ -1420,7 +1420,7 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "reach, named for the resolved page's own derived provenance; local keeps the bytes.",
   },
   {
-    surface: "osb://topic/{slug}",
+    surface: "osb://rule-topic/{slug}",
     kind: K.mcpResource,
     category: C.covered,
     reason:
@@ -1430,6 +1430,16 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "one happened to sort ahead of it. Delivery shaping (delivery-trust, lane A): the " +
       "synthesis is fenced at remote reach, named for the governing rule's derived provenance " +
       "(the absent-rule probe, fail closed); local keeps the bytes.",
+  },
+  {
+    surface: "osb://topic/{id}",
+    kind: K.mcpResource,
+    category: C.covered,
+    reason:
+      "a topic is a store record family with no owner line: its privacy is its partition. A read " +
+      "below local reach folds the shared partition alone, so a private topic answers byte for " +
+      "byte as an absent one (topic ids are ULIDs, not guessable, and still never confirmed), and " +
+      "a private item of a shared topic is left off the page.",
   },
   {
     surface: "osb://log/{date}",

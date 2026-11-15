@@ -22,6 +22,7 @@ import {
   SETTING_SET_KIND,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
+  SETTING_TOPIC_QUIET_DAYS,
   SETTING_UNSET_KIND,
   SETTING_VIEW_LANGUAGE,
   type SettingKey,
@@ -61,6 +62,7 @@ export const SETTING_RULES: Readonly<Record<SettingKey, SettingRule>> = Object.f
   },
   [SETTING_TOPIC_MIN_RECORDS]: { valid: positiveInt, expected: "a positive integer", fallback: 5 },
   [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 },
+  [SETTING_TOPIC_QUIET_DAYS]: { valid: positiveInt, expected: "a positive integer", fallback: 30 },
 });
 
 function ruleOf(key: string): SettingRule | undefined {

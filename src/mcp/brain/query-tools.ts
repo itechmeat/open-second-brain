@@ -10,7 +10,7 @@ import {
   BrainNotFoundError,
   queryByLogSince,
   queryByPreference,
-  queryByTopic,
+  queryByRuleTopic,
 } from "../../core/brain/query.ts";
 import { parseIsoUtc } from "../../core/brain/health/iso-time.ts";
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
@@ -79,7 +79,7 @@ const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
 /**
  * The as-of instant the expiration filter is evaluated against.
  *
- * `queryByTopic` has taken a `now` option since C5 and this handler
+ * `queryByRuleTopic` has taken a `now` option since C5 and this handler
  * dropped it, so an agent could ask to SEE lapsed memories
  * (`show_expired`) but never to ask what the brain held at an instant.
  * Only topic mode runs that filter, so an `at` supplied beside
@@ -244,7 +244,7 @@ async function toolBrainQuery(
       // expiration_date; show_expired re-includes them for audit, and
       // `at` moves the clock that filter compares against.
       const showExpired = coerceBoolOptional(args, "show_expired") ?? false;
-      const res = queryByTopic(ctx.vault, topic, {
+      const res = queryByRuleTopic(ctx.vault, topic, {
         showExpired,
         transportReach: contextReach(ctx),
         ...(asOf !== null ? { now: asOf } : {}),

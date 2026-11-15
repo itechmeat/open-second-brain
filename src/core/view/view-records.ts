@@ -3,7 +3,7 @@
  * records with their merge base, replaced page versions, ingested human
  * edits, the idle heartbeat and the device-local render intents.
  *
- *  - `view-render` `{ page, sum, base, bytes }` (`log`, `shared`): the page
+ *  - `view-render` `{ page, topic?, sum, base, bytes }` (`log`, `shared`): the page
  *    now holds the bytes whose sha256 is `sum`; `base` names the blob that
  *    keeps that text and the key of each line, the base of the next
  *    three-way merge. Written only after the page is in place.
@@ -58,7 +58,7 @@ import {
   VIEW_REPLACED_KIND,
   VIEW_STATE_DIR,
 } from "./constants.ts";
-import type { EditRecord } from "./corrections.ts";
+import type { EditRecord } from "./edit-record.ts";
 import { allRecords, type ViewCatchUp } from "./catch-up.ts";
 
 /** The merge base a render record names. */
@@ -192,7 +192,14 @@ export function ingestVersion(
     for (const edit of edits) {
       appendRecord(
         store,
-        { partition, stream: edit.stream, kind: edit.kind, agent: options.agent, body: edit.body },
+        {
+          partition,
+          stream: edit.stream,
+          kind: edit.kind,
+          agent: options.agent,
+          ...(edit.topic !== undefined ? { topic: edit.topic } : {}),
+          body: edit.body,
+        },
         now,
       );
     }
@@ -222,7 +229,13 @@ export function writeRender(
       stream: "log",
       kind: VIEW_RENDER_KIND,
       agent: options.agent,
-      body: { page: intent.page, sum: intent.sum, base: intent.base, bytes: intent.bytes },
+      body: {
+        page: intent.page,
+        ...(intent.topic !== undefined ? { topic: intent.topic } : {}),
+        sum: intent.sum,
+        base: intent.base,
+        bytes: intent.bytes,
+      },
     },
     options.now !== undefined ? { now: options.now } : {},
   ).record;
@@ -254,6 +267,8 @@ export function heartbeat(store: StoreHandle, read: ViewCatchUp, options: Record
 /** A page about to be put in place, kept device-local until its render record is written. */
 export interface RenderIntent {
   readonly page: string;
+  /** The topic a topic page or archive shows. */
+  readonly topic?: string;
   readonly sum: string;
   readonly base: string;
   readonly bytes: number;

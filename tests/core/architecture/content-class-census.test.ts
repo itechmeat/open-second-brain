@@ -67,7 +67,7 @@
  *   which is how the per-collection shape looks when it is done right).
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, setDefaultTimeout, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -269,6 +269,16 @@ const PAGE_CARRYING_SITES: ReadonlyArray<string> = Object.freeze([
 
 const ENTRIES = Object.values(EGRESS_SITES);
 
+/**
+ * Every test here scans the whole source tree, some of them more than
+ * once; that walk grows with the tree and takes several seconds on a
+ * loaded runner, past bun's 5 s default. One budget for the file, the
+ * one its slowest tests already carried, so no test depends on an idle
+ * machine.
+ */
+const CENSUS_SCAN_BUDGET_MS = 20_000;
+setDefaultTimeout(CENSUS_SCAN_BUDGET_MS);
+
 describe("content-class egress census", () => {
   test("the derived population is the named page-carrying sites, as an equality", () => {
     expect([...POPULATION].toSorted()).toEqual([...PAGE_CARRYING_SITES].toSorted());
@@ -292,7 +302,7 @@ describe("content-class egress census", () => {
   // carries its own budget instead of riding the default.
   test("every page-carrying site applies the class filter", () => {
     expect(classFilterCensus(SOURCE_TREE)).toEqual([]);
-  }, 20000);
+  });
 
   test("the pack verb's delegated filter is really there", () => {
     // The one hop the census credits. If the selection step's block scan
@@ -343,7 +353,7 @@ describe("the content-class census cannot pass by finding nothing", () => {
     // census names it - a blinded detector or a vacuous census shows here.
     expect(isPageCarryingRedactor(intruder.text)).toBe(true);
     expect(classFilterCensus([...SOURCE_TREE, intruder])).toContain(intruder.path);
-  }, 20000);
+  });
 
   test("removing the seam from a real verb is reported by name", () => {
     for (const path of [
@@ -358,7 +368,7 @@ describe("the content-class census cannot pass by finding nothing", () => {
       const tree = SOURCE_TREE.map((f) => (f.path === path ? { path, text: stripped } : f));
       expect(classFilterCensus(tree)).toContain(path);
     }
-  }, 20000);
+  });
 
   test("removing the transcript naming from `brain export` is reported by name", () => {
     // The transcript branch's duty is refuse-or-name, never silently

@@ -377,6 +377,8 @@ describe("tool listing", () => {
         "brain_retrieval_plan",
         // Durable token-impact ledger (context-pack-economics-observability).
         "brain_token_impact",
+        // Topics (brain-store-and-topics phase 3).
+        "brain_topic",
       ].toSorted(),
     );
     // Explicit grep: legacy writable tools are no longer advertised.

@@ -387,6 +387,7 @@ export async function toolBrainDream(
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),
     ...(onProgress ? { onProgress } : {}),
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
   });
   const changeList = dreamChangeList(summary);
   // A retire-sibling pair names two preferences; it is kept only when the

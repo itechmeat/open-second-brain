@@ -59,6 +59,7 @@ export interface RecSpec {
   readonly body: RecordBody;
   readonly agent?: string;
   readonly id?: string;
+  readonly topic?: string | null;
   readonly rng?: () => number;
 }
 
@@ -70,6 +71,7 @@ export function rec(spec: RecSpec): StoreRecord {
     agent: spec.agent ?? "agent-1",
     kind: spec.kind,
     body: spec.body,
+    topic: spec.topic ?? null,
     id: spec.id ?? seededUlid(spec.rng ?? fallbackRng, spec.physical),
   });
 }

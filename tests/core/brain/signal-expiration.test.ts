@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseSignal, writeSignal, type WriteSignalInput } from "../../../src/core/brain/signal.ts";
-import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../../src/core/brain/query.ts";
 import { filterExpired } from "../../../src/core/brain/expiration.ts";
 
 let vault: string;
@@ -63,7 +63,7 @@ describe("writeSignal — expiration_date frontmatter", () => {
   });
 });
 
-describe("queryByTopic — default drops expired signals, showExpired re-includes", () => {
+describe("queryByRuleTopic — default drops expired signals, showExpired re-includes", () => {
   const now = new Date("2026-08-01T00:00:00Z");
 
   function seed(): void {
@@ -74,7 +74,7 @@ describe("queryByTopic — default drops expired signals, showExpired re-include
 
   test("default query drops signals past their expiration_date", () => {
     seed();
-    const res = queryByTopic(vault, "deploy", { now });
+    const res = queryByRuleTopic(vault, "deploy", { now });
     const principles = res.signals.map((s) => s.principle).sort();
     // The expired one is dropped; the live one and the never-expiring one stay.
     expect(principles).toEqual(["Principle for live-sig", "Principle for no-expiry-sig"]);
@@ -82,13 +82,13 @@ describe("queryByTopic — default drops expired signals, showExpired re-include
 
   test("showExpired: true re-includes the expired signal (audit path)", () => {
     seed();
-    const res = queryByTopic(vault, "deploy", { now, showExpired: true });
+    const res = queryByRuleTopic(vault, "deploy", { now, showExpired: true });
     expect(res.signals.length).toBe(3);
   });
 
   test("an expired signal is FILTERED, not deleted from the inbox", () => {
     const res = writeSignal(vault, baseSignal("expired-sig", { expiration_date: "2026-07-15" }));
-    queryByTopic(vault, "deploy", { now });
+    queryByRuleTopic(vault, "deploy", { now });
     expect(existsSync(res.path)).toBe(true);
   });
 
@@ -107,11 +107,13 @@ describe("queryByTopic — default drops expired signals, showExpired re-include
     expect(parsed.source_type).toBe("extracted");
     expect(filterExpired([parsed], { now: new Date("2026-07-15T09:29:59Z") }).length).toBe(1);
     expect(filterExpired([parsed], { now: new Date("2026-07-15T09:30:01Z") }).length).toBe(0);
-    const query = queryByTopic(vault, "deploy", { now: new Date("2026-08-01T00:00:00Z") });
+    const query = queryByRuleTopic(vault, "deploy", { now: new Date("2026-08-01T00:00:00Z") });
     expect(query.signals.length).toBe(0);
     expect(
-      queryByTopic(vault, "deploy", { now: new Date("2026-08-01T00:00:00Z"), showExpired: true })
-        .signals.length,
+      queryByRuleTopic(vault, "deploy", {
+        now: new Date("2026-08-01T00:00:00Z"),
+        showExpired: true,
+      }).signals.length,
     ).toBe(1);
   });
 });

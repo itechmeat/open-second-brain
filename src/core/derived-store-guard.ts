@@ -48,7 +48,7 @@ export function derivedDirIsSymlinked(base: string, ...segments: readonly string
 }
 
 /** Open flags for a derived-file read: never follow a leaf symlink where the platform can refuse one. */
-const READ_NO_FOLLOW_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+export const READ_NO_FOLLOW_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
 
 /**
  * Outcome of {@link readRegularFileNoFollow}: the file is `absent`, exists but

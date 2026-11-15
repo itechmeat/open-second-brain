@@ -152,6 +152,56 @@ describe("state digests", () => {
     }
   });
 
+  test("a topic fold difference is reported; an older release's digest without topics is not compared on it", () => {
+    const a = tmp.open("dev-a");
+    const b = tmp.open("dev-b");
+    const c = tmp.open("dev-c");
+    seedPreferences(a, b, NOW - 60_000);
+    appendRecord(
+      a,
+      {
+        partition: "shared",
+        stream: "topics",
+        kind: "topic-create",
+        agent: "agent-1",
+        topic: "01KA0000000000000000000000",
+        body: { authority: "human", title: "Store", scope: "project:o2b" },
+      },
+      { now: at(NOW - 30_000) },
+    );
+    const good = publishStateDigest(a, { partition: "shared", agent: "doctor", now: at(NOW) });
+    const digest = (store: StoreHandle, body: RecordBody, ms: number) =>
+      appendRecord(
+        store,
+        { partition: "shared", stream: "digests", kind: "state-digest", agent: "doctor", body },
+        { now: at(ms) },
+      );
+    const { topics: _dropped, ...older } = good.body.folds;
+    digest(c, { ...good.body, folds: older }, NOW + 3);
+    const bad = digest(
+      b,
+      { ...good.body, folds: { ...good.body.folds, topics: "0".repeat(64) } },
+      NOW + 5,
+    );
+    const report = checkStateDigests(a, { now: at(NOW + 10) });
+    expect(report.findings.filter((f) => f.kind === "divergent")).toEqual([
+      {
+        kind: "divergent",
+        partition: "shared",
+        fold: "topics",
+        cutHash: good.body.cut_hash,
+        devices: [
+          {
+            device: "dev-a",
+            hash: good.body.folds.topics!,
+            digest: good.published ? good.append.record.id : "",
+          },
+          { device: "dev-b", hash: "0".repeat(64), digest: bad.record.id },
+        ],
+      },
+    ]);
+  });
+
   test("an offline device is reported as silent, never as divergent, and does not stall the others", () => {
     const a = tmp.open("dev-a");
     const b = tmp.open("dev-b");

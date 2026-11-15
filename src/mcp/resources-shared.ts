@@ -5,6 +5,7 @@
  * the markdown MIME type. Split from `resources.ts`.
  */
 
+import { isUlid } from "../core/store/ulid.ts";
 import { readFileSync } from "node:fs";
 import { BrainNotFoundError } from "../core/brain/query.ts";
 import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
@@ -41,6 +42,8 @@ export interface ResourceContext {
    * anything, which resolves to the narrowest rather than the widest.
    */
   readonly reach?: TransportReach;
+  /** The machine config the server runs under (the store, the device). */
+  readonly configPath?: string | null;
 }
 
 export interface ResourceDescriptor {
@@ -80,7 +83,7 @@ export function requestView(ctx: ResourceContext): RequestView {
  *
  * `refs` is the ANDed decision every reference-shaped filter asks.
  * `ownerScope` is separate because two readers push ownership into their
- * SELECTION rather than filtering afterwards - `queryByTopic` and
+ * SELECTION rather than filtering afterwards - `queryByRuleTopic` and
  * `buildBacklinkIndex` both take a scope - and that argument is the owner
  * rule's alone. The reserved-token rule has no selection-side form; it is
  * asked over the rows those selections return.
@@ -131,7 +134,8 @@ export type Parsed =
   | { readonly kind: "digestLatest" }
   | { readonly kind: "status" }
   | { readonly kind: "preference"; readonly id: string }
-  | { readonly kind: "topic"; readonly slug: string }
+  | { readonly kind: "ruleTopic"; readonly slug: string; readonly alias: boolean }
+  | { readonly kind: "topic"; readonly id: string }
   | { readonly kind: "log"; readonly date: string }
   | { readonly kind: "backlinks"; readonly id: string };
 
@@ -159,8 +163,15 @@ export function parseUri(uri: string): Parsed {
   if (head === "preference" && parts.length === 2) {
     return { kind: "preference", id: parts[1]! };
   }
+  if (head === "rule-topic" && parts.length === 2) {
+    return { kind: "ruleTopic", slug: parts[1]!, alias: false };
+  }
   if (head === "topic" && parts.length === 2) {
-    return { kind: "topic", slug: parts[1]! };
+    // A topic id is a ULID; anything else is a rule-topic slug through the
+    // old name, kept as an alias for one minor version (design D8).
+    return isUlid(parts[1]!)
+      ? { kind: "topic", id: parts[1]! }
+      : { kind: "ruleTopic", slug: parts[1]!, alias: true };
   }
   if (head === "log" && parts.length === 2) {
     return { kind: "log", date: parts[1]! };

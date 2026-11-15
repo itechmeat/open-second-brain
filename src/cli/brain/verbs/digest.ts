@@ -47,6 +47,7 @@ export async function cmdBrainDigest(argv: string[]): Promise<number> {
     ...(untilDate ? { until: untilDate } : {}),
     format: flags["json"] ? "json" : "markdown",
     linkOutputFormat: resolveLinkOutputFormat(config),
+    ...(config !== undefined ? { configPath: config } : {}),
   };
 
   let result;

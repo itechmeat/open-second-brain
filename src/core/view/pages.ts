@@ -55,6 +55,8 @@ export interface PageLine {
 export interface PageModel {
   readonly page: string;
   readonly lines: ReadonlyArray<PageLine>;
+  /** The topic a topic page or archive shows. */
+  readonly topic?: string;
 }
 
 /** Key of the id comment line; never mapped to a record. */

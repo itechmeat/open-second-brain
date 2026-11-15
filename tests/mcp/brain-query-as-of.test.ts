@@ -2,7 +2,7 @@
  * `brain_query` point-in-time recall + honest time-filter descriptions
  * (what-the-index-already-knew, task J).
  *
- * `queryByTopic` has accepted a `now` option since C5 and the MCP handler
+ * `queryByRuleTopic` has accepted a `now` option since C5 and the MCP handler
  * passed `{ showExpired }` and dropped it, so an agent could ask to SEE
  * lapsed memories but never to ask what the brain held at an instant.
  *

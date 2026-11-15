@@ -1,13 +1,13 @@
 /**
  * Text renderers for `o2b brain query` results.
  *
- * Pure projection of the typed `queryByPreference` / `queryByTopic`
+ * Pure projection of the typed `queryByPreference` / `queryByRuleTopic`
  * results plus log-entry arrays into stdout. JSON output uses the
  * raw shapes; this module only handles the human-readable variant.
  */
 
 import type { BrainLogEntry } from "../../core/brain/log.ts";
-import { queryByPreference, queryByTopic } from "../../core/brain/query.ts";
+import { queryByPreference, queryByRuleTopic } from "../../core/brain/query.ts";
 import { info, ok } from "../output.ts";
 
 export function renderQueryPreferenceText(out: ReturnType<typeof queryByPreference>): void {
@@ -32,7 +32,10 @@ export function renderQueryPreferenceText(out: ReturnType<typeof queryByPreferen
   }
 }
 
-export function renderQueryTopicText(out: ReturnType<typeof queryByTopic>, topic: string): void {
+export function renderQueryRuleTopicText(
+  out: ReturnType<typeof queryByRuleTopic>,
+  topic: string,
+): void {
   ok(`topic: ${topic}`);
   if (out.preference) {
     ok(`preference: ${out.preference.id}`);

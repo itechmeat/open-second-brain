@@ -3,7 +3,7 @@
  *
  * The ambient TTL stamps `expiration_date = created + N` on extracted
  * signals; the query read path drops a signal past that date from recall
- * (`filterExpired`, reached only through `queryByTopic`). The dream pass
+ * (`filterExpired`, reached only through `queryByRuleTopic`). The dream pass
  * read the same files with no such filter, so a transient fact whose TTL
  * lapsed inside the contradiction window was still clustered, still
  * counted toward the candidate threshold, and finally consolidated into a

@@ -41,7 +41,7 @@ import {
   ExpirationValueError,
   setExpiration,
 } from "../../../src/core/brain/expiration-set.ts";
-import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../../src/core/brain/query.ts";
 import { resolveAppendShardId } from "../../../src/core/brain/ledger-shards.ts";
 import { logShardJsonlPath } from "../../../src/core/brain/paths.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
@@ -269,15 +269,17 @@ describe("what an expiration is FOR", () => {
     seedPreference();
     setExpiration(vault, signalId, "2026-07-15");
 
-    const live = queryByTopic(vault, "staging-endpoint", { now: new Date("2026-07-15T12:00:00Z") });
+    const live = queryByRuleTopic(vault, "staging-endpoint", {
+      now: new Date("2026-07-15T12:00:00Z"),
+    });
     expect(live.signals.map((s) => s.id)).toContain(signalId);
 
-    const lapsed = queryByTopic(vault, "staging-endpoint", {
+    const lapsed = queryByRuleTopic(vault, "staging-endpoint", {
       now: new Date("2026-07-16T00:00:01Z"),
     });
     expect(lapsed.signals.map((s) => s.id)).not.toContain(signalId);
 
-    const audited = queryByTopic(vault, "staging-endpoint", {
+    const audited = queryByRuleTopic(vault, "staging-endpoint", {
       now: new Date("2026-07-16T00:00:01Z"),
       showExpired: true,
     });
@@ -288,7 +290,7 @@ describe("what an expiration is FOR", () => {
     const signalId = seedSignal();
     setExpiration(vault, signalId, "2026-07-15");
     setExpiration(vault, signalId, EXPIRATION_CLEAR);
-    const after = queryByTopic(vault, "staging-endpoint", {
+    const after = queryByRuleTopic(vault, "staging-endpoint", {
       now: new Date("2027-01-01T00:00:00Z"),
     });
     expect(after.signals.map((s) => s.id)).toContain(signalId);

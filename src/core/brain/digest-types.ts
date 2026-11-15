@@ -67,6 +67,8 @@ export interface RenderDigestOptions {
    * partition are withheld from every section, counts included.
    */
   readonly withholdsPrivate?: boolean;
+  /** The machine config whose store the topic section reads (default: the process's). */
+  readonly configPath?: string;
 }
 
 export interface RenderDigestResult {

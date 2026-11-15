@@ -90,6 +90,8 @@ export interface DualWriteRecord extends StreamRef {
   /** The writing agent; defaults to the configured agent name. */
   readonly agent?: string;
   readonly scope?: string | null;
+  /** The topic id the record belongs to (the envelope `topic`); `null` or absent: none. */
+  readonly topic?: string | null;
   readonly body: RecordBody;
 }
 
@@ -393,6 +395,7 @@ export function appendStoreRecords(
         agent:
           record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
         scope: record.scope ?? null,
+        topic: record.topic ?? null,
         body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
       }),
     );

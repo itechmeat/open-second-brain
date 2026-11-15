@@ -35,6 +35,8 @@
  * retired entries, the log, or the snapshots.
  */
 
+import { withPrivateWithheld } from "../store/caller-reach.ts";
+import { readTopicReview, renderTopicReview } from "../topics/review.ts";
 import { readerRefView } from "./artifact-ref-view.ts";
 import { closedCollectError } from "./maintenance/collect.ts";
 import { renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
@@ -153,8 +155,14 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
     ? renderEmptyMarkdown(until)
     : renderMarkdown(data, since, until, linkOutputFormat);
   const trustSection = renderTrustSection(opts.doctorResult, opts.dreamSummary);
-  const content = trustSection ? `${baseMd}\n${trustSection}` : baseMd;
-  return Object.freeze({ content, empty });
+  // What the user is asked about topics (merges, quiet topics), read at
+  // the caller's reach; absent when there is nothing to ask.
+  const topicSection = withPrivateWithheld(opts.withholdsPrivate === true, () =>
+    renderTopicReview(readTopicReview(now.getTime(), opts.configPath)),
+  );
+  const sections = [baseMd, trustSection, topicSection].filter((part) => part !== "");
+  const content = sections.join("\n");
+  return Object.freeze({ content, empty: empty && topicSection === "" });
 }
 
 /**

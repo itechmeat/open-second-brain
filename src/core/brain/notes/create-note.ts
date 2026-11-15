@@ -480,7 +480,7 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   // writer's: a page edited there is read back with human authority
   // (`core/view/vault-guard.ts`), so a note tool must not write it.
   for (const rel of new Set([relPath, landsAt])) {
-    const viewRefusal = viewFolderRefusal(vault, rel, "create_note");
+    const viewRefusal = viewFolderRefusal(vault, rel, "the note tools");
     if (viewRefusal !== null) throw new CreateNoteError("excluded", viewRefusal);
   }
 

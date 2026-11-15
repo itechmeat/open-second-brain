@@ -27,6 +27,33 @@ export const VIEW_DECISIONS_PAGE = "decisions.md";
 /** Folder of the weekly history pages, `history/<YYYY>-W<ww>.md`. */
 export const VIEW_HISTORY_DIR = "history";
 
+/** Folder of the topic pages, `topics/<YYYY-MM-DD>-<slug>/topic.md`. */
+export const VIEW_TOPICS_DIR = "topics";
+
+/** The page of one topic, in its folder. */
+export const VIEW_TOPIC_PAGE = "topic.md";
+
+/** The companion archive of a topic page, in the same folder. */
+export const VIEW_TOPIC_ARCHIVE_PAGE = "archive.md";
+
+/** Folder of the research report pages, `reports/<entry>.md`. */
+export const VIEW_REPORTS_DIR = "reports";
+
+/** Folder of the source summary pages, `sources/<entry>.md`. */
+export const VIEW_SOURCES_DIR = "sources";
+
+/**
+ * Folders whose pages come and go with their records (a topic renamed,
+ * merged or undone, a report removed): a page there that the store no
+ * longer renders is removed by the view writer, after any edit it carries
+ * is ingested.
+ */
+export const VIEW_RETIRING_DIRS = Object.freeze([
+  VIEW_TOPICS_DIR,
+  VIEW_REPORTS_DIR,
+  VIEW_SOURCES_DIR,
+]);
+
 /** Extension of every view page. */
 export const VIEW_PAGE_EXT = ".md";
 

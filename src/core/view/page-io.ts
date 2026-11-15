@@ -29,25 +29,72 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
+  rmdirSync,
+  symlinkSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+import { READ_NO_FOLLOW_FLAGS } from "../derived-store-guard.ts";
 import { NO_LINK_CODES } from "../store/blobs.ts";
 import { VIEW_PAGE_EXT, VIEW_TEMP_PREFIX } from "./constants.ts";
+
+/** A page name that is not a regular file (a symbolic link, a folder): never read through. */
+export class NotAPageFileError extends Error {
+  readonly code = "ENOTPAGE";
+  constructor(path: string) {
+    super(`not a regular file, left alone: ${path}`);
+    this.name = "NotAPageFileError";
+  }
+}
+
+/** Open errors of `O_NOFOLLOW` on a symbolic link (`EMLINK` on FreeBSD). */
+const LINK_REFUSED_CODES: ReadonlySet<string> = new Set(["ELOOP", "EMLINK"]);
+
+/**
+ * The bytes of the regular file at `path`, never following a symbolic
+ * link: a sync tool or another process may put a link under a page name
+ * after the path was checked. The `lstat` check refuses a link on every
+ * platform; where the platform has `O_NOFOLLOW` the open refuses one too,
+ * and the opened descriptor is checked again, so a link or a folder
+ * swapped in between is never read through.
+ */
+function readRegular(path: string): Buffer {
+  if (!lstatSync(path).isFile()) throw new NotAPageFileError(path);
+  let fd: number;
+  try {
+    fd = openSync(path, READ_NO_FOLLOW_FLAGS);
+  } catch (err) {
+    if (LINK_REFUSED_CODES.has(errnoCode(err) ?? "")) throw new NotAPageFileError(path);
+    throw err;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) throw new NotAPageFileError(path);
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** The bytes of a page, or `null` when it does not exist. */
 export function readPage(path: string): Buffer | null {
   try {
-    return readFileSync(path);
+    return readRegular(path);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
@@ -148,7 +195,7 @@ export function replacePage(
     let replaced: Buffer | null = null;
     if (captured) {
       try {
-        replaced = readFileSync(away);
+        replaced = readRegular(away);
       } catch (err) {
         // Unreadable right now (an antivirus or indexer holds it): the page
         // goes back under its name, never left away.
@@ -206,6 +253,63 @@ function restore(away: string, path: string): void {
   removeQuietly(away);
 }
 
+/** A page taken out of its name, its bytes captured, until the caller settles it. */
+export interface CapturedPage {
+  readonly bytes: Buffer;
+  /** Remove the captured file, once its bytes are stored or known to be the writer's own. */
+  readonly discard: () => void;
+  /** Put the page back under its name (a new page under that name is newer and kept). */
+  readonly restore: () => void;
+}
+
+/**
+ * Take the page at `path` away from its name for removal: one atomic
+ * rename captures exactly the bytes on disk at that instant, an edit a
+ * sync tool delivered a moment before included. `null` when there is no
+ * page. The captured file keeps a temp name until the caller discards or
+ * restores it, so a crash in between leaves it recoverable.
+ */
+export function capturePage(path: string): CapturedPage | null {
+  const away = tempName(dirname(path), "old");
+  try {
+    renameSync(path, away);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT" || errnoCode(err) === "ENOTDIR") return null;
+    throw err;
+  }
+  let bytes: Buffer;
+  try {
+    bytes = readRegular(away);
+  } catch (err) {
+    if (err instanceof NotAPageFileError) putBackOther(away, path);
+    else restore(away, path);
+    throw err;
+  }
+  return { bytes, discard: () => removeQuietly(away), restore: () => restore(away, path) };
+}
+
+/**
+ * Put a captured name that is not a regular file (a folder, a symbolic
+ * link) back under its name, never replacing a name that exists now: a
+ * link is made again (which fails on an existing name) and never followed,
+ * a folder is renamed back (a rename never replaces a file or a non-empty
+ * folder), and anything else only while the name is free. When it cannot
+ * go back it stays under its temp name, nothing lost.
+ */
+function putBackOther(away: string, path: string): void {
+  try {
+    const stat = lstatSync(away);
+    if (stat.isSymbolicLink()) {
+      symlinkSync(readlinkSync(away), path);
+      removeQuietly(away);
+    } else if (stat.isDirectory() || lstatOrNull(path) === null) {
+      renameSync(away, path);
+    }
+  } catch {
+    // kept under the temp name
+  }
+}
+
 /** Syncthing: `.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device id prefix>`. */
 const SYNCTHING_COPY_RE = /^\.sync-conflict-\d{8}-\d{6}-[a-z0-9]{7}$/;
 /** Dropbox, Nextcloud and similar: ` (<who>conflicted copy <date ...>)`. */
@@ -240,7 +344,139 @@ export function conflictCopies(path: string): string[] {
     .map((name) => join(dir, name));
 }
 
-/** Remove a conflict copy once its content is in the store. */
-export function removeCopy(path: string): void {
-  removeQuietly(path);
+/**
+ * Move what the user keeps in a topic folder (companion files beside the
+ * writer's pages) into the folder the topic moved to, when a rename moved
+ * its page. `skip` names the writer's own pages; temp files and names the
+ * new folder already has stay where they are; `only`, when given, limits
+ * the move to those names. Best effort: a file that cannot move stays in
+ * the old folder, which is then kept.
+ */
+export function moveCompanions(
+  fromDir: string,
+  toDir: string,
+  skip: ReadonlySet<string>,
+  only?: ReadonlySet<string>,
+): void {
+  for (const name of listCompanions(fromDir, skip)) {
+    if (only !== undefined && !only.has(name)) continue;
+    try {
+      mkdirSync(toDir, { recursive: true });
+      moveNoReplace(join(fromDir, name), join(toDir, name));
+    } catch {
+      // left in the old folder
+    }
+  }
+}
+
+/** The companion names in `dir` (none when it cannot be read): every name but `skip` and temp files. */
+export function listCompanions(dir: string, skip: ReadonlySet<string>): string[] {
+  try {
+    return readdirSync(dir).filter((n) => !skip.has(n) && !n.startsWith(VIEW_TEMP_PREFIX));
+  } catch {
+    return [];
+  }
+}
+
+/** Whether two stats are one version of one file: same file, same size, same modification time. */
+function sameVersion(a: Stats, b: Stats | null): boolean {
+  return (
+    b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
+  );
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Move `from` to `to` without ever replacing a `to` that exists, even one
+ * a sync tool creates in the same instant: a file is linked to its new
+ * name (which fails on an existing name) and then unlinked, or, where the
+ * file system has no hard links, copied exclusively; a folder is renamed
+ * only onto no name (a rename may replace an empty folder, never a file
+ * or a non-empty folder). A symbolic link is left where it is.
+ *
+ * A move that cannot finish is taken back: when the old name holds another
+ * version by the time it would be removed (a sync tool delivered a newer
+ * one), or cannot be removed (Windows reports a file another program
+ * holds as `EPERM`, the same code as "no hard links"), the new name is
+ * taken back and the file stays where it was. Neither name is ever
+ * unlinked live: each is first renamed to a temp name, and only the
+ * version checked is removed there, so a version a sync tool delivers
+ * under either name meanwhile is put back, never deleted. One case is
+ * left: a file another program holds open against deletion can be linked
+ * but neither name can then be removed, so it stays under both names
+ * until that program lets go.
+ */
+function moveNoReplace(from: string, to: string): void {
+  const stat = lstatSync(from);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    if (existsSync(to)) return;
+    renameSync(from, to);
+    return;
+  }
+  // The version this move put under the new name: the source itself for a
+  // link, the copy as written otherwise.
+  let placed = stat;
+  try {
+    linkSync(from, to);
+  } catch (err) {
+    const code = errnoCode(err);
+    if (code === undefined || !NO_LINK_CODES.has(code)) throw err;
+    copyFileSync(from, to, fsConstants.COPYFILE_EXCL);
+    placed = lstatSync(to);
+  }
+  const now = lstatOrNull(from);
+  if (now === null) return; // gone meanwhile: the new name holds the only copy
+  if (!sameVersion(stat, now)) {
+    removeIfVersion(to, placed);
+    return;
+  }
+  const away = tempName(dirname(from), "move");
+  try {
+    renameSync(from, away);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return; // gone meanwhile, as above
+    removeIfVersion(to, placed);
+    throw err;
+  }
+  if (sameVersion(stat, lstatOrNull(away))) {
+    removeQuietly(away);
+    return;
+  }
+  // A newer version took the old name between the check and the rename:
+  // it goes back under that name, and the move is taken back.
+  restore(away, from);
+  removeIfVersion(to, placed);
+}
+
+/**
+ * Remove `path` only while it is still the version `ours` (the name this
+ * move created): it is renamed to a temp name first and checked there, so
+ * a file a sync tool put under the name meanwhile is put back, not removed.
+ */
+function removeIfVersion(path: string, ours: Stats): void {
+  const away = tempName(dirname(path), "back");
+  try {
+    renameSync(path, away);
+  } catch {
+    return; // gone already
+  }
+  if (sameVersion(ours, lstatOrNull(away))) removeQuietly(away);
+  else restore(away, path);
+}
+
+/** Remove a page folder once nothing is left in it; a folder with anything in it stays. */
+export function removeEmptyFolder(dir: string): void {
+  try {
+    rmdirSync(dir);
+  } catch {
+    // not empty, or already gone
+  }
 }

@@ -118,6 +118,17 @@ describe("isInViewFolder", () => {
     expect(isInViewFolder("", "about-me (conflicted copy 2026-01-02).md")).toBe(true);
     expect(isInViewFolder("", "decisions.sync-conflict-20260102-101010-ABCDEFG.md")).toBe(true);
     expect(isInViewFolder("", "history/2026-W01.md")).toBe(true);
+    expect(isInViewFolder("", "topics/2026-11-02-store/topic.md")).toBe(true);
+    expect(isInViewFolder("", "reports/2026-11-02-x.md")).toBe(true);
+    expect(
+      isInViewFolder("", "topics/2026-11-02-store/topic.sync-conflict-20260102-101010-ABCDEFG.md"),
+    ).toBe(true);
+    expect(isInViewFolder("", "topics", { container: true })).toBe(true);
+    expect(isInViewFolder("", "topics/2026-11-02-store", { container: true })).toBe(true);
+    // The user's own notes in folders of the same names stay theirs.
+    expect(isInViewFolder("", "topics/plan.md")).toBe(false);
+    expect(isInViewFolder("", "reports/Q3/summary.md")).toBe(false);
+    expect(isInViewFolder("", "topics")).toBe(false);
     expect(isInViewFolder("", ".o2b-view-x-new.md")).toBe(true);
     expect(isInViewFolder("", "Notes/about-me.md")).toBe(false);
     expect(isInViewFolder("", "about-me-notes.md")).toBe(false);
