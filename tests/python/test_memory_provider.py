@@ -881,6 +881,35 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertEqual(gate_args["turn_id"], "turn-7")
         self.assertEqual(gate_args["telemetry_host"], "hermes")
 
+    def test_prefetch_bounds_long_queries_and_keeps_the_ends(self):
+        for query in (
+            "A" * 2000,
+            "Start " + "x" * 1990 + " end question?",
+            "Start " + "x" * 4000 + " end question?",
+            "Start " + "😀" * 4001 + " end question?",
+        ):
+            with self.subTest(length=len(query)):
+                bridge = FakeBrainBridge(results={
+                    "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                    "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+                })
+                provider = self._init(bridge, hermes_home="/tmp/hh")
+                with patch.object(provider_module.logger, "info") as log:
+                    result = provider.prefetch(query, session_id="sess-1")
+                gate = next(a for n, a in bridge.calls if n == "brain_recall_gate")
+                pack = next(a for n, a in bridge.calls if n == "brain_context_pack")
+                self.assertIn("RECALLED", result)
+                self.assertEqual(gate["prompt"], pack["query"])
+                self.assertLessEqual(len(pack["query"]), 2000)
+                self.assertLessEqual(len(gate["prompt"].encode("utf-16-le")) // 2, 4000)
+                self.assertEqual(next(a for n, a in bridge.calls if n == "skills_attach")["query"], query)
+                if len(query) > 2000:
+                    self.assertTrue(pack["query"].startswith("Start "))
+                    self.assertTrue(pack["query"].endswith(" end question?"))
+                    self.assertTrue(any("query reduced" in call.args[0] for call in log.call_args_list))
+                else:
+                    self.assertEqual(pack["query"], query)
+
     def test_prefetch_keeps_the_server_receipt_as_sample_id(self):
         # The sample id an agent later posts an outcome against must be the
         # id the server wrote a receipt under, never a locally hashed
