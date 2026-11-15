@@ -52,7 +52,12 @@ import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
+import {
+  acquireWriterLeaseSync,
+  acquireWriterLockSync,
+  isWriterLockHeld,
+  type WriterLease,
+} from "../../../src/core/search/store/writer-lock.ts";
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -599,23 +604,27 @@ function tablesOf(path: string): string[] {
   }
 }
 
-type LockSync = typeof lockfile.lockSync;
-
 /**
- * Run `fn` with every writer lock taken on the live store wrapped by
- * `wrapRelease`. Locks on other paths, and locks the test itself takes
- * while `bypass()` is true, are the real ones.
+ * Run `fn` with every release of the live store's writer lock wrapped by
+ * `wrapRelease`. A release removes the lock directory `<dbPath>.lock`
+ * while the lock is live, so that removal is what is wrapped. The lock
+ * module's other removals - of a lock past its stale window, before a
+ * takeover - happen on a lock that is not live and are left alone, as are
+ * removals on other paths and those the test itself makes while
+ * `bypass()` is true.
  */
 function withStoreLockRelease<T>(
   wrapRelease: (real: () => void) => () => void,
   fn: () => T,
   bypass: () => boolean = () => false,
 ): T {
-  const realLockSync: LockSync = lockfile.lockSync.bind(lockfile);
-  const spy = spyOn(lockfile, "lockSync").mockImplementation(((path, opts) => {
-    const release = realLockSync(path, opts);
-    return String(path) === dbPath && !bypass() ? wrapRelease(release) : release;
-  }) as LockSync);
+  const realRmdir = fs.rmdirSync;
+  const spy = spyOn(fs, "rmdirSync").mockImplementation(((path, opts) => {
+    const real = (): void => realRmdir(path, opts);
+    const release = String(path) === `${dbPath}.lock` && isWriterLockHeld(dbPath);
+    if (release && !bypass()) wrapRelease(real)();
+    else real();
+  }) as typeof fs.rmdirSync);
   try {
     return fn();
   } finally {
@@ -696,6 +705,112 @@ describe("the gated restore holds the store lock from the recovery point through
     // The recovery point holds every table the restore replaced.
     restoreSnapshot(vault, recoveryRunId);
     expect(tablesOf(dbPath)).toEqual(replaced!);
+  });
+
+  test("a lock another writer took over before the swap refuses it with nothing touched", () => {
+    snapshotThenDiverge();
+    let successor: WriterLease | null = null;
+    let successorLockKept = false;
+    expectUntouched(() => {
+      try {
+        restoreSnapshot(vault, RUN_ID, {
+          beforeDiscard: () => {
+            // What a takeover does on disk once the restore's lock went
+            // stale: the old lock directory is removed and the next
+            // writer creates its own.
+            rmSync(`${dbPath}.lock`, { recursive: true });
+            successor = acquireWriterLeaseSync(dbPath);
+          },
+        });
+      } finally {
+        // The restore's release left the successor's lock alone.
+        successorLockKept = existsSync(`${dbPath}.lock`);
+        (successor as WriterLease | null)?.release();
+      }
+    }, /writer lock was lost before the swap.*refusing before the Brain tree is touched/u);
+    expect(successor).not.toBeNull();
+    expect(successorLockKept).toBe(true);
+  });
+
+  test("a lock taken over during the Brain/ swap undoes it before the store is replaced", () => {
+    snapshotThenDiverge();
+    let successor: WriterLease | null = null;
+    const realRename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (successor === null && isMoveIn(String(from), String(to))) {
+        // A takeover in the middle of the renames: the restore's lock
+        // directory replaced by another writer's.
+        rmSync(`${dbPath}.lock`, { recursive: true });
+        successor = acquireWriterLeaseSync(dbPath);
+      }
+      realRename(from, to);
+    });
+    try {
+      expectUntouched(() => {
+        try {
+          restoreSnapshot(vault, RUN_ID);
+        } finally {
+          (successor as WriterLease | null)?.release();
+        }
+      }, /writer lock was lost during the Brain\/ swap.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were before the restore/su);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(successor).not.toBeNull();
+  });
+
+  test("a rename that fails after the lock was taken over reports the swap, not a refusal", () => {
+    snapshotThenDiverge();
+    let successor: WriterLease | null = null;
+    const realRename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (successor === null && isMoveIn(String(from), String(to))) {
+        // The swap is under way: the lock is taken over, and this rename
+        // fails. What the restore reports is the swap and its undo.
+        rmSync(`${dbPath}.lock`, { recursive: true });
+        successor = acquireWriterLeaseSync(dbPath);
+        throw fsError("EIO", String(to));
+      }
+      realRename(from, to);
+    });
+    try {
+      expectUntouched(() => {
+        try {
+          restoreSnapshot(vault, RUN_ID);
+        } finally {
+          (successor as WriterLease | null)?.release();
+        }
+      }, /^snapshot\[dream-restore-order\]: restore failed during the swap: a Brain\/ rename failed.*every Brain\/ rename was undone/su);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(successor).not.toBeNull();
+  });
+
+  test("a store archive written while its lock was taken over is not kept", () => {
+    let successor: WriterLease | null = null;
+    const archive = snapshotStorePath(vault, RUN_ID);
+    const realLink = fs.linkSync;
+    const spy = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      if (successor === null && String(to) === archive) {
+        // The store's lock taken over while the archive is published.
+        rmSync(`${dbPath}.lock`, { recursive: true });
+        successor = acquireWriterLeaseSync(dbPath);
+      }
+      realLink(from, to);
+    });
+    let message = "";
+    try {
+      message = refusal(() =>
+        createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED }),
+      );
+    } finally {
+      spy.mockRestore();
+      (successor as WriterLease | null)?.release();
+    }
+    expect(successor).not.toBeNull();
+    expect(message).toMatch(/writer lock was lost while its archive was written/u);
+    expect(existsSync(archive)).toBe(false);
   });
 
   test("a lock release that fails after the swap committed says so and names the recovery point", () => {

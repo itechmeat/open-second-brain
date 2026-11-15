@@ -430,12 +430,11 @@ function lockAgeMs(dbPath: string, now: Date): number | null {
 }
 
 /**
- * The lock directory `proper-lockfile` creates for an index path: a bare
- * `${dbPath}.lock` directory whose only metadata is its mtime (`getLockFile`
- * in `proper-lockfile/lib/lockfile.js`; `writer-lock.ts` takes it with
- * `mkdir`). Spelled here because the age reads that directory's mtime, and
- * the state probe (`isWriterLockHeld`) asks the same path behind the same
- * library.
+ * The writer lock directory for an index path: a bare `${dbPath}.lock`
+ * directory whose only metadata is its mtime (the `proper-lockfile` on-disk
+ * protocol, which `writer-lock.ts` keeps; it takes the lock with `mkdir`).
+ * Spelled here because the age reads that directory's mtime, and the state
+ * probe (`isWriterLockHeld`) asks the same path.
  */
 const WRITER_LOCK_SUFFIX = ".lock";
 

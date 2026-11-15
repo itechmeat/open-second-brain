@@ -93,6 +93,10 @@ import type {
 } from "../../../core/search/index.ts";
 import { PROVIDER_PROBE } from "../../../core/search/provider-probe.ts";
 import { acquireWriterLock } from "../../../core/search/store.ts";
+import {
+  keepWriterLeasesFresh,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+} from "../../../core/search/store/writer-lock.ts";
 import { runIntegrityCheck } from "../../../core/search/store/lifecycle.ts";
 import { nowIso } from "../../../core/search/store/sql.ts";
 import {
@@ -342,7 +346,11 @@ async function scanIntegrity(config: ResolvedSearchConfig): Promise<IntegrityRep
       const priorCheck = readPriorCheck(db);
 
       const startedAt = performance.now();
-      const verdict = runIntegrityCheck(db);
+      // Held under the writer lock, which is kept fresh off this blocked
+      // thread while the scan reads a large index.
+      const verdict = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+        runIntegrityCheck(db),
+      );
       const elapsedMs = Math.round(performance.now() - startedAt);
 
       // `quick_check` passes any well-formed sqlite file, including one

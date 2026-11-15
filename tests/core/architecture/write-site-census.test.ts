@@ -1036,6 +1036,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "takeover claim on that file won.",
   },
 
+  "src/core/search/store/writer-lock.ts": {
+    categories: [C.lockPrimitive],
+    calls: ["rmdirSync", "utimesSync"],
+    reason:
+      "the search index writer lock itself, an empty `<dbPath>.lock` directory. Its " +
+      "semantics come from the exclusive `mkdir`; `utimesSync` is the heartbeat that " +
+      "stamps the directory's mtime, and `rmdirSync` is the release (only of a lock whose " +
+      "mtime and inode are still this holder's) or the removal of a lock past its stale " +
+      "window by the contender about to re-create it. No file bytes are written.",
+  },
+
   // --- Metadata only -----------------------------------------------------
   "src/core/brain/health/remediation.ts": {
     categories: [C.metadataOnly],
@@ -1386,8 +1397,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 78 -> 79: the migration places accepted skills from Brain/skills in the vault's skills/ folder as files (task 2.10).
  * 79 -> 80: the skill accept journal writes its repair markers as machine-state files, not lane records.
  * 80 -> 81: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
+ * 81 -> 82: the search index writer lock is taken, refreshed and released by its own module instead of `proper-lockfile`, to check ownership.
  */
-const DIRECT_WRITE_ROWS = 81;
+const DIRECT_WRITE_ROWS = 82;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1759,8 +1771,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 77 -> 78: the migration places accepted skills from Brain/skills in the vault's skills/ folder as files (task 2.10).
  * 78 -> 79: the skill accept journal's repair markers are machine-state files.
  * 79 -> 80: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
+ * 80 -> 81: the search index writer lock's own module (lock directory metadata only, no stamped bytes).
  */
-const UNSTAMPED_DIRECT_ROWS = 80;
+const UNSTAMPED_DIRECT_ROWS = 81;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

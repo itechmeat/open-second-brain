@@ -116,7 +116,14 @@ import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/reco
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
-import { acquireWriterLockSync, WRITER_LOCK_STALE_MS } from "../search/store/writer-lock.ts";
+import {
+  acquireWriterLeaseSync,
+  acquireWriterLockSync,
+  keepWriterLeasesFresh,
+  resolveWriterLockStaleMs,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+  type WriterLease,
+} from "../search/store/writer-lock.ts";
 import { appendLogEvent } from "./log.ts";
 import {
   buildManifest,
@@ -1158,22 +1165,48 @@ function coverDerivedStore(
     ? (): void => {}
     : acquireWriterLockSync(sourcePath);
   try {
-    assertStoreIsSound(sourcePath, runId);
+    // Everything under the lock blocks this thread - the integrity scan,
+    // `VACUUM INTO`, the compressor - for minutes on a large store, so the
+    // lock is kept fresh off the thread meanwhile, bounded by the scan and
+    // copy budget plus the compressor's own timeout.
+    let published = false;
+    try {
+      keepWriterLeasesFresh(
+        WRITER_LEASE_BLOCKING_BUDGET_MS + resolveSnapshotToolTimeoutMs(),
+        () => {
+          assertStoreIsSound(sourcePath, runId);
 
-    // Measured against the LIVE size, which is what the operator's
-    // ceiling is expressed in and what they can check with `ls`. The
-    // compressed archive is smaller, but refusing on a number nobody can
-    // predict before the work is done would be a worse contract.
-    if (liveSize > policy.maxBytes) {
-      throw new BrainSnapshotStoreError(
-        `store is ${liveSize} bytes, over the ${policy.maxBytes}-byte ceiling ` +
-          `(snapshots.derived_store_max_bytes)`,
+          // Measured against the LIVE size, which is what the operator's
+          // ceiling is expressed in and what they can check with `ls`. The
+          // compressed archive is smaller, but refusing on a number nobody can
+          // predict before the work is done would be a worse contract.
+          if (liveSize > policy.maxBytes) {
+            throw new BrainSnapshotStoreError(
+              `store is ${liveSize} bytes, over the ${policy.maxBytes}-byte ceiling ` +
+                `(snapshots.derived_store_max_bytes)`,
+              runId,
+              SNAPSHOT_STORE_EXCLUSION.over_size_ceiling,
+            );
+          }
+
+          writeStoreArchive(sourcePath, archivePath, tools, runId);
+          published = true;
+        },
+      );
+    } catch (err) {
+      // An archive published before the lock turned out lost (the region's
+      // exit check) is this run's own: the name was free at the check above.
+      // It is removed, so the run leaves nothing a retry under the same id
+      // would be refused for.
+      if (published) rmSync(archivePath, { force: true });
+      if (err instanceof BrainSnapshotError) throw err;
+      throw new BrainSnapshotError(
+        `the derived store's writer lock was lost while its archive was written ` +
+          `(${(err as Error).message ?? String(err)}); no store archive was kept`,
         runId,
-        SNAPSHOT_STORE_EXCLUSION.over_size_ceiling,
+        { cause: err },
       );
     }
-
-    writeStoreArchive(sourcePath, archivePath, tools, runId);
   } finally {
     release();
   }
@@ -1645,11 +1678,18 @@ function spawnSnapshotTool(
   runId: string,
 ): SpawnSyncReturns<Buffer> {
   const timeoutMs = resolveSnapshotToolTimeoutMs();
-  const r = spawnSync(cmd, [...args], {
-    ...options,
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-  }) as SpawnSyncReturns<Buffer>;
+  // A writer lock held across this run (the restore's, a store archive's)
+  // is kept fresh while the thread is blocked in the child, bounded by the
+  // timeout the child is killed at plus one stale window for the kill.
+  const r = keepWriterLeasesFresh(
+    timeoutMs + resolveWriterLockStaleMs(),
+    () =>
+      spawnSync(cmd, [...args], {
+        ...options,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+      }) as SpawnSyncReturns<Buffer>,
+  );
   if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
     throw new BrainSnapshotError(
       `${cmd} did not finish within ${timeoutMs} ms and was stopped; ` +
@@ -2392,11 +2432,27 @@ export function restoreSnapshot(
       // The last moment at which the live state still exists. A throw
       // here propagates and nothing has been replaced yet, which is the
       // same abort-before-the-operation rule the destructive gate applies.
-      evidence =
-        opts.beforeDiscard?.({
-          storeTarget: store?.target ?? null,
-          heldStoreLock: lock?.token ?? null,
-        }) ?? null;
+      //
+      // The recovery point runs tar, zstd and a store archive synchronously
+      // under the lock. Each of those keeps the lease fresh for its own
+      // bound, and the rest of the callback (the manifest, the retention
+      // pass) for this outer one; the bounds add up rather than nest, so a
+      // wedged recovery point holds the lock at most for their sum and then
+      // lets it go stale, never forever.
+      try {
+        evidence =
+          keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+            opts.beforeDiscard?.({
+              storeTarget: store?.target ?? null,
+              heldStoreLock: lock?.token ?? null,
+            }),
+          ) ?? null;
+      } catch (err) {
+        // A lease lost while the recovery point ran is reported as the
+        // restore's own refusal, with nothing touched.
+        if (lock !== null && lock.lease.lost) assertStoreLeaseHeld(lock.lease, runId);
+        throw err;
+      }
       if (store !== null && evidence !== null) {
         assertRecoveryPointCoversTarget(vault, evidence, store.target, runId);
       }
@@ -2423,7 +2479,47 @@ export function restoreSnapshot(
         }
       }
 
-      const swap = swapBrainTree(staged, dirs.brain, liveEntries, runId, evidence);
+      // The lease is proven once more right before the first rename. One
+      // that another writer took over (the recovery point stalled past the
+      // stale window) excludes nothing any more, and the swap would discard
+      // whatever that writer committed.
+      if (lock !== null) assertStoreLeaseHeld(lock.lease, runId);
+
+      // The Brain/ renames run under the lease too, kept fresh off this
+      // thread, and the lease is proven once more when they are done, right
+      // before the store replacement: a lease lost during the renames
+      // undoes them instead of replacing a store another writer now owns.
+      const held: { swap?: ReturnType<typeof swapBrainTree> } = {};
+      const tree = staged;
+      const recovery = evidence;
+      let swapStarted = false;
+      const runSwap = (): void => {
+        swapStarted = true;
+        held.swap = swapBrainTree(tree, dirs.brain, liveEntries, runId, recovery);
+      };
+      try {
+        if (lock === null) runSwap();
+        else keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, runSwap);
+      } catch (err) {
+        // A failed rename has undone its own renames and says so, undo
+        // result and recovery included; that error stands. Only when the
+        // swap never started (the lease was found lost on entry) is this
+        // the restore's own refusal, with nothing touched.
+        if (held.swap === undefined) {
+          if (!swapStarted && lock !== null && lock.lease.lost) {
+            assertStoreLeaseHeld(lock.lease, runId);
+          }
+          throw err;
+        }
+        throw held.swap.fail(
+          `the derived store's writer lock was lost during the Brain/ swap (${errorText(err)})`,
+          err,
+          { storeIntact: true },
+        );
+      }
+      const swap = held.swap;
+      if (swap === undefined)
+        throw new BrainSnapshotError("restore: the Brain/ swap did not run", runId);
       if (store !== null) {
         try {
           commitDerivedStoreSwap(store);
@@ -3139,10 +3235,14 @@ function stageDerivedStore(
 function acquireStoreLockForRestore(
   target: string,
   runId: string,
-): { readonly token: StoreLockToken; readonly release: () => void } {
-  let unlock: () => void;
+): {
+  readonly token: StoreLockToken;
+  readonly lease: WriterLease;
+  readonly release: () => void;
+} {
+  let lease: WriterLease;
   try {
-    unlock = acquireWriterLockSync(target);
+    lease = acquireWriterLeaseSync(target);
   } catch (err) {
     throw new BrainSnapshotError(
       `cannot take the derived store's writer lock (${errorText(err)}); refusing before the ` +
@@ -3155,11 +3255,26 @@ function acquireStoreLockForRestore(
   liveStoreLockTokens.set(token, target);
   return {
     token,
+    lease,
     release: (): void => {
       liveStoreLockTokens.delete(token);
-      unlock();
+      lease.release();
     },
   };
+}
+
+/** Refuse the swap, with nothing touched, when the restore's lease was lost. */
+function assertStoreLeaseHeld(lease: WriterLease, runId: string): void {
+  try {
+    lease.assertHeld();
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `the derived store's writer lock was lost before the swap (${errorText(err)}); ` +
+        "refusing before the Brain tree is touched",
+      runId,
+      { cause: err },
+    );
+  }
 }
 
 /**
@@ -3244,7 +3359,7 @@ function releaseStoreLockAfterRestore(
             `pre-restore state; \`o2b brain rollback ${recoveryPoint.runId}\` puts it back`;
       throw new BrainSnapshotError(
         `the restore committed: Brain/ and the derived store now hold snapshot ${runId}, but ` +
-          `${what}; the lock is stale-released after ${WRITER_LOCK_STALE_MS} ms; ${recovery}`,
+          `${what}; the lock is stale-released after ${resolveWriterLockStaleMs()} ms; ${recovery}`,
         runId,
         { cause: releaseErr },
       );

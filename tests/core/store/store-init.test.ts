@@ -167,18 +167,93 @@ describe("o2b store init", () => {
     expect([...(inspectStore(root)?.partitions ?? [])]).toEqual(["shared"]);
   });
 
-  test("concurrent runs agree on one store and only one reports creating it", async () => {
-    // The sandboxed HOME also holds Bun's transpiler cache. One run first
-    // fills it, so the six racing children start warm instead of each
-    // transpiling the whole CLI at once (26 to 32 s on the Windows runner).
-    const warm = await runCli(["version"], { env: env(), subprocess: true });
-    expect(warm.returncode).toBe(0);
-    const runs = await Promise.all(
-      [1, 2, 3, 4, 5, 6].map(() =>
-        runCli(["store", "init", "--json"], { env: env(), subprocess: true }),
-      ),
+  test("six processes running the init verb at once agree on one store and only one reports creating it", async () => {
+    // Six processes run the `store init` verb (its handler, not the whole
+    // CLI entry; the single-run tests above cover the CLI) against one root. Each loads the verb,
+    // says it is ready and waits for one go signal, so the six really do
+    // race on the store, whatever the runner's load: a process start
+    // (a transpile of the CLI on a cold Windows runner takes seconds) is
+    // not part of the race and cannot stagger it into six serial runs or
+    // eat the test's budget while one run is still starting.
+    const runs = 6;
+    const go = join(parent, "go");
+    const child = join(parent, "racer.ts");
+    const storeVerb = join(import.meta.dir, "../../../src/cli/store.ts");
+    writeFileSync(
+      child,
+      [
+        'import { existsSync, writeFileSync } from "node:fs";',
+        `import { handleStoreSubcommand } from ${JSON.stringify(storeVerb)};`,
+        "writeFileSync(process.argv[2], '');",
+        // Bounded on its own, so a racer whose test already gave up exits
+        // instead of spinning after the run.
+        "const deadline = Date.now() + 30_000;",
+        `while (!existsSync(${JSON.stringify(go)})) {`,
+        "  if (Date.now() > deadline) process.exit(2);",
+        "  Bun.sleepSync(5);",
+        "}",
+        'process.exitCode = await handleStoreSubcommand(["init", "--json"]);',
+      ].join("\n"),
     );
-    const answers = runs.map((r) => JSON.parse(r.stdout) as Record<string, unknown>);
+    const spawnRacer = (i: number) => {
+      const home = join(parent, "home");
+      const proc = Bun.spawn([process.execPath, child, join(parent, `ready-${i}`)], {
+        cwd: parent,
+        env: {
+          ...process.env,
+          ...env(),
+          ...(process.platform === "win32" ? { USERPROFILE: home } : {}),
+          // A machine config of its own per run, as each CLI run gets.
+          OPEN_SECOND_BRAIN_CONFIG: join(parent, `config-${i}.yaml`),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { proc, output };
+    };
+    const racers: Array<ReturnType<typeof spawnRacer>> = [];
+    const readyUpTo = (count: number): boolean =>
+      Array.from({ length: count }, (_, i) => join(parent, `ready-${i}`)).every((f) =>
+        existsSync(f),
+      );
+    const waitReady = async (count: number): Promise<void> => {
+      while (!readyUpTo(count)) {
+        // A run that died before it got ready would leave the others waiting.
+        for (const { proc } of racers) {
+          if (proc.exitCode !== null) {
+            throw new Error(`a racer exited ${proc.exitCode} before the start`);
+          }
+        }
+        await Bun.sleep(10);
+      }
+    };
+    let results: Array<[string, string, number]>;
+    try {
+      // The first racer starts alone and fills Bun's transpiler cache, so
+      // the other five start warm instead of transpiling the verb's whole
+      // module graph six times at once on a slow runner.
+      racers.push(spawnRacer(0));
+      await waitReady(1);
+      for (let i = 1; i < runs; i++) racers.push(spawnRacer(i));
+      await waitReady(runs);
+      writeFileSync(go, "");
+      results = await Promise.all(racers.map((r) => r.output));
+    } finally {
+      // Whatever happened above, no racer outlives the test.
+      for (const { proc } of racers) if (proc.exitCode === null) proc.kill("SIGKILL");
+    }
+    const answers = results.map(([stdout, stderr]) => {
+      try {
+        return JSON.parse(stdout) as Record<string, unknown>;
+      } catch {
+        throw new Error(`a racer answered no JSON: ${stdout}${stderr}`);
+      }
+    });
     const done = answers.filter((a) => a["ok"] === true);
     // A run that lost is refused for the store the others made, never for another reason.
     const refused = answers.filter((a) => a["ok"] !== true).map((a) => a["reason"]);
@@ -188,7 +263,6 @@ describe("o2b store init", () => {
     const written = done.flatMap((a) => a["created"] as string[]);
     expect(written.toSorted()).toEqual(["private", "shared"]);
     expect(new Set(done.map((a) => a["storeId"]))).toEqual(new Set([inspectStore(root)?.storeId]));
-    // Six cold CLI processes start at once: a loaded CI runner needs more than the 5 s default.
   }, 30_000);
 
   test("with --json a usage error is a JSON answer too", async () => {

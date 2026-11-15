@@ -49,7 +49,12 @@ import {
   writeWatermark,
   type StoreWatermark,
 } from "../store/brain-records.ts";
-import { isWriterLockHeld } from "../store/writer-lock.ts";
+import {
+  isWriterLockHeld,
+  keepWriterLeasesFresh,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+  writerLeaseCheckIn,
+} from "../store/writer-lock.ts";
 import { SearchError, type ResolvedSearchConfig } from "../types.ts";
 import { STORE_CATCH_UP_INTERVAL_ENV, STORE_CATCH_UP_INTERVAL_MS } from "./constants.ts";
 import { completePendingRecord, ingestRecord, removeRecord } from "./ingest.ts";
@@ -259,6 +264,9 @@ function readOneShard(
   totals.shardsRead++;
   const seen = new Set<string>();
   for (const r of read.records) {
+    // A shard read from its start can hold every record the store has; the
+    // writer lock this pass runs under beats as it goes.
+    writerLeaseCheckIn();
     const outcome = ingestRecord(index, config, r.record, shard, r.bodyState === "pending");
     // A copy refused for sitting in the other partition does not hold the
     // record: it must not keep an orphaned row alive.
@@ -349,8 +357,25 @@ function dropVoidedRecords(
   return removed;
 }
 
-/** Bring `index` level with the shards in `shards`; returns what changed. */
+/**
+ * Bring `index` level with the shards in `shards`; returns what changed.
+ *
+ * A shard read from its start is one synchronous read of the whole file,
+ * which a check-in cannot interrupt, so the pass runs with the writer lock
+ * it holds kept fresh off this thread; the check-ins below cover the rest.
+ */
 function syncShards(
+  index: Store,
+  config: ResolvedSearchConfig,
+  store: IndexedStore,
+  shards: ReadonlyArray<ShardStat>,
+): SyncTotals {
+  return keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+    syncShardsInPass(index, config, store, shards),
+  );
+}
+
+function syncShardsInPass(
   index: Store,
   config: ResolvedSearchConfig,
   store: IndexedStore,
@@ -379,6 +404,7 @@ function syncShards(
     const eventsReadInFull = new Set<string>();
     const next: StoreWatermark[] = [];
     for (const shard of shards) {
+      writerLeaseCheckIn();
       present.add(shard.key);
       const mark = marks.get(shard.key);
       if (mark !== undefined && sameStat(mark, shard)) continue;
@@ -393,7 +419,9 @@ function syncShards(
     for (const key of vanished) {
       for (const id of recordIdsOfShard(db, key)) if (!orphans.has(id)) orphans.set(id, key);
     }
+    writerLeaseCheckIn();
     const settled = settleOrphans(index, config, store, shards, orphans, readInFull);
+    writerLeaseCheckIn();
     totals.removed += settled.removed;
     // A forgotten signal leaves the index with its tombstone (FORMAT.md,
     // "Removal"): after a pass that read one, that re-read an events shard

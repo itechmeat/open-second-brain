@@ -94,7 +94,12 @@ import { compareStamps, formatStampMismatch, type StampMismatch } from "../integ
 import { pathCovers } from "../vault-scope/defaults.ts";
 
 import {
-  acquireWriterLock,
+  acquireWriterLease,
+  keepWriterLeasesFresh,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+  writerLeaseCheckIn,
+} from "./store/writer-lock.ts";
+import {
   describeUnreadableIndex,
   embeddingAbiFixCommand,
   formatEmbedderRecordContradiction,
@@ -517,6 +522,9 @@ async function indexIntoRun(
       // Per-file document upserts are transactional, so a tripped
       // guard leaves a consistent (partially refreshed) index.
       opts?.safeguard?.checkpoint();
+      // The walk is synchronous between embed batches, so the lock's
+      // event-loop heartbeat cannot fire during it; this beats instead.
+      writerLeaseCheckIn();
       progress.advance(INDEX_STAGE.walk);
       // On-demand cancellation, same boundary as the deadline.
       throwIfAborted(opts?.signal, "index");
@@ -541,6 +549,10 @@ async function indexIntoRun(
         }
 
         const content = readUtf8(file.absPath);
+        // Reading (and below, chunking) one large note can take a while:
+        // the lease is checked again before this file's first write, so a
+        // write store that lost its lock meanwhile stops here.
+        writerLeaseCheckIn();
         const contentHash = sha256Hex(content);
 
         // Fallback: fastpath missed (mtime or size changed). If
@@ -583,6 +595,7 @@ async function indexIntoRun(
         // and the resolved event-time window below must come from the
         // same anchor answer.
         const eventAnchor = resolveEventAnchor(frontmatter, body);
+        writerLeaseCheckIn();
         const docId = store.upsertDocument({
           path: file.relPath,
           title: chunkResult.title,
@@ -717,6 +730,8 @@ async function indexIntoRun(
           opts?.onFile?.({ path: file.relPath, kind: "updated" });
         }
       } catch (e) {
+        // A lost writer lock is the run's end, not this file's error.
+        if (e instanceof SearchError && e.code === "INDEX_LOCKED") throw e;
         const msg = e instanceof Error ? e.message : String(e);
         stats.errors.push({ path: file.relPath, message: msg });
         opts?.onFile?.({ path: file.relPath, kind: "error", message: msg });
@@ -724,6 +739,7 @@ async function indexIntoRun(
     }
 
     for (const [path] of existing) {
+      writerLeaseCheckIn();
       if (!seen.has(path)) {
         markLinkResolutionPending();
         store.deleteDocument(path);
@@ -760,10 +776,14 @@ async function indexIntoRun(
     ) {
       stats.linkResolutionSkipped = true;
     } else {
-      store.resolveLinkTargets();
-      // Alias post-pass (v7): exact path matches above always win; this
-      // only fills still-unresolved slash-free targets from doc_aliases.
-      stats.aliasResolved = store.resolveAliasTargets();
+      // Whole-table statements that block for as long as the index is
+      // large: the writer lock is kept fresh off this thread meanwhile.
+      stats.aliasResolved = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () => {
+        store.resolveLinkTargets();
+        // Alias post-pass (v7): exact path matches above always win; this
+        // only fills still-unresolved slash-free targets from doc_aliases.
+        return store.resolveAliasTargets();
+      });
       store.setState(LINK_RESOLUTION_PENDING_STATE_KEY, "0");
     }
 
@@ -781,7 +801,9 @@ async function indexIntoRun(
       stats.errors.push({ path: "Brain/_brain.yaml", message: `schema pack unreadable: ${msg}` });
     }
     stats.relationViolations = Object.freeze(
-      store.recomputeRelationConstraintFlags(pack?.link_constraints ?? {}),
+      keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+        store.recomputeRelationConstraintFlags(pack?.link_constraints ?? {}),
+      ),
     );
 
     // Tier-guard post-pass: for each changed framework-kind doc,
@@ -1509,7 +1531,7 @@ async function reindexInto(
   // in-progress staging DB and then having its empty seed swapped over the
   // live index (INDEX_UNREADABLE, silent data loss). The staging-DB opens
   // below lock a different path (`.new`), so there is no self-deadlock.
-  const release = await acquireWriterLock(config.dbPath);
+  const lease = await acquireWriterLease(config.dbPath);
   progress.advance(INDEX_STAGE.lock);
   try {
     if (stillCurrent !== null && stillCurrent()) return null;
@@ -1611,7 +1633,18 @@ async function reindexInto(
     if (typeof Bun !== "undefined") Bun.gc(true);
     else (globalThis as { gc?: () => void }).gc?.();
     progress.start(INDEX_STAGE.swap, 1);
-    const keepBak = countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath);
+    // Counting the stored embeddings reads both indexes in full, which on
+    // a large one blocks for a while; the lock is kept fresh meanwhile.
+    const keepBak = keepWriterLeasesFresh(
+      WRITER_LEASE_BLOCKING_BUDGET_MS,
+      () => countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath),
+    );
+    // The last moment the rebuild can still be thrown away harmlessly,
+    // right before the first destructive step. A lease another writer took
+    // over (this run stalled past the stale window) no longer excludes that
+    // writer, and swapping now would replace whatever it committed with
+    // this run's staging build.
+    lease.assertHeld();
     const parkPath = keepBak ? config.dbPath + ".old" : bakPath;
     tryUnlink(parkPath);
     tryRename(config.dbPath, parkPath); // no-op (ENOENT) on fresh reindex
@@ -1625,7 +1658,7 @@ async function reindexInto(
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
-    await release();
+    lease.release();
   }
 }
 

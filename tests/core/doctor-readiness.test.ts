@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -1148,29 +1156,62 @@ describe("probeClientVersions", () => {
     expect(probe.detail).toContain("timed out");
   });
 
+  /**
+   * Ask the production runner, at a test-sized budget, to run a Bun child
+   * that reports its own pid and then hangs for `hangMs`; with `ignoreTerm`
+   * it ignores SIGTERM from before it reports.
+   * Bun's `process.pid` is the native pid on every platform, which a
+   * shell's `$$` is not on Windows, so the liveness poll below asks about
+   * the process the budget must kill.
+   *
+   * The pid is written to a temp name and renamed into place, so a child
+   * the budget cuts off mid-write never leaves a partial pid that reads as
+   * a report. A child cut off before it reported at all proves nothing
+   * either way - on a slow runner the interpreter's start alone can outlast
+   * the smallest budget - so that run is repeated at a doubled budget, a
+   * bounded number of times. Every run's verdict is checked; only the
+   * liveness proof needs a run whose child got as far as reporting.
+   */
+  async function askReportingChild(
+    name: string,
+    hangMs: number,
+    ignoreTerm = false,
+  ): Promise<{ readonly pid: number }> {
+    for (let attempt = 0, budgetMs = 150; attempt < 6; attempt++, budgetMs *= 2) {
+      const pidFile = join(tmp, `${name}-${attempt}.pid`);
+      const source = [
+        ignoreTerm ? 'process.on("SIGTERM", () => {});' : "",
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));`,
+        `fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});`,
+        `setTimeout(() => {}, ${hangMs});`,
+      ].join("\n");
+      const v = await probeClientVersions(
+        versionsOpts(() => spawnClientVersion([process.execPath, "-e", source], budgetMs)),
+      );
+      expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
+      expect(v.rows![0]!.detail).toContain("timed out");
+      if (!existsSync(pidFile)) continue;
+      const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+      expect(Number.isInteger(pid)).toBe(true);
+      return { pid };
+    }
+    throw new Error(`the ${name} child never reported its pid before its budget cut it off`);
+  }
+
   test("a hung version child is killed at its ask's budget, never orphaned", async () => {
     writeConfig("");
     codexManifest();
-    const pidFile = join(tmp, "version-child.pid");
     // The production runner itself, through the same seam every other
-    // row is graded by, at a test-sized budget, against a child that
-    // would sleep far past it: `exec` replaces the shell with the
-    // sleeper in place, so the pid the script wrote is the one process
-    // that must die when the budget cuts the ask off.
-    const v = await probeClientVersions(
-      versionsOpts(() =>
-        spawnClientVersion(["sh", "-c", `echo $$ > '${pidFile}'; exec sleep 30`], 150),
-      ),
-    );
-    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
-    expect(v.rows![0]!.detail).toContain("timed out");
-    const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    expect(Number.isInteger(pid)).toBe(true);
+    // row is graded by, against a child that would sleep far past the
+    // budget: the pid it reported is the one process that must die when
+    // the budget cuts the ask off.
+    const { pid } = await askReportingChild("hung", 30_000);
     // The kill is issued asynchronously: poll until the pid is gone,
     // bounded, rather than sleeping a fixed grace period.
     const gone = await pollUntilGone(pid, Date.now() + 5_000);
     expect(gone).toBe(true);
-  }, 20000);
+  }, 30000);
 
   test("a client whose helper holds stdout still delivers the version it printed", async () => {
     writeConfig("");
@@ -1194,26 +1235,19 @@ describe("probeClientVersions", () => {
   test("a TERM-ignoring version child is escalated to SIGKILL and reaped", async () => {
     writeConfig("");
     codexManifest();
-    const pidFile = join(tmp, "term-child.pid");
-    // The M10 shape: a client that ignores SIGTERM (`trap "" TERM` keeps
-    // the disposition across `exec`, so the sleeper itself never dies of
-    // the first kill) outlived doctor together with its children, because
-    // the budget's cut was one SIGTERM with no follow-up. The sleeper is
-    // bounded at 8s so a regression cannot leak an unbounded orphan.
-    const v = await probeClientVersions(
-      versionsOpts(() =>
-        spawnClientVersion(["sh", "-c", `echo $$ > '${pidFile}'; trap "" TERM; exec sleep 8`], 150),
-      ),
-    );
-    expect(v.rows![0]!.status).toBe(READINESS_STATUS.unknown);
-    expect(v.rows![0]!.detail).toContain("timed out");
-    const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    expect(Number.isInteger(pid)).toBe(true);
+    // The M10 shape: a client that ignores SIGTERM outlived doctor
+    // together with its children, because the budget's cut was one
+    // SIGTERM with no follow-up. The child ignores TERM before it reports,
+    // so a reported pid is one the first kill cannot stop. It lives
+    // 30 s, past the largest ask budget plus the poll window, so only the
+    // kill can make it go in time, and a regression cannot leak an
+    // unbounded orphan.
+    const { pid } = await askReportingChild("term", 30_000, true);
     // The escalation lands a grace period after the SIGTERM: poll until
     // the pid is gone, bounded, rather than sleeping a fixed window.
     const gone = await pollUntilGone(pid, Date.now() + 5_000);
     expect(gone).toBe(true);
-  }, 20000);
+  }, 30000);
 
   test("a manifest recording no installs is skipped", async () => {
     writeConfig("");
