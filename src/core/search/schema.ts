@@ -10,6 +10,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "./types.ts";
+import { keepWriterLeasesFresh, WRITER_LEASE_BLOCKING_BUDGET_MS } from "./store/writer-lock.ts";
 import { hasPrivacyMarkerKey, remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { closeDatabase } from "../sqlite-close.ts";
@@ -1456,18 +1457,23 @@ export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {})
 
   if (current === LATEST_SCHEMA_VERSION) return current;
 
-  db.exec("BEGIN");
-  try {
-    for (const migration of MIGRATIONS) {
-      if (migration.version <= current) continue;
-      migration.up(db, ctx);
-      setSchemaVersion(db, migration.version);
+  // A migration can rewrite a large table in one synchronous run; the
+  // write open that calls this holds the writer lock, kept fresh off the
+  // blocked thread meanwhile.
+  keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () => {
+    db.exec("BEGIN");
+    try {
+      for (const migration of MIGRATIONS) {
+        if (migration.version <= current) continue;
+        migration.up(db, ctx);
+        setSchemaVersion(db, migration.version);
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
     }
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+  });
   return LATEST_SCHEMA_VERSION;
 }
 

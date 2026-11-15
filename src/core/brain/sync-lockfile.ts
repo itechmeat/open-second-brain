@@ -48,9 +48,10 @@
  * SIGKILL never wedges the index for longer than that. This lock
  * deliberately has no such window, and the asymmetry is not an
  * oversight: the search lock can self-heal only because its holder
- * HEARTBEATS - `acquireWriterLock` passes `update:
- * WRITER_LOCK_HEARTBEAT_MS` so a live holder keeps refreshing the mtime,
- * which is what makes "old mtime" mean "dead holder". A holder of THIS
+ * HEARTBEATS - a live writer lease refreshes its mtime every
+ * `WRITER_LOCK_HEARTBEAT_MS`, from a worker thread while it is blocked
+ * in a bounded synchronous call, which is what makes "old mtime" mean
+ * "dead or wedged holder". A holder of THIS
  * lock is inside a synchronous critical section: the single thread is
  * busy doing the very work the lock protects, so no timer can refresh
  * anything. Here an age threshold would only mean "held for longer than

@@ -32,7 +32,12 @@ import {
   setState,
 } from "./state.ts";
 import { loadVecExtension } from "./vectors.ts";
-import { acquireWriterLock, acquireWriterLockSync } from "./writer-lock.ts";
+import {
+  acquireWriterLease,
+  acquireWriterLockSync,
+  keepWriterLeasesFresh,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+} from "./writer-lock.ts";
 import { closeDatabase } from "../../sqlite-close.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
 import {
@@ -413,7 +418,11 @@ function runWriteOpenIntegrityGate(db: Database, dbPath: string): void {
     return;
   }
 
-  const verdict = runIntegrityCheck(db);
+  // A full scan of a large index blocks for as long as it reads; the open
+  // holds the writer lock, kept fresh off the blocked thread meanwhile.
+  const verdict = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+    runIntegrityCheck(db),
+  );
   try {
     setState(db, INTEGRITY_CHECKED_AT_STATE_KEY, nowIso());
     if (verdict.ok) deleteState(db, INTEGRITY_FAULT_STATE_KEY);
@@ -512,11 +521,29 @@ export async function openWriteDatabase(
     closeDatabase(seed);
   }
 
-  const release = await acquireWriterLock(config.dbPath);
+  // A write session has no single commit point to check its lease at, so
+  // a lease lost to a takeover stops the session where the loss is seen:
+  // the connection turns read-only (a write that slips past a caught
+  // throw is refused by SQLite) and the loss is thrown as INDEX_LOCKED -
+  // into the index walk from its check-in, or out of the heartbeat timer,
+  // which ends the process as `proper-lockfile` did for a lost lock.
+  let session: Database | null = null;
+  const lease = await acquireWriterLease(config.dbPath, {
+    onLost: (err) => {
+      try {
+        session?.exec("PRAGMA query_only = ON");
+      } catch {
+        /* the throw below still stops the session */
+      }
+      throw err;
+    },
+  });
+  const release = async (): Promise<void> => lease.release();
 
   let db: Database;
   try {
     db = new Database(config.dbPath);
+    session = db;
   } catch (e) {
     await release();
     const msg = e instanceof Error ? e.message : String(e);

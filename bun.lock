@@ -6,6 +6,7 @@
       "name": "open-second-brain",
       "dependencies": {
         "proper-lockfile": "^4.1.2",
+        "signal-exit": "^3.0.7",
       },
       "devDependencies": {
         "@types/bun": "^1.4.4",

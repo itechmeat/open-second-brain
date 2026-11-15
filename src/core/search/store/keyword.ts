@@ -11,7 +11,11 @@ import type { SearchKind } from "../property-pushdown.ts";
 import { pushdownSqlFragment } from "../property-pushdown.ts";
 import { SearchError } from "../types.ts";
 import { pathPrefixRange } from "./path-prefix.ts";
-import { acquireWriterLockSync } from "./writer-lock.ts";
+import {
+  acquireWriterLockSync,
+  keepWriterLeasesFresh,
+  WRITER_LEASE_BLOCKING_BUDGET_MS,
+} from "./writer-lock.ts";
 
 export interface KeywordHit {
   readonly chunkId: number;
@@ -82,13 +86,17 @@ export function rebuildFtsIndexWithWriterLock(
   dbPath: string,
   heldWriterLock: boolean,
 ): void {
+  // One statement that can run for minutes on a large index, so the lock
+  // is kept fresh off the blocked thread for its duration.
+  const rebuild = (): void =>
+    keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () => rebuildFtsIndex(db));
   if (heldWriterLock) {
-    rebuildFtsIndex(db);
+    rebuild();
     return;
   }
   const release = acquireWriterLockSync(dbPath);
   try {
-    rebuildFtsIndex(db);
+    rebuild();
   } finally {
     release();
   }
