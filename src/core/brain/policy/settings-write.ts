@@ -36,15 +36,11 @@ import lockfile from "proper-lockfile";
 
 import { canonicalJson } from "../../integrity/digest.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { AUTHORITY_FIELD, SETTING_SET_KIND, SETTING_UNSET_KIND } from "../../store/constants.ts";
 import { foldSettings, type SettingsFold } from "../../store/fold-settings.ts";
-import { callerInput, opaqueFields, operationPrivacy } from "../../store/operation-privacy.ts";
-import { withOperationPrivacy } from "../../store/operation-scope.ts";
 import { protectionStore, StoreUnavailableError } from "../../store/read/protection-store.ts";
 import { readStreamRecords } from "../../store/read/stream-read.ts";
 import { storeOnlyMode } from "../../store/store-only.ts";
 import type { StoreInspection } from "../../store/store-open.ts";
-import { storeWrite } from "../../store/store-write.ts";
 import { brainConfigPath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { parseBrainYaml } from "../yaml-parse.ts";
@@ -69,6 +65,12 @@ import {
   type YamlSettingValue,
 } from "./settings-yaml-edit.ts";
 import { validateBrainConfigDetailed } from "./validate.ts";
+import {
+  refuseOverStrongerEntry,
+  slotDecider,
+  refuseWholeListOverStrongerEntries,
+} from "./settings-entry-authority.ts";
+import { storeCommit, type StoreChange } from "./settings-store-commit.ts";
 
 export {
   BrainSettingError,
@@ -305,102 +307,68 @@ function refuseOverOperatorYaml(
   );
 }
 
-/** One change of a multi-key store write: a value, or {@link REMOVE_KEY}. */
-interface StoreChange {
-  readonly target: SettingTarget;
-  readonly value: unknown;
-}
-
-/**
- * Append the records of `changes` as ONE operation: one privacy verdict
- * over the whole caller input, every record in `shared`. Returns the ids
- * written, in order.
- */
-function storeCommit(
-  ctx: BrainSettingsWriteContext,
-  changes: ReadonlyArray<StoreChange>,
-): string[] {
-  const bodies = changes.map(({ target, value }) => {
-    const body: Record<string, unknown> = { [AUTHORITY_FIELD]: ctx.authority, key: target.key };
-    if (value !== REMOVE_KEY) body["value"] = value;
-    return { target, value, body };
-  });
-  // A shared setting is read from `shared` only, so a value that would
-  // route the record to `private` is refused rather than written where no
-  // reader looks (one verdict over the whole caller input, fail closed).
-  const verdict = operationPrivacy(ctx.vault, {
-    content: [
-      callerInput(
-        bodies.map(({ body }) => ({ key: body["key"], value: body["value"] })),
-        opaqueFields("key"),
-      ),
-    ],
-  });
-  if (verdict()) {
-    throw new BrainSettingError(
-      "private_setting_value",
-      `${changes.map((c) => c.target.name).join(", ")}: the value names a private page or ` +
-        `carries a <private> region; shared settings are read by every machine`,
-    );
-  }
-  const written = withOperationPrivacy(verdict, () =>
-    storeWrite(
-      () =>
-        bodies.map(({ value, body }) => ({
-          stream: "settings" as const,
-          kind: value === REMOVE_KEY ? SETTING_UNSET_KIND : SETTING_SET_KIND,
-          agent: ctx.agent,
-          body,
-        })),
-      {
-        vault: ctx.vault,
-        ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
-      },
-    ),
-  );
-  return written.map((w) => w.record.id);
-}
-
-/** A change of {@link writeSharedSettingRecords}: a value, or `null` to unset. */
-export interface SharedSettingRecordChange {
+/** A change of {@link writeSharedSettingEntries}: one entry of a list setting. */
+export interface SharedSettingEntryChange {
   readonly name: string;
-  /** The new value; `null` writes a `setting-unset`. */
-  readonly value: unknown;
+  readonly entry: string;
+  /** `true` adds the entry, `false` removes it. */
+  readonly present: boolean;
+  /**
+   * A removal every reader applies already (a reference the pack drops on
+   * read): skipped, not refused, where this authority may not write it.
+   * `decidedBy` is the record that decided the entry's slot in the read
+   * the repair was judged on: when another record decides the slot now (a
+   * replacement another device wrote meanwhile), the repair is skipped,
+   * and the removal it writes is conditional on that record
+   * (`if_decided_by`), so the fold keeps a replacement delivered only
+   * after the repair was written too: it never removes what it did not
+   * judge.
+   */
+  readonly repair?: { readonly decidedBy: string };
 }
 
 /**
- * Write several shared settings as one store operation, for a writer
- * that validated the values itself against a richer validator than the
- * settings one (the schema pack). Store mode only: the names are
- * classified, and an agent change to a key the operator set is refused
- * for the whole batch before anything is written. Unchanged keys are
- * skipped. Returns the ids of the records written.
+ * Write entry changes of list settings as one store operation, one
+ * `setting-entry` record each (task 3.12): a list setting folds per entry,
+ * so an edit another device makes meanwhile is kept. Store mode only. An
+ * entry whose register a stronger authority decides (an agent changing an
+ * entry the operator set or left out) refuses the whole batch, since the
+ * fold would ignore it. Returns the ids of the records written.
  */
-export function writeSharedSettingRecords(
+export function writeSharedSettingEntries(
   ctx: BrainSettingsWriteContext,
-  changes: ReadonlyArray<SharedSettingRecordChange>,
+  changes: ReadonlyArray<SharedSettingEntryChange>,
 ): string[] {
-  // An unswitched reader ignores settings records: written there, they
-  // would change nothing anyone reads.
   if (modeOf(ctx) !== "store") {
-    throw new Error("writeSharedSettingRecords: store mode only (this machine reads _brain.yaml)");
+    throw new Error("writeSharedSettingEntries: store mode only (this machine reads _brain.yaml)");
   }
   const read = sharedRead(ctx);
-  const fold = read.fold;
   const pending: StoreChange[] = [];
   for (const change of changes) {
     const target = resolveSettingName(change.name);
+    if (
+      change.repair !== undefined &&
+      slotDecider(read.fold, target.key, change.entry) !== change.repair.decidedBy
+    ) {
+      continue;
+    }
     refuseOperatorOnly(target, ctx.authority);
     refuseUnseen(target, read, ctx.authority);
-    const before = storeView(target, fold);
-    const value = change.value === null ? REMOVE_KEY : change.value;
-    const same =
-      value === REMOVE_KEY
-        ? !before.set
-        : before.set && canonicalJson(before.value) === canonicalJson(value);
-    if (same) continue;
-    refuseOverHuman(target, fold, ctx.authority);
-    pending.push({ target, value });
+    try {
+      refuseOverStrongerEntry(target, read.fold, change.entry, ctx.authority);
+    } catch (err) {
+      if (change.repair !== undefined && err instanceof BrainSettingError) continue;
+      throw err;
+    }
+    pending.push({
+      target,
+      value: null,
+      entry: {
+        text: change.entry,
+        present: change.present,
+        ...(change.repair !== undefined ? { ifDecidedBy: change.repair.decidedBy } : {}),
+      },
+    });
   }
   return pending.length === 0 ? [] : storeCommit(ctx, pending);
 }
@@ -663,7 +631,12 @@ function write(
       mode: "store" as const,
     };
     if (same) return { ...result, value: before.value, changed: false };
-    refuseOverHuman(target, fold, ctx.authority);
+    // A key folded per entry (task 3.12) is judged entry by entry: the key's
+    // newest record says nothing about who decides each entry.
+    const perEntry = fold.lists.has(target.key);
+    if (perEntry && ctx.authority !== "human") {
+      refuseWholeListOverStrongerEntries(target, fold, removing ? null : value, ctx.authority);
+    } else refuseOverHuman(target, fold, ctx.authority);
     if (!native) {
       validateCandidate(
         readRawBrainSettingsFromStore(
@@ -675,7 +648,16 @@ function write(
       );
     }
     const [record] = storeCommit(ctx, [{ target, value }]);
-    return { ...result, changed: true, ...(record !== undefined ? { record } : {}) };
+    // What is in force now: for a key folded per entry the fold can keep
+    // what a stronger authority decided, so the requested value is not
+    // reported as if it were.
+    const inForce = perEntry ? storeView(target, sharedFold(ctx)).value : result.value;
+    return {
+      ...result,
+      value: inForce,
+      changed: true,
+      ...(record !== undefined ? { record } : {}),
+    };
   }
   const vault = ctx.vault!;
   // The read the comparison and the refusal judge, and the edit, are one

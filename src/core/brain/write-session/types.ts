@@ -51,7 +51,7 @@ export interface WriteSessionError {
   readonly message: string;
 }
 
-/** One panel persona (loaded from Brain/personas/ or built-in). */
+/** One panel persona (custom: a note or a store record; or built-in). */
 export interface WriteSessionPersona {
   readonly slug: string;
   readonly lens: string;

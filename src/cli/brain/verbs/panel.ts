@@ -2,7 +2,10 @@
  * `o2b brain panel <op>` (Agent Write Contract Suite, t_0cc6fdff):
  * convenience face of the decision-panel session kind. `open` takes
  * the topic as positional text; `submit`/`status` are sugar over the
- * shared session surface for panel-shaped sessions.
+ * shared session surface for panel-shaped sessions. `personas`,
+ * `persona-set` and `persona-remove` curate the panel's personas (task
+ * 3.12): notes on an unswitched machine, records on a store-only one,
+ * where no vault is needed.
  */
 
 import { readFileSync } from "node:fs";
@@ -12,13 +15,27 @@ import {
   sessionEnvelope,
 } from "../../../core/brain/write-session/engine.ts";
 import { openPanelSession, submitToPanelSession } from "../../../core/brain/write-session/panel.ts";
+import {
+  listPersonas,
+  removePersona,
+  setPersona,
+} from "../../../core/brain/write-session/personas.ts";
 import { readWriteSession } from "../../../core/brain/write-session/store.ts";
 import type { WriteSessionEnvelope } from "../../../core/brain/write-session/types.ts";
-import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
+import {
+  brainVerbContext,
+  fail,
+  ok,
+  okJson,
+  parse,
+  resolveBrainAgent,
+  type BrainVerbFlags,
+} from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain panel <open <topic...>|submit <session-id>|status <session-id>> " +
-  "[--personas a,b,c] [--target T] [--file F] [--require-review] [--agent A] [--vault V] [--json]";
+  "usage: o2b brain panel <open <topic...>|submit <session-id>|status <session-id>|personas|" +
+  "persona-set <slug>|persona-remove <slug>> [--personas a,b,c] [--target T] [--file F] " +
+  "[--lens L] [--require-review] [--agent A] [--vault V] [--json]";
 
 function renderEnvelope(env: WriteSessionEnvelope, asJson: boolean): void {
   if (asJson) {
@@ -59,9 +76,17 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
     file: { type: "string" },
     agent: { type: "string" },
     "require-review": { type: "boolean" },
+    lens: { type: "string" },
   });
   const op = positional[0];
   const asJson = flags["json"] === true;
+  if (op === "personas" || op === "persona-set" || op === "persona-remove") {
+    try {
+      return personaVerb(op, positional[1], flags, asJson);
+    } catch (err) {
+      return emitCliError(err instanceof Error ? err.message : String(err), asJson);
+    }
+  }
   const { config, vault } = brainVerbContext(flags);
 
   try {
@@ -134,4 +159,44 @@ export async function cmdBrainPanel(argv: string[]): Promise<number> {
     }
     return emitCliError(err instanceof Error ? err.message : String(err), asJson);
   }
+}
+
+/** The persona verbs: list, add or replace, remove (no vault needed on a store-only machine). */
+function personaVerb(
+  op: "personas" | "persona-set" | "persona-remove",
+  slug: string | undefined,
+  flags: BrainVerbFlags,
+  asJson: boolean,
+): number {
+  const { vault } = brainVerbContext(flags, { vault: "optional" });
+  if (op === "personas") {
+    const listed = listPersonas(vault);
+    if (asJson) {
+      okJson({ source: listed.source, personas: listed.personas.map((p) => ({ ...p })) });
+      return 0;
+    }
+    ok(`personas (${listed.source}):`);
+    for (const p of listed.personas) ok(`  ${p.slug}: ${p.lens}`);
+    return 0;
+  }
+  if (!slug) {
+    process.stderr.write(`${USAGE}\n`);
+    return 2;
+  }
+  if (op === "persona-remove") {
+    const removed = removePersona(vault, slug);
+    if (asJson) okJson({ slug, removed });
+    else ok(removed ? `removed persona ${slug}` : `no persona ${slug}`);
+    return 0;
+  }
+  const fileFlag = flags["file"] as string | undefined;
+  const prompt =
+    fileFlag !== undefined && fileFlag !== "-"
+      ? readFileSync(fileFlag, "utf8")
+      : readFileSync(0, "utf8");
+  const lens = flags["lens"] as string | undefined;
+  const result = setPersona(vault, { slug, prompt, ...(lens !== undefined ? { lens } : {}) });
+  if (asJson) okJson({ ...result });
+  else ok(result.changed ? `persona ${slug} saved` : `persona ${slug} unchanged`);
+  return 0;
 }

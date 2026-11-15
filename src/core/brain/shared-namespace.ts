@@ -27,11 +27,23 @@
  * records as ordinary first-class signals. Reading it back is a separate
  * mechanism - it is enumerated as a search origin by
  * `portability/origins.ts`.
+ *
+ * The brain store (task 3.12, design D19 item 3): the namespace gets no
+ * store of its own. A write to a vault that is store-only on this machine
+ * lands in this machine's brain store, which every store-only agent of
+ * every machine of the store reads, so a store-only namespace IS that
+ * store. The mirror writes there only when the origin record is not in it
+ * already: the origin vault still writes the legacy layout here and dual
+ * writes are off. It refuses, before any I/O, on a switched machine, for a
+ * store-only origin vault, with dual writes on (each would put the record
+ * into the store a second time), and when there is no store at all.
  */
 
 import { realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
+import { isDualWriteEnabled } from "../store/dual-write.ts";
+import { configuredStore } from "../store/read/store-entities.ts";
 import { storeOnlyMode } from "../store/store-only.ts";
 import { resolveSharedNamespace } from "../config.ts";
 import { appendLogEvent } from "./log.ts";
@@ -99,26 +111,61 @@ const SELF_MIRROR: MirrorReport = Object.freeze({
 });
 
 /**
- * The refusal when the shared vault is store-only on this machine (this
- * machine switched, or the shared vault has no legacy tree): a store write
- * goes to this machine's own store, never to the shared namespace, so the
- * mirror would only duplicate the origin record in the same store.
+ * The refusal when the shared vault is store-only on this machine and the
+ * origin record is already in this machine's store (this machine switched,
+ * the origin vault is store-only too, or dual writes copied it there): a
+ * mirror would only write the same record into the same store again.
  */
 const STORE_ONLY_MIRROR: MirrorReport = Object.freeze({
   outcome: MIRROR_OUTCOME.misconfigured,
   reason:
-    "the shared namespace is store-only on this machine, so a mirror would write this " +
-    "machine's own brain store again and never reach the shared vault; nothing was mirrored",
+    "the shared namespace is store-only on this machine, and the origin record is already in " +
+    "this machine's brain store, which is that namespace; nothing was mirrored",
 });
 
-/** Why a mirror cannot run before any I/O, or `null` when it can. */
-function mirrorRefusal(sharedVault: string, originVault: string): MirrorReport | null {
+/** The refusal when the shared vault is store-only but this machine has no store. */
+const NO_STORE_MIRROR: MirrorReport = Object.freeze({
+  outcome: MIRROR_OUTCOME.misconfigured,
+  reason:
+    "the shared namespace is store-only on this machine (it has no legacy tree), but this " +
+    "machine has no brain store to write it into; run `o2b store init`, or `o2b brain init` " +
+    "in the shared vault; nothing was mirrored",
+});
+
+/** The report when the shared namespace path is no directory. */
+const NOT_A_DIRECTORY: MirrorReport = Object.freeze({
+  outcome: MIRROR_OUTCOME.failed,
+  reason:
+    "shared_namespace is not a directory (unmounted, missing, or a file); nothing was mirrored",
+});
+
+/**
+ * Why a mirror cannot run before any I/O, or `null` when it can. Every
+ * check reads the caller's machine config (`configPath`, default: the
+ * resolved one), the same config the origin write and the namespace came
+ * from.
+ */
+function mirrorRefusal(
+  sharedVault: string,
+  originVault: string,
+  configPath: string | undefined,
+): MirrorReport | null {
   if (isSelfMirror(sharedVault, originVault)) return SELF_MIRROR;
-  const mode = storeOnlyMode({ vault: sharedVault });
-  // A shared path that is no directory at all is a broken mount: the
-  // attempted write reports it as `failed`, as before.
+  const withConfig = configPath !== undefined ? { configPath } : {};
+  const mode = storeOnlyMode({ vault: sharedVault, ...withConfig });
   if (mode.reason === "device-switched") return STORE_ONLY_MIRROR;
-  if (mode.reason === "no-legacy-tree" && isDirectory(sharedVault)) return STORE_ONLY_MIRROR;
+  if (mode.reason !== "no-legacy-tree") return null;
+  // A shared path that is no directory at all (an unmounted share, a
+  // file) is a broken namespace, not a store-only one: reported `failed`
+  // before any write, never mirrored into this machine's store.
+  if (!isDirectory(sharedVault)) return NOT_A_DIRECTORY;
+  if (configuredStore(configPath) === null) return NO_STORE_MIRROR;
+  if (
+    storeOnlyMode({ vault: originVault, ...withConfig }).storeOnly ||
+    isDualWriteEnabled(configPath)
+  ) {
+    return STORE_ONLY_MIRROR;
+  }
   return null;
 }
 
@@ -141,15 +188,18 @@ function failureReason(exc: unknown): MirrorReport {
 /**
  * Mirror a feedback signal into the shared vault. The record is the
  * same signal with `origin_vault` attribution; slug collisions resolve
- * through the normal allocator.
+ * through the normal allocator. `configPath` is the caller's machine
+ * config: the refusal checks read it. The signal writer itself resolves
+ * the process's config, as the origin write did.
  */
 export function mirrorSignal(
   sharedVault: string,
   originVault: string,
   input: WriteSignalInput,
   options: WriteSignalOptions = {},
+  configPath?: string | null,
 ): MirrorReport {
-  const refused = mirrorRefusal(sharedVault, originVault);
+  const refused = mirrorRefusal(sharedVault, originVault, configPath ?? undefined);
   if (refused !== null) return refused;
   try {
     writeSignal(sharedVault, { ...input, origin_vault: basename(originVault) }, options);
@@ -165,13 +215,17 @@ export interface MirrorNoteInput {
   readonly now?: Date;
 }
 
-/** Mirror a narrative note event into the shared vault's log. */
+/**
+ * Mirror a narrative note event into the shared vault's log. The refusal
+ * checks and the write read the caller's machine config (`configPath`).
+ */
 export function mirrorNote(
   sharedVault: string,
   originVault: string,
   input: MirrorNoteInput,
+  configPath?: string | null,
 ): MirrorReport {
-  const refused = mirrorRefusal(sharedVault, originVault);
+  const refused = mirrorRefusal(sharedVault, originVault, configPath ?? undefined);
   if (refused !== null) return refused;
   try {
     appendLogEvent(
@@ -186,6 +240,7 @@ export function mirrorNote(
         },
       },
       // Not fail-open: the mirror reports its own failure to the caller.
+      configPath !== undefined && configPath !== null ? { configPath } : {},
     );
     return OK;
   } catch (exc) {

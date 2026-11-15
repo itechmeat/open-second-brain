@@ -48,6 +48,20 @@ export function normalizeSchemaToken(raw: string): string {
   return raw.normalize("NFC").trim().toLowerCase();
 }
 
+/**
+ * The two halves of a compound `type.field` key (the `attributes` and
+ * `frontmatter_tiers` entries), split at its first `.`, or `null` when
+ * either half would be empty. `rawKey` is the trimmed text before the
+ * entry's `=`; the halves are not normalised. The pack parser and the
+ * store's per-entry fold of those lists both split here, so they agree on
+ * which entries name one key.
+ */
+export function splitCompoundSchemaKey(rawKey: string): readonly [string, string] | null {
+  const dot = rawKey.indexOf(".");
+  if (dot <= 0 || dot === rawKey.length - 1) return null;
+  return [rawKey.slice(0, dot), rawKey.slice(dot + 1)];
+}
+
 export function validateSchemaDeclarations(
   declarations: BrainSchemaDeclarations | undefined | null,
 ): BrainSchemaDeclarations {

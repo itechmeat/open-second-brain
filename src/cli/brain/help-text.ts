@@ -840,6 +840,8 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain schema [report|stats|lint|graph|explain|orphans|apply|sync] [--vault <path>] [--json]\n" +
     "Inspect and mutate the active runtime schema vocabulary through locked, audited writes.\n" +
     "report names the pack's integrity: ok, modified, or unverified with the reason.\n" +
+    "apply --adopt-unattested (store-only machines, the operator only; alone or with\n" +
+    "--mutation): adopt the records deciding the pack that no audited apply wrote.\n" +
     "sync is not implemented and refuses; it never reported real work.\n",
   "session-hook":
     "usage: o2b brain session-hook [--vault <path>] [--agent <name>] [--dry-run] [--json]\n" +
@@ -1584,12 +1586,18 @@ export const VERB_HELP: Record<string, string> = {
     "status <id> | list | sweep  inspect or clean the session store.\n" +
     "Envelopes are JSON with --json: status, step, prompt, errors, attempts_left.",
   panel:
-    "usage: o2b brain panel <open <topic...>|submit <id>|status <id>> [flags]\n" +
+    "usage: o2b brain panel <open <topic...>|submit <id>|status <id>|personas|\n" +
+    "  persona-set <slug>|persona-remove <slug>> [flags]\n" +
     "open <topic> [--personas a,b,c] [--target T] [--require-review]  convene a\n" +
-    "decision panel; personas come from Brain/personas/ (built-in default set:\n" +
-    "technical, strategic, risk, user-experience). Each submit answers the\n" +
+    "decision panel; personas are the operator's custom ones (built-in default\n" +
+    "set: technical, strategic, risk, user-experience). Each submit answers the\n" +
     "current persona step; after synthesis the decision note commits under\n" +
-    "Brain/decisions/panels/. The calling agent generates every word.",
+    "Brain/decisions/panels/. The calling agent generates every word.\n" +
+    "personas [--json]  list the personas in force. persona-set <slug> [--lens L]\n" +
+    "[--file F]  add or replace a custom persona, its prompt read from F or\n" +
+    "stdin. persona-remove <slug>  remove one. A custom persona is a note under\n" +
+    "Brain/personas/ before the store switch and a store record after it, so\n" +
+    "it reaches every machine of the store and needs no vault.",
   architect:
     "usage: o2b brain architect <project-path> [--vault V] [--progress] [--json]\n" +
     "Scan a project tree deterministically (built-in runtime only, no dependency,\n" +

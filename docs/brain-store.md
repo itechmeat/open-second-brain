@@ -638,7 +638,14 @@ machine writes is refused, because its writer may still be appending. A
 quarantined record whose blob arrives later reads with its body, with no
 step of yours. The rollback, the late import of the transition, the
 migration preflight and the legacy removal still refuse while any record
-waits for its blob, quarantined or not. One exception:
+waits for its blob, quarantined or not. While a record in `private` waits
+for its blob, quarantined or not, a Brain lane page written or moved on
+this machine is kept out of `shared` (refused on a machine without
+`private`), since the record may be the one that makes the page private. A
+record in `shared` that waits for its blob does not hold lane pages back:
+a record there never makes a page private, so a machine that holds only
+`shared` goes on writing lane pages after you quarantine its lost blob.
+One exception:
 `o2b brain migrate-store --remove-legacy --force` goes past a shard read
 only in part, a quarantined or pending blob included, as it goes past a
 cohort device still on the legacy layout. That risks data loss: a record
@@ -666,6 +673,93 @@ protection reads fail closed again, while a `resolved` entry (its blob has
 arrived) leaves the shard whole. When another process holds the ledger's
 lock past the wait budget, `quarantine` and `release` refuse with
 `ledger-busy` and change nothing; run the command again.
+
+## Settings, schema and personas across machines
+
+Shared settings are records in `shared/settings/`, so a change on one
+machine applies on every other once the record syncs. A setting holds one
+value, and when two machines change it before they sync, your change beats
+an agent's and then the later one wins.
+
+The schema fields (`brain.schema.<field>`, what `o2b brain schema apply` and
+`schema_apply_mutations` change) are lists, and they merge per entry: an
+apply writes one record per entry it adds or removes, never the whole list.
+Two machines that change the same field before they sync keep both changes.
+An add on one machine and a remove of the same entry on the other resolve
+like a setting: your record beats an agent's, then the later one wins. For
+fields of `name=value` entries that hold one value per name (`prefixes`,
+`expert_routing`, `attributes`, `frontmatter_tiers`) a new value replaces
+the old entry; in `attributes` and `frontmatter_tiers` the name is
+`type.field`, and spaces around its dot do not make a second name. Two
+spellings of one token (case, spaces, quotes) are one entry. An agent cannot change an entry you set or removed, through an apply
+or through a whole-list `o2b brain settings set` or `brain_settings` write,
+and an accepted write reports the list in force.
+
+When a type is removed on one machine and a reference to it (an alias, a
+prefix, an expert route, an attribute) is added on another, the merged
+fields hold a reference to a type that is gone. The pack drops such
+references when it is read, the same way on every machine, and the next
+apply removes them from the records, so no apply is blocked by them. An
+apply skips that removal when another machine has replaced the entry in
+the meantime, and the removal it writes names the record it judged, so
+every machine ignores it once a replacement it never saw, even one that
+syncs in later, decides the entry.
+
+The schema integrity check accepts a pack merged from applies on several
+machines: each apply's audit row names the records it wrote and the
+records rows it had seen already attest, and the migration's import
+attests the records it imported. A record no apply wrote (a settings write,
+a hand-made line) still reports the pack as modified, even when it leaves
+the pack as it was, and the next
+store-only apply refuses with `unattested_schema_records`, naming the
+records. A row attests each record in the version it saw, so another body
+written under the id of an attested record counts as unattested too. Look
+at them with `o2b brain schema report`; if they are right, adopt them with
+`o2b brain schema apply --adopt-unattested` (alone, or added to the apply
+that refused), which records the records and your name in the audit row.
+Adoption alone works only on a store-only machine; an empty batch there
+(no `--mutation`, or `--mutation '[]'`) changes no entry.
+An agent cannot adopt. A record under `brain.schema.` for a name the pack
+does not read is no part of the pack and needs no adoption.
+
+Panel personas are store records once a machine is switched: curate them
+with `o2b brain panel persona-set`, `persona-remove` and `personas`, on any
+machine of the store, with or without a vault. Before the switch they are
+notes under `Brain/personas/`. A persona is read on every machine, so a
+private one (a `<private>` region, or a private page named in its lens or
+prompt) is refused; the prompt holds at most 16 KB and the lens at most 200
+characters on one line. The verbs refuse in a frozen vault, on a switched
+machine too, and over a note of another kind at the persona's path. A
+persona that lives in `private` (written before these rules, or marked
+private) is not replaced, since the replacement would stay private: remove
+it with `persona-remove`, then set it again. On a machine that has not
+switched yet and runs the dual-write trial, `persona-remove` also removes
+the copy the trial wrote to the store, so the persona stays removed after
+the switch. The same holds for every Brain page a lane removes or moves
+there: a moved page's store copy is the page as it is after the move, and
+a private page moved over a shared one leaves no shared copy behind. A
+page moved over a private one stays private, as a page written over it
+does. A page that never reached the store, moved over one that did,
+replaces the store copy of the page it overwrote. A moved page that is a
+symbolic link, or sits in a linked folder, is never read into the store:
+the move removes the old copy, and the store copy of a page it
+overwrote. During the trial the legacy file is
+the truth: when a switched machine has already stored a newer version of
+a page and this machine moves the page, the store copy at the new path is
+this machine's file, and the newer version stays only in the store's
+history. A lane page or folder is never moved out of `Brain/` lanes, and a
+lane folder is never moved into its own subfolder or into a folder that
+holds it, on either kind of machine.
+
+The `shared_namespace` mirror gets no store of its own. Where the shared
+vault is store-only on a machine (it has no legacy tree), it is that
+machine's brain store, which every store-only agent reads: the mirror writes
+there when the origin record went only to the origin vault's legacy tree,
+and refuses, with the reason, when the record is in the store already (a
+switched machine, a store-only origin vault, dual writes on) or when the
+machine has no store. These checks read the machine config the write
+itself was made with. A `shared_namespace` path that is not a directory
+(an unmounted share, a missing path, a file) is reported as failed.
 
 ## What the partitions protect, and what they do not
 

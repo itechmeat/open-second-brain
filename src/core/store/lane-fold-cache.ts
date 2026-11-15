@@ -62,6 +62,28 @@ export interface LaneFolded {
   readonly pendingBlobs: ReadonlyArray<string>;
 }
 
+/**
+ * Whether `fold` may miss a record that makes a lane entry private: an
+ * `events` shard it could not see (in either partition), or a record in
+ * `private` whose body blob has not arrived (quarantined on this machine
+ * or not; a quarantine lets the shard read as whole, yet the record is
+ * still left out). Every lane privacy verdict over such a fold fails
+ * closed: the one test of "the fold is complete enough to place in
+ * `shared`" for every lane write, move and privacy read.
+ *
+ * A pending blob in `shared` is no such gap. A record in `shared` never
+ * carries a value a write would place in `private` (every writer judges
+ * the fields first), and leaving one record out changes an entry's
+ * winner only when it is that winner, so the fold without it is at least
+ * as private as the fold with it. So a quarantined blob in `shared` does
+ * not block lane writes on a machine that holds only `shared`.
+ */
+export function laneFoldIncomplete(fold: LaneFolded): boolean {
+  return (
+    fold.unreadable.length > 0 || fold.pendingBlobs.some((blob) => blob.startsWith("private/"))
+  );
+}
+
 const EMPTY_FOLD: LaneFolded = {
   fingerprint: "",
   entries: new Map(),

@@ -10,8 +10,14 @@
  *  - `setting-set` `{ authority, key, value }`: proposes `value` for `key`.
  *  - `setting-unset` `{ authority, key }`: a tombstone; the key falls back
  *    to its default.
+ *  - `setting-entry` `{ authority, key, entry, present }`: adds or removes
+ *    one entry of a schema field list `brain.schema.<field>` (task 3.12);
+ *    a key that holds one folds per entry (`./fold-setting-lists.ts`). An
+ *    entry record for any other key is rejected, and so is a `setting-set`
+ *    of a list key whose value is no list: it would hide the stored list
+ *    from every reader of the pack while deciding no entry of it.
  *
- * Each key is one register, resolved by authority, then clock. Keys this
+ * Each other key is one register, resolved by authority, then clock. Keys this
  * version knows are validated (see {@link SETTING_RULES}); a record with
  * an invalid value is rejected and does not take effect. Unknown keys
  * (written by a newer release) fold as plain JSON values, so an older
@@ -19,6 +25,7 @@
  */
 
 import {
+  SETTING_ENTRY_KIND,
   SETTING_SET_KIND,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
@@ -28,6 +35,12 @@ import {
   type SettingKey,
 } from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
+import {
+  foldListSetting,
+  isListSettingKey,
+  listValueRejection,
+  settingEntryRejection,
+} from "./fold-setting-lists.ts";
 import {
   prepareRecords,
   recordAuthority,
@@ -72,6 +85,8 @@ function ruleOf(key: string): SettingRule | undefined {
 export interface SettingsFold {
   /** Resolved keys, inserted in code unit order. */
   readonly settings: ReadonlyMap<string, RegisterState<unknown>>;
+  /** Per-entry registers of the list keys that hold a `setting-entry` record. */
+  readonly lists: ReadonlyMap<string, ReadonlyMap<string, RegisterState<string>>>;
   readonly rejected: ReadonlyArray<RejectedRecord>;
 }
 
@@ -80,7 +95,9 @@ function rejection(record: StoreRecord): string | null {
   const key = record.body["key"];
   if (typeof key !== "string" || !SETTING_KEY_RE.test(key)) return "missing or invalid key";
   if (record.kind === SETTING_UNSET_KIND) return null;
+  if (record.kind === SETTING_ENTRY_KIND) return settingEntryRejection(record);
   if (!("value" in record.body) || record.body["value"] === null) return "value is required";
+  if (isListSettingKey(key)) return listValueRejection(key, record.body["value"]);
   const rule = ruleOf(key);
   if (rule !== undefined && !rule.valid(record.body["value"])) {
     return `${key} must be ${rule.expected}`;
@@ -91,25 +108,49 @@ function rejection(record: StoreRecord): string | null {
 /** Fold setting records (any order, duplicates allowed). */
 export function foldSettings(input: Iterable<StoreRecord>): SettingsFold {
   const { records } = prepareRecords(input);
-  const registers = new RegisterSet<unknown>();
+  const valid: StoreRecord[] = [];
+  const listKeys = new Set<string>();
   const rejected: RejectedRecord[] = [];
   for (const record of records) {
-    if (record.kind !== SETTING_SET_KIND && record.kind !== SETTING_UNSET_KIND) continue;
+    if (
+      record.kind !== SETTING_SET_KIND &&
+      record.kind !== SETTING_UNSET_KIND &&
+      record.kind !== SETTING_ENTRY_KIND
+    )
+      continue;
     const reason = rejection(record);
     if (reason !== null) {
       rejected.push({ id: record.id, kind: record.kind, reason });
       continue;
     }
+    valid.push(record);
+    if (record.kind === SETTING_ENTRY_KIND) listKeys.add(record.body["key"] as string);
+  }
+  const registers = new RegisterSet<unknown>();
+  const byListKey = new Map<string, StoreRecord[]>();
+  for (const record of valid) {
+    const key = record.body["key"] as string;
+    if (listKeys.has(key)) {
+      const list = byListKey.get(key) ?? [];
+      list.push(record);
+      byListKey.set(key, list);
+      continue;
+    }
     const value = record.kind === SETTING_UNSET_KIND ? TOMBSTONE : record.body["value"];
-    registers.offer(record.body["key"] as string, {
-      record,
-      authority: recordAuthority(record)!,
-      value,
-    });
+    registers.offer(key, { record, authority: recordAuthority(record)!, value });
+  }
+  const resolved = new Map<string, RegisterState<unknown>>();
+  for (const key of registers.keys()) resolved.set(key, registers.get(key)!);
+  const lists = new Map<string, ReadonlyMap<string, RegisterState<string>>>();
+  for (const [key, list] of byListKey) {
+    const folded = foldListSetting(key, list);
+    if (folded === null) continue;
+    resolved.set(key, folded.state);
+    lists.set(key, folded.slots);
   }
   const settings = new Map<string, RegisterState<unknown>>();
-  for (const key of registers.keys()) settings.set(key, registers.get(key)!);
-  return { settings, rejected };
+  for (const key of [...resolved.keys()].toSorted()) settings.set(key, resolved.get(key)!);
+  return { settings, lists, rejected };
 }
 
 /**

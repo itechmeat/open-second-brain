@@ -15,7 +15,10 @@
  *    byte is written under `<vault>/Brain/`, and no vault is needed.
  *  - **Unswitched machine**: the page is the legacy file, written exactly
  *    as before, with the phase 1 dual write behind the flag
- *    ({@link routeWrite}).
+ *    ({@link routeWrite}). A removal or a move dual-writes too: the
+ *    stored entry's tombstone, and its entry at the new path
+ *    (`./lane-dual-moves.ts`), so a page removed before the switch is not
+ *    live again after it.
  *
  * Privacy (phase 1 rules): a page is private when its frontmatter
  * reserves it, or when its fields or text name a private page or one that
@@ -41,7 +44,6 @@ import {
   renameWithRetry,
 } from "../fs-atomic.ts";
 import { noVaultRoot } from "../platform-dirs.ts";
-import { containedRecordPath } from "../record-path.ts";
 import type { FrontmatterMap } from "../types.ts";
 import {
   parseFrontmatter,
@@ -49,13 +51,13 @@ import {
   writeFrontmatterAtomic,
   type WriteFrontmatterAtomicOptions,
 } from "../vault.ts";
+import { assertStoreContentWrite } from "./content-write-gates.ts";
 import { type DualWriteContext } from "./dual-write.ts";
 import { laneLockTarget, laneStoreFold } from "./lane-fold-cache.ts";
 import {
   brainRelOf,
   entryRecord,
   fieldsCopy,
-  foldIncomplete,
   heldInStore,
   insideBrain,
   isPrivateEntry,
@@ -63,7 +65,6 @@ import {
   legacyPagePrivate,
   livesInPrivate,
   lanePagesInStore,
-  partitionOf,
   replacedShared,
   sameEntry,
   storeEntries,
@@ -71,6 +72,19 @@ import {
   storedEntryPrivate,
   tombstoneOf,
 } from "./lane-entry-store.ts";
+import {
+  assertFoldersApart,
+  assertLaneDestination,
+  dualWriteLaneMove,
+  dualWriteLaneRemoval,
+  dualWriteLaneTreeMove,
+  laneMoveRecords,
+  sameLaneEntry,
+  type LaneMove,
+  laneRemovalRecords,
+  storedContent,
+  storedLanePathsBelow,
+} from "./lane-dual-moves.ts";
 import { rawParsesBack, rawToKeep, renderLaneText } from "./lane-raw.ts";
 import { brainRelOfEntry, lanePlaceOf } from "./lane-paths.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS, withLocalLock } from "./local-lock.ts";
@@ -92,12 +106,15 @@ export function laneVaultRoot(vault: string | null | undefined): string {
 
 /**
  * The write guard of a lane write: the vault identity guard (freeze,
- * migration gate, identity marker) on an unswitched machine; nothing on a
- * store-only one, where the store write checks the store identity itself
- * (design D14 item 13).
+ * migration gate, identity marker) on an unswitched machine. On a
+ * store-only one the store write checks the store identity in place of
+ * the vault marker (design D14 item 13), and the freeze still holds
+ * (`./content-write-gates.ts`); a migration gate left naming the vault is
+ * a leftover there and refuses nothing.
  */
 export function assertLaneWrite(vault: string): void {
-  if (!lanePagesInStore(vault)) assertVaultIdentityForWrite(vault);
+  if (lanePagesInStore(vault)) assertStoreContentWrite(vault);
+  else assertVaultIdentityForWrite(vault);
 }
 
 /** `routeWrite` for a lane path; a path outside `Brain/` is written as a file. */
@@ -312,19 +329,7 @@ export function vaultOfBrainPath(path: string): string {
  */
 export function listLaneTree(vault: string, dir: string, ext = ".md"): string[] {
   if (!heldInStore(vault, dir)) return [];
-  const prefix = brainRelOf(vault, dir);
-  const brain = join(laneVaultRoot(vault), BRAIN_ROOT_REL);
-  const out: string[] = [];
-  for (const value of storeEntries().values()) {
-    const rel = brainRelOfEntry(value.lane, value.entry);
-    if (!rel.startsWith(prefix === "" ? "" : `${prefix}/`) || !rel.endsWith(ext)) continue;
-    // The fold already refuses an entry id that is no record path; this
-    // keeps a path outside `Brain/` out of every reader (and remover) of
-    // the list even if that check is ever loosened (FORMAT.md, Trust).
-    const path = containedRecordPath(brain, rel);
-    if (path !== null) out.push(path);
-  }
-  return out.toSorted();
+  return storedLanePathsBelow(laneVaultRoot(vault), dir, ext);
 }
 
 /**
@@ -483,13 +488,16 @@ export function removeLanePage(vault: string, path: string): boolean {
     return true;
   }
   guardUserVaultWrite(vault, path);
+  let removed = true;
   try {
     rmSync(path);
-    return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    removed = false;
   }
+  // The entry the dual write put in the store goes too (`./lane-dual-moves.ts`).
+  dualWriteLaneRemoval(vault, () => [path], context(vault));
+  return removed;
 }
 
 /**
@@ -508,6 +516,7 @@ export function moveLanePage(
   to: string,
   rewrite?: { readonly frontmatter: FrontmatterMap; readonly body: string },
 ): void {
+  assertLaneDestination(vault, from, to);
   if (!heldInStore(vault, from)) {
     if (rewrite !== undefined) {
       writeLanePage(vault, to, rewrite.frontmatter, rewrite.body, {
@@ -518,23 +527,31 @@ export function moveLanePage(
       return;
     }
     guardUserVaultWrite(vault, from);
+    // Read before the rename replaces it, as a write over the page reads it.
+    const destinationPrivate = legacyPagePrivate(vault, to);
     mkdirSync(dirname(to), { recursive: true });
     renameWithRetry(from, to);
+    dualWriteLaneMove(vault, { from, to, destinationPrivate }, context(vault));
     return;
   }
   const value = storeEntry(vault, from);
   if (value === null) throw new Error(`no lane page to move: ${from}`);
+  // A move onto the entry it moves changes nothing.
+  if (rewrite === undefined && sameLaneEntry(vault, from, to)) return;
   // The tombstone stays where the entry lives: it must reach every device
   // that saw the entry. The new entry stays there too, unless a rewrite
-  // whose page is private raises it to `private`, as does a fold that
-  // misses a shard (the entry may have been raised in it).
+  // whose page is private raises it to `private`, as does an entry it
+  // replaces that is private (nothing lowers an entry's partition) and a
+  // fold that may miss a record (the entry may have been raised in it).
   const isPrivate =
     livesInPrivate(value) ||
-    foldIncomplete() ||
+    storedEntryPrivate(vault, to) ||
     (rewrite !== undefined && isPrivateEntry(vault, rewrite.frontmatter, rewrite.body));
   withOperationPrivacy(isPrivate, () =>
     storeWrite(
       () => [
+        // A shared entry this move replaces with a private one goes first.
+        ...replacedShared(vault, to),
         tombstoneOf(value),
         entryRecord(
           vault,
@@ -578,46 +595,35 @@ export function listLaneDirs(vault: string, dir: string): string[] {
  * Move the folder `from` (every lane file below it) to `to`. A rename on an
  * unswitched machine; on a store-only one each entry's tombstone and its
  * new entry, all in one store write, each in the entry's own partition.
+ * Folders that overlap, one inside the other, are refused in both modes
+ * before anything moves; a folder moved onto itself changes nothing.
  */
 export function moveLaneTree(vault: string, from: string, to: string): void {
+  const movedTo = (path: string): LaneMove => ({ from: path, to: join(to, relative(from, path)) });
+  // Judged from the paths alone, so a legacy move reads no store first.
+  assertLaneDestination(vault, from, to, [movedTo(join(from, "page.md"))]);
+  if (relative(from, to) === "") return;
+  assertFoldersApart(from, to);
   if (!heldInStore(vault, from)) {
     guardUserVaultWrite(vault, from);
     mkdirSync(dirname(to), { recursive: true });
     renameWithRetry(from, to);
+    dualWriteLaneTreeMove(vault, from, to, context(vault));
     return;
   }
-  const moves = listLaneTree(vault, from, "").map((path) => {
-    const value = storeEntry(vault, path)!;
-    return { value, target: join(to, relative(from, path)) };
-  });
-  if (moves.length === 0) return;
-  // One store write, but every entry is placed by itself (design D14 item
-  // 18): a shared entry and its tombstone stay in `shared`, so a device
-  // that holds only `shared` sees it leave the folder, and a private
-  // entry's text never reaches `shared`. An enclosing private operation
-  // still raises the moved entries, never their tombstones.
-  storeWrite(
-    () =>
-      moves.flatMap(({ value, target }) => {
-        const partition = partitionOf(value);
-        return [
-          {
-            ...entryRecord(
-              vault,
-              target,
-              value.fields,
-              value.text,
-              partition === "private",
-              "located",
-              value.raw,
-            ),
-            located: { partition, content: true },
-          },
-          tombstoneOf(value),
-        ];
-      }),
-    context(vault),
-  );
+  const paths = listLaneTree(vault, from, "");
+  if (paths.length === 0) return;
+  assertLaneDestination(vault, from, to, paths.map(movedTo));
+  // One store write, every record built from one fold (`laneMoveRecords`),
+  // each entry placed by itself (design D14 item 18): a shared entry and
+  // its tombstone stay in `shared`, so a device that holds only `shared`
+  // sees it leave the folder, and a private entry's text never reaches
+  // `shared`. An enclosing private operation still raises the moved
+  // entries, never their tombstones.
+  storeWrite(() => {
+    const fold = laneStoreFold();
+    return paths.flatMap((path) => laneMoveRecords(vault, fold, movedTo(path), storedContent));
+  }, context(vault));
 }
 
 /** Remove the folder `dir` and every lane file below it; absent is a no-op. */
@@ -625,12 +631,13 @@ export function removeLaneTree(vault: string, dir: string): void {
   if (!heldInStore(vault, dir)) {
     guardUserVaultWrite(vault, dir);
     rmSync(dir, { recursive: true, force: true });
+    dualWriteLaneRemoval(vault, () => storedLanePathsBelow(vault, dir, ""), context(vault));
     return;
   }
   // One store write, so a folder is never half removed; each tombstone in
   // the partition its entry lives in, so a device that holds only `shared`
   // sees the folder's shared entries go.
-  const values = listLaneTree(vault, dir, "").map((path) => storeEntry(vault, path)!);
-  if (values.length === 0) return;
-  storeWrite(() => values.map((value) => tombstoneOf(value)), context(vault));
+  const paths = listLaneTree(vault, dir, "");
+  if (paths.length === 0) return;
+  storeWrite(() => laneRemovalRecords(vault, laneStoreFold(), paths), context(vault));
 }

@@ -140,7 +140,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   const mirror =
     sharedNamespace === null || vault === null
       ? undefined
-      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts);
+      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts, config);
 
   try {
     appendLogEvent(

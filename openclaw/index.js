@@ -2417,7 +2417,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2452,6 +2452,7 @@ var init_constants = __esm(() => {
     PINNED_CLEAR_KIND,
     SETTING_SET_KIND,
     SETTING_UNSET_KIND,
+    SETTING_ENTRY_KIND,
     DEVICE_RETIRE_KIND,
     STATE_DIGEST_KIND
   ]);
@@ -5169,10 +5170,152 @@ var init_fold_preferences = __esm(() => {
   ]);
 });
 
+// src/core/brain/types.ts
+var BRAIN_SIGNAL_SOURCE_TYPE, BRAIN_SIGNAL_SOURCE_TYPES, BRAIN_MEMORY_LAYER, BRAIN_MEMORY_LAYER_VALUES, BRAIN_LOG_EVENT_KIND, BRAIN_COMMITMENT_TIER, BRAIN_COMMITMENT_TIER_VALUES, BRAIN_LOG_EVENT_KIND_SET, BRAIN_SNAPSHOT_REASON, BRAIN_SNAPSHOT_REASONS;
+var init_types = __esm(() => {
+  BRAIN_SIGNAL_SOURCE_TYPE = {
+    live: "live",
+    inline: "inline",
+    session: "session",
+    extracted: "extracted",
+    autoExtract: "auto_extract"
+  };
+  BRAIN_SIGNAL_SOURCE_TYPES = Object.freeze(Object.values(BRAIN_SIGNAL_SOURCE_TYPE));
+  BRAIN_MEMORY_LAYER = {
+    L0: "L0",
+    L1: "L1",
+    L2: "L2",
+    L3: "L3"
+  };
+  BRAIN_MEMORY_LAYER_VALUES = Object.values(BRAIN_MEMORY_LAYER);
+  BRAIN_LOG_EVENT_KIND = {
+    dream: "dream",
+    feedback: "feedback",
+    applyEvidence: "apply-evidence",
+    forceConfirmed: "force-confirmed",
+    reject: "reject",
+    promote: "promote",
+    retire: "retire",
+    notedRedundant: "noted-redundant",
+    skipCorruptedFrontmatter: "skip-corrupted-frontmatter",
+    pin: "pin",
+    unpin: "unpin",
+    rollback: "rollback",
+    snapshot: "snapshot",
+    signalSuppressed: "signal-suppressed",
+    scanInline: "scan-inline",
+    importSession: "import-session",
+    merge: "merge",
+    upgrade: "upgrade",
+    importClaudeMemory: "import-claude-memory",
+    promoteHostMemory: "promote-host-memory",
+    note: "note",
+    sessionLifecycle: "session-lifecycle",
+    reconcile: "reconcile",
+    writeSession: "write-session",
+    entityAnchorSkip: "entity-anchor-skip",
+    attributeWrite: "attribute-write",
+    durabilitySkip: "durability-skip",
+    ambientWithheld: "ambient-withheld",
+    writeConflictAdvisory: "write-conflict-advisory",
+    captureRoutingHint: "capture-routing-hint",
+    signalRetire: "signal-retire",
+    tombstone: "tombstone",
+    temporalReplace: "temporal-replace",
+    chainDecay: "chain-decay",
+    decisionRecord: "decision-record",
+    decisionOutcome: "decision-outcome",
+    decisionRating: "decision-rating",
+    decisionChangeReceipt: "decision-change-receipt",
+    decisionOpen: "decision-open",
+    decisionResolved: "decision-resolved",
+    decisionDiscarded: "decision-discarded",
+    authoredAtBackfill: "authored-at-backfill",
+    tension: "tension",
+    sourceCitation: "source-citation",
+    doctorRepair: "doctor-repair",
+    vectorBackfill: "vector-backfill",
+    eventAnchorBackfill: "event-anchor-backfill",
+    expirationSet: "expiration-set",
+    freeze: "freeze",
+    unfreeze: "unfreeze",
+    writeRefused: "write-refused",
+    noteWrite: "note-write",
+    lessonsApproved: "lessons-approved",
+    lessonsDenied: "lessons-denied",
+    lessonsPromoted: "lessons-promoted"
+  };
+  BRAIN_COMMITMENT_TIER = {
+    exploring: "exploring",
+    leaning: "leaning",
+    decided: "decided",
+    locked: "locked"
+  };
+  BRAIN_COMMITMENT_TIER_VALUES = Object.values(BRAIN_COMMITMENT_TIER);
+  BRAIN_LOG_EVENT_KIND_SET = new Set(Object.values(BRAIN_LOG_EVENT_KIND));
+  BRAIN_SNAPSHOT_REASON = Object.freeze({
+    dream: "dream",
+    upgrade: "upgrade",
+    importClaudeMemory: "import-claude-memory",
+    promoteHostMemory: "promote-host-memory",
+    deleteBySource: "delete-by-source",
+    entityPrune: "entity-prune",
+    entityMerge: "entity-merge",
+    noteDelete: "note-delete",
+    noteRevert: "note-revert",
+    knowledgePackUninstall: "knowledge-pack-uninstall",
+    payloadGc: "payload-gc",
+    receiptCompaction: "receipt-compaction",
+    storeMigration: "store-migration",
+    sessionBoundary: "session-boundary",
+    planBoundary: "plan-boundary",
+    decisionBoundary: "decision-boundary",
+    manual: "manual"
+  });
+  BRAIN_SNAPSHOT_REASONS = Object.freeze(Object.values(BRAIN_SNAPSHOT_REASON));
+});
+
+// src/core/brain/schema-vocab.ts
+var SCHEMA_VOCAB_CATEGORIES, DEFAULT_SCHEMA_VOCAB;
+var init_schema_vocab = __esm(() => {
+  init_types();
+  SCHEMA_VOCAB_CATEGORIES = Object.freeze([
+    "preference_types",
+    "signal_types",
+    "page_types",
+    "log_event_kinds"
+  ]);
+  DEFAULT_SCHEMA_VOCAB = Object.freeze({
+    preference_types: Object.freeze(["preference"]),
+    signal_types: Object.freeze(["feedback"]),
+    page_types: Object.freeze(["note"]),
+    log_event_kinds: Object.freeze(Object.values(BRAIN_LOG_EVENT_KIND))
+  });
+});
+
+// src/core/store/fold-setting-lists.ts
+var KEYED_LIST_SETTINGS, COMPOUND_KEYED_LIST_SETTINGS;
+var init_fold_setting_lists = __esm(() => {
+  init_schema_vocab();
+  init_fold();
+  init_constants();
+  KEYED_LIST_SETTINGS = new Set([
+    "brain.schema.prefixes",
+    "brain.schema.expert_routing",
+    "brain.schema.attributes",
+    "brain.schema.frontmatter_tiers"
+  ]);
+  COMPOUND_KEYED_LIST_SETTINGS = new Set([
+    "brain.schema.attributes",
+    "brain.schema.frontmatter_tiers"
+  ]);
+});
+
 // src/core/store/fold-settings.ts
 var positiveInt = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 1, LANGUAGE_RE, SETTING_RULES;
 var init_fold_settings = __esm(() => {
   init_constants();
+  init_fold_setting_lists();
   init_fold();
   LANGUAGE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
   SETTING_RULES = Object.freeze({
@@ -8328,111 +8471,6 @@ var init_artifact_ref_resolve = __esm(() => {
 
 // src/core/brain/note-path.ts
 var init_note_path = () => {};
-
-// src/core/brain/types.ts
-var BRAIN_SIGNAL_SOURCE_TYPE, BRAIN_SIGNAL_SOURCE_TYPES, BRAIN_MEMORY_LAYER, BRAIN_MEMORY_LAYER_VALUES, BRAIN_LOG_EVENT_KIND, BRAIN_COMMITMENT_TIER, BRAIN_COMMITMENT_TIER_VALUES, BRAIN_LOG_EVENT_KIND_SET, BRAIN_SNAPSHOT_REASON, BRAIN_SNAPSHOT_REASONS;
-var init_types = __esm(() => {
-  BRAIN_SIGNAL_SOURCE_TYPE = {
-    live: "live",
-    inline: "inline",
-    session: "session",
-    extracted: "extracted",
-    autoExtract: "auto_extract"
-  };
-  BRAIN_SIGNAL_SOURCE_TYPES = Object.freeze(Object.values(BRAIN_SIGNAL_SOURCE_TYPE));
-  BRAIN_MEMORY_LAYER = {
-    L0: "L0",
-    L1: "L1",
-    L2: "L2",
-    L3: "L3"
-  };
-  BRAIN_MEMORY_LAYER_VALUES = Object.values(BRAIN_MEMORY_LAYER);
-  BRAIN_LOG_EVENT_KIND = {
-    dream: "dream",
-    feedback: "feedback",
-    applyEvidence: "apply-evidence",
-    forceConfirmed: "force-confirmed",
-    reject: "reject",
-    promote: "promote",
-    retire: "retire",
-    notedRedundant: "noted-redundant",
-    skipCorruptedFrontmatter: "skip-corrupted-frontmatter",
-    pin: "pin",
-    unpin: "unpin",
-    rollback: "rollback",
-    snapshot: "snapshot",
-    signalSuppressed: "signal-suppressed",
-    scanInline: "scan-inline",
-    importSession: "import-session",
-    merge: "merge",
-    upgrade: "upgrade",
-    importClaudeMemory: "import-claude-memory",
-    promoteHostMemory: "promote-host-memory",
-    note: "note",
-    sessionLifecycle: "session-lifecycle",
-    reconcile: "reconcile",
-    writeSession: "write-session",
-    entityAnchorSkip: "entity-anchor-skip",
-    attributeWrite: "attribute-write",
-    durabilitySkip: "durability-skip",
-    ambientWithheld: "ambient-withheld",
-    writeConflictAdvisory: "write-conflict-advisory",
-    captureRoutingHint: "capture-routing-hint",
-    signalRetire: "signal-retire",
-    tombstone: "tombstone",
-    temporalReplace: "temporal-replace",
-    chainDecay: "chain-decay",
-    decisionRecord: "decision-record",
-    decisionOutcome: "decision-outcome",
-    decisionRating: "decision-rating",
-    decisionChangeReceipt: "decision-change-receipt",
-    decisionOpen: "decision-open",
-    decisionResolved: "decision-resolved",
-    decisionDiscarded: "decision-discarded",
-    authoredAtBackfill: "authored-at-backfill",
-    tension: "tension",
-    sourceCitation: "source-citation",
-    doctorRepair: "doctor-repair",
-    vectorBackfill: "vector-backfill",
-    eventAnchorBackfill: "event-anchor-backfill",
-    expirationSet: "expiration-set",
-    freeze: "freeze",
-    unfreeze: "unfreeze",
-    writeRefused: "write-refused",
-    noteWrite: "note-write",
-    lessonsApproved: "lessons-approved",
-    lessonsDenied: "lessons-denied",
-    lessonsPromoted: "lessons-promoted"
-  };
-  BRAIN_COMMITMENT_TIER = {
-    exploring: "exploring",
-    leaning: "leaning",
-    decided: "decided",
-    locked: "locked"
-  };
-  BRAIN_COMMITMENT_TIER_VALUES = Object.values(BRAIN_COMMITMENT_TIER);
-  BRAIN_LOG_EVENT_KIND_SET = new Set(Object.values(BRAIN_LOG_EVENT_KIND));
-  BRAIN_SNAPSHOT_REASON = Object.freeze({
-    dream: "dream",
-    upgrade: "upgrade",
-    importClaudeMemory: "import-claude-memory",
-    promoteHostMemory: "promote-host-memory",
-    deleteBySource: "delete-by-source",
-    entityPrune: "entity-prune",
-    entityMerge: "entity-merge",
-    noteDelete: "note-delete",
-    noteRevert: "note-revert",
-    knowledgePackUninstall: "knowledge-pack-uninstall",
-    payloadGc: "payload-gc",
-    receiptCompaction: "receipt-compaction",
-    storeMigration: "store-migration",
-    sessionBoundary: "session-boundary",
-    planBoundary: "plan-boundary",
-    decisionBoundary: "decision-boundary",
-    manual: "manual"
-  });
-  BRAIN_SNAPSHOT_REASONS = Object.freeze(Object.values(BRAIN_SNAPSHOT_REASON));
-});
 
 // src/core/brain/temporal/period-common.ts
 function extractId(linkOrId) {

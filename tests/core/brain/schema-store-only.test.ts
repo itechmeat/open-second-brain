@@ -9,14 +9,22 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
+import { freezeVault, unfreezeVault } from "../../../src/core/brain/freeze.ts";
+import { VaultFrozenError } from "../../../src/core/brain/freeze-marker.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { setBrainSetting } from "../../../src/core/brain/policy/settings-write.ts";
 import { applySchemaAdminMutations } from "../../../src/core/brain/schema-admin.ts";
 import { assessSchemaPackIntegrity } from "../../../src/core/brain/schema-integrity.ts";
 import { SCHEMA_AUDIT_STORE_NAME } from "../../../src/core/brain/schema-mutate-store.ts";
 import type { SchemaMutation } from "../../../src/core/brain/schema-mutate.ts";
 import { STORE_SCHEMA_PACK_SOURCE } from "../../../src/core/brain/schema-pack-store.ts";
 import { loadSchemaPack, readSchemaPackSource } from "../../../src/core/brain/schema-pack.ts";
-import { SETTING_SET_KIND, SETTING_UNSET_KIND } from "../../../src/core/store/constants.ts";
+import {
+  SETTING_ENTRY_KIND,
+  SETTING_SET_KIND,
+  SETTING_UNSET_KIND,
+} from "../../../src/core/store/constants.ts";
+import { holdMigrationGate, releaseMigrationGate } from "../../../src/core/migration-gate.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../../src/mcp/index.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
@@ -43,7 +51,9 @@ const ALIAS: SchemaMutation = { op: "add_alias", token: "paper", alias: "article
 function schemaRecords(e: StoreEnv) {
   return partitionRecords(e.storeRoot, "shared").filter(
     (r) =>
-      (r.kind === SETTING_SET_KIND || r.kind === SETTING_UNSET_KIND) &&
+      (r.kind === SETTING_SET_KIND ||
+        r.kind === SETTING_UNSET_KIND ||
+        r.kind === SETTING_ENTRY_KIND) &&
       String(r.body["key"]).startsWith("brain.schema."),
   );
 }
@@ -68,10 +78,13 @@ describe("schema apply on a store-only machine", () => {
     expect(brainTreeDigest(env.vault)).toBe(before);
 
     const records = schemaRecords(env);
-    expect(records.map((r) => [r.body["key"], r.body["value"]])).toEqual([
-      ["brain.schema.aliases", ["paper=article"]],
-      ["brain.schema.page_types", ["paper"]],
-    ]);
+    // One entry record per entry added, never the whole list (task 3.12).
+    expect(records.map((r) => [r.kind, r.body["key"], r.body["entry"], r.body["present"]])).toEqual(
+      [
+        [SETTING_ENTRY_KIND, "brain.schema.aliases", "paper=article", true],
+        [SETTING_ENTRY_KIND, "brain.schema.page_types", "paper", true],
+      ],
+    );
     // Not from the CLI: an agent wrote these.
     expect(records.every((r) => r.body["authority"] === "agent")).toBe(true);
     // The attestation in `shared`, the whole row in `private`.
@@ -88,7 +101,7 @@ describe("schema apply on a store-only machine", () => {
     expect(integrity).toMatchObject({ audit_path: SCHEMA_AUDIT_STORE_NAME });
   });
 
-  test("a field the pack drops is unset; the next apply builds on the stored pack", async () => {
+  test("an entry the pack drops is removed; the next apply builds on the stored pack", async () => {
     env = makeStoreEnv("osb-schema-store-unset-");
     switchDevice(env.storeRoot);
     await applySchemaAdminMutations(env.vault, [ADD_PAPER, ALIAS], { actor: "t" });
@@ -98,14 +111,18 @@ describe("schema apply on a store-only machine", () => {
       { actor: "t" },
     );
     const last = schemaRecords(env).at(-1)!;
-    expect(last.kind).toBe(SETTING_UNSET_KIND);
-    expect(last.body["key"]).toBe("brain.schema.aliases");
+    expect(last.kind).toBe(SETTING_ENTRY_KIND);
+    expect(last.body).toMatchObject({
+      key: "brain.schema.aliases",
+      entry: "paper=article",
+      present: false,
+    });
     const pack = loadSchemaPack(env.vault);
     expect(pack.aliases).toEqual({});
     expect(pack.declarations.page_types).toEqual(["paper"]);
   });
 
-  test("the CLI writes with human authority, and an agent cannot change that field", async () => {
+  test("the CLI writes with human authority, and an agent cannot remove the operator's entry", async () => {
     env = makeStoreEnv("osb-schema-store-cli-");
     switchDevice(env.storeRoot);
     const cli = await runCli(
@@ -133,7 +150,7 @@ describe("schema apply on a store-only machine", () => {
       params: {
         name: "schema_apply_mutations",
         arguments: {
-          mutations: [{ op: "add_type", category: "page_types", token: "memo" }],
+          mutations: [{ op: "remove_type", category: "page_types", token: "paper" }],
         },
       },
     })) as { result?: { isError?: boolean; content: Array<{ text: string }> }; error?: unknown };
@@ -153,6 +170,36 @@ function sharedOnlyPeer(from: StoreEnv): StoreEnv {
   switchDevice(peer.storeRoot, "dev-b");
   return peer;
 }
+
+describe("the content-write gates on a store-only machine", () => {
+  test("a frozen machine refuses a schema apply and a settings write; a leftover gate does not", async () => {
+    env = makeStoreEnv("osb-schema-store-gates-");
+    switchDevice(env.storeRoot);
+    const vault = env.vault;
+    const settings = { vault, authority: "human" as const, agent: "test" };
+    freezeVault(vault, { agent: "@operator", reason: "moving machines" });
+    try {
+      await expect(applySchemaAdminMutations(vault, [ADD_PAPER], { actor: "t" })).rejects.toThrow(
+        VaultFrozenError,
+      );
+      expect(() => setBrainSetting(settings, "schema.page_types", ["paper"])).toThrow(
+        VaultFrozenError,
+      );
+    } finally {
+      unfreezeVault(vault);
+    }
+    expect(schemaRecords(env)).toHaveLength(0);
+    expect(schemaAuditRows(env)).toHaveLength(0);
+    // A migration gate left naming the vault refuses no store write.
+    holdMigrationGate(vault, "run-schema-gates");
+    try {
+      await applySchemaAdminMutations(vault, [ADD_PAPER], { actor: "t" });
+    } finally {
+      releaseMigrationGate(vault, "run-schema-gates");
+    }
+    expect(schemaRecords(env)).toHaveLength(1);
+  });
+});
 
 describe("a schema apply seen from a machine that holds only shared", () => {
   let other: StoreEnv | null = null;
