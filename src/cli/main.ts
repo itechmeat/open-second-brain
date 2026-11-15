@@ -59,6 +59,7 @@ import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
 import { handleStoreSubcommand } from "./store.ts";
 import { handleViewSubcommand } from "./view.ts";
+import { handleTopicSubcommand } from "./topic.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { installMcpFaultGuard } from "./mcp-fault-guard.ts";
 import { handleVaultSubcommand } from "./vault.ts";
@@ -1481,6 +1482,7 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     command !== "aider" &&
     command !== "brain" &&
     command !== "vault" &&
+    command !== "topic" &&
     // `secrets` has its own two-line help (the env fallback's name read
     // is spelled there), so the generic URL stub would only bury it.
     command !== "secrets"
@@ -1561,6 +1563,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleStoreSubcommand(rest);
       case "view":
         return await handleViewSubcommand(rest);
+      case "topic":
+        return await handleTopicSubcommand(rest);
       case "vault":
         return await handleVaultSubcommand(rest);
       case "partner":

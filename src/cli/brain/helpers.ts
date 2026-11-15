@@ -185,7 +185,7 @@ export function renderUpgradePlanJson(
 }
 export {
   renderQueryPreferenceText,
-  renderQueryTopicText,
+  renderQueryRuleTopicText,
   renderQueryLogText,
 } from "./query-render.ts";
 export { diffSummary, readSingleLine, type DiffSummary } from "./rollback-prompt.ts";

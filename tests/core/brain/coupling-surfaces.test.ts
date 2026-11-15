@@ -6,7 +6,7 @@
  * through `couplingVerdict`: the record appears only beside its
  * resolved, readable chain-tip correction and is dropped fail-closed
  * otherwise - a withheld correction takes its predecessor with it. The
- * surfaces covered here are recall by topic (`queryByTopic`), the
+ * surfaces covered here are recall by topic (`queryByRuleTopic`), the
  * context pack, the active.md digest and the dream scan.
  *
  * Today's exclusion wiring is pinned too: a tombstoned retired record
@@ -23,7 +23,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
-import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../../src/core/brain/query.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 import { renderActive } from "../../../src/core/brain/active.ts";
 import { scanBrain } from "../../../src/core/brain/dream-scan.ts";
@@ -106,21 +106,21 @@ describe("recall by topic", () => {
     writePreferencePage("pref-new", "alpha-v2");
     writeRetired("ret-old", { topic: "alpha", supersededBy: "pref-new" });
 
-    const out = queryByTopic(vault, "alpha");
+    const out = queryByRuleTopic(vault, "alpha");
     expect(out.preference?.id).toBe("ret-old");
   });
 
   test("a retired record whose correction is unresolved is dropped fail-closed", () => {
     writeRetired("ret-dangling", { topic: "beta", supersededBy: "pref-ghost" });
 
-    const out = queryByTopic(vault, "beta");
+    const out = queryByRuleTopic(vault, "beta");
     expect(out.preference).toBeNull();
   });
 
   test("a retired record with no successor pointer keeps today's behavior", () => {
     writeRetired("ret-plain", { topic: "gamma" });
 
-    const out = queryByTopic(vault, "gamma");
+    const out = queryByRuleTopic(vault, "gamma");
     expect(out.preference?.id).toBe("ret-plain");
   });
 
@@ -128,7 +128,7 @@ describe("recall by topic", () => {
     writePreferencePage("pref-new", "delta-v2");
     writeRetired("ret-dead", { topic: "delta", supersededBy: "pref-new", tombstoned: true });
 
-    const out = queryByTopic(vault, "delta");
+    const out = queryByRuleTopic(vault, "delta");
     expect(out.preference).toBeNull();
   });
 
@@ -136,7 +136,7 @@ describe("recall by topic", () => {
     writePreferencePage("pref-new", "alpha-v2");
     writeRetired("ret-old", { topic: "alpha", supersededBy: "pref-new" });
 
-    const out = queryByTopic(vault, "alpha-v2");
+    const out = queryByRuleTopic(vault, "alpha-v2");
     expect(out.preference?.id).toBe("pref-new");
   });
 });

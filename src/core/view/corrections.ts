@@ -13,7 +13,11 @@
  *  - any other generated line reworded: a `view-correction` of that line's
  *    key with the user's text; deleted: a `view-correction` that hides it;
  *  - a line the user added: a `view-addition` placed after the nearest
- *    generated line above it.
+ *    generated line above it;
+ *  - a line of a topic page (keyed `t:<topic id>:...`): the topic record
+ *    that says the same thing (`topic-edits.ts`), so the edit lands on
+ *    the topic and follows it through a rename; a topic line that module
+ *    does not map takes the generic correction above.
  *
  * The id comment line and blank layout lines are never mapped. The next
  * render folds the corrections back in (see {@link applyCorrections}), so
@@ -22,18 +26,15 @@
  */
 
 import { AUTHORITY_FIELD, PREFERENCE_SET_KIND } from "../store/constants.ts";
-import type { RecordBody, StoreRecord } from "../store/envelope.ts";
+import type { StoreRecord } from "../store/envelope.ts";
 import { prepareRecords, recordAuthority, RegisterSet, TOMBSTONE } from "../store/fold.ts";
 import { VIEW_ABOUT_ME_PAGE, VIEW_ADDITION_KIND, VIEW_CORRECTION_KIND } from "./constants.ts";
+import type { EditRecord } from "./edit-record.ts";
 import { alignable, diffLines } from "./line-diff.ts";
 import { ID_LINE_KEY, type PageLine, type PageModel } from "./pages.ts";
+import { topicAddition, topicCorrection } from "./topic-edits.ts";
 
-/** A record an edit produces, before the caller picks its partition. */
-export interface EditRecord {
-  readonly stream: "events";
-  readonly kind: string;
-  readonly body: RecordBody;
-}
+export type { EditRecord } from "./edit-record.ts";
 
 /** Retired status a deleted rule line sets. */
 const RETIRED = "retired";
@@ -158,7 +159,7 @@ export function applyCorrections(
   for (const add of byAnchor.get(null) ?? []) {
     emit({ key: `${ADDITION_KEY_PREFIX}${add.id}`, text: add.text });
   }
-  return { page: model.page, lines };
+  return { ...model, lines };
 }
 
 function correction(page: string, key: string, text: string | null): EditRecord {
@@ -188,6 +189,21 @@ function addition(page: string, after: string | null, text: string): EditRecord 
     kind: VIEW_ADDITION_KIND,
     body: { [AUTHORITY_FIELD]: "human", page, after, text },
   };
+}
+
+/** The records of one changed keyed line: a topic record when it maps, else a correction. */
+function correctionRecords(
+  page: string,
+  key: string,
+  before: string,
+  text: string | null,
+): EditRecord[] {
+  return topicCorrection(key, before, text) ?? [correction(page, key, text)];
+}
+
+/** The records of one added line: a topic item when its anchor is in one, else an addition. */
+function additionRecords(page: string, anchor: string | null, text: string): EditRecord[] {
+  return topicAddition(anchor, text) ?? [addition(page, anchor, text)];
 }
 
 /** The key of the nearest keyed line at or above `index`, the id line excluded. */
@@ -229,21 +245,24 @@ export function editRecords(
         continue;
       }
       if (key === null) {
-        if (text.trim() !== "") out.push(addition(page, anchor, text));
+        if (text.trim() !== "") out.push(...additionRecords(page, anchor, text));
         continue;
       }
       // A line cleared down to its list marker is emptied too.
       const emptied = text.replace(BARE_LIST_MARKER_RE, "").trim() === "";
-      out.push(correction(page, key, emptied ? null : text));
+      const before = base[hunk.baseStart + p]!;
+      out.push(...correctionRecords(page, key, before, emptied ? null : text));
       anchor = key;
     }
     for (let p = paired; p < baseLen; p++) {
       const key = baseKeys[hunk.baseStart + p] ?? null;
-      if (key !== null && key !== ID_LINE_KEY) out.push(correction(page, key, null));
+      if (key !== null && key !== ID_LINE_KEY) {
+        out.push(...correctionRecords(page, key, base[hunk.baseStart + p]!, null));
+      }
     }
     for (let p = paired; p < otherLen; p++) {
       const text = edited[hunk.otherStart + p]!.trimEnd();
-      if (text.trim() !== "") out.push(addition(page, anchor, text));
+      if (text.trim() !== "") out.push(...additionRecords(page, anchor, text));
     }
   }
   return out;
@@ -276,6 +295,8 @@ export function reviewedEdits(
 
 function isDeletion(record: EditRecord): boolean {
   if (record.kind === VIEW_CORRECTION_KIND) return record.body["hidden"] === true;
+  // A topic item's tombstone, or an undo of a goal proposal.
+  if (record.stream === "topics") return record.body["removed"] === true || record.kind === "undo";
   const fields = record.body["fields"] as Record<string, unknown> | undefined;
   return record.kind === PREFERENCE_SET_KIND && fields?.["status"] === RETIRED;
 }

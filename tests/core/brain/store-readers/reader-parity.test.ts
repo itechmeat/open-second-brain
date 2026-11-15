@@ -36,7 +36,7 @@ import { loadPreference } from "../../../../src/core/brain/preference.ts";
 import {
   queryByLogSince,
   queryByPreference,
-  queryByTopic,
+  queryByRuleTopic,
   readAllLogEntries,
 } from "../../../../src/core/brain/query.ts";
 import { vaultAgentSourceProvider as vaultProvider } from "../../../../src/core/brain/agent-source/vault-provider.ts";
@@ -181,7 +181,7 @@ const READERS: ReadonlyArray<Reader> = [
   },
   {
     name: "query by topic",
-    read: (env) => queryByTopic(env.vault, "tabs", { now: FIXTURE_NOW }),
+    read: (env) => queryByRuleTopic(env.vault, "tabs", { now: FIXTURE_NOW }),
     holdsData: mentions(FIXTURE.confirmed, FIXTURE.activeSignals[0]!),
   },
   {

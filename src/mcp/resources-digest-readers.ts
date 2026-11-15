@@ -114,6 +114,7 @@ export function readLessons(ctx: ResourceContext, uri: string, view: RequestView
     : renderLessonsForReader(ctx.vault, {
         readable: view.refs.visible,
         ...(view.refs.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
       }).document;
   return { uri, mimeType: MIME_MARKDOWN, text: delivery.shape(text, LESSONS_REL) };
 }
@@ -164,7 +165,7 @@ export function readStatus(ctx: ResourceContext, uri: string): ResourceContent {
  * Render the topic-query result as a compact markdown document. Kept
  * here (not in `query.ts`) because the markdown shape is a
  * resource-surface concern; callers that want the structured form can
- * still invoke `queryByTopic` directly.
+ * still invoke `queryByRuleTopic` directly.
  */
 export function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   const lines: string[] = [];

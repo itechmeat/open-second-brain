@@ -10,6 +10,7 @@
  * `dream-plan.ts`; this module is only what a CALLER of `dream()` sees.
  */
 
+import type { TopicPlanningReport } from "../topics/planning.ts";
 import type { DreamPhaseSummary } from "./dream-phases.ts";
 import type { DreamQuarantinedEntry } from "./dream-plan.ts";
 import type { DreamOutcomeRegression } from "./dream-refresh.ts";
@@ -20,6 +21,13 @@ import type { SalienceGateVerdict } from "./salience-gate.ts";
 import type { BrainRetiredReason, DreamOpenQuestion } from "./types.ts";
 
 /** The human view render pass at the end of a dream pass. */
+/** The topic-planning step of one dream pass. */
+export interface DreamTopicsOutcome {
+  /** One readable line: what the step did. */
+  readonly summary: string;
+  readonly report: TopicPlanningReport;
+}
+
 export interface DreamViewOutcome {
   readonly status: string;
   /** One readable line: what the pass did. */
@@ -130,6 +138,13 @@ export interface DreamRunSummary {
    * machine, and on a dry run.
    */
   readonly view?: DreamViewOutcome;
+  /**
+   * The topic-planning step that ran before the render (design D9, task
+   * 3.4): what it created and routed, each with its undo command, and what
+   * it only proposes. Absent when the brain store is not in use on this
+   * machine, and on a dry run.
+   */
+  readonly topics?: DreamTopicsOutcome;
   /**
    * Sub-operations the dream pass attempted but could not fully
    * verify. Empty on every clean run; populated by future
@@ -242,6 +257,11 @@ export interface DreamGateOverrides {
 }
 
 export interface DreamOptions {
+  /**
+   * The machine config whose brain store the topic planning and the view
+   * render at the end of the pass use (absent: the process's own).
+   */
+  readonly configPath?: string;
   /** Wall clock for the run. Defaults to `new Date()`. */
   readonly now?: Date;
   /** When true, compute the plan but make no writes. */

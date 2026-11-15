@@ -303,8 +303,10 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
 // record ids from the index, and store records carry no `owner:`.
 // 109 -> 110, the shared-settings change: brain_settings, one ownerless
 // recipe - settings are one value for every machine, never owner-tagged.
-export const PROBE_ENTRY_COUNT = 110;
-export const PROBE_RECIPE_COUNT = 253;
+// 110 -> 111, topics: brain_topic, one ownerless recipe - topics are store
+// records with no `owner:`, and their privacy is the partition's.
+export const PROBE_ENTRY_COUNT = 111;
+export const PROBE_RECIPE_COUNT = 254;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -539,6 +541,12 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     // The shared brain settings carry no owner: a setting is one value for
     // every machine and every agent, and the probe only lists them.
     name: "brain_settings",
+    calls: one({ action: "list" }, REASON.ownerlessLane),
+  },
+  {
+    // Topics carry no owner: a topic is a store record family whose privacy
+    // is its partition, withheld whole below local reach.
+    name: "brain_topic",
     calls: one({ action: "list" }, REASON.ownerlessLane),
   },
   {

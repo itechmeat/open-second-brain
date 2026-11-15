@@ -2417,7 +2417,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_KEYS, STATE_DIGEST_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2464,9 +2464,20 @@ var init_constants = __esm(() => {
   SETTING_KEYS = Object.freeze([
     SETTING_VIEW_LANGUAGE,
     SETTING_TOPIC_MIN_RECORDS,
-    SETTING_TOPIC_MIN_SESSIONS
+    SETTING_TOPIC_MIN_SESSIONS,
+    SETTING_TOPIC_QUIET_DAYS
   ]);
-  STATE_DIGEST_FOLDS = Object.freeze(["preferences", "pinned", "settings"]);
+  STATE_DIGEST_FOLDS = Object.freeze([
+    "preferences",
+    "pinned",
+    "settings",
+    "topics"
+  ]);
+  STATE_DIGEST_REQUIRED_FOLDS = Object.freeze([
+    "preferences",
+    "pinned",
+    "settings"
+  ]);
   DAY_MS = 24 * 60 * 60 * 1000;
   DUAL_WRITE_RECORD_KINDS = Object.freeze([
     SIGNAL_KIND,
@@ -5171,8 +5182,91 @@ var init_fold_settings = __esm(() => {
       fallback: null
     },
     [SETTING_TOPIC_MIN_RECORDS]: { valid: positiveInt, expected: "a positive integer", fallback: 5 },
-    [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 }
+    [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 },
+    [SETTING_TOPIC_QUIET_DAYS]: { valid: positiveInt, expected: "a positive integer", fallback: 30 }
   });
+});
+
+// src/core/topics/constants.ts
+var TOPIC_CREATE_KIND = "topic-create", TOPIC_RENAME_KIND = "topic-rename", TOPIC_STATUS_KIND = "topic-status", TOPIC_GOAL_KIND = "topic-goal", TOPIC_DECISION_KIND = "decision", TOPIC_QUESTION_KIND = "open-question", TOPIC_QUESTION_RESOLVED_KIND = "question-resolved", TOPIC_LOG_KIND = "log-entry", TOPIC_MILESTONE_KIND = "milestone", TOPIC_MILESTONE_DONE_KIND = "milestone-done", TOPIC_ASSIGN_KIND = "assign", TOPIC_UNASSIGN_KIND = "unassign", TOPIC_MERGE_KIND = "merge", TOPIC_SPLIT_KIND = "split", TOPIC_LINK_KIND = "link", TOPIC_UNDO_KIND = "undo", TOPIC_RECORD_KINDS, TOPIC_ITEM_KINDS, TOPIC_STATUSES, TOPIC_LOG_CLASSES, TOPIC_EARNED_LOG_CLASSES, TOPIC_PAGE_BUDGET;
+var init_constants2 = __esm(() => {
+  TOPIC_RECORD_KINDS = Object.freeze([
+    TOPIC_CREATE_KIND,
+    TOPIC_RENAME_KIND,
+    TOPIC_STATUS_KIND,
+    TOPIC_GOAL_KIND,
+    TOPIC_DECISION_KIND,
+    TOPIC_QUESTION_KIND,
+    TOPIC_QUESTION_RESOLVED_KIND,
+    TOPIC_LOG_KIND,
+    TOPIC_MILESTONE_KIND,
+    TOPIC_MILESTONE_DONE_KIND,
+    TOPIC_ASSIGN_KIND,
+    TOPIC_UNASSIGN_KIND,
+    TOPIC_MERGE_KIND,
+    TOPIC_SPLIT_KIND,
+    TOPIC_LINK_KIND,
+    TOPIC_UNDO_KIND
+  ]);
+  TOPIC_ITEM_KINDS = Object.freeze([
+    TOPIC_DECISION_KIND,
+    TOPIC_QUESTION_KIND,
+    TOPIC_LOG_KIND,
+    TOPIC_MILESTONE_KIND
+  ]);
+  TOPIC_STATUSES = Object.freeze([
+    "active",
+    "waiting",
+    "blocked",
+    "on-hold",
+    "done",
+    "closed"
+  ]);
+  TOPIC_LOG_CLASSES = Object.freeze([
+    "correction",
+    "decision",
+    "blocker",
+    "reframing",
+    "rejected",
+    "note",
+    "routine"
+  ]);
+  TOPIC_EARNED_LOG_CLASSES = new Set([
+    "correction",
+    "decision",
+    "blocker",
+    "reframing",
+    "rejected",
+    "note"
+  ]);
+  TOPIC_PAGE_BUDGET = Object.freeze({
+    doneMilestones: 10,
+    decisions: 25,
+    log: 15
+  });
+});
+
+// src/core/topics/records.ts
+var init_records = __esm(() => {
+  init_fold();
+  init_ulid();
+  init_constants2();
+});
+
+// src/core/topics/undo-fold.ts
+var init_undo_fold = __esm(() => {
+  init_fold();
+  init_constants2();
+});
+
+// src/core/topics/fold.ts
+var init_fold2 = __esm(() => {
+  init_envelope();
+  init_fold();
+  init_hlc();
+  init_constants2();
+  init_records();
+  init_undo_fold();
 });
 
 // src/core/store/shard-quarantine.ts
@@ -6174,6 +6268,7 @@ var init_state_digest = __esm(() => {
   init_fold_pinned();
   init_fold_preferences();
   init_fold_settings();
+  init_fold2();
   init_hlc();
   init_reader();
   init_seen_shards();
@@ -8639,6 +8734,7 @@ function appendStoreRecords(store, records, context) {
       kind: record.kind,
       agent: record.agent !== undefined && record.agent.trim() !== "" ? record.agent : defaultAgent(),
       scope: record.scope ?? null,
+      topic: record.topic ?? null,
       body: { ...record.body, [VAULT_ID_FIELD]: vaultId }
     }));
   } catch (err) {

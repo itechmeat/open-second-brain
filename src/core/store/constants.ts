@@ -204,16 +204,34 @@ export const PREFERENCE_COUNTER_FIELDS = Object.freeze([
 export const SETTING_VIEW_LANGUAGE = "view.language";
 export const SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records";
 export const SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions";
+export const SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days";
 export const SETTING_KEYS = Object.freeze([
   SETTING_VIEW_LANGUAGE,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
+  SETTING_TOPIC_QUIET_DAYS,
 ] as const);
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
 /** The folds a state digest hashes, in the order the digest body lists them. */
-export const STATE_DIGEST_FOLDS = Object.freeze(["preferences", "pinned", "settings"] as const);
+export const STATE_DIGEST_FOLDS = Object.freeze([
+  "preferences",
+  "pinned",
+  "settings",
+  "topics",
+] as const);
 export type StateDigestFold = (typeof STATE_DIGEST_FOLDS)[number];
+
+/**
+ * The folds every digest carries. `topics` came later: a digest an older
+ * release published has no `topics` hash, and a pair of digests is
+ * compared on a fold only when both carry it.
+ */
+export const STATE_DIGEST_REQUIRED_FOLDS: ReadonlyArray<StateDigestFold> = Object.freeze([
+  "preferences",
+  "pinned",
+  "settings",
+]);
 
 /** One day in milliseconds, for the day-based windows below. */
 export const DAY_MS = 24 * 60 * 60 * 1000;

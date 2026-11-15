@@ -545,6 +545,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       safeguard: guard(),
       ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
       ...(gates !== null ? { gates } : {}),
+      ...(config !== undefined ? { configPath: config } : {}),
     });
   } catch (exc) {
     if (exc instanceof SafeguardTimeoutError && asJson) {

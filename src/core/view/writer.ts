@@ -172,6 +172,22 @@ function claimSeenPath(store: StoreHandle): string {
 }
 
 /**
+ * Whether {@link claimSettled} has already answered `true` for this
+ * device's current claim, without noting anything: for a step that must
+ * wait for the writer's settled claim but must not spend the render's own
+ * wait (topic planning runs before the render in a dream pass).
+ */
+export function claimSeen(store: StoreHandle, state: ViewWriterState): boolean {
+  if (state.via !== "claim" || state.since === null) return true;
+  try {
+    const seen = JSON.parse(readFileSync(claimSeenPath(store), "utf8")) as { claim?: unknown };
+    return seen.claim === state.since.id;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether this device, holding the role through its own claim, has
  * already caught up once since it first saw that: the first call for a
  * claim notes it in device-local state and answers `false`, every later

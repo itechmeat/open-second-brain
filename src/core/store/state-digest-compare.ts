@@ -26,6 +26,7 @@ import {
   DIGEST_ROSTER_WINDOW_DAYS,
   DIGEST_SILENCE_DAYS,
   STATE_DIGEST_FOLDS,
+  STATE_DIGEST_REQUIRED_FOLDS,
   STATE_DIGEST_KIND,
   type StateDigestFold,
   type StorePartition,
@@ -48,8 +49,17 @@ export function parseDigest(record: StoreRecord): DigestBody | null {
   if (typeof body.cut_hash !== "string" || !SHA256_RE.test(body.cut_hash)) return null;
   const folds = body.folds as Record<string, unknown> | undefined;
   if (typeof folds !== "object" || folds === null) return null;
-  for (const fold of STATE_DIGEST_FOLDS) {
+  for (const fold of STATE_DIGEST_REQUIRED_FOLDS) {
     if (typeof folds[fold] !== "string" || !SHA256_RE.test(folds[fold] as string)) return null;
+  }
+  // A fold added later (`topics`) is optional; when present it must be a hash.
+  for (const fold of STATE_DIGEST_FOLDS) {
+    if (
+      folds[fold] !== undefined &&
+      !(typeof folds[fold] === "string" && SHA256_RE.test(folds[fold]))
+    ) {
+      return null;
+    }
   }
   return record.body as unknown as DigestBody;
 }
@@ -179,16 +189,20 @@ export function compareDigests(input: CompareDigestsInput): DigestComparison {
     const names = [...devices.keys()].toSorted();
     comparedCuts.push({ cutHash, devices: names });
     for (const fold of STATE_DIGEST_FOLDS) {
-      const hashes = new Set(names.map((device) => devices.get(device)!.body.folds[fold]));
-      if (hashes.size < 2) continue;
+      // Only the digests that carry the fold (an older release's has no `topics`).
+      const carrying = names.filter(
+        (device) => devices.get(device)!.body.folds[fold] !== undefined,
+      );
+      const hashes = new Set(carrying.map((device) => devices.get(device)!.body.folds[fold]));
+      if (carrying.length < 2 || hashes.size < 2) continue;
       findings.push({
         kind: "divergent",
         partition,
         fold,
         cutHash,
-        devices: names.map((device) => {
+        devices: carrying.map((device) => {
           const { record, body } = devices.get(device)!;
-          return { device, hash: body.folds[fold], digest: record.id };
+          return { device, hash: body.folds[fold]!, digest: record.id };
         }),
       });
     }

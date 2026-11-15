@@ -103,8 +103,10 @@ describe("automatic view render", () => {
       const page = join(view, "about-me.md");
       fs.utimesSync(page, new Date(NOW), new Date(NOW));
       read.mockClear();
+      opened.mockClear();
       runViewPass(a, opts);
-      expect(read.mock.calls.map((c) => String(c[0]))).toContain(page);
+      // A page is opened, then read through its descriptor.
+      expect([...read.mock.calls, ...opened.mock.calls].map((c) => String(c[0]))).toContain(page);
 
       read.mockClear();
       opened.mockClear();

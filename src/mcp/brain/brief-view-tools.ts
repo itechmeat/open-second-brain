@@ -223,6 +223,7 @@ export async function toolBrainDigest(
       ...(agentScope !== undefined ? { agentScope } : {}),
       ...(readable !== undefined ? { readable } : {}),
       ...(restricted ? { withholdsPrivate: true } : {}),
+      ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     });
   const result = renderFor(format, readableAtContextReachOrUndefined(ctx));
 

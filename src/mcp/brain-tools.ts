@@ -40,6 +40,7 @@ import { SYNTHESIS_TOOLS } from "./brain/synthesis-tools.ts";
 import { GENERATION_TOOLS } from "./brain/generation-tools.ts";
 import { CALENDAR_TOOLS } from "./brain/calendar-tools.ts";
 import { PLEDGE_TOOLS } from "./brain/pledge-tools.ts";
+import { TOPIC_TOOLS } from "./brain/topic-tools.ts";
 import { MEMORY_BRIDGE_TOOLS } from "./brain/memory-bridge-tools.ts";
 import { LIFECYCLE_TOOLS } from "./brain/lifecycle-tools.ts";
 import { LIFECYCLE_FILE_TOOLS } from "./brain/lifecycle-file-tools.ts";
@@ -97,6 +98,8 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...RECEIPT_TOOLS,
   // Brain store change probe (design D5): new record ids since a watermark.
   ...CHANGES_TOOLS,
+  // Topics (design D8, D9): read and change topics by recording topic events.
+  ...TOPIC_TOOLS,
   // Shared brain settings (design D4, D14 item 3): get, list, set, unset.
   ...SETTINGS_TOOLS,
 ]);

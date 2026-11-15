@@ -61,3 +61,67 @@ export function seedSetting(store: StoreHandle, ms: number, key: string, value: 
     { now: () => ms },
   );
 }
+
+/** One topic record, as an agent (or the user) would write it through the topic tools. */
+export function seedTopicRecord(
+  store: StoreHandle,
+  ms: number,
+  kind: string,
+  topic: string,
+  body: Record<string, unknown>,
+  options: {
+    readonly authority?: "human" | "agent" | "model";
+    readonly agent?: string;
+    readonly partition?: StorePartition;
+  } = {},
+): string {
+  return appendRecord(
+    store,
+    {
+      partition: options.partition ?? "shared",
+      stream: "topics",
+      kind,
+      agent: options.agent ?? "seed",
+      topic,
+      body: { authority: options.authority ?? "agent", ...body },
+    },
+    { now: () => ms },
+  ).record.id;
+}
+
+/** One lane entry (a research report, a source summary), as the store-only lane writers write it. */
+export function seedLaneEntry(
+  store: StoreHandle,
+  ms: number,
+  lane: string,
+  entry: string,
+  fields: Record<string, unknown>,
+  text: string,
+): void {
+  appendRecord(
+    store,
+    {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "seed",
+      body: { authority: "agent", lane, entry, fields, text },
+    },
+    { now: () => ms },
+  );
+}
+
+/** The tombstone of a lane entry. */
+export function seedLaneRemove(store: StoreHandle, ms: number, lane: string, entry: string): void {
+  appendRecord(
+    store,
+    {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry-remove",
+      agent: "seed",
+      body: { authority: "human", lane, entry },
+    },
+    { now: () => ms },
+  );
+}

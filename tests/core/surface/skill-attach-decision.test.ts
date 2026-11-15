@@ -463,7 +463,10 @@ test("stage 2 gets only the time that remains", async () => {
     provider,
   });
   expect(seen).toHaveLength(2);
-  expect(seen[0]).toBe(3000);
+  // Stage 1 gets the whole budget, less the moment the call itself took to
+  // start: a slow runner hands the provider 2999, not 3000.
+  expect(seen[0]!).toBeLessThanOrEqual(3000);
+  expect(seen[0]!).toBeGreaterThan(3000 - 55);
   expect(seen[1]!).toBeLessThanOrEqual(3000 - 55);
   expect(seen[1]!).toBeGreaterThan(SKILLS_STAGE2_MIN_REMAINING_MS);
 });

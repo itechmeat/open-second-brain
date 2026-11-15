@@ -516,6 +516,11 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
       "brain_settings: 'action' must be one of get, list, set, unset",
     ],
     [
+      "brain_topic",
+      { action: BOGUS },
+      "brain_topic: 'action' must be one of list, show, review, create, rename, status, goal, assign, unassign, merge, split, link, archive, undo, record",
+    ],
+    [
       "brain_note_lifecycle",
       { action: BOGUS },
       "brain_note_lifecycle: 'action' must be one of rename, move, archive, delete, move-folder, rename-folder",

@@ -43,6 +43,7 @@ import { compareRecords, type StoreRecord } from "./envelope.ts";
 import { foldPinned, pinnedFingerprint } from "./fold-pinned.ts";
 import { foldPreferences, preferencesFingerprint } from "./fold-preferences.ts";
 import { foldSettings, settingsFingerprint } from "./fold-settings.ts";
+import { foldTopics, topicsFingerprint } from "../topics/fold.ts";
 import { parseHlc } from "./hlc.ts";
 import { readShard, replacedShards, shardReadGap, type Compaction } from "./reader.ts";
 import { SEEN_SHARD_MISSING_REASON, trackSeenShards } from "./seen-shards.ts";
@@ -108,12 +109,15 @@ export interface CutEntry {
 /** Fold name to sha256. */
 export type FoldHashes = { readonly [F in StateDigestFold]: string };
 
+/** The fold hashes a parsed digest carries: `topics` is absent in an older release's digest. */
+export type ParsedFoldHashes = Omit<FoldHashes, "topics"> & { readonly topics?: string };
+
 /** The body of a `state-digest` record. */
 export interface DigestBody {
   readonly partition: StorePartition;
   readonly cut: ReadonlyArray<CutEntry>;
   readonly cut_hash: string;
-  readonly folds: FoldHashes;
+  readonly folds: ParsedFoldHashes;
 }
 
 function ledgerNames(partitionRoot: string): string[] {
@@ -242,6 +246,7 @@ export function foldHashes(records: ReadonlyArray<StoreRecord>): FoldHashes {
     preferences: hash(preferencesFingerprint(foldPreferences(records))),
     pinned: hash(pinnedFingerprint(foldPinned(records))),
     settings: hash(settingsFingerprint(foldSettings(records))),
+    topics: hash(topicsFingerprint(foldTopics(records))),
   };
 }
 

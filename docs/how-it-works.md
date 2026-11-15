@@ -718,7 +718,8 @@ content as **resources** (added in v0.9.1):
 | `osb://digest/latest`      | most recent `brain_digest` rendering                                                                                                               |
 | `osb://status`             | Markdown form of the `second_brain_status.brain` block                                                                                             |
 | `osb://preference/{id}`    | one `pref-` / `ret-` file                                                                                                                          |
-| `osb://topic/{slug}`       | every signal + active/retired pref for a topic                                                                                                     |
+| `osb://rule-topic/{slug}`  | every signal + active/retired pref for a rule topic (`osb://topic/{slug}` is an alias for one minor version)                                       |
+| `osb://topic/{id}`         | one topic's page (see [topics.md](topics.md))                                                                                                      |
 | `osb://log/{date}`         | one day's `Brain/log/YYYY-MM-DD.md` (a parallel `YYYY-MM-DD.jsonl` sidecar carries the same events as one JSON row per line for machine consumers) |
 | `osb://backlinks/{id}`     | inverted reference map for `<id>`                                                                                                                  |
 

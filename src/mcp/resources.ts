@@ -10,9 +10,13 @@
  *   osb://preference/{id}        — Brain/preferences/pref-{id}.md OR
  *                                  Brain/retired/ret-{id}.md when the
  *                                  preferences/ copy is gone
- *   osb://topic/{slug}           — synthesized markdown summary of every
+ *   osb://rule-topic/{slug}      — synthesized markdown summary of every
  *                                  signal + the current pref / retired
- *                                  for the topic slug
+ *                                  for the rule-topic slug (the old name
+ *                                  osb://topic/{slug} is an alias for one
+ *                                  minor version)
+ *   osb://topic/{id}             — one topic (design D8) by its id, as
+ *                                  its rendered page
  *   osb://log/{date}             — Brain/log/<date>.md as-is
  *
  * The first two are concrete resources (returned by `resources/list`).
@@ -71,8 +75,9 @@ import {
   readLessons,
   readStatus,
 } from "./resources-digest-readers.ts";
-import { readLog, readPreference, readTopic } from "./resources-record-readers.ts";
+import { readLog, readPreference, readRuleTopic } from "./resources-record-readers.ts";
 import { readBacklinks } from "./resources-backlink-readers.ts";
+import { readTopicById } from "./resources-topic-readers.ts";
 
 export type {
   ResourceContext,
@@ -120,10 +125,17 @@ const TEMPLATES: ReadonlyArray<ResourceTemplateDescriptor> = [
     mimeType: MIME_MARKDOWN,
   },
   {
-    uriTemplate: "osb://topic/{slug}",
-    name: "Brain topic summary",
+    uriTemplate: "osb://rule-topic/{slug}",
+    name: "Brain rule-topic summary",
     description:
-      "Markdown synthesis of every signal (active + processed), the current preference (or retired), the most recent log mentions, and a deterministic 'Strongest objection' steelman against the current preference for the topic slug.",
+      "Markdown synthesis of every signal (active + processed), the current preference (or retired), the most recent log mentions, and a deterministic 'Strongest objection' steelman against the current preference for the rule-topic slug. The old name osb://topic/{slug} still answers for one minor version.",
+    mimeType: MIME_MARKDOWN,
+  },
+  {
+    uriTemplate: "osb://topic/{id}",
+    name: "Brain topic",
+    description:
+      "One topic by its id (a ULID): the page the human view renders for it (status, goal, milestones, decisions, open questions, log, related), as Markdown.",
     mimeType: MIME_MARKDOWN,
   },
   {
@@ -162,8 +174,14 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
       return readStatus(ctx, uri);
     case "preference":
       return readPreference(ctx, uri, parsed.id, requestView(ctx));
+    case "ruleTopic":
+      return readRuleTopic(ctx, uri, parsed.slug, requestView(ctx));
     case "topic":
-      return readTopic(ctx, uri, parsed.slug, requestView(ctx));
+      // A ULID-shaped value that names no topic the caller sees is still a
+      // rule-topic slug through the old name.
+      return (
+        readTopicById(ctx, uri, parsed.id) ?? readRuleTopic(ctx, uri, parsed.id, requestView(ctx))
+      );
     case "log":
       return readLog(ctx, uri, parsed.date, requestView(ctx));
     case "backlinks":

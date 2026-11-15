@@ -19,6 +19,9 @@
  *   - `dream-apply.ts`        the plan turned into disk state, in order
  *   - `dream-report.ts`       the run's audit trail in `Brain/log/`
  *   - `dream-summary.ts`      the {@link DreamRunSummary} the caller sees
+ *   - `dream-outcome.ts`      the `changed` gate, warnings, retire siblings
+ *   - `dream-rollup.ts`       the rollup-ladder plan and its link manifest
+ *   - `dream-tail.ts`         topic planning and the human view render
  *
  * Outputs (high level):
  *
@@ -50,10 +53,9 @@
  *   - dryRun mode returns the planned summary but performs no writes.
  */
 
+import { withTopicPass, withViewPass } from "./dream-tail.ts";
 import { vaultRelativeOf } from "./no-vault.ts";
 import { withLogReadPass } from "./log-days.ts";
-import { describeAutoView, runAutoViewPass } from "../view/auto-render.ts";
-import { VIEW_DREAM_BUDGET_MS } from "../view/constants.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -63,29 +65,22 @@ import {
   gatedRetireSlugs,
   plannedSignalArchiveIds,
   plannedSignalMoveIds,
-  shouldGateRetireFromConfirmed,
   type DreamApplyResult,
 } from "./dream-apply.ts";
-import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
 import { planAutoRetires } from "./dream-plan-retires.ts";
 import { planTopics, topicKeyContentionWarnings } from "./dream-plan-topics.ts";
-import type { PlanState, ScanResult } from "./dream-plan.ts";
+import type { ScanResult } from "./dream-plan.ts";
 import {
   planCrossTopicRules,
   readCrossTopicLedger,
   resolveCrossTopicConfig,
 } from "./dream-plan-cross-topic.ts";
-import { planRefresh, scanApplyEvidence, type RefreshResult } from "./dream-refresh.ts";
+import { planRefresh, scanApplyEvidence } from "./dream-refresh.ts";
 import { writeDreamLog } from "./dream-report.ts";
 import { scanBrain } from "./dream-scan.ts";
 import { planSignalArchive } from "./signal-archive.ts";
 import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
-import type {
-  DreamGatedRetireEntry,
-  DreamOptions,
-  DreamRunSummary,
-  DreamWarning,
-} from "./dream-types.ts";
+import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, workrunPath, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
 import { logShardWikilink } from "./log.ts";
@@ -96,26 +91,17 @@ import {
   type ProgressCounter,
 } from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
-import { buildLinkCandidateManifest, type LinkCandidateManifest } from "./notes/link-candidates.ts";
-import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import { brainDirsForWrite, collisionCandidateName } from "./paths.ts";
 import { isStoreOnly } from "../store/store-only.ts";
 import { repairLaneEntryIds } from "../store-migration/lane-id-repair.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
-import {
-  planRollupLadder,
-  readRollupLedger,
-  resolveRollupThresholds,
-  type RollupLadderPlan,
-} from "./rollup-ladder.ts";
-import { READ_ALL_REFS } from "./near-duplicate.ts";
-import { planRetireSiblings, retireSiblingPool } from "./retire-siblings.ts";
+import { buildRollupPlan, memoizedLinkCandidates } from "./dream-rollup.ts";
+import { collectWarnings, hasStateChange, withRetireSiblings } from "./dream-outcome.ts";
 import { applySalienceGate } from "./salience-gate.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { compactRunStamp, isoDate } from "./time.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
-import type { BrainConfig } from "./types.ts";
 
 // ----- Public surface ------------------------------------------------------
 
@@ -231,7 +217,7 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
     // One read pass for the whole dream: the store-only log is read once
     // and shared by every preference's evidence walk (log-days.ts).
     return withLogReadPass(() =>
-      withViewPass(dreamRun(vault, opts, progress, progressFaults), opts),
+      withViewPass(withTopicPass(dreamRun(vault, opts, progress, progressFaults), opts), opts),
     );
   } catch (error) {
     const reason = progressReasonForError(error);
@@ -250,34 +236,6 @@ function uniqueNoVaultRunId(base: string): string {
     if (!existsSync(workrunPath(null, candidate))) return candidate;
   }
   throw new Error(`dream: no free run id after ${NO_VAULT_RUN_ID_ATTEMPTS} attempts (${base})`);
-}
-
-/**
- * Render the human view at the end of a pass that wrote (design D7): the
- * view writer keeps its pages current, any other machine writes none and
- * its summary names the writer. Bounded by a time budget: pages it does
- * not reach are deferred to the next pass and counted. Fail-open, and
- * absent when the brain store is not in use here, so such a summary is
- * byte-identical to before.
- */
-function withViewPass(summary: DreamRunSummary, opts: DreamOptions): DreamRunSummary {
-  if (opts.dryRun === true) return summary;
-  const result = runAutoViewPass({
-    trigger: "dream",
-    budgetMs: opts.viewBudgetMs ?? VIEW_DREAM_BUDGET_MS,
-  });
-  if (result === null) return summary;
-  return {
-    ...summary,
-    view: {
-      status: result.status,
-      summary: describeAutoView(result),
-      ...(result.status === "not-writer" ? { writer: result.writer } : {}),
-      ...(result.status === "rendered"
-        ? { deferred: result.pages.filter((p) => p.status === "deferred").length }
-        : {}),
-    },
-  };
 }
 
 /**
@@ -669,168 +627,6 @@ function dreamRun(
     previewGateThreshold: dryRun ? cfg.retire.confirmed_evidence_min_threshold : undefined,
   });
 }
-
-/**
- * Attach the retire-sibling projection (near-duplicate defense) to a
- * changed run's summary. Computed from the completed retire plan, then
- * reconciled against the retires the confirmed-evidence gate holds back:
- * the ones the apply step gated, or on a dry run the ones it would gate,
- * so the dry run and the real run agree. A retiring preference is never
- * refreshed first, so its scanned frontmatter is what the apply step
- * reads. The scan is the pass's own reach (a preview scan is already
- * admitted), hence {@link READ_ALL_REFS}. Off (`enabled`, else the
- * default config's key), or with nothing to report, the summary is
- * returned untouched.
- */
-function withRetireSiblings(
-  summary: DreamRunSummary,
-  scan: ScanResult,
-  plan: PlanState,
-  opts: {
-    readonly enabled: boolean | undefined;
-    readonly gatedRetires: ReadonlyArray<DreamGatedRetireEntry>;
-    readonly previewGateThreshold: number | undefined;
-  },
-): DreamRunSummary {
-  if (plan.retires.length === 0 || !(opts.enabled ?? resolveNearDuplicateRetireSiblingsEnabled())) {
-    return summary;
-  }
-  const gated = new Set(opts.gatedRetires.map((g) => g.pref_id));
-  if (opts.previewGateThreshold !== undefined) {
-    const byId = new Map(scan.preferences.map((p) => [p.pref.id, p.pref] as const));
-    for (const r of plan.retires) {
-      const existing = byId.get(`pref-${r.slug}`);
-      if (
-        existing !== undefined &&
-        shouldGateRetireFromConfirmed(existing, r.reason, opts.previewGateThreshold)
-      ) {
-        gated.add(existing.id);
-      }
-    }
-  }
-  const siblings = planRetireSiblings(
-    retireSiblingPool(scan.preferences.map((p) => p.pref)),
-    plan.retires.map((r) => ({ id: `pref-${r.slug}`, principle: r.principle, reason: r.reason })),
-    { readable: READ_ALL_REFS, gated },
-  );
-  if (siblings.length === 0) return summary;
-  return Object.freeze({ ...summary, retire_siblings: Object.freeze([...siblings]) });
-}
-
-/**
- * Non-fatal warnings raised during the run. The non-primary-dream-run
- * check is the first one: when the caller declares an agent name and it
- * differs from the vault's declared primary, surface a structured
- * warning. We do NOT abort — the declaration is observability, not
- * access control.
- */
-function collectWarnings(
-  isNonPrimary: boolean,
-  callerAgent: string,
-  primaryAgent: string | null,
-): DreamWarning[] {
-  if (!isNonPrimary) return [];
-  return [
-    {
-      code: "non-primary-dream-run",
-      message:
-        `dream run from agent '${callerAgent}', but primary is ` +
-        `'${primaryAgent}'. Convention violation, run proceeds.`,
-    },
-  ];
-}
-
-/**
- * Decide if anything is going to change. We treat any of the following
- * as a state change:
- *   - a new unconfirmed pref
- *   - a refreshed pref (counters/confidence/status changed)
- *   - a retire
- *   - a same-sign signal noted on an active pref (move + log)
- *   - an inbox signal archived because it left the contradiction window
- *   - a corrupted frontmatter (we want the skip event recorded)
- *   - any pinned-rebut-attempt warning
- *   - a fired rollup-ladder rung (S3)
- *   - a cross-topic rule promotion (t_642bc2b8)
- */
-function hasStateChange(
-  plan: PlanState,
-  refresh: RefreshResult,
-  corruptedCount: number,
-  rollupPlan: RollupLadderPlan,
-): boolean {
-  return (
-    plan.newUnconfirmed.length > 0 ||
-    refresh.confirmed.size > 0 ||
-    refresh.updated.size > 0 ||
-    plan.retires.length > 0 ||
-    plan.notedRedundant.length > 0 ||
-    plan.signalsToMove.size > 0 ||
-    plan.signalsToArchive.size > 0 ||
-    plan.retainPinned.length > 0 ||
-    plan.signalsSuppressed.length > 0 ||
-    // v0.10.16: quarantine is a recorded decision (deferred-but-noted),
-    // so a run that produces only quarantine entries is still a
-    // meaningful run from the operator's perspective.
-    plan.quarantined.length > 0 ||
-    plan.crossTopicRules.length > 0 ||
-    rollupPlan.fired ||
-    corruptedCount > 0
-  );
-}
-
-function buildRollupPlan(
-  vault: string | null,
-  cfg: BrainConfig,
-  factCount: number,
-  runId: string,
-  linkCandidates: () => LinkCandidateManifest,
-): RollupLadderPlan {
-  return planRollupLadder({
-    factCount,
-    ledger: readRollupLedger(vault),
-    thresholds: resolveRollupThresholds(cfg),
-    runId,
-    linkCandidates,
-  });
-}
-
-/**
- * The link-candidate manifest for this run, walked at most once and only
- * if something asks for it. Both callers of {@link buildRollupPlan} share
- * one of these, so a runId collision re-plans off the manifest already
- * built rather than walking the vault a second time.
- *
- * No query: the ladder is count-only by design and never learns which
- * items it is folding, so ranking the candidates would be inventing a
- * relevance nothing measured. The manifest says `alphabetical` and names
- * the total, which is the honest form of that.
- */
-function memoizedLinkCandidates(
-  vault: string | null,
-  agentName: string | undefined,
-  readable: ((rel: string) => boolean) | undefined,
-): () => LinkCandidateManifest {
-  let manifest: LinkCandidateManifest | null = null;
-  return () => {
-    if (manifest !== null) return manifest;
-    // No vault: no user notes for a rollup to link to (design D14).
-    if (vault === null) return (manifest = NO_LINK_CANDIDATES);
-    const ownerView = gatedOwnerScopeView(vault, agentName);
-    manifest = buildLinkCandidateManifest(vault, {
-      visible: (rel) => ownerView.visible(rel) && (readable?.(rel) ?? true),
-    });
-    return manifest;
-  };
-}
-
-/** The link manifest of a machine with no vault: no notes, so no candidates. */
-const NO_LINK_CANDIDATES: LinkCandidateManifest = Object.freeze({
-  candidates: Object.freeze([]),
-  total: 0,
-  truncated: false,
-  selection: "alphabetical",
-});
 
 /** What a no-vault run names as its log: the brain log is a store record stream. */
 const NO_VAULT_LOG_PATH = "store:log";

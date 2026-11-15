@@ -8,7 +8,7 @@
  *   - {@link queryByPreference} — one preference (active or retired)
  *     plus every `apply-evidence` log entry that references it.
  *
- *   - {@link queryByTopic} — every signal under a topic (active +
+ *   - {@link queryByRuleTopic} — every signal under a topic (active +
  *     processed), the current preference for that topic (active or
  *     retired), and every log entry mentioning the preference.
  *
@@ -234,7 +234,7 @@ export function queryByPreference(vault: string, pref_id: string): QueryByPrefer
  * retired), and every log entry mentioning the preference id (active
  * or retired form). Unknown topic → empty result with `preference: null`.
  */
-export function queryByTopic(
+export function queryByRuleTopic(
   vault: string,
   topic: string,
   options: QueryByTopicOptions = {},

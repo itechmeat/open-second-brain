@@ -23,7 +23,7 @@ import {
   BrainNotFoundError,
   queryByLogSince,
   queryByPreference,
-  queryByTopic,
+  queryByRuleTopic,
 } from "../../src/core/brain/query.ts";
 
 let tmp: string;
@@ -164,7 +164,7 @@ describe("queryByPreference", () => {
   });
 });
 
-describe("queryByTopic", () => {
+describe("queryByRuleTopic", () => {
   test("collects active and processed signals plus the active preference", () => {
     // Two signals — one active, one already processed.
     writeSignal(tmp, {
@@ -211,7 +211,7 @@ describe("queryByTopic", () => {
       },
     });
 
-    const res = queryByTopic(tmp, "no-internal-abbrev");
+    const res = queryByRuleTopic(tmp, "no-internal-abbrev");
     expect(res.signals).toHaveLength(2);
     expect(res.signals.map((s) => s.id)).toEqual([
       "sig-2026-05-13-no-internal-abbrev",
@@ -228,7 +228,7 @@ describe("queryByTopic", () => {
       now: new Date("2026-08-12T05:00:00Z"),
       retired_by: "[[Brain/log/2026-08-12]]",
     });
-    const res = queryByTopic(tmp, "orphan");
+    const res = queryByRuleTopic(tmp, "orphan");
     expect(res.preference?.id).toBe("ret-orphan");
     expect(res.signals).toEqual([]);
   });
@@ -243,16 +243,16 @@ describe("queryByTopic", () => {
     writePreference(tmp, { ...basePref("alpha"), slug: "alpha", topic: "shared-topic" });
     writePreference(tmp, { ...basePref("middle"), slug: "middle", topic: "shared-topic" });
 
-    const r1 = queryByTopic(tmp, "shared-topic");
-    const r2 = queryByTopic(tmp, "shared-topic");
-    const r3 = queryByTopic(tmp, "shared-topic");
+    const r1 = queryByRuleTopic(tmp, "shared-topic");
+    const r2 = queryByRuleTopic(tmp, "shared-topic");
+    const r3 = queryByRuleTopic(tmp, "shared-topic");
     expect(r1.preference?.id).toBe("pref-alpha");
     expect(r2.preference?.id).toBe("pref-alpha");
     expect(r3.preference?.id).toBe("pref-alpha");
   });
 
   test("unknown topic returns null preference and empty signals/events", () => {
-    const res = queryByTopic(tmp, "never-existed");
+    const res = queryByRuleTopic(tmp, "never-existed");
     expect(res.signals).toEqual([]);
     expect(res.preference).toBeNull();
     expect(res.all_log_events).toEqual([]);

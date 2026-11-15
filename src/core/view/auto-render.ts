@@ -153,8 +153,10 @@ export function describeAutoView(result: AutoViewResult): string {
     case "rendered": {
       const written = result.pages.filter((p) => p.status === "written").length;
       const deferred = result.pages.filter((p) => p.status === "deferred").length;
+      const removed = result.pages.filter((p) => p.status === "removed").length;
       return (
-        `rendered ${result.pages.length} page(s), ${written} changed` +
+        `rendered ${result.pages.length - removed} page(s), ${written} changed` +
+        (removed > 0 ? `, ${removed} removed` : "") +
         (deferred > 0 ? `, ${deferred} deferred to the next pass` : "")
       );
     }
@@ -185,7 +187,9 @@ export function autoViewAudit(result: AutoViewResult): [boolean, Record<string, 
   const failed =
     result.status === "rendered"
       ? result.pages
-          .filter((p) => p.status !== "written" && p.status !== "unchanged")
+          .filter(
+            (p) => p.status !== "written" && p.status !== "unchanged" && p.status !== "removed",
+          )
           .map((p) => ({
             page: p.page,
             status: p.status,

@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
-import { queryByTopic } from "../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../src/core/brain/query.ts";
 import { correct } from "../../src/core/brain/lifecycle/correction.ts";
 import { appendClaimEvent, readClaimEvents } from "../../src/core/brain/truth/store.ts";
 import { computeTruthStateWithConflicts } from "../../src/core/brain/truth/conflicts.ts";
@@ -138,7 +138,7 @@ describe("serve-with-correction contract", () => {
     expect(event).toBeDefined();
     expect(event!.validFrom).toBe(CORRECTION_TS);
 
-    const out = queryByTopic(vault, "deploy-timeout");
+    const out = queryByRuleTopic(vault, "deploy-timeout");
     expect(out.preference?.id).toBe("pref-old");
   });
 
@@ -148,7 +148,7 @@ describe("serve-with-correction contract", () => {
 
     rmSync(join(brainDirs(vault).preferences, "pref-new.md"));
 
-    const out = queryByTopic(vault, "deploy-timeout");
+    const out = queryByRuleTopic(vault, "deploy-timeout");
     expect(out.preference).toBeNull();
   });
 
@@ -161,7 +161,7 @@ describe("serve-with-correction contract", () => {
     expect(retirement.reasonCode).toBe("tombstone");
     expect(retirement.validUntil).toBeNull();
 
-    const out = queryByTopic(vault, "deploy-timeout");
+    const out = queryByRuleTopic(vault, "deploy-timeout");
     expect(out.preference).toBeNull();
   });
 

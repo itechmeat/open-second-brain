@@ -10,7 +10,14 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { conflictCopies, replacePage } from "../../../src/core/view/page-io.ts";
+import {
+  capturePage,
+  conflictCopies,
+  moveCompanions,
+  NotAPageFileError,
+  readPage,
+  replacePage,
+} from "../../../src/core/view/page-io.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -92,5 +99,151 @@ describe("replacePage", () => {
     } finally {
       link.mockRestore();
     }
+  });
+});
+
+describe("readPage", () => {
+  test.skipIf(process.platform === "win32")(
+    "a link put under the page name after the check is never read through",
+    () => {
+      const secret = join(dir, "secret.txt");
+      writeFileSync(secret, "secret\n");
+      const page = join(dir, "about-me.md");
+      fs.symlinkSync(secret, page);
+      // The name was a regular file when it was checked; a link took it
+      // before the open.
+      const realLstat = fs.lstatSync;
+      const lstat = spyOn(fs, "lstatSync").mockImplementation(((p: fs.PathLike) =>
+        p === page ? realLstat(secret) : realLstat(p)) as typeof fs.lstatSync);
+      try {
+        expect(() => readPage(page)).toThrow(NotAPageFileError);
+      } finally {
+        lstat.mockRestore();
+      }
+    },
+  );
+});
+
+function folders(): { from: string; to: string } {
+  const from = join(dir, "old");
+  const to = join(dir, "new");
+  fs.mkdirSync(from);
+  writeFileSync(join(from, "notes.md"), "mine\n");
+  return { from, to };
+}
+
+/** Windows: EPERM for a file another program holds. */
+function denied(): never {
+  throw Object.assign(new Error("access denied"), { code: "EPERM" });
+}
+
+describe("capturePage", () => {
+  test("a folder at the name is refused and put back under its name, its files kept", () => {
+    const folder = join(dir, "p.sync-conflict-20260101-120000-abcdefg.md");
+    fs.mkdirSync(folder);
+    writeFileSync(join(folder, "mine.txt"), "mine\n");
+    expect(() => capturePage(folder)).toThrow(NotAPageFileError);
+    expect(readFileSync(join(folder, "mine.txt"), "utf8")).toBe("mine\n");
+    expect(readdirSync(dir)).toEqual([basename(folder)]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a symbolic link at the name is refused and made again as the same link, never followed",
+    () => {
+      const target = join(dir, "target.md");
+      writeFileSync(target, "secret\n");
+      const link = join(dir, "p.md");
+      fs.symlinkSync(target, link);
+      expect(() => capturePage(link)).toThrow(NotAPageFileError);
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(link)).toBe(target);
+      expect(readdirSync(dir).toSorted()).toEqual(["p.md", "target.md"]);
+    },
+  );
+});
+
+describe("moveCompanions", () => {
+  test("a copy whose source cannot be removed is taken back: the file stays in one folder", () => {
+    const { from, to } = folders();
+    // Both calls fail with EPERM, as on Windows: the link, and taking the
+    // source out of its name (Windows refuses to rename a held file too).
+    const link = spyOn(fs, "linkSync").mockImplementation(denied);
+    const realRename = fs.renameSync;
+    const rename = spyOn(fs, "renameSync").mockImplementation(((p: fs.PathLike, q: fs.PathLike) => {
+      if (String(p) === join(from, "notes.md")) denied();
+      realRename(p, q);
+    }) as typeof fs.renameSync);
+    try {
+      moveCompanions(from, to, new Set());
+    } finally {
+      link.mockRestore();
+      rename.mockRestore();
+    }
+    expect(readdirSync(from)).toEqual(["notes.md"]);
+    expect(readdirSync(to)).toEqual([]);
+  });
+
+  test("a source a sync tool replaced after the link is kept, and the stale link is taken back", () => {
+    const { from, to } = folders();
+    const realLink = fs.linkSync;
+    const link = spyOn(fs, "linkSync").mockImplementation(((a: fs.PathLike, b: fs.PathLike) => {
+      realLink(a, b);
+      // The sync tool delivers a newer version under the old name.
+      fs.renameSync(join(dir, "newer.tmp"), join(from, "notes.md"));
+    }) as typeof fs.linkSync);
+    writeFileSync(join(dir, "newer.tmp"), "newer\n");
+    try {
+      moveCompanions(from, to, new Set());
+    } finally {
+      link.mockRestore();
+    }
+    expect(readFileSync(join(from, "notes.md"), "utf8")).toBe("newer\n");
+    expect(readdirSync(to)).toEqual([]);
+  });
+
+  test("a destination a sync tool replaced while the move is taken back is kept", () => {
+    const { from, to } = folders();
+    const realLink = fs.linkSync;
+    writeFileSync(join(dir, "newer.tmp"), "newer\n");
+    writeFileSync(join(dir, "theirs.tmp"), "theirs\n");
+    const link = spyOn(fs, "linkSync").mockImplementation(((a: fs.PathLike, b: fs.PathLike) => {
+      realLink(a, b);
+      link.mockRestore();
+      // The sync tool delivers newer versions under both names.
+      fs.renameSync(join(dir, "newer.tmp"), join(from, "notes.md"));
+      fs.renameSync(join(dir, "theirs.tmp"), join(to, "notes.md"));
+    }) as typeof fs.linkSync);
+    try {
+      moveCompanions(from, to, new Set());
+    } finally {
+      link.mockRestore();
+    }
+    expect(readFileSync(join(from, "notes.md"), "utf8")).toBe("newer\n");
+    expect(readFileSync(join(to, "notes.md"), "utf8")).toBe("theirs\n");
+  });
+
+  test("a source a sync tool replaced after the last check is kept, never removed", () => {
+    const { from, to } = folders();
+    const source = join(from, "notes.md");
+    const realLstat = fs.lstatSync;
+    writeFileSync(join(dir, "newer.tmp"), "newer\n");
+    let seen = 0;
+    const lstat = spyOn(fs, "lstatSync").mockImplementation(((p: fs.PathLike) => {
+      const stat = realLstat(p);
+      // The second look at the source is the last check before it goes.
+      if (String(p) === source && ++seen === 2) {
+        lstat.mockRestore();
+        fs.renameSync(join(dir, "newer.tmp"), source);
+      }
+      return stat;
+    }) as typeof fs.lstatSync);
+    try {
+      moveCompanions(from, to, new Set());
+    } finally {
+      lstat.mockRestore();
+    }
+    expect(seen).toBe(2);
+    expect(readFileSync(source, "utf8")).toBe("newer\n");
+    expect(readdirSync(to)).toEqual([]);
   });
 });

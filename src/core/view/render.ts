@@ -22,19 +22,22 @@
  *        the replacement and capturing the bytes it replaces; a racing
  *        edit in those bytes is ingested and the page rendered again;
  *     d. writes the render record with the new merge base;
- *  4. writes a `view-pass` heartbeat when it wrote nothing for a day.
+ *  4. before the pages, removes the pages of a retiring folder (topics,
+ *     reports, sources) the store no longer renders (a renamed, merged or
+ *     undone topic, a removed report), ingesting any edit they carry
+ *     first, and moves a renamed topic's companion files to its new
+ *     folder;
+ *  5. writes a `view-pass` heartbeat when it wrote nothing for a day.
  *
  * A missing or empty page is never read as an edit (deleting a page does
  * not retire every rule on it); it is rendered again.
  */
 
-import { join } from "node:path";
-
 import { PartitionUnavailableError } from "../store/appender.ts";
 import { SETTING_VIEW_LANGUAGE } from "../store/constants.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { withLocalLock } from "../store/local-lock.ts";
-import { textCarriesPrivateRegion } from "../store/private-region.ts";
+import { textCarriesPrivateRegion, valueCarriesPrivateRegion } from "../store/private-region.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import {
   catchUp,
@@ -43,11 +46,20 @@ import {
   withOwnRecord,
   type ViewCatchUp,
 } from "./catch-up.ts";
+import { foldTopics } from "../topics/fold.ts";
 import { VIEW_RENDER_ATTEMPTS } from "./constants.ts";
 import { applyCorrections, foldCorrections, pageLines, reviewedEdits } from "./corrections.ts";
 import { viewStrings } from "./i18n.ts";
 import { matchLines, mergeLines } from "./line-diff.ts";
-import { conflictCopies, readPage, removeCopy, replacePage, type ReplaceHooks } from "./page-io.ts";
+import { lanePages } from "./lane-view-pages.ts";
+import {
+  capturePage,
+  conflictCopies,
+  NotAPageFileError,
+  readPage,
+  replacePage,
+  type ReplaceHooks,
+} from "./page-io.ts";
 import {
   aboutMePage,
   confirmedPreferences,
@@ -76,6 +88,9 @@ import {
 } from "./view-records.ts";
 import { claimSettled, releaseIfRequested, renderLockTarget } from "./writer.ts";
 import { readPageStats, sameStat, statPage, writePageStats, type PageStats } from "./page-stats.ts";
+import { pageFileInside } from "./page-path.ts";
+import { retirePages, type RetireContext } from "./retire.ts";
+import { topicPages } from "./topic-pages.ts";
 import { foldViewWriter } from "./writer-fold.ts";
 
 export interface ViewPassOptions extends RecordOptions {
@@ -93,7 +108,14 @@ export interface ViewPassOptions extends RecordOptions {
 /** What happened to one page. */
 export interface PageReport {
   readonly page: string;
-  readonly status: "written" | "unchanged" | "refused" | "busy" | "base-pending" | "deferred";
+  readonly status:
+    | "written"
+    | "unchanged"
+    | "removed"
+    | "refused"
+    | "busy"
+    | "base-pending"
+    | "deferred";
   /** Human records written from edits of this page. */
   readonly ingested: number;
   readonly detail?: string;
@@ -117,10 +139,15 @@ export function buildPages(store: StoreHandle, read: ViewCatchUp): Map<string, P
   const prefs = confirmedPreferences(all);
   const entries = viewEntries(shared, all);
   const corrections = foldCorrections(shared);
+  // Topic records that carry a `<private>` region stay off the pages, as
+  // every other record family's do.
+  const topics = foldTopics(shared.filter((r) => !valueCarriesPrivateRegion(r.body)));
   const models = [
     aboutMePage(store.storeId, prefs, strings),
     decisionsPage(store.storeId, entries, strings),
     ...historyPages(store.storeId, entries, strings),
+    ...topicPages(store.storeId, topics, strings),
+    ...lanePages(store.storeId, shared, strings),
   ];
   return new Map(models.map((m) => [m.page, applyCorrections(m, corrections)]));
 }
@@ -228,13 +255,23 @@ function renderPageNow(ctx: PageContext, page: string, path: string): PageReport
       privateEdit = done.isPrivate;
     }
     for (const copy of conflictCopies(path)) {
-      const bytes = readPage(copy);
-      if (hasContent(bytes) && !own.has(bytesSum(bytes))) {
-        const done = ingest(ctx, page, base, bytes.toString("utf8"), "conflict-copy");
-        ingested += done.records;
-        privateEdit ||= done.isPrivate;
+      // A name that is not a regular file (a folder, a link) is refused
+      // where it is. A copy is taken out of its name before it is read: one
+      // a sync tool writes again meanwhile is left for the next pass.
+      readPage(copy);
+      const captured = capturePage(copy);
+      if (captured === null) continue;
+      try {
+        if (hasContent(captured.bytes) && !own.has(bytesSum(captured.bytes))) {
+          const done = ingest(ctx, page, base, captured.bytes.toString("utf8"), "conflict-copy");
+          ingested += done.records;
+          privateEdit ||= done.isPrivate;
+        }
+      } catch (err) {
+        captured.restore();
+        throw err;
       }
-      removeCopy(copy);
+      captured.discard();
     }
     const model = modelOf(ctx, page);
     if (model === undefined) return { page, status: "unchanged", ingested };
@@ -250,6 +287,7 @@ function renderPageNow(ctx: PageContext, page: string, path: string): PageReport
     const bytes = Buffer.from(text, "utf8");
     const intent = {
       page,
+      ...(model.topic !== undefined ? { topic: model.topic } : {}),
       sum: bytesSum(bytes),
       base: writeBase(ctx.store, page, { text, keys }),
       bytes: bytes.length,
@@ -289,7 +327,13 @@ function renderPageNow(ctx: PageContext, page: string, path: string): PageReport
 /** Write the render records a dead pass left only as intents. */
 function recoverIntents(ctx: PageContext, target: string): void {
   for (const intent of pendingIntents(ctx.store)) {
-    const disk = readPage(join(target, ...intent.page.split("/")));
+    const path = pageFileInside(target, intent.page);
+    let disk: Buffer | null = null;
+    try {
+      disk = path === null ? null : readPage(path);
+    } catch (err) {
+      if (!(err instanceof NotAPageFileError)) throw err;
+    }
     const recorded = ownSums(ctx.read, intent.page).has(intent.sum);
     if (disk !== null && bytesSum(disk) === intent.sum && !recorded) {
       writeRender(ctx.store, intent, ctx.options);
@@ -306,25 +350,52 @@ function renderPages(ctx: PageContext, target: string): PageReport[] {
   recoverIntents(ctx, target);
   const reports: PageReport[] = [];
   ctx.models ??= buildPages(ctx.store, ctx.read);
+  const retire: RetireContext = {
+    store: ctx.store,
+    read: () => ctx.read,
+    models: () => (ctx.models ??= buildPages(ctx.store, ctx.read)),
+    stats: ctx.stats,
+    ingest: (page, base, text, reason) => ingest(ctx, page, base, text, reason).records,
+  };
+  reports.push(...retirePages(retire, target, pageFailure, ctx.options.shouldStop));
+  ctx.models ??= buildPages(ctx.store, ctx.read);
+  // The page list of this pass: an ingest may rebuild the models, and a
+  // page it renamed is retired by the next pass.
   for (const page of ctx.models.keys()) {
     if (ctx.options.shouldStop?.() === true) {
       reports.push({ page, status: "deferred", ingested: 0, detail: "the time budget ran out" });
       continue;
     }
+    // A page whose folder is a link (or leads out of the view) is never written.
+    const path = pageFileInside(target, page);
+    if (path === null) {
+      reports.push({
+        page,
+        status: "refused",
+        ingested: 0,
+        detail: "the page path leaves the view",
+      });
+      continue;
+    }
     try {
-      reports.push(renderOnePage(ctx, page, join(target, ...page.split("/"))));
+      reports.push(renderOnePage(ctx, page, path));
     } catch (err) {
-      if (err instanceof PartitionUnavailableError) {
-        reports.push({ page, status: "refused", ingested: 0, detail: err.message });
-      } else if (PAGE_BUSY_CODES.has((err as NodeJS.ErrnoException).code ?? "")) {
-        // Windows refuses to rename a page another program holds open.
-        reports.push({ page, status: "busy", ingested: 0, detail: (err as Error).message });
-      } else {
-        throw err;
-      }
+      reports.push(pageFailure(page, err));
     }
   }
   return reports;
+}
+
+/** The report of a page whose render or removal failed for a reason a later pass may not have. */
+function pageFailure(page: string, err: unknown): PageReport {
+  if (err instanceof PartitionUnavailableError || err instanceof NotAPageFileError) {
+    return { page, status: "refused", ingested: 0, detail: err.message };
+  }
+  if (PAGE_BUSY_CODES.has((err as NodeJS.ErrnoException).code ?? "")) {
+    // Windows refuses to rename a page another program holds open.
+    return { page, status: "busy", ingested: 0, detail: (err as Error).message };
+  }
+  throw err;
 }
 
 /** One render pass on this machine. */

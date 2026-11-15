@@ -19,7 +19,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
 import { parseSignal, writeSignal } from "../../../src/core/brain/signal.ts";
-import { queryByTopic, readAllLogEntries } from "../../../src/core/brain/query.ts";
+import { queryByRuleTopic, readAllLogEntries } from "../../../src/core/brain/query.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 import {
   InvalidSignalIdError,
@@ -95,12 +95,12 @@ describe("retireSignal", () => {
   test("the retired signal is excluded from dream intake but stays readable", () => {
     const id = seedSignal("fact-url", "fact-url-topic");
     // Before retirement the dream-intake surface (inbox + processed) sees it.
-    expect(queryByTopic(vault, "fact-url-topic").signals.map((s) => s.id)).toContain(id);
+    expect(queryByRuleTopic(vault, "fact-url-topic").signals.map((s) => s.id)).toContain(id);
 
     const res = retireSignal(vault, id, { reason: "no longer relevant", now: NOW });
 
     // The dream signal-collection surface no longer sees it.
-    expect(queryByTopic(vault, "fact-url-topic").signals.map((s) => s.id)).not.toContain(id);
+    expect(queryByRuleTopic(vault, "fact-url-topic").signals.map((s) => s.id)).not.toContain(id);
     // But it remains readable in the retired directory.
     const reread = parseSignal(res.path);
     expect(reread.id).toBe(id);

@@ -254,6 +254,11 @@ store into the `view_target` folder:
 | `about-me.md` | What the brain knows about you: confirmed rules, grouped by subject |
 | `history/<YYYY>-W<ww>.md` | One page per week of what happened, in plain language |
 | `decisions.md` | Decisions that were recorded |
+| `topics/<date>-<slug>/topic.md` | One page per shared topic: status, goal, milestones, decisions, open questions, log and related, with an `archive.md` beside it for older entries |
+| `reports/<entry>.md` | One page per research report |
+| `sources/<entry>.md` | One page per ingested source summary |
+
+Topics have their own guide: [topics.md](topics.md).
 
 Each page starts with one HTML comment line that names the store and the
 page; there is no frontmatter and there are no Obsidian-only links, so any

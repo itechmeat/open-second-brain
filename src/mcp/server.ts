@@ -617,6 +617,7 @@ export class MCPServer {
         vault: this.vault,
         agentName: this.contextFor(identity).agentName,
         reach: this.reach,
+        configPath: this.configPath,
       },
       uri,
     );

@@ -74,14 +74,16 @@ Phases follow design.md D13. Each phase ends in its own release PR, and the vers
 
 ## 3. Phase 3: topics, plus reports and sources
 
-- [ ] 3.1 Implement topic records and folds for the canonical event list in design.md D8, with an immutable `topic_id`. Verify: property tests for order independence, and a rename that keeps every reference.
-- [ ] 3.2 Render `topics/<date>-<slug>/topic.md` through the phase 2 render protocol, with the fixed section order, the page budget and the companion archive. Also render `reports/` and `sources/`. Verify: snapshot tests, including budget overflow.
-- [ ] 3.3 Refuse note-tool writes into the view folder, with a pointer to the topic tools. Verify: a test on `brain_create_note` and `brain_update_note`.
-- [ ] 3.4 Add topic planning to dream, run on the view writer only: route unassigned records, create on N records from at least two sessions, propose merges and splits, prompt on quiet topics, write report entries, and support undo as a synced human record. Verify:
+- [x] 3.1 Implement topic records and folds for the canonical event list in design.md D8, with an immutable `topic_id`. Verify: property tests for order independence, and a rename that keeps every reference. Done: `src/core/topics/`, design D16 items 1 to 6.
+- [x] 3.2 Render `topics/<date>-<slug>/topic.md` through the phase 2 render protocol, with the fixed section order, the page budget and the companion archive. Also render `reports/` and `sources/`. Verify: snapshot tests, including budget overflow. Done: design D16 items 7 to 12.
+- [x] 3.3 Refuse note-tool writes into the view folder, with a pointer to the topic tools. Verify: a test on `brain_create_note` and `brain_update_note`. Done: design D16 item 13.
+- [x] 3.4 Add topic planning to dream, run on the view writer only: route unassigned records, create on N records from at least two sessions, propose merges and splits, prompt on quiet topics, write report entries, and support undo as a synced human record. Verify:
   - dream tests for every scenario in `specs/topics/spec.md`;
   - a concurrent dream on two machines, and two dream processes on the view writer, each yield exactly one topic per cluster.
-- [ ] 3.5 Add the `brain_topic` MCP tool and the `o2b topic` CLI verbs. Rename the preference-topic internals to `ruleTopic` and the resource to `osb://rule-topic/{slug}`, with an alias for one minor version, and add `osb://topic/{id}`. Verify: MCP contract tests, an alias test and a CHANGELOG note.
-- [ ] 3.6 Write the topics guide in docs: what a topic is, the page schema, how to ask an agent, and undo. Verify: a doc test runs the listed CLI verbs.
+
+  Done: `src/core/topics/plan.ts`, `planning.ts`, design D17.
+- [x] 3.5 Add the `brain_topic` MCP tool and the `o2b topic` CLI verbs. Rename the preference-topic internals to `ruleTopic` and the resource to `osb://rule-topic/{slug}`, with an alias for one minor version, and add `osb://topic/{id}`. Verify: MCP contract tests, an alias test and a CHANGELOG note.
+- [x] 3.6 Write the topics guide in docs: what a topic is, the page schema, how to ask an agent, and undo. Verify: a doc test runs the listed CLI verbs.
 - [x] 3.8 Keep a lane page's raw text in its `lane-entry` record (an optional `raw` body field, FORMAT.md), so a store-only machine reads back staged bytes verbatim (OCR F291). Verify: a round-trip test of text without frontmatter and of quoted values. Done in change `store-hardening`.
 - [x] 3.9 Make lane entry ids a bijection with legacy paths (every extension, `x.json` vs `x.json.md`, folders that are not lane names), or refuse the names that do not round-trip (OCR F295). Verify: a round-trip test over the lane path table. Done: refused names, design D15 item 1.
 - [x] 3.10 Keep the procedural graph and hint counters as device-local state instead of re-appending whole `lane-entry` records on every usage tick (OCR F360). Verify: a usage tick appends no store record, and a migration test moves the counters into the device-local state. Done: design D15 item 2.

@@ -4,13 +4,17 @@
  * before the replacement, conflict copies are ingested and removed, and
  * only changed bytes are written. Human edits become human records.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
+  lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -269,6 +273,83 @@ describe("render protocol", () => {
     expect(read()).toContain("- Rule B, from the phone.");
     expect(readdirSync(m.view("dev-a")).filter((n) => n.startsWith("."))).toEqual([]);
   });
+
+  test("a conflict copy a sync tool writes again while the page renders is kept and ingested later", () => {
+    const copy = join(m.view("dev-a"), "about-me.sync-conflict-20261106-120000-ABCDEFG.md");
+    writeFileSync(copy, read().replace("- Rule B.", "- Rule B, older from the phone."));
+    const newer = join(m.view("dev-a"), "..", "newer.tmp");
+    writeFileSync(newer, read().replace("- Rule B.", "- Rule B, newer from the phone."));
+    const realOpen = fs.openSync;
+    const realRename = fs.renameSync;
+    let delivered = false;
+    // The sync tool writes the copy again right after the writer first
+    // touches it: once a read has closed the file (Windows refuses to
+    // replace a file that is open), or right after a rename took it.
+    const deliver = (): void => {
+      if (delivered) return;
+      delivered = true;
+      realRename(newer, copy);
+    };
+    const realClose = fs.closeSync;
+    let copyFd: number | null = null;
+    const open = spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: never[]) => {
+      const fd = (realOpen as (...args: unknown[]) => number)(p, ...rest);
+      if (String(p) === copy) copyFd = fd;
+      return fd;
+    }) as typeof fs.openSync);
+    const close = spyOn(fs, "closeSync").mockImplementation(((fd: number) => {
+      realClose(fd);
+      if (fd === copyFd) {
+        copyFd = null;
+        deliver();
+      }
+    }) as typeof fs.closeSync);
+    const rename = spyOn(fs, "renameSync").mockImplementation(((p: fs.PathLike, q: fs.PathLike) => {
+      realRename(p, q);
+      if (String(p) === copy) deliver();
+    }) as typeof fs.renameSync);
+    try {
+      pass();
+    } finally {
+      open.mockRestore();
+      close.mockRestore();
+      rename.mockRestore();
+    }
+    expect(delivered).toBe(true);
+    pass();
+    expect(
+      humanPreferenceSets().map((s) => (s["fields"] as Record<string, unknown>)["principle"]),
+    ).toContain("Rule B, newer from the phone.");
+    expect(existsSync(copy)).toBe(false);
+  });
+
+  test("a folder named like a conflict copy of a live page is refused and stays where it is", () => {
+    const copy = join(m.view("dev-a"), "about-me.sync-conflict-20261106-120000-ABCDEFG.md");
+    mkdirSync(copy);
+    writeFileSync(join(copy, "mine.txt"), "mine\n");
+    const report = pass();
+    expect(readFileSync(join(copy, "mine.txt"), "utf8")).toBe("mine\n");
+    expect(readdirSync(m.view("dev-a")).filter((n) => n.startsWith("."))).toEqual([]);
+    if (report.status !== "rendered") throw new Error(report.status);
+    expect(report.pages.find((p) => p.page === "about-me.md")?.status).toBe("refused");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a symbolic link named like a conflict copy of a live page is never read or moved",
+    () => {
+      const outside = join(m.view("dev-a"), "..", "outside-secret.md");
+      writeFileSync(outside, read().replace("- Rule B.", "- Rule B, outside secret."));
+      const copy = join(m.view("dev-a"), "about-me.sync-conflict-20261106-120000-ABCDEFG.md");
+      symlinkSync(outside, copy);
+      pass();
+      pass();
+      expect(lstatSync(copy).isSymbolicLink()).toBe(true);
+      expect(readdirSync(m.view("dev-a")).filter((n) => n.startsWith("."))).toEqual([]);
+      expect(JSON.stringify(allRecords(catchUp(a, now)).map((r) => r.body))).not.toContain(
+        "outside secret",
+      );
+    },
+  );
 
   test("a private racing edit lands in private, and no shared file holds its text", () => {
     // A new rule makes the pass render, so the edit races the replace.

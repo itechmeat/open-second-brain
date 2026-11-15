@@ -7,7 +7,7 @@ import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { listObligations } from "../../../../src/core/brain/obligations.ts";
-import { queryByTopic } from "../../../../src/core/brain/query.ts";
+import { queryByRuleTopic } from "../../../../src/core/brain/query.ts";
 import {
   DECISION_TYPE,
   DecisionError,
@@ -218,7 +218,7 @@ describe("rating and rationale (B2)", () => {
 
   test("rated decisions do not pollute signal/preference recall", () => {
     recordDecision(vault, baseInput({ title: "deploy runtime choice", chosen: "Bun", rating: 5 }));
-    const recall = queryByTopic(vault, "deploy");
+    const recall = queryByRuleTopic(vault, "deploy");
     expect(recall.signals.length).toBe(0);
     expect(recall.preference).toBeNull();
   });

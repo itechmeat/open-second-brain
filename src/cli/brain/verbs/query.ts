@@ -3,7 +3,7 @@
  * timestamp.
  *
  * Topic mode is the one surface in this system that ENFORCES per-memory
- * expiry (`filterExpired`, reached only through `queryByTopic`), so it is
+ * expiry (`filterExpired`, reached only through `queryByRuleTopic`), so it is
  * also the only one where a point-in-time question is meaningful. Both
  * knobs the filter has always taken are exposed here:
  *
@@ -20,7 +20,7 @@
 import {
   queryByLogSince,
   queryByPreference,
-  queryByTopic,
+  queryByRuleTopic,
   BrainNotFoundError,
   type QueryByTopicOptions,
 } from "../../../core/brain/query.ts";
@@ -32,7 +32,7 @@ import {
   parseOptionalIsoDate,
   renderQueryLogText,
   renderQueryPreferenceText,
-  renderQueryTopicText,
+  renderQueryRuleTopicText,
   usageError,
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
@@ -67,7 +67,7 @@ export async function cmdBrainQuery(argv: string[]): Promise<number> {
     );
 
   // `--at` moves the clock the expiration filter compares against and
-  // `--show-expired` turns that filter off; `queryByTopic` is the only
+  // `--show-expired` turns that filter off; `queryByRuleTopic` is the only
   // reader of either. Naming that here beats accepting a flag on
   // `--preference` / `--since` that would quietly change nothing.
   const atRaw = typeof flags["at"] === "string" ? flags["at"].trim() : null;
@@ -115,11 +115,11 @@ export async function cmdBrainQuery(argv: string[]): Promise<number> {
         transportReach: CLI_TRANSPORT_REACH,
         ...(asOf !== null ? { now: asOf } : {}),
       };
-      const out = queryByTopic(vault, String(flags["topic"]), topicOptions);
+      const out = queryByRuleTopic(vault, String(flags["topic"]), topicOptions);
       if (flags["json"]) {
         process.stdout.write(JSON.stringify(out, null, 2) + "\n");
       } else {
-        renderQueryTopicText(out, String(flags["topic"]));
+        renderQueryRuleTopicText(out, String(flags["topic"]));
       }
       return 0;
     }
