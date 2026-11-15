@@ -9,7 +9,7 @@
  *    would carry, typed as the legacy parser types it.
  */
 
-import type { StorePreference } from "../store/read/store-entities.ts";
+import { countersAtReach, type StorePreference } from "../store/read/store-entities.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
 import { isRetiredEntry } from "./preference-store.ts";
@@ -55,8 +55,10 @@ export function storeEntryMeta(
     if (DERIVED_FIELD_SET.has(name)) meta[`_${name}`] = value === null ? "null" : value;
     else if (value !== null) meta[name] = value;
   }
-  meta["_applied_count"] = entry.state.counters.applied_count;
-  meta["_violated_count"] = entry.state.counters.violated_count;
+  // Below local reach without the private partition's evidence (task 3.18).
+  const counters = countersAtReach(entry);
+  meta["_applied_count"] = counters.applied_count;
+  meta["_violated_count"] = counters.violated_count;
   meta["kind"] = retired ? "brain-retired" : "brain-preference";
   meta["id"] = `${retired ? "ret" : "pref"}-${slug}`;
   const [typed] = parseFrontmatterText(formatFrontmatter(meta as FrontmatterMap, ""));

@@ -8,7 +8,11 @@ import {
   shardedFileName,
   type LedgerShardGrammar,
 } from "../brain/ledger-shards.ts";
-import { auditRowRecord, DUAL_WRITE_LEDGERS } from "../store/dual-write-records.ts";
+import {
+  auditRowRecord,
+  DUAL_WRITE_LEDGERS,
+  ledgerRowRecord,
+} from "../store/dual-write-records.ts";
 import { isRecordLabel } from "../store/envelope.ts";
 import { logRefsNamePrivatePage } from "../store/reference-privacy.ts";
 import { isStoreOnly } from "../store/store-only.ts";
@@ -65,6 +69,15 @@ export interface AppendAuditRecordOptions {
    * hook audit trail (`hook-audit`) is always fail-open.
    */
   readonly failOpen?: boolean;
+  /**
+   * The row attests records of the `shared` partition (a schema apply
+   * attests the shared `brain.schema.*` settings records it wrote), so on a
+   * store-only machine it goes to `shared`, the partition of what it
+   * attests: a machine that holds only `shared` can then check the
+   * attestation (task 3.11). The caller has judged the row's privacy once
+   * and left out what is private; no per-row privacy judgment runs.
+   */
+  readonly attestsShared?: boolean;
 }
 
 /**
@@ -122,10 +135,15 @@ export function appendAuditRecord(
     legacy: () => appendLegacyAuditLine(auditRoot, timestamp, line),
     store: () => {
       const written = JSON.parse(line) as AuditRecord;
+      const row = { audit_dir: basename(auditRoot), record: written };
+      const agent = isRecordLabel(written.actor) ? written.actor : undefined;
+      if (options.attestsShared === true) {
+        return ledgerRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, "shared", agent);
+      }
       return auditRowRecord(
         DUAL_WRITE_LEDGERS.reliabilityAudit,
-        { audit_dir: basename(auditRoot), record: written },
-        isRecordLabel(written.actor) ? written.actor : undefined,
+        row,
+        agent,
         auditRowNamesPrivatePage(vault, written),
       );
     },

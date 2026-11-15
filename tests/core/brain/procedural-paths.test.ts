@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   procedurePath,
   proceduralMemoryIndexPath,
-  proceduralMemoryUsagePath,
   proceduralRecurrencePath,
   skillProposalAcceptedPath,
   skillProposalPendingPath,
@@ -35,7 +34,6 @@ describe("procedural learning paths", () => {
     const rejected = skillProposalRejectedPath(vault, "release-notes");
     const procedure = procedurePath(vault, "release-notes");
     const index = proceduralMemoryIndexPath(vault);
-    const usage = proceduralMemoryUsagePath(vault);
     const recurrence = proceduralRecurrencePath(vault);
 
     expect(pending).toBe(
@@ -49,7 +47,6 @@ describe("procedural learning paths", () => {
     );
     expect(procedure).toBe(join(vault, "Brain", "procedures", "proc-release-notes.md"));
     expect(index).toBe(join(vault, "Brain", "procedural-memory", "index.json"));
-    expect(usage).toBe(join(vault, "Brain", "procedural-memory", "usage.jsonl"));
     expect(recurrence).toBe(join(vault, "Brain", "log", "recurrence-support.jsonl"));
   });
 

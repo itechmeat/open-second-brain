@@ -19,6 +19,8 @@
 import { existsSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
+import { compareCodeUnits } from "../../store/compare.ts";
+
 import { memoryFromStore, storeRecordPages, UNSTAGED_STATES } from "../memory-pages.ts";
 import { storePreferenceRecords, storeRetiredRecords } from "../memory-page-records.ts";
 import { storeLogDays } from "../log-days.ts";
@@ -66,9 +68,17 @@ const MARKDOWN_EXT = ".md";
  * a directory nobody created - and those are different findings.
  */
 function listRecordDir(dir: string, swept: SweptPath | undefined): Dirent[] | null {
-  if (swept !== undefined) return readSweptDir(dir, swept, SWEEP_ORIGIN.root);
-  if (!existsSync(dir)) return null;
-  return readdirSync(dir, { withFileTypes: true });
+  const entries =
+    swept !== undefined
+      ? readSweptDir(dir, swept, SWEEP_ORIGIN.root)
+      : existsSync(dir)
+        ? readdirSync(dir, { withFileTypes: true })
+        : null;
+  // In name order: `readdir` answers in whatever order the filesystem
+  // keeps (hash order on ext4), and the records of a store-only machine
+  // come sorted by path, so an unsorted listing made the two machines'
+  // answers differ in order only.
+  return entries === null ? null : entries.toSorted((a, b) => compareCodeUnits(a.name, b.name));
 }
 
 /** The read context of the machine config the doctor was started against. */

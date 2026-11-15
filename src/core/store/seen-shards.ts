@@ -20,9 +20,23 @@
  * The ledger lives in the store's device-local directory
  * (`<state>/open-second-brain/stores/<store id>/seen-shards-<root hash>.json`),
  * so a store recreated under the same root, or a copy of a store at another
- * root, starts a fresh one. It is written
- * best-effort, without a lock (a reader must not take one): a lost update
- * between two processes only delays tracking a shard to the next read.
+ * root, starts a fresh one. Every read-modify-write of the ledger runs
+ * under the device-local lock of the ledger file (`local-lock.ts`), and
+ * re-reads the file inside it, so two processes on one machine never
+ * interleave: a stale write from {@link trackSeenShards} cannot bring
+ * back the entries a partition leave just cleared, and a leave cannot
+ * drop a shard another process just recorded. The lock guards only the
+ * ledger file and takes no other lock inside it, so a reader that already
+ * holds a store lock can take it. A tracking update stays best-effort: it
+ * waits at most {@link TRACK_LOCK_BUDGET_MS} (a read must not stall on a
+ * lock a crashed process left), and a lock still busy then leaves the
+ * change queued in the process: the next update of the ledger writes it
+ * with its own, so a skip delays tracking a shard, it does not drop it. After a
+ * skip behind a lock one holder kept through the whole wait (a crashed
+ * process's) the process leaves the ledger alone for
+ * {@link TRACK_BACKOFF_MS} without waiting, so a hook that lists several
+ * streams behind it loses the wait once, not once per listing; a lock
+ * other processes take and release in turn backs nothing off.
  * A surface that promises to write nothing (doctor, the status block)
  * runs inside {@link withoutSeenRecording}: it still reports a shard the
  * ledger names that is gone, and records nothing. Leaving a partition
@@ -62,6 +76,66 @@ interface Loaded {
 }
 
 const loaded = new Map<string, Loaded>();
+
+/**
+ * The device-local lock, loaded on the first ledger write: every stream
+ * read imports this module, and a hot path that only reads (a hook with
+ * its feature off) must not load the lock modules for it.
+ */
+function withLocalLock<T>(lockTarget: string, fn: () => T, budgetMs?: number): T {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const lock = require("./local-lock.ts") as typeof import("./local-lock.ts");
+  return lock.withLocalLock(lockTarget, fn, budgetMs);
+}
+
+/** Longest wait of a tracking update for the ledger lock; a leave waits the full lock budget. */
+const TRACK_LOCK_BUDGET_MS = 500;
+
+/** How long a tracking update that found the lock busy keeps the process off it. */
+const TRACK_BACKOFF_MS = 10_000;
+
+/** Ledger paths whose lock was found busy, with the time the back-off ends. */
+const busyUntil = new Map<string, number>();
+
+/** One tracking change: shards a listing saw, and shards it found replaced. */
+interface TrackChange {
+  readonly partitionRoot: string;
+  readonly partition: StorePartition;
+  readonly fresh: ReadonlyArray<string>;
+  readonly expected: ReadonlyArray<string>;
+}
+
+/** Tracking changes of this process an update could not write yet, per ledger path. */
+const pending = new Map<string, TrackChange[]>();
+
+/** The most changes kept for one ledger path while its lock stays busy. */
+const PENDING_MAX = 1_000;
+
+/**
+ * Apply `changes` to `ledger`, leaving out those of a partition this
+ * machine no longer holds (its identity file is gone): a change queued
+ * before `o2b store partition leave` cleared the partition must not bring
+ * its entries back.
+ */
+function applyChanges(ledger: Ledger, changes: ReadonlyArray<TrackChange>): void {
+  const held = new Map<string, boolean>();
+  for (const change of changes) {
+    let holds = held.get(change.partitionRoot);
+    if (holds === undefined) {
+      try {
+        holds = readStoreId(change.partitionRoot) !== null;
+      } catch {
+        holds = false;
+      }
+      held.set(change.partitionRoot, holds);
+    }
+    if (!holds) continue;
+    const own = ledger.get(change.partition) ?? new Set<string>();
+    for (const rel of change.fresh) own.add(rel);
+    for (const rel of change.expected) own.delete(rel);
+    ledger.set(change.partition, own);
+  }
+}
 
 /** Depth of read-only scopes in this process. */
 let readOnlyDepth = 0;
@@ -165,22 +239,75 @@ function isStrictLedger(value: unknown): boolean {
   );
 }
 
-/** Apply `change` to the ledger on disk and write it back; never throws. */
-function update(path: string, change: (ledger: Ledger) => void): void {
+/**
+ * Apply `change` to the ledger on disk and write it back. The caller holds
+ * the ledger lock, and `ledger` is the file as read inside it.
+ */
+function writeChanged(path: string, ledger: Ledger, change: (ledger: Ledger) => void): void {
+  change(ledger);
+  const shards: Record<string, string[]> = {};
+  for (const [partition, rels] of [...ledger].toSorted(([a], [b]) => compareCodeUnits(a, b))) {
+    shards[partition] = [...rels].toSorted();
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWriteText(path, `${JSON.stringify({ version: 1, shards }, null, 2)}\n`);
+  loaded.set(path, { stamp: stampOf(path), ledger });
+}
+
+/**
+ * Apply `change`, with every change of this process an earlier update
+ * could not write, to the ledger on disk under the ledger lock, reading
+ * the file again inside it; never throws (best-effort, see the module
+ * comment).
+ */
+function update(path: string, change: TrackChange | null): void {
+  const queued = pending.get(path) ?? [];
+  if (change !== null) queued.push(change);
+  // Bounded: a process that never gets the lock keeps its newest changes.
+  if (queued.length > PENDING_MAX) queued.splice(0, queued.length - PENDING_MAX);
+  pending.set(path, queued);
+  const until = busyUntil.get(path);
+  if (until !== undefined && Date.now() < until) return;
+  const holder = lockHolderStamp(path);
   try {
+    withLocalLock(
+      path,
+      () => {
+        loaded.delete(path);
+        // Every change an earlier update of this process could not write,
+        // then this one: a skip delays a shard's tracking, it does not drop it.
+        writeChanged(path, load(path), (ledger) => applyChanges(ledger, queued));
+      },
+      TRACK_LOCK_BUDGET_MS,
+    );
+    pending.delete(path);
+    busyUntil.delete(path);
+  } catch (err) {
     loaded.delete(path);
-    const ledger = load(path);
-    change(ledger);
-    const shards: Record<string, string[]> = {};
-    for (const [partition, rels] of [...ledger].toSorted(([a], [b]) => compareCodeUnits(a, b))) {
-      shards[partition] = [...rels].toSorted();
+    // Backed off only from a lock one holder has kept the whole wait and
+    // longer (a crashed process's, or one stuck). A lock that other
+    // processes take and release in turn is live contention, whatever its
+    // directory's stat says (on Windows a released lock directory can
+    // linger with its old stat while a delete is pending), so the next
+    // read tries again.
+    const after = lockHolderStamp(path);
+    if (
+      (err as NodeJS.ErrnoException | null)?.code === "ELOCKED" &&
+      holder !== null &&
+      after === holder &&
+      Date.now() - after >= TRACK_LOCK_BUDGET_MS
+    ) {
+      busyUntil.set(path, Date.now() + TRACK_BACKOFF_MS);
     }
-    mkdirSync(dirname(path), { recursive: true });
-    atomicWriteText(path, `${JSON.stringify({ version: 1, shards }, null, 2)}\n`);
-    loaded.set(path, { stamp: stampOf(path), ledger });
+  }
+}
+
+/** The modification time of the ledger's lock directory, or null when none is held. */
+function lockHolderStamp(path: string): number | null {
+  try {
+    return statSync(`${path}.lock`).mtimeMs;
   } catch {
-    // Best-effort, see the module comment.
-    loaded.delete(path);
+    return null;
   }
 }
 
@@ -213,9 +340,11 @@ function ledgerPath(partitionRoot: string): { path: string; partition: StorePart
  * the store `storeId`, and return how many there were. Checked, not
  * best-effort: the ledger is read strictly, so a file that exists but
  * cannot be read or parsed throws (the lenient `load` would answer an
- * empty map and report a clearing that did not happen), and the ledger's
- * `update` never throws, so this verifies the write landed before the
- * caller reports the partition cleared.
+ * empty map and report a clearing that did not happen), and the write is
+ * verified to have landed before the caller reports the partition cleared.
+ * The read, the write and the check run under one hold of the ledger lock,
+ * so a tracking update of another process lands before or after the whole
+ * clearing, never inside it.
  */
 export function forgetSeenPartition(
   storeRoot: string,
@@ -223,18 +352,34 @@ export function forgetSeenPartition(
   partition: StorePartition,
 ): number {
   const path = seenLedgerFile(storeRoot, storeId);
-  const count = loadStrict(path).get(partition)?.size ?? 0;
-  if (count > 0) {
-    update(path, (ledger) => {
-      ledger.delete(partition);
-    });
-    if ((loadStrict(path).get(partition)?.size ?? 0) > 0) {
-      throw new Error(
-        `could not clear the seen-shard entries of the ${partition} partition in ${path}`,
-      );
-    }
+  // This process's queued tracking of the partition goes with its entries.
+  const queued = pending.get(path);
+  if (queued !== undefined) {
+    pending.set(
+      path,
+      queued.filter((change) => change.partition !== partition),
+    );
   }
-  return count;
+  return withLocalLock(path, () => {
+    loaded.delete(path);
+    const ledger = loadStrict(path);
+    const count = ledger.get(partition)?.size ?? 0;
+    if (count > 0) {
+      try {
+        writeChanged(path, ledger, (l) => {
+          l.delete(partition);
+        });
+      } catch {
+        loaded.delete(path);
+      }
+      if ((loadStrict(path).get(partition)?.size ?? 0) > 0) {
+        throw new Error(
+          `could not clear the seen-shard entries of the ${partition} partition in ${path}`,
+        );
+      }
+    }
+    return count;
+  });
 }
 
 function deviceOf(rel: string): string {
@@ -284,7 +429,15 @@ export function trackSeenShards(
 ): string[] {
   const at = ledgerPath(partitionRoot);
   if (at === null) return [];
-  const seen = load(at.path).get(at.partition) ?? new Set<string>();
+  // What this machine has seen: the ledger, and what this process saw but
+  // could not write to it yet (a queued change), so a shard tracked behind
+  // a busy lock is still named once it is gone.
+  const seen = new Set(load(at.path).get(at.partition) ?? []);
+  for (const change of pending.get(at.path) ?? []) {
+    if (change.partition !== at.partition) continue;
+    for (const rel of change.fresh) seen.add(rel);
+    for (const rel of change.expected) seen.delete(rel);
+  }
   const present = new Set(listed);
   const fresh = listed.filter((rel) => !seen.has(rel));
   let missing = [...seen].filter(
@@ -301,13 +454,13 @@ export function trackSeenShards(
     expected = [...expected, ...missing.filter((rel) => retired.has(deviceOf(rel)))];
     missing = missing.filter((rel) => !retired.has(deviceOf(rel)));
   }
-  if (readOnlyDepth === 0 && (fresh.length > 0 || expected.length > 0)) {
-    update(at.path, (ledger) => {
-      const own = ledger.get(at.partition) ?? new Set<string>();
-      for (const rel of fresh) own.add(rel);
-      for (const rel of expected) own.delete(rel);
-      ledger.set(at.partition, own);
-    });
+  if (readOnlyDepth === 0) {
+    if (fresh.length > 0 || expected.length > 0) {
+      update(at.path, { partitionRoot, partition: at.partition, fresh, expected });
+    } else if ((pending.get(at.path)?.length ?? 0) > 0) {
+      // Nothing new, but changes are still queued: try to write them now.
+      update(at.path, null);
+    }
   }
   return missing.toSorted();
 }

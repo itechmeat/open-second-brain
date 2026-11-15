@@ -1,11 +1,11 @@
 import { proceduralHintsPath } from "./paths.ts";
-import { readProceduralGraph, type ProceduralGraphProjection } from "./procedural-graph.ts";
 import {
-  assertLaneWrite,
-  readLaneFile,
-  lanePageExists,
-  writeLaneText,
-} from "../store/lane-pages.ts";
+  readProceduralState,
+  readProceduralGraph,
+  writeMachineStateText,
+  type ProceduralGraphProjection,
+} from "./procedural-graph.ts";
+import { assertLaneWrite } from "../store/lane-pages.ts";
 
 export interface ProceduralHintEntry {
   readonly node_id: string;
@@ -59,16 +59,15 @@ export function rebuildProceduralHints(
     entries: Object.freeze(entries.toSorted((l, r) => l.node_id.localeCompare(r.node_id))),
   };
 
-  const path = proceduralHintsPath(vault);
-  writeLaneText(vault, path, `${JSON.stringify(projection, null, 2)}\n`);
+  writeMachineStateText(proceduralHintsPath(vault), `${JSON.stringify(projection, null, 2)}\n`);
   return projection;
 }
 
 export function readProceduralHints(vault: string): ProceduralHintsProjection | null {
-  const path = proceduralHintsPath(vault);
-  if (!lanePageExists(vault, path)) return null;
+  const text = readProceduralState(vault, proceduralHintsPath(vault));
+  if (text === null) return null;
   try {
-    const parsed = JSON.parse(readLaneFile(vault, path)) as ProceduralHintsProjection;
+    const parsed = JSON.parse(text) as ProceduralHintsProjection;
     if (parsed.schema_version !== 1) return null;
     if (!Array.isArray(parsed.entries)) return null;
     return parsed;

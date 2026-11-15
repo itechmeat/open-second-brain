@@ -340,6 +340,27 @@ describe.each(LANE_MODES.filter((m) => m !== "legacy"))("lane pages in the store
     expect(lane.vaultHash()).toBe(before);
     expect(lane.laneRecords().filter((r) => r.kind === "lane-entry")).toHaveLength(1);
   });
+
+  test("a page and a JSON file of one name stay two entries", () => {
+    lane = makeLaneEnv(mode);
+    const json = join(lane.vault, "Brain", "entities", "x.json");
+    const page = join(lane.vault, "Brain", "entities", "x.json.md");
+    writeLaneText(lane.vault, json, '{"a":1}\n');
+    writeLanePage(lane.vault, page, { kind: "note" }, "Page.\n");
+    expect(readLaneText(lane.vault, json)).toBe('{"a":1}\n');
+    expect(readLanePage(lane.vault, page)?.body).toBe("Page.\n");
+  });
+
+  test("a name that does not map to an entry and back is refused, nothing written", () => {
+    lane = makeLaneEnv(mode);
+    const before = lane.laneRecords().length;
+    for (const rel of ["entities/x.png", "exact-state/x.md"]) {
+      expect(() => writeLaneText(lane!.vault, join(lane!.vault, "Brain", rel), "x\n")).toThrow(
+        "does not map to a lane entry and back",
+      );
+    }
+    expect(lane.laneRecords()).toHaveLength(before);
+  });
 });
 
 describe("a removed entry's tombstone", () => {

@@ -10,6 +10,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -32,8 +33,9 @@ import {
   MIGRATION_STREAM,
 } from "../../../src/core/store-migration/migration-records.ts";
 import { rollback } from "../../../src/core/store-migration/outcome.ts";
+import { repairLaneEntryIds } from "../../../src/core/store-migration/lane-id-repair.ts";
 import { RollbackRefusedError } from "../../../src/core/store-migration/rollback.ts";
-import { writeLaneText } from "../../../src/core/store/lane-pages.ts";
+import { readLanePage, writeLaneText } from "../../../src/core/store/lane-pages.ts";
 import { readVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -265,6 +267,90 @@ describe("rollback", () => {
     expect(existsSync(bad)).toBe(false);
     rollback(a.vault);
     expect(readFileSync(bad, "utf8")).toBe("{bad");
+  });
+
+  test("after a lane-id repair, the page and the file beside it come back at their own paths", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    const file = join(a.vault, "Brain", "entities", "x.json");
+    const page = join(a.vault, "Brain", "entities", "x.json.md");
+    mkdirSync(join(a.vault, "Brain", "entities"), { recursive: true });
+    writeFileSync(file, '{"a":1}\n');
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // What an earlier release's import made of the page beside it: a record
+    // under the file's id that names the page as its legacy path.
+    appendRecord(a.store(), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "o2b",
+      body: {
+        authority: "agent",
+        lane: "entities",
+        entry: "x.json",
+        fields: { kind: "note" },
+        text: "The page.\n",
+        migrated: { key: "Brain/entities/x.json.md", sum: "page-sum" },
+      },
+    });
+    expect(repairLaneEntryIds(a.vault)).toHaveLength(1);
+    rollback(a.vault);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ a: 1 });
+    expect(parseFrontmatterText(readFileSync(page, "utf8"))[1].trim()).toBe("The page.");
+  });
+
+  test("after a lane-id repair of a page with no file beside it, the page survives", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    const page = join(a.vault, "Brain", "entities", "x.json.md");
+    mkdirSync(join(a.vault, "Brain", "entities"), { recursive: true });
+    writeFileSync(page, "---\nkind: note\n---\nThe page.\n");
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // An earlier release's import of the same page, under the id `x.json`.
+    appendRecord(a.store(), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "o2b",
+      body: {
+        authority: "agent",
+        lane: "entities",
+        entry: "x.json",
+        fields: { kind: "note" },
+        text: "The page.\n",
+        migrated: { key: "Brain/entities/x.json.md", sum: "page-sum" },
+      },
+    });
+    expect(repairLaneEntryIds(a.vault)).toEqual([
+      { from: "entities/x.json", to: "entities/x.json.md", left: "removed" },
+    ]);
+    rollback(a.vault);
+    expect(parseFrontmatterText(readFileSync(page, "utf8"))[1].trim()).toBe("The page.");
+    expect(existsSync(join(a.vault, "Brain", "entities", "x.json"))).toBe(false);
+  });
+
+  test("a user's folder spelled otherwise than its lane is imported and rolls back in place", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    const original = join(a.vault, "Brain", "My Notes", "idea.md");
+    mkdirSync(join(a.vault, "Brain", "My Notes"), { recursive: true });
+    writeFileSync(original, "---\nkind: note\n---\nAn idea.\n");
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // Read under its lane on the switched machine.
+    const stored = readLanePage(a.vault, join(a.vault, "Brain", "my-notes", "idea.md"));
+    expect(stored?.body.trim()).toBe("An idea.");
+    // Changed after the switch, then rolled back: the change lands at the user's own path.
+    writeLaneText(
+      a.vault,
+      join(a.vault, "Brain", "my-notes", "idea.md"),
+      "---\nkind: note\n---\nA better idea.\n",
+    );
+    rollback(a.vault);
+    expect(parseFrontmatterText(readFileSync(original, "utf8"))[1].trim()).toBe("A better idea.");
+    expect(existsSync(join(a.vault, "Brain", "my-notes"))).toBe(false);
   });
 
   test("puts post-switch and late remote records back once, in fold order", () => {

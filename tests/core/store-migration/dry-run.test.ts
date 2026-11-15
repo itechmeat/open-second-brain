@@ -138,6 +138,44 @@ describe("planMigrationDryRun", () => {
     expect(surface("standing_rules").items).toBe(2);
     expect(surface("exact_state").items).toBe(1);
   });
+
+  test("two user folders that take one lane are listed, the one spelled as the lane imported", () => {
+    fx.write("Brain/my-notes/a.md", "---\nkind: note\n---\nA.\n");
+    fx.write("Brain/My Notes/b.md", "---\nkind: note\n---\nB.\n");
+    fx.write("Brain/Lone Folder/c.md", "---\nkind: note\n---\nC.\n");
+    const result = planMigrationDryRun(fx.vault);
+    expect(result.unparseable).toContainEqual(
+      expect.objectContaining({
+        path: "Brain/My Notes/b.md",
+        reason: expect.stringContaining("which my-notes also takes"),
+      }),
+    );
+    const listed = result.unparseable.map((u) => u.path);
+    expect(listed).not.toContain("Brain/my-notes/a.md");
+    expect(listed).not.toContain("Brain/Lone Folder/c.md");
+    expect(result.surfaces.find((s) => s.id === "record_lanes")?.items).toBe(4);
+  });
+
+  test("a respelled folder beside a dot-folder of the same name has no rival", () => {
+    fx.write("Brain/.archives/src.txt", "redacted source\n");
+    fx.write("Brain/Archives/a.md", "---\nkind: note\n---\nA.\n");
+    const listed = planMigrationDryRun(fx.vault).unparseable.map((u) => u.path);
+    expect(listed).not.toContain("Brain/Archives/a.md");
+  });
+
+  test("a lane page whose name does not map to an entry and back is listed, not filed", () => {
+    // `exact-state` is the lane of `state/`, so its entry would name another path.
+    fx.write("Brain/exact-state/x.md", "---\nkind: note\n---\nBody.\n");
+    const result = planMigrationDryRun(fx.vault);
+    expect(result.unparseable).toContainEqual(
+      expect.objectContaining({
+        surface: "record_lanes",
+        path: "Brain/exact-state/x.md",
+        reason: expect.stringContaining("does not map to a lane entry and back"),
+      }),
+    );
+    expect(result.surfaces.find((s) => s.id === "record_lanes")?.items).toBe(2);
+  });
 });
 
 describe("the dry run writes nothing", () => {

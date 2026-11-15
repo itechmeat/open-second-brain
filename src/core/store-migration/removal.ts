@@ -75,6 +75,7 @@ import {
   MIGRATION_STREAM,
 } from "./migration-records.ts";
 import type { ConvertHooks } from "./convert.ts";
+import { retireAdoptedLaneEntries } from "./retire-adopted.ts";
 import { GATED_IMPORT_WAIT_MS, importLateLegacyWrites } from "./transition.ts";
 
 /** Where archives of removed legacy trees go, inside the device-local state. */
@@ -416,6 +417,14 @@ function removeUnderGate(
   });
   writeRemovalMarker(store, { vault: resolve(vault), at, archive, forced, stopped: pending });
   rmSync(journal, { force: true });
+  // No rollback can run from here on: the records of files that are
+  // machine state now are retired (`retire-adopted.ts`). Best effort: a
+  // record left live is only read by a machine without its own copy yet.
+  try {
+    retireAdoptedLaneEntries(store, vault, options.agent);
+  } catch {
+    // see above
+  }
   return {
     removed: true,
     archive,

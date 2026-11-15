@@ -15,7 +15,7 @@ import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { laneStoreFold } from "./lane-fold-cache.ts";
-import { lanePlaceOf } from "./lane-paths.ts";
+import { laneNameRefusal, lanePlaceOf } from "./lane-paths.ts";
 import {
   laneEntryKey,
   laneEntryRecord,
@@ -59,8 +59,11 @@ export function brainRelOf(vault: string, path: string): string {
 }
 
 function placeOf(vault: string, path: string): { lane: string; entry: string } {
-  const place = lanePlaceOf(brainRelOf(vault, path));
-  if (place === null) throw new Error(`not a Brain lane page: ${path}`);
+  const rel = brainRelOf(vault, path);
+  const place = lanePlaceOf(rel);
+  if (place === null) {
+    throw new Error(`not a Brain lane page: ${path}: ${laneNameRefusal(rel) ?? "no lane entry"}`);
+  }
   return place;
 }
 

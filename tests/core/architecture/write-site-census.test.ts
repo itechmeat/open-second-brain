@@ -1647,8 +1647,13 @@ const DIRECT_WRITE_ROWS = 82;
  * 112 -> 113: the legacy-tree removal journals its archive
  * (`removal.json`, device-local migration folder) before the first move,
  * so an interrupted removal finishes into the same archive.
+ * 113 -> 114: the procedural graph, hints and usage counters are machine
+ * state written with the shared atomic writer, not lane records, so a
+ * usage tick appends no store record (task 3.10).
+ * 114 -> 115: the lane-id repair writes its device-local "repaired" marker
+ * with the shared atomic writer, once per store (task 3.9).
  */
-const SHARED_HELPER_ROWS = 113;
+const SHARED_HELPER_ROWS = 115;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1909,8 +1914,12 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * files carry no origin channel.
  * 108 -> 109: the legacy-tree removal's device-local journal, machine
  * state and no note.
+ * 109 -> 110: the procedural graph, hints and usage counters, machine
+ * state and no note (task 3.10).
+ * 110 -> 111: the lane-id repair's device-local marker, machine state and
+ * no note (task 3.9).
  */
-const UNSTAMPED_SHARED_ROWS = 109;
+const UNSTAMPED_SHARED_ROWS = 111;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

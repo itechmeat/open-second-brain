@@ -63,6 +63,11 @@ import {
   type RerankProviderProfile,
 } from "../../../src/core/search/rerank/registry.ts";
 import { forgetMachineStateCache } from "../../../src/core/state/machine-state.ts";
+import { proceduralMemoryUsagePath } from "../../../src/core/brain/paths.ts";
+import {
+  listProceduralMemory,
+  markProceduralMemoryUsed,
+} from "../../../src/core/brain/procedural-memory.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { digestVaultTree } from "../../helpers/vault-digest.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
@@ -157,6 +162,50 @@ describe("runMigration", () => {
     expect(loadRerankRegistry(bench.vault).map((p) => p.name)).toEqual(["my-rerank"]);
     // Device-local, never a shared record.
     expect(bench.records().some((r) => JSON.stringify(r.body).includes("my-embed"))).toBe(false);
+  });
+
+  test("procedural usage counters move into the device-local state, never into a record", () => {
+    // A legacy machine used the procedure; its counters sit beside the index.
+    const pmem = join(bench.vault, "Brain", "procedural-memory");
+    mkdirSync(pmem, { recursive: true });
+    const id = "pmem-000000000001";
+    const entry = {
+      id,
+      kind: "procedure",
+      sourcePath: "Brain/procedures/deploy.md",
+      title: "Deploy",
+      triggers: [],
+      tags: [],
+      permissions: [],
+      source: null,
+      version: null,
+      lastUsedAt: "2026-11-01T09:00:00.000Z",
+      usedCount: 3,
+      successCount: 2,
+      failureCount: 1,
+    };
+    writeFileSync(
+      join(pmem, "index.json"),
+      `${JSON.stringify({ schema_version: 1, entries: [entry] })}\n`,
+    );
+    writeFileSync(
+      join(pmem, "usage.jsonl"),
+      `${JSON.stringify({ id, usedCount: 3, lastUsedAt: entry.lastUsedAt, successCount: 2, failureCount: 1 })}\n`,
+    );
+    expect(runMigration(bench.vault, FAST).ok).toBe(true);
+    forgetMachineStateCache();
+    expect(proceduralMemoryUsagePath(bench.vault).startsWith(bench.vault)).toBe(false);
+    expect(readFileSync(proceduralMemoryUsagePath(bench.vault), "utf8")).toContain(id);
+    expect(listProceduralMemory(bench.vault)).toEqual([
+      expect.objectContaining({ id, usedCount: 3, successCount: 2, failureCount: 1 }),
+    ]);
+    const laneEntries = bench.records().filter((r) => r.kind === "lane-entry");
+    expect(laneEntries.some((r) => String(r.body["entry"]).startsWith("usage"))).toBe(false);
+    // A tick on the switched machine counts on, and appends no record.
+    const before = bench.records().length;
+    markProceduralMemoryUsed(bench.vault, id, new Date("2026-11-15T10:00:00Z"));
+    expect(bench.records()).toHaveLength(before);
+    expect(listProceduralMemory(bench.vault)[0]?.usedCount).toBe(4);
   });
 
   test("a clean run imports every item once, backs up, archives and records the switch", () => {

@@ -36,6 +36,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { withPrivateShown } from "../store/caller-reach.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { computeMostApplied, type MostAppliedEntry } from "./most-applied.ts";
 import {
@@ -332,15 +333,18 @@ export function activeDigestPathForRead(
   const stamp = readGeneratedAt(path);
   const stampMs = stamp === null ? Number.NaN : Date.parse(stamp);
   // One read pass: the check render and a regeneration share one log read.
-  return withLogReadPass(() => {
-    if (stamp !== null && !Number.isNaN(stampMs)) {
-      // Keep the log window at the cached generation, but do not keep serving
-      // a preference whose explicit expiration has passed since then.
-      const atStamp = renderActiveAt(vault, { now: new Date(stampMs) }, now);
-      if (readExistingBody(path) === atStamp.body.trim()) return path;
-    }
-    return regenerateActive(vault, { now }).path;
-  });
+  // The cache is a local reader's file: checked with nothing withheld.
+  return withPrivateShown(() =>
+    withLogReadPass(() => {
+      if (stamp !== null && !Number.isNaN(stampMs)) {
+        // Keep the log window at the cached generation, but do not keep serving
+        // a preference whose explicit expiration has passed since then.
+        const atStamp = renderActiveAt(vault, { now: new Date(stampMs) }, now);
+        if (readExistingBody(path) === atStamp.body.trim()) return path;
+      }
+      return regenerateActive(vault, { now }).path;
+    }),
+  );
 }
 
 /**
@@ -360,7 +364,10 @@ export function regenerateActive(
   if (!onDemand && vault !== null) assertVaultIdentityForWrite(vault);
   const path =
     onDemand || vault === null ? digestCachePath(vault, "active") : brainActivePath(vault);
-  const rendered = renderActive(vault, { now });
+  // The file is shared with every later reader, so it is rendered with
+  // nothing withheld even for a caller below local reach (who is served
+  // its own render, `renderActiveForReader`).
+  const rendered = withPrivateShown(() => renderActive(vault, { now }));
 
   // `readExistingBody` returns the trimmed body (parseFrontmatter
   // trims internally), so compare against the trimmed render for an

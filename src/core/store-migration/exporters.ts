@@ -58,7 +58,7 @@ import {
 import { preferencePath, retiredPath, validateSlug } from "../brain/paths.ts";
 import { preferencePageBody } from "../brain/preference.ts";
 import { PREFERENCE_TEXT_FIELD } from "../brain/preference-store.ts";
-import { brainRelOfEntry } from "../store/lane-paths.ts";
+import { brainRelOfEntry, lanePlaceOf } from "../store/lane-paths.ts";
 import { rawParsesBack, renderLaneText } from "../store/lane-raw.ts";
 import { signalPagePath } from "../store/read/signals.ts";
 import {
@@ -91,7 +91,7 @@ import {
 import { foldPreferences } from "../store/fold-preferences.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
-import { migratedMark } from "./migration-records.ts";
+import { migratedMark, type MigratedMark } from "./migration-records.ts";
 
 /** Kinds an exporter writes back. */
 export const EXPORTED_KINDS: ReadonlySet<string> = new Set([
@@ -397,12 +397,29 @@ function exportPinned(vault: string, records: ReadonlyArray<StoreRecord>): void 
 }
 
 /**
- * Where a lane entry is written back: the path it was imported from, else
- * its own page; null when that path leaves `Brain/`.
+ * Where a lane entry is written back: the path its winning record was
+ * imported from, else the path any of its records was imported from, else
+ * its own page; null when that path leaves `Brain/`. A mark counts only
+ * when its legacy path names this entry under the current path rule, or
+ * names no entry the rule maps (a blob lane's file, a folder whose name
+ * is not a lane name): an entry an earlier release filed under another
+ * path's id holds records imported from that other path
+ * (`lane-id-repair.ts`), and writing to it would remove or overwrite the
+ * other file.
  */
 function laneEntryPath(vault: string, key: string, fold: LaneFold): string | null {
   const state = fold.entries.get(key);
-  const imported = state?.history.map((h) => migratedMark(h.record)).find((m) => m !== null);
+  const fits = (mark: MigratedMark | null): mark is MigratedMark => {
+    if (mark === null) return false;
+    if (!mark.key.startsWith(BRAIN_PREFIX)) return true;
+    const place = lanePlaceOf(mark.key.slice(BRAIN_PREFIX.length));
+    return place === null || laneEntryKey(place.lane, place.entry) === key;
+  };
+  const winner = state?.history.find((h) => h.record.id === state.winner);
+  const own = winner !== undefined ? migratedMark(winner.record) : null;
+  const imported = fits(own)
+    ? own
+    : state?.history.map((h) => migratedMark(h.record)).find((m) => fits(m));
   const [lane, ...rest] = key.split("/");
   return brainPath(
     vault,

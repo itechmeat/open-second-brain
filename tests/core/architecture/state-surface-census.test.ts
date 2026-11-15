@@ -133,7 +133,10 @@ const SWEPT_POPULATION_SIZE = 33;
 // 58 -> 61: the embedding and rerank provider registries and the search
 // activation history join the catalogue as device-local rows, so the
 // migration moves them (task 2.10 review).
-const DECLARED_SURFACE_COUNT = 61;
+// 61 -> 64: the procedural usage counters, graph and hints join the
+// catalogue as device-local rows, so a usage tick appends no store record
+// and the migration moves the counters (task 3.10).
+const DECLARED_SURFACE_COUNT = 64;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

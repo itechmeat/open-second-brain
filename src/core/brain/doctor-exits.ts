@@ -193,6 +193,19 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "copy over and delete the folder by hand",
   },
   {
+    code: "lane-folder-unimportable",
+    reason:
+      "which name each folder of the user's own legacy tree should take is the user's choice, " +
+      "and renaming a folder moves the user's files, so the remedy is a rename by hand",
+  },
+  {
+    code: "lane-id-misfiled",
+    reason:
+      "the repair runs only on a machine that holds the private partition, which may be " +
+      "another machine than the one running doctor, and on a store where none holds it the " +
+      "partition must first be added on one; the finding names which of the two applies",
+  },
+  {
     code: "store-device-state-foreign",
     reason:
       "another machine's clock and locks reached this machine's device-local state because a " +

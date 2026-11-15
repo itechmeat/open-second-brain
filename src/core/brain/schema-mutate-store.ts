@@ -13,6 +13,13 @@
  * the store's audit ledger (`appendAuditRecord` routes it there on a
  * store-only machine). Nothing under the vault's `Brain/` is written; the
  * lock is device-local.
+ *
+ * The audit row attests the shared pack records, so it is written to
+ * `shared` too (task 3.11): a machine that holds only `shared` reads the
+ * digest it must hold the pack against, and reports another device's
+ * apply as attested instead of `modified`. The shared row carries no
+ * reason on a machine that holds `private`, where the whole row goes as
+ * before; see `sharedAttestation`.
  */
 
 import { mkdirSync } from "node:fs";
@@ -20,9 +27,16 @@ import { join } from "node:path";
 
 import { resolveAgentName } from "../config.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
-import { AUDIT_STORE_LEDGER_NAME, appendAuditRecord } from "../reliability/audit.ts";
+import {
+  AUDIT_STORE_LEDGER_NAME,
+  appendAuditRecord,
+  auditRowNamesPrivatePage,
+  type AuditRecord,
+} from "../reliability/audit.ts";
 import { withFileLock } from "../reliability/lock.ts";
 import { authorityFromOrigin } from "../store/dual-write.ts";
+import { configuredStore } from "../store/read/store-entities.ts";
+import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { storesStateDir } from "../store/store-paths.ts";
 import { brainDirs } from "./paths.ts";
 import {
@@ -79,23 +93,26 @@ export async function applySchemaMutationsToStore(
       renderSchemaBlock(nextPack),
     );
     const packDigest = computeSchemaPackDigest(nextPack);
-    const auditPath = appendAuditRecord(
-      join(brainDirs(vault).log, SCHEMA_MUTATION_AUDIT_DIR),
-      {
-        timestamp: opts.now.toISOString(),
-        actor: opts.actor,
-        action: SCHEMA_MUTATION_AUDIT_ACTION,
-        target: STORE_SCHEMA_PACK_SOURCE,
-        ok: true,
-        details: {
-          applied: mutations.length,
-          mutations,
-          [SCHEMA_PACK_DIGEST_FIELD]: packDigest,
-          ...(opts.reason ? { reason: opts.reason } : {}),
-        },
+    const record: AuditRecord = {
+      timestamp: opts.now.toISOString(),
+      actor: opts.actor,
+      action: SCHEMA_MUTATION_AUDIT_ACTION,
+      target: STORE_SCHEMA_PACK_SOURCE,
+      ok: true,
+      details: {
+        applied: mutations.length,
+        mutations,
+        [SCHEMA_PACK_DIGEST_FIELD]: packDigest,
+        ...(opts.reason ? { reason: opts.reason } : {}),
       },
-      vault,
-    );
+    };
+    const auditRoot = join(brainDirs(vault).log, SCHEMA_MUTATION_AUDIT_DIR);
+    const holdsPrivate = configuredStore()?.partitions.has("private") === true;
+    const attestation = sharedAttestation(vault, record, holdsPrivate);
+    const auditPath = appendAuditRecord(auditRoot, attestation, vault, { attestsShared: true });
+    // The whole row, reason included, stays where audit rows always went:
+    // `private` on a machine that holds it.
+    if (holdsPrivate) appendAuditRecord(auditRoot, record, vault);
     return {
       applied: mutations.length,
       // The row's store shard is a device path; the result names the ledger.
@@ -104,4 +121,34 @@ export async function applySchemaMutationsToStore(
       pack_digest: packDigest,
     };
   });
+}
+
+/** What the shared row says in place of a batch that names a private page. */
+export const SCHEMA_AUDIT_WITHHELD = "the mutations name a private page";
+
+/**
+ * The audit row of an apply as the shared partition holds it (task 3.11,
+ * design D15 item 3): what attests the pack (actor, time, target, count,
+ * digest) and the mutation list, which the shared `brain.schema.*` records
+ * hold anyway. The reason is free text an operator wrote: it is left off
+ * the shared row on a machine that holds `private`, where the whole row
+ * goes as every audit row does, and kept on it on a machine that does
+ * not, as before. One privacy verdict covers the batch and the reason (a
+ * private page named, by the rule every audit row is judged by, or a
+ * `<private>` region): when it holds, the shared row keeps only the
+ * attestation and says so.
+ */
+function sharedAttestation(vault: string, record: AuditRecord, holdsPrivate: boolean): AuditRecord {
+  const details = record.details ?? {};
+  const isPrivate =
+    auditRowNamesPrivatePage(vault, record) || valueCarriesPrivateRegion(record.details);
+  const { reason, mutations, ...attests } = details;
+  return {
+    ...record,
+    details: {
+      ...attests,
+      ...(isPrivate ? { withheld: SCHEMA_AUDIT_WITHHELD } : { mutations }),
+      ...(!isPrivate && !holdsPrivate && reason !== undefined ? { reason } : {}),
+    },
+  };
 }

@@ -66,6 +66,7 @@ import {
   BRAIN_RETIRED_REL,
 } from "./path-constants.ts";
 import { storeEntryMeta } from "./preference-page-meta.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
 import { preferencePageBody } from "./preference-body.ts";
 import { CODEC_VERSION, expand } from "./portability/codec.ts";
 import { textOfFields } from "./preference-store.ts";
@@ -369,7 +370,9 @@ function rebuiltPages(
     byVault = new Map();
     REBUILT_PAGES.set(entities, byVault);
   }
-  const key = vault ?? "\u0000no-vault";
+  // A caller below local reach gets the counters without the private
+  // partition's evidence (`store/caller-reach.ts`): its pages are kept apart.
+  const key = `${privateWithheld() ? "withheld" : "all"}\u0000${vault ?? "\u0000no-vault"}`;
   const known = byVault.get(key);
   if (known !== undefined) return known;
   const pages: StoreMemoryPage[] = [];
