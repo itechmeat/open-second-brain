@@ -160,8 +160,13 @@ _PREFETCH_QUERY_OMISSION = "\n...\n"
 
 
 def _bounded_prefetch_query(query: str) -> str:
-    """Keep both the opening context and the final question within the caps."""
-    if len(query) <= _PREFETCH_QUERY_MAX:
+    """Keep both the opening context and the final question within the caps.
+
+    A non-string, or a turn that is blank after trimming, travels unchanged,
+    so the bridge refuses it as before; bounding a blank turn would leave
+    only the omission marker, a non-blank query with nothing to recall on.
+    """
+    if not isinstance(query, str) or not query.strip() or len(query) <= _PREFETCH_QUERY_MAX:
         return query
     retained = _PREFETCH_QUERY_MAX - len(_PREFETCH_QUERY_OMISSION)
     head = retained // 2

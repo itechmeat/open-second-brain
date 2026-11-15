@@ -884,6 +884,7 @@ class ProviderLifecycleTests(unittest.TestCase):
     def test_prefetch_bounds_long_queries_and_keeps_the_ends(self):
         for query in (
             "A" * 2000,
+            "Start " + "x" * 1981 + " end question?",
             "Start " + "x" * 1990 + " end question?",
             "Start " + "x" * 4000 + " end question?",
             "Start " + "😀" * 4001 + " end question?",
@@ -903,12 +904,49 @@ class ProviderLifecycleTests(unittest.TestCase):
                 self.assertLessEqual(len(pack["query"]), 2000)
                 self.assertLessEqual(len(gate["prompt"].encode("utf-16-le")) // 2, 4000)
                 self.assertEqual(next(a for n, a in bridge.calls if n == "skills_attach")["query"], query)
+                reduced = [c for c in log.call_args_list if "query reduced" in c.args[0]]
                 if len(query) > 2000:
+                    self.assertEqual(len(pack["query"]), 2000)
                     self.assertTrue(pack["query"].startswith("Start "))
                     self.assertTrue(pack["query"].endswith(" end question?"))
-                    self.assertTrue(any("query reduced" in call.args[0] for call in log.call_args_list))
+                    self.assertEqual(len(reduced), 1)
                 else:
                     self.assertEqual(pack["query"], query)
+                    self.assertEqual(reduced, [])
+
+    def test_prefetch_leaves_a_long_blank_turn_unbounded(self):
+        # Bounding a turn that is blank after trimming would leave only the
+        # omission marker, a non-blank query that recalls on nothing. The turn
+        # travels as before: the gate refuses it and the pack gets no query.
+        query = " \n\t" * 1000
+        bridge = FakeBrainBridge(results={
+            "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+            "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+        })
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        with patch.object(provider_module.logger, "info") as log:
+            provider.prefetch(query, session_id="sess-1")
+        gate = next(a for n, a in bridge.calls if n == "brain_recall_gate")
+        pack = next(a for n, a in bridge.calls if n == "brain_context_pack")
+        self.assertEqual(gate["prompt"], query)
+        self.assertNotIn("query", pack)
+        self.assertNotIn("query_mode", pack)
+        self.assertFalse(any("query reduced" in c.args[0] for c in log.call_args_list))
+
+    def test_prefetch_forwards_a_non_string_query_without_raising(self):
+        # A host that hands over None or a non-string still reaches the bridge,
+        # which answers fail-soft; the bound must not raise first.
+        for query in (None, 12345):
+            with self.subTest(query=query):
+                bridge = FakeBrainBridge(
+                    results={"brain_recall_gate": {"structuredContent": {"retrieve": False}}}
+                )
+                provider = self._init(bridge, hermes_home="/tmp/hh")
+                provider.prefetch(query, session_id="sess-1")
+                gate = next(a for n, a in bridge.calls if n == "brain_recall_gate")
+                self.assertIs(gate["prompt"], query)
+                attach = next(a for n, a in bridge.calls if n == "skills_attach")
+                self.assertIs(attach["query"], query)
 
     def test_prefetch_keeps_the_server_receipt_as_sample_id(self):
         # The sample id an agent later posts an outcome against must be the
