@@ -7,7 +7,7 @@
  * switched machine that has data, the inventory's top reader risk.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -16,6 +16,8 @@ import {
   readAllRetiredRecords,
 } from "../../../src/core/brain/doctor/records.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { brainDirs, preferencePath } from "../../../src/core/brain/paths.ts";
+import { moveToRetired, writePreference } from "../../../src/core/brain/preference.ts";
 import { STORE_CLOCK_AHEAD_CODE } from "../../../src/core/brain/doctor/store-check.ts";
 import { computeSemanticHealth } from "../../../src/core/brain/doctor/semantic-health-check.ts";
 import { resolveArtifactRef } from "../../../src/core/brain/artifact-ref-resolve.ts";
@@ -402,6 +404,88 @@ describe("legacy pages left in place on a switched machine", () => {
       expect(afterSwitch.get(name)).not.toEqual(legacy.get(name));
     });
   }
+});
+
+describe("legacy record listing order", () => {
+  // `readdir` answers in the filesystem's order: hash order on ext4,
+  // creation order on btrfs, newest first on tmpfs. Writing the pages in an
+  // order that is neither name order nor its reverse puts the listing out
+  // of name order on each of them; the store side is always in path order.
+  // Twelve names a folder, so a hash order that happens to be name order
+  // is a one in 479 million chance.
+  const WRITE_ORDER = [
+    "order-f",
+    "order-b",
+    "order-h",
+    "order-a",
+    "order-e",
+    "order-c",
+    "order-g",
+    "order-d",
+    "order-p",
+    "order-k",
+    "order-t",
+    "order-i",
+    "order-x",
+    "order-m",
+    "order-r",
+    "order-j",
+    "order-w",
+    "order-l",
+    "order-u",
+    "order-n",
+    "order-s",
+    "order-o",
+    "order-v",
+    "order-q",
+  ];
+  const RETIRED = WRITE_ORDER.slice(0, 12);
+  const NAME_ORDER = WRITE_ORDER.toSorted();
+
+  test("the preference and retired snapshots come in name order whatever readdir answers", () => {
+    const answer = withMemoryFixture(
+      "legacy",
+      (env) => {
+        for (const slug of WRITE_ORDER) {
+          writePreference(
+            env.vault,
+            {
+              slug,
+              topic: slug,
+              principle: `principle ${slug}`,
+              created_at: "2026-11-01T00:00:00Z",
+              unconfirmed_until: "2026-11-30T00:00:00Z",
+              status: "unconfirmed",
+              evidenced_by: [],
+            },
+            { authority: "agent" },
+          );
+        }
+        for (const slug of RETIRED) {
+          moveToRetired(env.vault, preferencePath(env.vault, slug), "stale-no-evidence", {
+            now: FIXTURE_NOW,
+            retired_by: "[[Brain/log/2026-11-06]]",
+            authority: "agent",
+          });
+        }
+        const dirs = brainDirs(env.vault);
+        return {
+          listed: [readdirSync(dirs.preferences), readdirSync(dirs.retired)],
+          preferences: readAllPreferenceRecords(env.vault).map((r) => r.pref.id),
+          retired: readAllRetiredRecords(env.vault).map((r) => r.retired.id),
+        };
+      },
+      { seed: false },
+    );
+    if (process.platform === "linux") {
+      // The bad order is forced: the listing itself is out of name order.
+      for (const names of answer.listed) expect(names).not.toEqual(names.toSorted());
+    }
+    expect(answer.preferences).toEqual(
+      NAME_ORDER.filter((slug) => !RETIRED.includes(slug)).map((slug) => `pref-${slug}`),
+    );
+    expect(answer.retired).toEqual(RETIRED.toSorted().map((slug) => `ret-${slug}`));
+  });
 });
 
 describe("operator snapshot on a switched machine", () => {

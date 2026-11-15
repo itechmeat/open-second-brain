@@ -153,6 +153,25 @@ _PREFETCH_RECEIPT_HOST = "hermes"
 # relevance rather than filtering them, so a natural-language turn spends the
 # budget on what matters instead of substring-missing every page.
 _PREFETCH_QUERY_MODE = "ranked"
+# The ranked query limit counts Unicode codepoints; the gate counts UTF-16
+# code units. At most 2,000 codepoints also fit the gate's 4,000-unit limit.
+_PREFETCH_QUERY_MAX = 2000
+_PREFETCH_QUERY_OMISSION = "\n...\n"
+
+
+def _bounded_prefetch_query(query: str) -> str:
+    """Keep both the opening context and the final question within the caps.
+
+    A non-string, or a turn that is blank after trimming, travels unchanged,
+    so the bridge refuses it as before; bounding a blank turn would leave
+    only the omission marker, a non-blank query with nothing to recall on.
+    """
+    if not isinstance(query, str) or not query.strip() or len(query) <= _PREFETCH_QUERY_MAX:
+        return query
+    retained = _PREFETCH_QUERY_MAX - len(_PREFETCH_QUERY_OMISSION)
+    head = retained // 2
+    tail = retained - head
+    return query[:head] + _PREFETCH_QUERY_OMISSION + query[-tail:]
 
 # A provider instance is created per AIAgent, but the MCP server is a gateway
 # resource rather than a session resource. Keep one bridge per effective server
@@ -812,8 +831,14 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         parts: list[str] = []
         sid = session_id or self._session_id
         turn_id = str(_kwargs.get("turn_id") or "")
+        recall_query = _bounded_prefetch_query(query)
+        if recall_query != query:
+            logger.info(
+                "%s: prefetch recall query reduced to %d codepoints (original %d)",
+                self.PROVIDER_NAME, len(recall_query), len(query),
+            )
         gate_args: dict[str, Any] = {
-            "prompt": query,
+            "prompt": recall_query,
             "telemetry_host": _PREFETCH_RECEIPT_HOST,
         }
         if sid:
@@ -833,8 +858,8 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             # turn and excludes none, so the budget decides what is dropped.
             # The server refuses a mode with no query, so both travel or
             # neither does.
-            if query.strip():
-                pack_args["query"] = query
+            if recall_query.strip():
+                pack_args["query"] = recall_query
                 pack_args["query_mode"] = _PREFETCH_QUERY_MODE
             if sid:
                 pack_args["session_id"] = sid
