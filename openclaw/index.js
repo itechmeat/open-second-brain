@@ -5967,6 +5967,32 @@ var init_store_open = __esm(() => {
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, statSync as statSync8 } from "node:fs";
 import { createHash as createHash4 } from "node:crypto";
 import { basename as basename6, dirname as dirname11, join as join17, resolve as resolve8 } from "node:path";
+function withLocalLock2(lockTarget, fn, budgetMs) {
+  const lock = (init_local_lock(), {});
+  return withLocalLock(lockTarget, fn, budgetMs);
+}
+function applyChanges(ledger, changes) {
+  const held = new Map;
+  for (const change of changes) {
+    let holds = held.get(change.partitionRoot);
+    if (holds === undefined) {
+      try {
+        holds = readStoreId(change.partitionRoot) !== null;
+      } catch {
+        holds = false;
+      }
+      held.set(change.partitionRoot, holds);
+    }
+    if (!holds)
+      continue;
+    const own = ledger.get(change.partition) ?? new Set;
+    for (const rel of change.fresh)
+      own.add(rel);
+    for (const rel of change.expected)
+      own.delete(rel);
+    ledger.set(change.partition, own);
+  }
+}
 function isPartition2(value) {
   return STORE_PARTITIONS.includes(value);
 }
@@ -6003,21 +6029,48 @@ function load3(path) {
   loaded2.set(path, { stamp, ledger });
   return ledger;
 }
-function update2(path, change) {
-  try {
-    loaded2.delete(path);
-    const ledger = load3(path);
-    change(ledger);
-    const shards = {};
-    for (const [partition, rels] of [...ledger].toSorted(([a], [b]) => compareCodeUnits(a, b))) {
-      shards[partition] = [...rels].toSorted();
-    }
-    mkdirSync10(dirname11(path), { recursive: true });
-    atomicWriteText(path, `${JSON.stringify({ version: 1, shards }, null, 2)}
+function writeChanged(path, ledger, change) {
+  change(ledger);
+  const shards = {};
+  for (const [partition, rels] of [...ledger].toSorted(([a], [b]) => compareCodeUnits(a, b))) {
+    shards[partition] = [...rels].toSorted();
+  }
+  mkdirSync10(dirname11(path), { recursive: true });
+  atomicWriteText(path, `${JSON.stringify({ version: 1, shards }, null, 2)}
 `);
-    loaded2.set(path, { stamp: stampOf2(path), ledger });
-  } catch {
+  loaded2.set(path, { stamp: stampOf2(path), ledger });
+}
+function update2(path, change) {
+  const queued = pending.get(path) ?? [];
+  if (change !== null)
+    queued.push(change);
+  if (queued.length > PENDING_MAX)
+    queued.splice(0, queued.length - PENDING_MAX);
+  pending.set(path, queued);
+  const until = busyUntil.get(path);
+  if (until !== undefined && Date.now() < until)
+    return;
+  const holder = lockHolderStamp(path);
+  try {
+    withLocalLock2(path, () => {
+      loaded2.delete(path);
+      writeChanged(path, load3(path), (ledger) => applyChanges(ledger, queued));
+    }, TRACK_LOCK_BUDGET_MS);
+    pending.delete(path);
+    busyUntil.delete(path);
+  } catch (err) {
     loaded2.delete(path);
+    const after = lockHolderStamp(path);
+    if (err?.code === "ELOCKED" && holder !== null && after === holder && Date.now() - after >= TRACK_LOCK_BUDGET_MS) {
+      busyUntil.set(path, Date.now() + TRACK_BACKOFF_MS);
+    }
+  }
+}
+function lockHolderStamp(path) {
+  try {
+    return statSync8(`${path}.lock`).mtimeMs;
+  } catch {
+    return null;
   }
 }
 function seenLedgerFile(storeRoot, storeId) {
@@ -6067,7 +6120,15 @@ function trackSeenShards(partitionRoot, scope, listed, replaced = new Set) {
   const at = ledgerPath2(partitionRoot);
   if (at === null)
     return [];
-  const seen = load3(at.path).get(at.partition) ?? new Set;
+  const seen = new Set(load3(at.path).get(at.partition) ?? []);
+  for (const change of pending.get(at.path) ?? []) {
+    if (change.partition !== at.partition)
+      continue;
+    for (const rel of change.fresh)
+      seen.add(rel);
+    for (const rel of change.expected)
+      seen.delete(rel);
+  }
   const present = new Set(listed);
   const fresh = listed.filter((rel) => !seen.has(rel));
   let missing = [...seen].filter((rel) => rel.startsWith(scope.prefix) && !present.has(rel) && (scope.device === undefined || deviceOf(rel) === scope.device) && (scope.month === undefined || scope.month(monthOf(rel))));
@@ -6078,19 +6139,16 @@ function trackSeenShards(partitionRoot, scope, listed, replaced = new Set) {
     expected = [...expected, ...missing.filter((rel) => retired.has(deviceOf(rel)))];
     missing = missing.filter((rel) => !retired.has(deviceOf(rel)));
   }
-  if (readOnlyDepth === 0 && (fresh.length > 0 || expected.length > 0)) {
-    update2(at.path, (ledger) => {
-      const own = ledger.get(at.partition) ?? new Set;
-      for (const rel of fresh)
-        own.add(rel);
-      for (const rel of expected)
-        own.delete(rel);
-      ledger.set(at.partition, own);
-    });
+  if (readOnlyDepth === 0) {
+    if (fresh.length > 0 || expected.length > 0) {
+      update2(at.path, { partitionRoot, partition: at.partition, fresh, expected });
+    } else if ((pending.get(at.path)?.length ?? 0) > 0) {
+      update2(at.path, null);
+    }
   }
   return missing.toSorted();
 }
-var loaded2, readOnlyDepth = 0, SEEN_SHARD_MISSING_REASON;
+var loaded2, TRACK_LOCK_BUDGET_MS = 500, TRACK_BACKOFF_MS = 1e4, busyUntil, pending, PENDING_MAX = 1000, readOnlyDepth = 0, SEEN_SHARD_MISSING_REASON;
 var init_seen_shards = __esm(() => {
   init_fs_atomic();
   init_platform_dirs();
@@ -6101,6 +6159,8 @@ var init_seen_shards = __esm(() => {
   init_store_open();
   init_store_paths();
   loaded2 = new Map;
+  busyUntil = new Map;
+  pending = new Map;
   SEEN_SHARD_MISSING_REASON = "this machine read the shard before and it is gone now (the store never deletes a shard); " + "its records are unknown until sync delivers it again";
 });
 
@@ -7781,8 +7841,27 @@ var init_fold_signals = __esm(() => {
   STATE_SET = new Set(SIGNAL_STATE_VALUES);
 });
 
+// src/core/store/caller-reach.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+var storage;
+var init_caller_reach = __esm(() => {
+  storage = new AsyncLocalStorage;
+});
+
 // src/core/store/read/store-entities.ts
 import { statSync as statSync12 } from "node:fs";
+function sharedCountersOf(history, privateIds) {
+  const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
+  for (const record of history) {
+    if (record.kind !== PREFERENCE_EVIDENCE_KIND || privateIds.has(record.id))
+      continue;
+    const result = record.body["result"];
+    if (typeof result === "string" && EVIDENCE_RESULTS.includes(result)) {
+      out[`${result}_count`] += 1;
+    }
+  }
+  return out;
+}
 function fingerprintOf(store) {
   const parts = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
@@ -7833,9 +7912,14 @@ function build(store) {
   const fold = foldPreferences(all.map((e) => e.record));
   const preferences = new Map;
   for (const [id, state] of fold.preferences) {
-    const inPrivate = state.history.some((record) => privateIds.has(record.id));
+    const inPrivate = state.history.some((record) => privateIds.has(record.id) && record.kind !== PREFERENCE_EVIDENCE_KIND);
     const markedPrivate = state.removed ? state.history.some((record) => record.kind === PREFERENCE_SET_KIND && isPrivateFrontmatter(record.body["fields"] ?? {})) : isPrivateFrontmatter(state.fields);
-    preferences.set(id, { state, private: degraded || inPrivate || markedPrivate });
+    preferences.set(id, {
+      state,
+      private: degraded || inPrivate || markedPrivate,
+      sharedCounters: sharedCountersOf(state.history, privateIds),
+      privateRecordIds: new Set(state.history.filter((record) => privateIds.has(record.id)).map((record) => record.id))
+    });
   }
   const signals = new Map;
   const partitionOf = new Map(all.map((e) => [e.record.id, e.partition]));
@@ -7898,6 +7982,7 @@ var init_store_entities = __esm(() => {
   init_fold_pinned();
   init_fold_signals();
   init_fold_preferences();
+  init_caller_reach();
   init_shard_list();
   init_store_open();
   init_store_paths();
@@ -8405,13 +8490,13 @@ var init_origin_channel = __esm(() => {
 });
 
 // src/core/store/operation-scope.ts
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 function activeOperationPrivate() {
-  return storage.getStore()?.() ?? false;
+  return storage2.getStore()?.() ?? false;
 }
-var storage;
+var storage2;
 var init_operation_scope = __esm(() => {
-  storage = new AsyncLocalStorage;
+  storage2 = new AsyncLocalStorage2;
 });
 
 // src/core/store/dual-write.ts
@@ -8918,7 +9003,12 @@ function appendAuditRecord(auditRoot, record, vault, options = {}) {
     legacy: () => appendLegacyAuditLine(auditRoot, timestamp, line),
     store: () => {
       const written = JSON.parse(line);
-      return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, { audit_dir: basename8(auditRoot), record: written }, isRecordLabel(written.actor) ? written.actor : undefined, auditRowNamesPrivatePage(vault, written));
+      const row = { audit_dir: basename8(auditRoot), record: written };
+      const agent = isRecordLabel(written.actor) ? written.actor : undefined;
+      if (options.attestsShared === true) {
+        return ledgerRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, "shared", agent);
+      }
+      return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, agent, auditRowNamesPrivatePage(vault, written));
     },
     context,
     ...options.failOpen === true || basename8(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}

@@ -100,6 +100,7 @@ import { buildLinkCandidateManifest, type LinkCandidateManifest } from "./notes/
 import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import { brainDirsForWrite, collisionCandidateName } from "./paths.ts";
 import { isStoreOnly } from "../store/store-only.ts";
+import { repairLaneEntryIds } from "../store-migration/lane-id-repair.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
 import {
@@ -308,6 +309,16 @@ function dreamRun(
   progress.start(DREAM_STAGE.scan);
   opts.safeguard?.checkpoint();
   const cfg = loadBrainConfig(vault);
+  // Lane entries an earlier release filed under another path's id are
+  // moved to their own (`store-migration/lane-id-repair.ts`); a no-op once
+  // repaired, and never a reason to fail the pass.
+  if (!dryRun && (vault === null || isStoreOnly({ vault }))) {
+    try {
+      repairLaneEntryIds(vault);
+    } catch {
+      // The next pass tries again.
+    }
+  }
   // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
   // this run, the configured value decides when it is absent. Resolved
   // once, here, so the heal branch below has a single source of truth and

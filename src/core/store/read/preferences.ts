@@ -40,7 +40,7 @@ import type { PreferenceCounters } from "../fold-preferences.ts";
 import { isPrivatePageFile } from "../private-page.ts";
 import type { StoreInspection } from "../store-open.ts";
 import { readSource, type ReadContext } from "./read-context.ts";
-import { readEntitiesOf } from "./store-entities.ts";
+import { countersAtReach, readEntitiesOf } from "./store-entities.ts";
 
 /** One preference as the facades return it. */
 export interface PreferenceEntry {
@@ -139,7 +139,8 @@ function legacyEntries(
 
 function storeEntries(store: StoreInspection, retired: boolean): PreferenceEntry[] {
   const out: PreferenceEntry[] = [];
-  for (const [id, { state, private: isPrivate }] of readEntitiesOf(store).preferences) {
+  for (const [id, entry] of readEntitiesOf(store).preferences) {
+    const { state, private: isPrivate } = entry;
     if (!state.exists || !id.startsWith(PREFERENCE_PREFIX)) continue;
     if ((state.fields["status"] === RETIRED_STATUS) !== retired) continue;
     out.push({
@@ -148,7 +149,8 @@ function storeEntries(store: StoreInspection, retired: boolean): PreferenceEntry
       retired,
       private: isPrivate,
       fields: viewFields(state.fields),
-      counters: state.counters,
+      // Below local reach without the private partition's evidence (task 3.18).
+      counters: countersAtReach(entry),
     });
   }
   return out;

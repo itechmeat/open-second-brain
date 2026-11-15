@@ -140,6 +140,21 @@ The store SHALL keep records in partitions by sensitivity, at least `shared` and
 - **WHEN** an agent on a machine that has no `private` partition records a private item
 - **THEN** the write is refused with a message saying this machine does not hold the private partition
 
+### Requirement: Private evidence stays out of shared preferences
+An `apply-evidence` event that lands in `private` because its artifact or note names a private page SHALL NOT change the status, confidence, evidence timestamps or evidence sections of a preference that is not itself private: those fields are read from `shared` by every machine and remote caller. Such an event SHALL NOT make the preference private, a merge SHALL copy it as a private record, and no number derived from it SHALL be written to `shared`. It MAY count in the evidence counters a local caller of a machine that holds `private` reads, which fold the partitions that machine holds; a caller below local reach SHALL be shown the counters of the `shared` evidence alone. Toward a preference that is itself private it SHALL count like any other evidence.
+
+#### Scenario: Private evidence on a shared preference
+- **WHEN** a machine that holds `private` records evidence whose note names a private page against a shared, unconfirmed preference and runs dream
+- **THEN** the preference stays unconfirmed with the confidence it had, as a machine that holds only `shared` reads it, and later shared evidence on it still lands in `shared` and counts
+
+#### Scenario: Evidence counters below local reach
+- **WHEN** a remote MCP caller reads that shared preference, its page or a digest built from it, on the machine that holds `private`
+- **THEN** its applied and violated counts leave the private evidence out, while a local caller sees it counted
+
+#### Scenario: Private evidence on a private preference
+- **WHEN** the same evidence targets a preference that is itself private
+- **THEN** dream confirms that preference
+
 ### Requirement: Threat model is documented
 The product SHALL document what the store contains in plain text, which partitions exist, what leaves the machine through sync and decision models, and that encryption at rest is the user's sync or disk layer's job.
 

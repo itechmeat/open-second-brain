@@ -100,6 +100,7 @@ import { auditStaleDependencies } from "./stale-dependency.ts";
 import { frozenVaultCheck } from "./doctor/frozen-check.ts";
 import { deviceStateCheck } from "./doctor/device-state-check.ts";
 import { adoptConflictsCheck } from "./doctor/adopt-conflicts-check.ts";
+import { laneFolderCollisionCheck, laneIdMisfiledCheck } from "./doctor/lane-id-check.ts";
 import { migrationCheck } from "./doctor/migration-check.ts";
 import { storeCheck } from "./doctor/store-check.ts";
 import { runStoreSideDoctor } from "./doctor/store-side-pass.ts";
@@ -283,6 +284,9 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   migrationCheck,
   // Machine state a switch kept aside (task 2.10).
   adoptConflictsCheck,
+  // Lane ids an earlier release filed under another path (task 3.9).
+  laneIdMisfiledCheck,
+  laneFolderCollisionCheck,
   denyConsultedLanesCheck,
 ]);
 

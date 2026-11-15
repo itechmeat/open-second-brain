@@ -166,6 +166,9 @@ export const STATE_SURFACE_ID = Object.freeze({
   rollupLedger: "rollup_ledger",
   crossTopicLedger: "cross_topic_ledger",
   proposalWatermark: "proposal_watermark",
+  proceduralUsage: "procedural_usage",
+  proceduralGraph: "procedural_graph",
+  proceduralHints: "procedural_hints",
   captureWatermark: "capture_watermark",
   decisionLedger: "decision_ledger",
   sourceArchives: "source_archives",
@@ -351,6 +354,9 @@ const QUERY_DEMAND_FILE = `${QUERY_DEMAND_LEDGER_STEM}.${JSONL_LEDGER_EXT}`;
 const CAPTURE_DECISIONS_FILE = `${CAPTURE_DECISION_LEDGER_STEM}.${JSONL_LEDGER_EXT}`;
 const CAPTURE_WATERMARK_FILE = ".catchup-watermark.json";
 const PROPOSAL_WATERMARK_FILE = "proposal-watermark.json";
+const PROCEDURAL_USAGE_FILE = "usage.jsonl";
+const PROCEDURAL_GRAPH_FILE = "graph.json";
+const PROCEDURAL_HINTS_FILE = "hints.json";
 const TRUTH_DIR = "truth";
 const BRAIN_INTERNAL_STATE_DIR = ".state";
 const LINEAGE_LEDGER_FILE = "session-lineage.jsonl";
@@ -1259,6 +1265,50 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     reason:
       "How far the procedural proposal scan has read. Deleting it makes the next scan re-read " +
       "from the beginning, which costs time and re-proposes nothing already accepted.",
+    sources: ["src/core/brain/paths.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.proceduralUsage,
+    label: "procedural memory usage counters",
+    tier: STATE_TIER.vaultContent,
+    switched: STATE_SWITCHED.deviceLocal,
+    derive: (vault) => join(vault, BRAIN_PROCEDURAL_MEMORY_REL, PROCEDURAL_USAGE_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "How often and how recently each procedure was used, and how its uses turned out. The " +
+      "counters tick on every use, so they stay on the machine that counts them instead of " +
+      "appending a whole record to the store per tick; a reset restarts the counts and the " +
+      "ranking they feed.",
+    sources: ["src/core/brain/paths.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.proceduralGraph,
+    label: "procedural graph projection",
+    tier: STATE_TIER.derived,
+    switched: STATE_SWITCHED.deviceLocal,
+    derive: (vault) => join(vault, BRAIN_PROCEDURAL_MEMORY_REL, PROCEDURAL_GRAPH_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "A projection of the procedural memory index and the skill proposals into nodes and " +
+      "edges. It is recomputed from those, which are the source of truth.",
+    sources: ["src/core/brain/paths.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.proceduralHints,
+    label: "procedural recall hints",
+    tier: STATE_TIER.derived,
+    switched: STATE_SWITCHED.deviceLocal,
+    derive: (vault) => join(vault, BRAIN_PROCEDURAL_MEMORY_REL, PROCEDURAL_HINTS_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "The recall cues of each procedural graph node. They are recomputed from the procedural " +
+      "graph.",
     sources: ["src/core/brain/paths.ts"],
   },
   {

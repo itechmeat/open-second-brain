@@ -20,6 +20,7 @@ import {
   vaultFrozenRefusal,
 } from "./frozen-refusal.ts";
 import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
+import { withPrivateWithheld } from "../core/store/caller-reach.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
   INTERNAL_ERROR,
@@ -317,9 +318,13 @@ export class MCPServer {
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
-    return toolResult(
-      tool,
-      this.forCaller(await this.invokeToolHandler(tool, args, undefined, undefined)),
+    // The same scope `tools/call` runs in: below local reach the readers
+    // answer without what only the `private` partition knows.
+    return withPrivateWithheld(this.reach !== TRANSPORT_REACH.local, async () =>
+      toolResult(
+        tool,
+        this.forCaller(await this.invokeToolHandler(tool, args, undefined, undefined)),
+      ),
     );
   }
 
@@ -501,14 +506,22 @@ export class MCPServer {
       } else if (method === "tools/list") {
         result = this.handleToolsList();
       } else if (method === "tools/call") {
-        result = await this.handleToolsCall(params, identity);
+        // Below local reach every reader answers without what only the
+        // `private` partition knows, down to the folds' derived counters.
+        result = await withPrivateWithheld(this.reach !== TRANSPORT_REACH.local, () =>
+          this.handleToolsCall(params, identity),
+        );
       } else if (method === "resources/list") {
         result = this.handleResourcesList();
       } else if (method === "resources/templates/list") {
         result = this.handleResourcesTemplatesList();
       } else if (method === "resources/read") {
         // A resource body is prose the brain rendered; it may name a host path.
-        result = this.forCaller(this.handleResourcesRead(params, identity));
+        result = this.forCaller(
+          await withPrivateWithheld(this.reach !== TRANSPORT_REACH.local, () =>
+            this.handleResourcesRead(params, identity),
+          ),
+        );
       } else if (method.startsWith("notifications/")) {
         return null;
       } else {

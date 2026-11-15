@@ -17,7 +17,14 @@ import { basename, join, relative, sep } from "node:path";
 import { isSyncConflictName, parseShardedName } from "../brain/ledger-shards.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { parseFrontmatterWithNotices } from "../vault.ts";
-import { entryOfPath, lanePlaceOf, ROOT_LANE } from "../store/lane-paths.ts";
+import {
+  entryOfPath,
+  laneNameRefusal,
+  laneFolderRivals,
+  lanePlaceOf,
+  normalizedFolderPlace,
+  ROOT_LANE,
+} from "../store/lane-paths.ts";
 import type { LegacyItem, Locator } from "./destinations.ts";
 import { claims } from "./legacy-claims.ts";
 
@@ -261,11 +268,48 @@ function entryPlace(
   path: string,
 ): { lane: string; entry: string } {
   const rel = relative(locator.root, path).split(sep).join("/");
-  if (locator.lane === null) {
-    const place = lanePlaceOf(rel);
-    if (place !== null) return place;
+  if (locator.lane === null && rel !== "") {
+    // A name that does not map to an entry and back is listed as an item
+    // the migration could not convert, never filed under an id that
+    // names another path (`store/lane-paths.ts`).
+    const place = lanePlaceOf(rel) ?? spelledFolderPlace(locator.root, rel);
+    if (place === null) throw new Error(laneNameRefusal(rel) ?? "not a lane entry");
+    return place;
   }
   return { lane: locator.lane ?? ROOT_LANE, entry: entryOfPath(rel === "" ? basename(path) : rel) };
+}
+
+/**
+ * The place of a page in a user's top folder spelled otherwise than its
+ * lane name (`normalizedFolderPlace`), when no other top folder of the
+ * tree at `root` takes the same lane; null otherwise. Two folders that
+ * map to one lane (`My Notes/` beside `my-notes/` or `my_notes/`) are
+ * refused, both but the one already named as the lane: their entries
+ * would share ids.
+ */
+function spelledFolderPlace(root: string, rel: string): { lane: string; entry: string } | null {
+  const place = normalizedFolderPlace(rel);
+  if (place === null) return null;
+  const folder = rel.split("/")[0]!;
+  const rivals = laneFolderRivals(topFolders(root), folder, place.lane);
+  if (rivals.length > 0) {
+    throw new Error(
+      `the folder ${folder} maps to the lane ${place.lane}, which ${rivals.join(", ")} also ` +
+        "takes; rename one of them so each folder has a lane of its own",
+    );
+  }
+  return place;
+}
+
+/** The names of the folders directly under `root`. */
+function topFolders(root: string): string[] {
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 function entryItem(locator: Extract<Locator, { shape: "entries" }>, path: string): LegacyItem {

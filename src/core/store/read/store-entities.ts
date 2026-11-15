@@ -21,8 +21,12 @@
  *
  * Privacy (FORMAT.md, "Partitions"): an entity is private when any of
  * its records sits in `private`, or when its fields reserve it as private
- * by the rule every legacy page uses (`isPrivateFrontmatter`). Nothing is
- * written.
+ * by the rule every legacy page uses (`isPrivateFrontmatter`). A
+ * preference's `preference-evidence` records do not count for it: one
+ * lands in `private` because its artifact or note names a private page,
+ * which says nothing about the rule itself, and counting it would move a
+ * shared preference into `private` on its first such use (task 3.18).
+ * Nothing is written.
  */
 
 import { statSync } from "node:fs";
@@ -30,6 +34,9 @@ import { statSync } from "node:fs";
 import {
   PINNED_CLEAR_KIND,
   PINNED_SET_KIND,
+  EVIDENCE_RESULTS,
+  PREFERENCE_COUNTER_FIELDS,
+  PREFERENCE_EVIDENCE_KIND,
   PREFERENCE_SET_KIND,
   SIGNAL_KIND,
   type StorePartition,
@@ -43,7 +50,12 @@ import {
   SIGNAL_STATE_KIND,
   type SignalLifecycle,
 } from "../fold-signals.ts";
-import { foldPreferences, type PreferenceState } from "../fold-preferences.ts";
+import {
+  foldPreferences,
+  type PreferenceCounters,
+  type PreferenceState,
+} from "../fold-preferences.ts";
+import { privateWithheld } from "../caller-reach.ts";
 import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
 import { partitionDir, pendingBlobStampLines, resolveConfiguredStoreRoot } from "../store-paths.ts";
@@ -54,6 +66,55 @@ import { quarantineStamp } from "../shard-quarantine.ts";
 export interface StorePreference {
   readonly state: PreferenceState;
   readonly private: boolean;
+  /**
+   * The evidence counters without the evidence of the `private` partition:
+   * what a machine that holds only `shared` folds, and what a caller below
+   * local reach is shown ({@link countersAtReach}).
+   */
+  readonly sharedCounters: PreferenceCounters;
+  /** Ids of the records of {@link PreferenceState.history} that sit in `private`. */
+  readonly privateRecordIds: ReadonlySet<string>;
+}
+
+/**
+ * The evidence counters of `entry` for the caller of the work running now:
+ * the shared counters below local reach (`../caller-reach.ts`), every held
+ * partition's otherwise (task 3.18).
+ */
+export function countersAtReach(entry: StorePreference): PreferenceCounters {
+  return privateWithheld() ? entry.sharedCounters : entry.state.counters;
+}
+
+/**
+ * The evidence counters that may be written into a record about `entry`
+ * other machines read (a merge summary, a dream comparison): every held
+ * partition's for a private preference, the shared ones otherwise, so a
+ * private use never reaches `shared` through a derived number (task 3.18).
+ */
+export function countersForShared(entry: StorePreference): PreferenceCounters {
+  return entry.private ? entry.state.counters : entry.sharedCounters;
+}
+
+/** The counters of `history`'s evidence records that are not in `privateIds`. */
+function sharedCountersOf(
+  history: ReadonlyArray<StoreRecord>,
+  privateIds: ReadonlySet<string>,
+): PreferenceCounters {
+  const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0])) as Record<
+    (typeof PREFERENCE_COUNTER_FIELDS)[number],
+    number
+  >;
+  for (const record of history) {
+    if (record.kind !== PREFERENCE_EVIDENCE_KIND || privateIds.has(record.id)) continue;
+    const result = record.body["result"];
+    if (
+      typeof result === "string" &&
+      (EVIDENCE_RESULTS as ReadonlyArray<string>).includes(result)
+    ) {
+      out[`${result}_count` as (typeof PREFERENCE_COUNTER_FIELDS)[number]] += 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -172,7 +233,9 @@ function build(store: StoreInspection): StoreEntities {
   const fold = foldPreferences(all.map((e) => e.record));
   const preferences = new Map<string, StorePreference>();
   for (const [id, state] of fold.preferences) {
-    const inPrivate = state.history.some((record) => privateIds.has(record.id));
+    const inPrivate = state.history.some(
+      (record) => privateIds.has(record.id) && record.kind !== PREFERENCE_EVIDENCE_KIND,
+    );
     // A removed preference's fold holds no fields, so its history is what
     // still says whether it was marked private.
     const markedPrivate = state.removed
@@ -182,7 +245,14 @@ function build(store: StoreInspection): StoreEntities {
             isPrivateFrontmatter((record.body["fields"] ?? {}) as Record<string, unknown>),
         )
       : isPrivateFrontmatter(state.fields);
-    preferences.set(id, { state, private: degraded || inPrivate || markedPrivate });
+    preferences.set(id, {
+      state,
+      private: degraded || inPrivate || markedPrivate,
+      sharedCounters: sharedCountersOf(state.history, privateIds),
+      privateRecordIds: new Set(
+        state.history.filter((record) => privateIds.has(record.id)).map((record) => record.id),
+      ),
+    });
   }
   const signals = new Map<string, StoreSignal>();
   const partitionOf = new Map(all.map((e) => [e.record.id, e.partition] as const));

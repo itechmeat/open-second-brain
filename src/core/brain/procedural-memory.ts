@@ -9,7 +9,11 @@ import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 import { ensureInsideVault } from "../path-safety.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
-import { rebuildProceduralGraph } from "./procedural-graph.ts";
+import {
+  readProceduralState,
+  rebuildProceduralGraph,
+  writeMachineStateText,
+} from "./procedural-graph.ts";
 import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts";
 import type { ProceduralEntryKind, ProceduralMemoryEntry, ProceduralOutcome } from "./types.ts";
 import {
@@ -20,6 +24,7 @@ import {
   parseLanePage,
   writeLaneText,
   readLaneFile,
+  withLaneLock,
 } from "../store/lane-pages.ts";
 
 interface UsageRecord {
@@ -88,6 +93,18 @@ export function reconcileProceduralMemory(
     if (!nextById.has(id) && counted(old)) removed++;
   }
 
+  // The counters live in the usage file only: the index is written without
+  // them, so counters an older index still carries move into it here,
+  // before the index loses them (a failed rebuild after the index write
+  // must not leave them nowhere). The file is read again under its lock,
+  // and only an entry it does not name takes the index's counters: a tick
+  // another process counted since the read above is kept.
+  assertLaneWrite(vault);
+  withUsageLock(vault, () => {
+    const fresh = readUsageMap(vault, true);
+    for (const [id, used] of usageOf(next)) if (!fresh.has(id)) fresh.set(id, used);
+    writeUsageMap(vault, fresh);
+  });
   writeProjections(vault, next, () => writeIndex(vault, next));
   return { total: next.filter(counted).length, added, updated, removed };
 }
@@ -100,15 +117,17 @@ export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMem
       entries?: Array<ProceduralMemoryEntry>;
     };
     if (!Array.isArray(parsed.entries)) return Object.freeze([]);
+    const usage = readUsageMap(vault);
     // Normalize additive fields so an older index reads with defaults
     // instead of `undefined`: the outcome counters (pre-t_703f7b18) and the
-    // four contract lists (pre no-dead-ends Unit I).
+    // four contract lists (pre no-dead-ends Unit I). The counters come from
+    // the usage file; an index written before they moved there still
+    // carries its own, read for an entry the usage file does not name.
     return Object.freeze(
       parsed.entries.map((entry) =>
         Object.freeze({
           ...entry,
-          successCount: typeof entry.successCount === "number" ? entry.successCount : 0,
-          failureCount: typeof entry.failureCount === "number" ? entry.failureCount : 0,
+          ...counters(entry, usage.get(entry.id)),
           prerequisites: asStringArray(entry.prerequisites),
           rollback: asStringArray(entry.rollback),
           sideEffects: asStringArray(entry.sideEffects),
@@ -162,29 +181,11 @@ export function markProceduralMemoryUsed(
   const target = entries.find((entry) => entry.id === id);
   if (!target) return null;
 
-  const next = entries.map((entry) =>
-    entry.id === id
-      ? {
-          ...entry,
-          usedCount: entry.usedCount + 1,
-          lastUsedAt: now.toISOString(),
-        }
-      : entry,
-  );
-  writeProjections(vault, next, () => {
-    writeIndex(vault, next);
-    const usage = readUsageMap(vault);
-    const prev = usage.get(id);
-    usage.set(id, {
-      usedCount: (prev?.usedCount ?? 0) + 1,
-      lastUsedAt: now.toISOString(),
-      successCount: prev?.successCount ?? 0,
-      failureCount: prev?.failureCount ?? 0,
-    });
-    writeUsageMap(vault, usage);
-  });
-
-  return next.find((entry) => entry.id === id) ?? null;
+  return writeUsageTick(vault, entries, target, (current) => ({
+    ...current,
+    usedCount: current.usedCount + 1,
+    lastUsedAt: now.toISOString(),
+  }));
 }
 
 /**
@@ -205,40 +206,80 @@ export function recordProceduralOutcome(
   const target = entries.find((entry) => entry.id === id);
   if (!target) return null;
 
-  const next = entries.map((entry) =>
-    entry.id === id
-      ? {
-          ...entry,
-          successCount: entry.successCount + (outcome === "success" ? 1 : 0),
-          failureCount: entry.failureCount + (outcome === "failure" ? 1 : 0),
-        }
-      : entry,
-  );
-  writeProjections(vault, next, () => {
-    writeIndex(vault, next);
-    const usage = readUsageMap(vault);
-    const prev = usage.get(id);
-    usage.set(id, {
-      usedCount: prev?.usedCount ?? target.usedCount,
-      lastUsedAt: prev?.lastUsedAt ?? target.lastUsedAt,
-      successCount: (prev?.successCount ?? 0) + (outcome === "success" ? 1 : 0),
-      failureCount: (prev?.failureCount ?? 0) + (outcome === "failure" ? 1 : 0),
-    });
-    writeUsageMap(vault, usage);
-  });
+  return writeUsageTick(vault, entries, target, (current) => ({
+    ...current,
+    successCount: current.successCount + (outcome === "success" ? 1 : 0),
+    failureCount: current.failureCount + (outcome === "failure" ? 1 : 0),
+  }));
+}
 
-  return next.find((entry) => entry.id === id) ?? null;
+/**
+ * Record one tick of `target`'s counters: only the usage file changes, a
+ * file of machine state (`paths.ts`). The index, the graph and the hints
+ * hold no counter, so a tick appends no store record (task 3.10).
+ */
+function writeUsageTick(
+  vault: string,
+  entries: ReadonlyArray<ProceduralMemoryEntry>,
+  target: ProceduralMemoryEntry,
+  tick: (current: UsageRecord) => UsageRecord,
+): ProceduralMemoryEntry {
+  assertLaneWrite(vault);
+  // Read, counted and written under the usage file's lock, so two ticks,
+  // or a tick and a reconcile, of two processes never lose one.
+  return withUsageLock(vault, () => {
+    const usage = readUsageMap(vault, true);
+    for (const [id, used] of usageOf(entries)) if (!usage.has(id)) usage.set(id, used);
+    const next = tick(usage.get(target.id) ?? counters(target, undefined));
+    usage.set(target.id, next);
+    writeUsageMap(vault, usage);
+    return { ...target, ...next };
+  });
+}
+
+/** Run `fn` holding the write lock of this machine's usage file. */
+function withUsageLock<T>(vault: string, fn: () => T): T {
+  return withLaneLock(vault, proceduralMemoryUsagePath(vault), fn);
+}
+
+/** The counters of `entry`: the usage file's when it names the entry, else the index's own. */
+function counters(
+  entry: Partial<ProceduralMemoryEntry>,
+  used: UsageRecord | undefined,
+): UsageRecord {
+  if (used !== undefined) return used;
+  return {
+    usedCount: typeof entry.usedCount === "number" ? entry.usedCount : 0,
+    lastUsedAt: typeof entry.lastUsedAt === "string" ? entry.lastUsedAt : null,
+    successCount: typeof entry.successCount === "number" ? entry.successCount : 0,
+    failureCount: typeof entry.failureCount === "number" ? entry.failureCount : 0,
+  };
+}
+
+/** The usage records of every entry that has been used or has an outcome. */
+function usageOf(entries: ReadonlyArray<ProceduralMemoryEntry>): Map<string, UsageRecord> {
+  const out = new Map<string, UsageRecord>();
+  for (const entry of entries) {
+    const used = counters(entry, undefined);
+    const blank =
+      used.usedCount === 0 &&
+      used.lastUsedAt === null &&
+      used.successCount === 0 &&
+      used.failureCount === 0;
+    if (!blank) out.set(entry.id, used);
+  }
+  return out;
 }
 
 /** Fields of an index entry that are counters and stamps, never page references. */
 const PROJECTION_OPAQUE = opaqueFields("lastUsedAt", "usedCount", "successCount", "failureCount");
 
 /**
- * Write the index (and usage) with `write`, then rebuild the graph and
- * hints, as ONE operation: one privacy verdict over the entries every one
- * of these projections is derived from (an entry naming a private page
- * makes them all private), so the index, the usage sidecar, the graph and
- * the hints never land in different partitions.
+ * Write the index with `write`, then rebuild the graph and hints, as ONE
+ * operation: one privacy verdict over the entries every one of these
+ * projections is derived from (an entry naming a private page makes them
+ * all private). The graph and the hints are machine state (`paths.ts`), so
+ * the verdict reaches the index only, the one store record here.
  */
 function writeProjections(
   vault: string,
@@ -396,14 +437,19 @@ function asStringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** The counters an index entry carries: none, they live in the usage file. */
+const AT_REST = Object.freeze({ lastUsedAt: null, usedCount: 0, successCount: 0, failureCount: 0 });
+
 function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const path = proceduralMemoryIndexPath(vault);
+  // The counters live in the usage file (machine state); the index, a lane
+  // record, carries them at rest so a use never changes it.
   const payload = JSON.stringify(
     {
       schema_version: 1,
-      entries,
+      entries: entries.map((entry) => ({ ...entry, ...AT_REST })),
     },
     null,
     2,
@@ -411,12 +457,20 @@ function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>
   writeLaneText(vault, path, `${payload}\n`);
 }
 
-function readUsageMap(vault: string): Map<string, UsageRecord> {
-  const path = proceduralMemoryUsagePath(vault);
-  if (!lanePageExists(vault, path)) return new Map();
+/**
+ * This machine's usage counters. `locked`: the caller holds the usage
+ * file's lock; otherwise a first adoption of the store record takes it.
+ */
+function readUsageMap(vault: string, locked = false): Map<string, UsageRecord> {
+  const text = readProceduralState(
+    vault,
+    proceduralMemoryUsagePath(vault),
+    locked ? undefined : (write) => withUsageLock(vault, write),
+  );
+  if (text === null) return new Map();
 
   const out = new Map<string, UsageRecord>();
-  for (const line of readLaneFile(vault, path).split("\n")) {
+  for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
@@ -452,5 +506,5 @@ function writeUsageMap(vault: string, usage: ReadonlyMap<string, UsageRecord>): 
     if (value.failureCount > 0) record["failureCount"] = value.failureCount;
     lines.push(JSON.stringify(record));
   }
-  writeLaneText(vault, path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
+  writeMachineStateText(path, `${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`);
 }

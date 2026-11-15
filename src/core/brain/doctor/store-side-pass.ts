@@ -16,6 +16,7 @@ import { computeTrustVerdict } from "../trust/compute-trust-verdict.ts";
 import type { TrustVerdict } from "../types.ts";
 import type { DoctorFindings, StoreSideDoctorCheck } from "./check.ts";
 import { adoptConflictsCheck } from "./adopt-conflicts-check.ts";
+import { laneIdMisfiledCheck } from "./lane-id-check.ts";
 import { deviceStateCheck } from "./device-state-check.ts";
 import type { RunDoctorOptions, RunDoctorResult } from "./report.ts";
 import { storeCheck } from "./store-check.ts";
@@ -27,6 +28,7 @@ export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.fre
   viewWriterCheck,
   deviceStateCheck,
   adoptConflictsCheck,
+  laneIdMisfiledCheck,
 ]);
 
 /**

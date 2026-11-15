@@ -106,8 +106,60 @@ async function readUntil(
   }
 }
 
-function pickPort(): number {
-  return 30000 + Math.floor(Math.random() * 25000);
+/**
+ * A port the system has just handed out as free (bound to port 0 and let
+ * go), not a guess: a fixed or random high port can sit in a range the
+ * host reserves (Windows excludes whole port blocks) or be taken by
+ * another job on a shared runner.
+ */
+function freePort(): number {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+  const port = probe.port as number;
+  void probe.stop(true);
+  return port;
+}
+
+/**
+ * Start the live explorer for the test vault and wait until it listens.
+ * A port another process took between `freePort` and the bind is retried
+ * on a new one, a few times; any other failure to start is thrown with
+ * what the child printed.
+ */
+async function startExplorer(
+  configPath: string,
+): Promise<{ readonly proc: ReturnType<typeof Bun.spawn>; readonly port: number }> {
+  for (let attempt = 0; ; attempt++) {
+    const port = freePort();
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        "src/cli/main.ts",
+        "brain",
+        "explorer",
+        "--vault",
+        vault,
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: configPath },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    // Each attempt waits on the child before the next: nothing to batch.
+    // oxlint-disable-next-line no-await-in-loop
+    const banner = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Live explorer at ");
+    if (banner.found) return { proc, port };
+    // oxlint-disable-next-line no-await-in-loop
+    const stderr = await new Response(proc.stderr as ReadableStream<Uint8Array>).text();
+    // oxlint-disable-next-line no-await-in-loop
+    await proc.exited;
+    if (attempt < 4 && /in use/i.test(stderr)) continue;
+    throw new Error(`explorer exited before listening:\n${banner.text}${stderr}`);
+  }
 }
 
 describe("o2b brain explorer --help", () => {
@@ -357,32 +409,8 @@ describe("o2b brain explorer (live) store group", () => {
     mkdirSync(dirname(lockPath), { recursive: true });
     symlinkSync(lockPath, lockPath);
 
-    const port = pickPort();
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "run",
-        "src/cli/main.ts",
-        "brain",
-        "explorer",
-        "--vault",
-        vault,
-        "--port",
-        String(port),
-      ],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: config },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
+    const { proc, port } = await startExplorer(config);
     try {
-      const banner = await readUntil(proc.stdout, "Live explorer at ");
-      if (!banner.found) {
-        const stderr = await new Response(proc.stderr).text();
-        throw new Error(`explorer exited before listening:\n${banner.text}${stderr}`);
-      }
       const res = await fetch(`http://127.0.0.1:${port}/status.json`);
       expect(res.ok).toBe(true);
       const status = JSON.parse(await res.text()) as {
@@ -414,42 +442,14 @@ describe("o2b brain explorer (live)", () => {
     async () => {
       await bootstrap();
       seedOnePref();
-      const port = pickPort();
-      // Spawn the CLI manually so we can poll the server and send SIGINT.
-      // `cwd: process.cwd()` instead of a hard-coded path so the test
-      // works from any checkout (CI, local clone, contributor laptop).
-      const isolatedConfig = config;
-      const proc = Bun.spawn(
-        [
-          "bun",
-          "run",
-          "src/cli/main.ts",
-          "brain",
-          "explorer",
-          "--vault",
-          vault,
-          "--port",
-          String(port),
-        ],
-        {
-          cwd: process.cwd(),
-          env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: isolatedConfig },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
+      // Spawned so the test can poll the server and send SIGINT. It waits
+      // for the CLI to say it is listening, not for a clock: the line is
+      // printed only once the server is bound, so the first fetch cannot
+      // race the boot (a fixed poll lost to a cold start on the Windows
+      // runner, and WSL's mirrored loopback drops a SYN to an unbound port
+      // instead of refusing it).
+      const { proc, port } = await startExplorer(config);
       try {
-        // Wait for the CLI to say it is listening, not for a clock. It prints
-        // the line only after the server is bound, so the first fetch cannot
-        // race the boot. The fixed 3 s poll this replaces lost to a cold
-        // `bun run src/cli/main.ts` on the Windows runner, and polling a port
-        // nothing is bound to yet is not even a clean refusal everywhere
-        // (WSL's mirrored loopback drops the SYN instead of refusing it).
-        const banner = await readUntil(proc.stdout, "Live explorer at ");
-        if (!banner.found) {
-          const stderr = await new Response(proc.stderr).text();
-          throw new Error(`explorer exited before listening:\n${banner.text}${stderr}`);
-        }
         const r = await fetch(`http://127.0.0.1:${port}/`);
         expect(r.ok).toBe(true);
         const mainBody = await r.text();

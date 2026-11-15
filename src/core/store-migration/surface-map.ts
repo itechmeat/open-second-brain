@@ -374,6 +374,16 @@ export const SURFACE_MAP: Readonly<Record<StateSurfaceId, SurfaceMapping>> = Obj
   [STATE_SURFACE_ID.rollupLedger]: plain(deviceLocal, MOVED + "consolidation counters"),
   [STATE_SURFACE_ID.crossTopicLedger]: plain(deviceLocal, MOVED + "the daily promotion budget"),
   [STATE_SURFACE_ID.proposalWatermark]: plain(deviceLocal, MOVED + "a scan watermark"),
+  [STATE_SURFACE_ID.proceduralUsage]: plain(
+    deviceLocal,
+    MOVED + "use and outcome counters that tick on every use of a procedure",
+  ),
+  [STATE_SURFACE_ID.proceduralGraph]: rebuildable(
+    plain(drop, "a projection recomputed from the procedural memory index"),
+  ),
+  [STATE_SURFACE_ID.proceduralHints]: rebuildable(
+    plain(drop, "recall cues recomputed from the procedural graph"),
+  ),
   [STATE_SURFACE_ID.captureWatermark]: plain(deviceLocal, MOVED + "a catch-up watermark"),
   [STATE_SURFACE_ID.decisionLedger]: ledger(
     DUAL_WRITE_LEDGERS.permissions,

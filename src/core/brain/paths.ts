@@ -593,19 +593,23 @@ export function proceduralMemoryIndexPath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "index.json"), vault);
 }
 
-/** Procedural-memory usage sidecar path: `Brain/procedural-memory/usage.jsonl`. */
+/**
+ * Procedural-memory usage counters: `Brain/procedural-memory/usage.jsonl`,
+ * machine state (device-local once switched). They tick on every use, so a
+ * synced record per tick would grow the store without bound (task 3.10).
+ */
 export function proceduralMemoryUsagePath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl"), vault);
+  return machineStatePath(vault, BRAIN_PROCEDURAL_MEMORY_REL, "usage.jsonl");
 }
 
-/** Procedural graph projection path: `Brain/procedural-memory/graph.json`. */
+/** Procedural graph projection: `Brain/procedural-memory/graph.json`, machine state. */
 export function proceduralGraphPath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "graph.json"), vault);
+  return machineStatePath(vault, BRAIN_PROCEDURAL_MEMORY_REL, "graph.json");
 }
 
-/** Prospective recall hints path: `Brain/procedural-memory/hints.json`. */
+/** Prospective recall hints: `Brain/procedural-memory/hints.json`, machine state. */
 export function proceduralHintsPath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_PROCEDURAL_MEMORY_REL, "hints.json"), vault);
+  return machineStatePath(vault, BRAIN_PROCEDURAL_MEMORY_REL, "hints.json");
 }
 
 /** Declarative attention-flows directory: `Brain/attention/flows/`. */

@@ -1,4 +1,7 @@
+import { mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+
+import { atomicWriteFileSync } from "../fs-atomic.ts";
 
 import { ensureInsideVault } from "../path-safety.ts";
 import {
@@ -15,8 +18,10 @@ import {
   lanePageExists,
   listLaneFiles,
   parseLanePage,
-  writeLaneText,
+  lanePagesInStore,
+  readLaneText,
 } from "../store/lane-pages.ts";
+import { BRAIN_PROCEDURAL_MEMORY_REL } from "./path-constants.ts";
 
 export type ProceduralGraphNodeKind = "procedure" | "skill" | "runbook" | "proposal" | "entity";
 export type ProceduralGraphEdgeKind =
@@ -143,16 +148,87 @@ export function rebuildProceduralGraph(
     ),
   };
 
-  const path = proceduralGraphPath(vault);
-  writeLaneText(vault, path, `${JSON.stringify(projection, null, 2)}\n`);
+  writeMachineStateText(proceduralGraphPath(vault), `${JSON.stringify(projection, null, 2)}\n`);
   return projection;
 }
 
-export function readProceduralGraph(vault: string): ProceduralGraphProjection | null {
-  const path = proceduralGraphPath(vault);
-  if (!lanePageExists(vault, path)) return null;
+/**
+ * Write a procedural projection or counter file. They are machine state
+ * (`paths.ts`), never store records: the graph and the hints are
+ * recomputed on each machine, and the counters tick on every use.
+ */
+export function writeMachineStateText(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  atomicWriteFileSync(path, text);
+}
+
+/** The text of a machine-state file, or null when there is none. */
+function readMachineStateText(path: string): string | null {
   try {
-    const parsed = JSON.parse(readLaneFile(vault, path)) as ProceduralGraphProjection;
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The text of the procedural projection or counter file at `path` (its
+ * machine-state location), or null when there is none.
+ *
+ * A machine switched before these files became machine state (task 3.10)
+ * holds them as `lane-entry` records of the store, the migration's import
+ * of the legacy files. Until this machine has its own copy, that record is
+ * read and adopted: copied into the machine-state location on the first
+ * read, so a switched machine answers from it before its next reconcile.
+ * The record itself stays in the store until the legacy tree leaves the
+ * vault (`store-migration/removal.ts` retires it then), so a rollback
+ * still finds the legacy file it was imported from.
+ *
+ * `guard` runs the adoption write: a file other writers update (the usage
+ * counters) passes the run of its write lock, and the copy is written only
+ * when the file is still absent inside it, so an adoption never lands over
+ * a tick another process wrote first. A caller that already holds the lock
+ * passes none.
+ */
+export function readProceduralState(
+  vault: string,
+  path: string,
+  guard: (write: () => void) => void = (write) => write(),
+): string | null {
+  const own = readMachineStateText(path);
+  if (own !== null) return own;
+  if (!lanePagesInStore(vault)) return null;
+  const stored = join(vault, BRAIN_PROCEDURAL_MEMORY_REL, basename(path));
+  if (stored === path) return null;
+  let text: string | null;
+  try {
+    text = readLaneText(vault, stored);
+  } catch {
+    return null;
+  }
+  if (text === null) return null;
+  let answer = text;
+  try {
+    guard(() => {
+      // Another process may have adopted (and ticked) it meanwhile.
+      const now = readMachineStateText(path);
+      if (now !== null) {
+        answer = now;
+        return;
+      }
+      writeMachineStateText(path, text);
+    });
+  } catch {
+    // Adopted on the next read instead; the answer stands.
+  }
+  return answer;
+}
+
+export function readProceduralGraph(vault: string): ProceduralGraphProjection | null {
+  const text = readProceduralState(vault, proceduralGraphPath(vault));
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text) as ProceduralGraphProjection;
     if (parsed.schema_version !== 1) return null;
     if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
     return parsed;

@@ -6,7 +6,8 @@
  * unswitched machine keeps writing `_brain.yaml`.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { cpSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { applySchemaAdminMutations } from "../../../src/core/brain/schema-admin.ts";
@@ -73,7 +74,8 @@ describe("schema apply on a store-only machine", () => {
     ]);
     // Not from the CLI: an agent wrote these.
     expect(records.every((r) => r.body["authority"] === "agent")).toBe(true);
-    expect(schemaAuditRows(env)).toHaveLength(1);
+    // The attestation in `shared`, the whole row in `private`.
+    expect(schemaAuditRows(env)).toHaveLength(2);
 
     const source = readSchemaPackSource(env.vault);
     expect(source.path).toBe(STORE_SCHEMA_PACK_SOURCE);
@@ -140,6 +142,77 @@ describe("schema apply on a store-only machine", () => {
     expect(answer).toContain("human_value_in_force");
     expect(schemaRecords(env)).toHaveLength(1);
     expect(loadSchemaPack(env.vault).declarations.page_types).toEqual(["paper"]);
+  });
+});
+
+/** A second store-only machine of the same store that holds only `shared`, synced from `from`. */
+function sharedOnlyPeer(from: StoreEnv): StoreEnv {
+  const peer = makeStoreEnv("osb-schema-peer-", { partitions: ["shared"], device: "dev-b" });
+  rmSync(join(peer.storeRoot, "shared"), { recursive: true, force: true });
+  cpSync(join(from.storeRoot, "shared"), join(peer.storeRoot, "shared"), { recursive: true });
+  switchDevice(peer.storeRoot, "dev-b");
+  return peer;
+}
+
+describe("a schema apply seen from a machine that holds only shared", () => {
+  let other: StoreEnv | null = null;
+  afterEach(() => {
+    other?.cleanup();
+    other = null;
+  });
+
+  test("is attested, not modified: the audit row lives with the pack it attests", async () => {
+    env = makeStoreEnv("osb-schema-attest-");
+    switchDevice(env.storeRoot);
+    await applySchemaAdminMutations(env.vault, [ADD_PAPER, ALIAS], {
+      actor: "t",
+      reason: "operator note about the paper type",
+    });
+    // The reason stays where audit rows always went, off the shared row.
+    expect(JSON.stringify(ledgerRows(env.storeRoot, "shared", "reliability-audit"))).not.toContain(
+      "operator note",
+    );
+    expect(JSON.stringify(ledgerRows(env.storeRoot, "private", "reliability-audit"))).toContain(
+      "operator note",
+    );
+    other = sharedOnlyPeer(env);
+    const integrity = assessSchemaPackIntegrity(other.vault);
+    expect(integrity.status).toBe("ok");
+    expect(integrity.mismatches).toEqual([]);
+    expect(loadSchemaPack(other.vault).declarations.page_types).toEqual(["paper"]);
+  });
+
+  test("a reason that names a private page stays off the shared row", async () => {
+    env = makeStoreEnv("osb-schema-attest-private-");
+    switchDevice(env.storeRoot);
+    await applySchemaAdminMutations(env.vault, [ADD_PAPER], {
+      actor: "t",
+      // A preference the store cannot resolve is judged private (fail closed).
+      reason: "[[pref-hidden]]",
+    });
+    const shared = JSON.stringify(ledgerRows(env.storeRoot, "shared", "reliability-audit"));
+    expect(shared).toContain("pack_digest");
+    expect(shared).not.toContain("pref-hidden");
+    // The machine that holds private keeps the batch and the reason on its own row.
+    expect(JSON.stringify(ledgerRows(env.storeRoot, "private", "reliability-audit"))).toContain(
+      "pref-hidden",
+    );
+    other = sharedOnlyPeer(env);
+    expect(assessSchemaPackIntegrity(other.vault).status).toBe("ok");
+  });
+
+  test("a reason with a private region still attests the apply", async () => {
+    env = makeStoreEnv("osb-schema-attest-region-");
+    switchDevice(env.storeRoot);
+    await applySchemaAdminMutations(env.vault, [ADD_PAPER], {
+      actor: "t",
+      reason: "for <private>the board</private>",
+    });
+    const shared = JSON.stringify(ledgerRows(env.storeRoot, "shared", "reliability-audit"));
+    expect(shared).toContain("pack_digest");
+    expect(shared).not.toContain("the board");
+    other = sharedOnlyPeer(env);
+    expect(assessSchemaPackIntegrity(other.vault).status).toBe("ok");
   });
 });
 

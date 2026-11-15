@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,9 +20,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
+import { proceduralMemoryUsagePath } from "../../../src/core/brain/paths.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import {
   LEGACY_DEVICES_PENDING_CODE,
@@ -53,6 +55,7 @@ import { RollbackRefusedError } from "../../../src/core/store-migration/rollback
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
 import { moveNeverHeld } from "../../helpers/held-partitions.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 // Tests here spawn processes; see tests/helpers/cli-timeout.ts.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -630,6 +633,68 @@ function switchedAlone(): Machine {
   expect(a.records().length).toBeGreaterThan(0);
   return a;
 }
+
+describe("the store records of files that became machine state", () => {
+  test("are adopted, then retired by the removal, when no rollback can run any more", () => {
+    const a = switchedAlone();
+    // What the migration of an earlier release imported: the procedural
+    // usage counters as a lane entry.
+    const usage = `${JSON.stringify({ id: "pmem-1", usedCount: 3, lastUsedAt: null })}\n`;
+    appendRecord(a.store(), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "o2b",
+      body: {
+        authority: "agent",
+        lane: "procedural-memory",
+        entry: "usage.jsonl",
+        fields: {},
+        text: usage,
+      },
+    });
+    const removed = removeLegacy(a.vault, { force: true });
+    if (!removed.removed) throw new Error("not removed");
+    const tombstones = a
+      .records()
+      .filter((r) => r.kind === "lane-entry-remove" && r.body["lane"] === "procedural-memory");
+    expect(tombstones.map((r) => r.body["entry"])).toEqual(["usage.jsonl"]);
+    expect(readFileSync(proceduralMemoryUsagePath(a.vault), "utf8")).toBe(usage);
+  });
+});
+
+describe("a store record this machine could not adopt", () => {
+  test.skipIf(CHMOD_CANNOT_DENY)("stays live through the removal, the one copy there is", () => {
+    const a = switchedAlone();
+    appendRecord(a.store(), {
+      partition: "shared",
+      stream: "events",
+      kind: "lane-entry",
+      agent: "o2b",
+      body: {
+        authority: "agent",
+        lane: "procedural-memory",
+        entry: "usage.jsonl",
+        fields: {},
+        text: `${JSON.stringify({ id: "pmem-1", usedCount: 3, lastUsedAt: null })}\n`,
+      },
+    });
+    // The device-local folder the copy would land in refuses writes.
+    const dir = dirname(proceduralMemoryUsagePath(a.vault));
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o500);
+    try {
+      const removed = removeLegacy(a.vault, { force: true });
+      if (!removed.removed) throw new Error("not removed");
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    const tombstones = a
+      .records()
+      .filter((r) => r.kind === "lane-entry-remove" && r.body["lane"] === "procedural-memory");
+    expect(tombstones).toEqual([]);
+  });
+});
 
 describe("a removal while a data shard of the store cannot be seen", () => {
   test("an imported record's shard gone since this machine read it refuses, even with --force", () => {

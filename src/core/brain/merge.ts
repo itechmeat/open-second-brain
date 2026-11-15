@@ -35,6 +35,7 @@ import { storeWrite } from "../store/store-write.ts";
 
 import { regenerateActiveQuiet } from "./active.ts";
 import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
+import { countersForShared } from "../store/read/store-entities.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { guardEntityMerge, type GuardEntityLike } from "./truth/merge-guard.ts";
@@ -206,8 +207,42 @@ export function mergePreferences(
   }
 
   const merged_evidenced_by = mergeEvidencedBy(keep.evidenced_by, drop.evidenced_by);
-  const applied_sum = keep.applied_count + drop.applied_count;
-  const violated_sum = keep.violated_count + drop.violated_count;
+  // Once switched, a shared preference's private uses stay out of the
+  // sums the merge log event and audit trail carry (task 3.18), and a drop
+  // record an earlier, interrupted run of this merge already copied to the
+  // keep is counted once, in the keep's counters.
+  const counts = (pref: typeof keep, slug: string) => {
+    const entry = storeOnly ? storePreferenceEntry(slug) : undefined;
+    if (entry === undefined) return { applied: pref.applied_count, violated: pref.violated_count };
+    const counters = countersForShared(entry);
+    return { applied: counters.applied_count, violated: counters.violated_count };
+  };
+  const keepCounts = counts(keep, keepSlug);
+  const dropCounts = ((): { applied: number; violated: number } => {
+    const dropEntry = storeOnly ? storePreferenceEntry(dropSlug) : undefined;
+    if (dropEntry === undefined) return counts(drop, dropSlug);
+    const copied = new Set(
+      (storePreferenceEntry(keepSlug)?.state.history ?? [])
+        .map((record) => record.body[MERGED_FROM_FIELD])
+        .filter((id): id is string => typeof id === "string"),
+    );
+    let applied = 0;
+    let violated = 0;
+    for (const record of dropEntry.state.history) {
+      if (record.kind !== PREFERENCE_EVIDENCE_KIND || copied.has(record.id)) continue;
+      // A private use counts unless the keep it lands on is shared: copied
+      // to a private keep (or from a private drop) it is part of the keep.
+      const keepPrivate = storePreferenceEntry(keepSlug)?.private ?? true;
+      if (!dropEntry.private && !keepPrivate && dropEntry.privateRecordIds.has(record.id)) {
+        continue;
+      }
+      if (record.body["result"] === "applied") applied += 1;
+      else if (record.body["result"] === "violated") violated += 1;
+    }
+    return { applied, violated };
+  })();
+  const applied_sum = keepCounts.applied + dropCounts.applied;
+  const violated_sum = keepCounts.violated + dropCounts.violated;
   const last_evidence_at = maxIso(keep.last_evidence_at, drop.last_evidence_at);
 
   const plan: MergePlan = Object.freeze({
@@ -278,20 +313,29 @@ export function mergePreferences(
     );
     if (evidence.length > 0) {
       const pairPrivate = (keepEntry?.private ?? true) || (dropEntry?.private ?? true);
-      storeWrite(
-        () =>
-          evidence.map((record) =>
-            preferenceEvidenceRecord({
-              id: keep.id,
-              result: record.body["result"] as EvidenceResult,
-              artifact: typeof record.body["artifact"] === "string" ? record.body["artifact"] : "",
-              agent: opts.agentName ?? "merge",
-              private: pairPrivate,
-              mergedFrom: record.id,
-            }),
-          ),
-        { vault },
-      );
+      // A record of the drop that sits in `private` (its artifact named a
+      // private page) stays there as a copy too. One store write lands in
+      // one partition, so the shared and the private copies are two writes.
+      const isPrivate = (record: (typeof evidence)[number]): boolean =>
+        pairPrivate || (dropEntry?.privateRecordIds.has(record.id) ?? true);
+      for (const group of [evidence.filter((r) => !isPrivate(r)), evidence.filter(isPrivate)]) {
+        if (group.length === 0) continue;
+        storeWrite(
+          () =>
+            group.map((record) =>
+              preferenceEvidenceRecord({
+                id: keep.id,
+                result: record.body["result"] as EvidenceResult,
+                artifact:
+                  typeof record.body["artifact"] === "string" ? record.body["artifact"] : "",
+                agent: opts.agentName ?? "merge",
+                private: isPrivate(record),
+                mergedFrom: record.id,
+              }),
+            ),
+          { vault },
+        );
+      }
     }
   }
 
@@ -356,8 +400,8 @@ export function mergePreferences(
         keep: renderPrefLink({ id: keep.id, principle: keep.principle }),
         drop: renderPrefLink({ id: drop.id, principle: drop.principle }),
         signal_union: `${merged_evidenced_by.length} (was ${keep.evidenced_by.length}, ${drop.evidenced_by.length})`,
-        applied_sum: `${applied_sum} (was ${keep.applied_count}, ${drop.applied_count})`,
-        violated_sum: `${violated_sum} (was ${keep.violated_count}, ${drop.violated_count})`,
+        applied_sum: `${applied_sum} (was ${keepCounts.applied}, ${dropCounts.applied})`,
+        violated_sum: `${violated_sum} (was ${keepCounts.violated}, ${dropCounts.violated})`,
         agent: opts.agentName ?? "unknown",
       },
     },
