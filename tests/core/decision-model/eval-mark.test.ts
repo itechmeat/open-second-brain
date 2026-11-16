@@ -26,6 +26,7 @@ import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import type { DecisionRequest } from "../../../src/core/decision-model/contract.ts";
 import {
   decisionModelModeFor,
+  parseDecisionModelUses,
   type ResolvedDecisionModelConfig,
   resolveDecisionModelConfig,
 } from "../../../src/core/decision-model/config.ts";
@@ -102,26 +103,9 @@ function evalConfig(profile: string | null = "laya"): ResolvedDecisionModelConfi
     timeoutMs: 3000,
     hookBudgetMs: 700,
     maxStateTokens: 32_000,
-    uses: {
-      rerank: "shadow",
-      answerable: "off",
-      skills: "off",
-      extract_prefilter: "off",
-      dedup: "off",
-      tension: "off",
-      labels: "off",
-      recall_inject: "off",
-    },
-    configuredUses: {
-      rerank: "shadow",
-      answerable: "off",
-      skills: "off",
-      extract_prefilter: "off",
-      dedup: "off",
-      tension: "off",
-      labels: "off",
-      recall_inject: "off",
-    },
+    // Derived so a newly registered use starts off here too.
+    uses: parseDecisionModelUses("rerank:shadow", []),
+    configuredUses: parseDecisionModelUses("rerank:shadow", []),
     dailyCostGateUsd: 0.5,
     inputPriceUsdPerMtok: 0.042,
     allowUncalibrated: false,

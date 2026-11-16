@@ -338,7 +338,30 @@ export function assessSchemaPackIntegrity(vault: string): SchemaPackIntegrity {
   // merge check below judges the records the digest was taken of.
   const store = isStoreOnly({ vault }) ? readStoreSchemaPack() : null;
   const source = store?.source ?? readSchemaPackSource(vault);
+  // A store whose rows name records: a deciding record no row attests is
+  // a finding even when the pack digests as recorded (a record that sets
+  // an entry the pack already held), since the next apply refuses it, and
+  // even when it removed the last entry, so the pack reads as absent.
+  const deciding = store?.deciding ?? [];
+  const unattested = store === null ? null : unattestedDeciding(vault, deciding);
+  const unattestedMismatches =
+    unattested === null || unattested.length === 0
+      ? NO_MISMATCHES
+      : Object.freeze([
+          Object.freeze({
+            field: SCHEMA_DECIDED_RECORDS_FIELD,
+            expected: "every deciding record attested by an audit row",
+            actual: `unattested: ${unattested.join(", ")}`,
+          }),
+        ]);
   if (!source.present) {
+    if (unattestedMismatches.length > 0) {
+      return Object.freeze({
+        status: SCHEMA_PACK_INTEGRITY.modified,
+        digest: null,
+        mismatches: unattestedMismatches,
+      });
+    }
     return Object.freeze({
       status: SCHEMA_PACK_INTEGRITY.unverified,
       digest: null,
@@ -365,22 +388,10 @@ export function assessSchemaPackIntegrity(vault: string): SchemaPackIntegrity {
     { [SCHEMA_PACK_DIGEST_FIELD]: recorded.digest },
     { [SCHEMA_PACK_DIGEST_FIELD]: digest },
   );
-  // A store whose rows name records: a deciding record no row attests is
-  // a finding even when the pack digests as recorded (a record that sets
-  // an entry the pack already held), since the next apply refuses it.
-  const deciding = store?.deciding ?? [];
-  const unattested = store === null ? null : unattestedDeciding(vault, deciding);
   const mismatches =
-    unattested === null || unattested.length === 0
+    unattestedMismatches.length === 0
       ? digestMismatches
-      : Object.freeze([
-          ...digestMismatches,
-          Object.freeze({
-            field: SCHEMA_DECIDED_RECORDS_FIELD,
-            expected: "every deciding record attested by an audit row",
-            actual: `unattested: ${unattested.join(", ")}`,
-          }),
-        ]);
+      : Object.freeze([...digestMismatches, ...unattestedMismatches]);
   if (
     digestMismatches.length > 0 &&
     unattested !== null &&

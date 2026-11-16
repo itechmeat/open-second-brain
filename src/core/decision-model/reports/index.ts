@@ -60,5 +60,17 @@ export const USE_REPORTS: Readonly<Record<DecisionModelUse, UseReportEntry | nul
     labels: entry(buildLabelsReport, renderLabelsReport),
     answerable: entry(buildAnswerableReport, renderAnswerableReport),
     recall_inject: entry(buildRecallInjectUseReport, renderRecallInjectUseReport),
+    // The topic and agent-context uses have no per-use report builder yet
+    // (noted in the design "as built" section); the generic summary in
+    // `diagnostics.ts` covers them.
+    topic_route: null,
+    event_kind: null,
+    human_readable: null,
+    topic_new: null,
+    topic_same: null,
+    question_resolved: null,
+    milestone_done: null,
+    head_select: null,
+    neighbour_relevant: null,
   },
 );

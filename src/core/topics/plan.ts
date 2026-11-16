@@ -33,6 +33,7 @@ import { TOPIC_PERSONAL_SCOPE, TOPIC_PROJECT_SCOPE_PREFIX } from "./constants.ts
 import { subjectTokens, type TopicCandidate } from "./candidates.ts";
 import { TOPIC_TITLE_MAX } from "./records.ts";
 import { routeKey, type TopicFold, type TopicHeadField, type TopicState } from "./fold.ts";
+import { topicGroupKey, type TopicVerdictBody, type TopicVerdicts } from "./verdicts.ts";
 
 /** At least this many shared subject words route a record or join it to a group. */
 const MIN_SHARED = 2;
@@ -55,6 +56,8 @@ export interface PlannedRoute {
   readonly record: string;
   readonly topic: string;
   readonly private: boolean;
+  /** Set when a model verdict chose this route in enforce (design D10): the assign carries it, with `authority: "model"`. */
+  readonly verdict?: TopicVerdictBody;
 }
 
 export interface PlannedCreate {
@@ -65,11 +68,15 @@ export interface PlannedCreate {
   /** Record ids the topic is made from, in record order. */
   readonly members: ReadonlyArray<string>;
   readonly sessions: number;
+  /** Set when the model was asked about this group and let it through (`topic_new`): the create record carries it. */
+  readonly verdict?: TopicVerdictBody;
 }
 
 export interface MergeProposal {
   readonly topics: readonly [string, string];
   readonly score: number;
+  /** Set when the model judged this pair (`topic_same`, design D10): a Jaccard proposal it called `different` is listed last; a pair it called `same` is added. Never applied. */
+  readonly verdict?: TopicVerdictBody;
 }
 
 export interface SplitProposal {
@@ -130,6 +137,33 @@ function scopeOf(candidate: TopicCandidate): string {
 function holder(fold: TopicFold, candidate: TopicCandidate): string | null {
   if (fold.assignments.has(candidate.id)) return fold.assignments.get(candidate.id)!;
   return candidate.topic === null ? null : fold.canonical(candidate.topic);
+}
+
+/**
+ * The topics a routing question may offer for `candidate` (design D10,
+ * `topic_route`): the active topics of its scope that the deterministic
+ * rule would not refuse - never a blocked route - the deterministic best
+ * first, then by shared-word count, then by creation. Empty when the
+ * deterministic rule routes nowhere.
+ */
+export function rankedRouteTopics(fold: TopicFold, candidate: TopicCandidate): string[] {
+  const words = subjectTokens(candidate.text);
+  if (words.size === 0) return [];
+  return [...fold.topics.values()]
+    .filter(isActive)
+    .filter((topic) => topic.scope === scopeOf(candidate))
+    .filter((topic) => !fold.blockedRoutes.has(routeKey(candidate.id, topic.id)))
+    .map((topic) => ({
+      id: topic.id,
+      createdAt: topic.createdAt,
+      n: shared(
+        words,
+        candidate.private || topic.private ? headTokens(topic, true) : headTokens(topic, false),
+      ),
+    }))
+    .filter(({ n }) => n >= MIN_SHARED && n / words.size >= MIN_ROUTE_SHARE)
+    .toSorted((a, b) => b.n - a.n || a.createdAt - b.createdAt || compareCodeUnits(a.id, b.id))
+    .map((entry) => entry.id);
 }
 
 function bestTopic(
@@ -210,6 +244,98 @@ function draftGoal(group: Group): string {
 const byRecordOrder = (a: TopicCandidate, b: TopicCandidate): number =>
   a.at - b.at || compareCodeUnits(a.id, b.id);
 
+/**
+ * Topic pairs of one scope whose head tokens share at least `minJaccard`
+ * (design D10, `topic_same`), best score first (ids break ties), at most `maxPairs`.
+ * The same head fields `reviewTopics` ranks merges by; `admit` leaves a
+ * topic out before the cap (the decide pass: one the egress rule keeps home).
+ */
+export function topicPairsForSame(
+  fold: TopicFold,
+  minJaccard: number,
+  maxPairs: number,
+  admit: (topic: TopicState) => boolean = () => true,
+): Array<{ readonly a: string; readonly b: string; readonly score: number }> {
+  const active = [...fold.topics.values()]
+    .filter((topic) => isActive(topic) && admit(topic))
+    .toSorted((a, b) => compareCodeUnits(a.id, b.id));
+  const heads = active.map((topic) => ({
+    topic,
+    tokens: subjectTokens([topic.title, topic.description ?? "", topic.goal ?? ""].join(" ")),
+  }));
+  const pairs: Array<{ a: string; b: string; score: number }> = [];
+  for (let i = 0; i < heads.length; i++) {
+    for (let j = i + 1; j < heads.length; j++) {
+      const a = heads[i]!;
+      const b = heads[j]!;
+      if (a.topic.scope !== b.topic.scope) continue;
+      const n = shared(a.tokens, b.tokens);
+      const union = a.tokens.size + b.tokens.size - n;
+      const score = union === 0 ? 0 : n / union;
+      if (score >= minJaccard) pairs.push({ a: a.topic.id, b: b.topic.id, score });
+    }
+  }
+  // The best-scoring pairs first, ids breaking ties: when more pairs
+  // qualify than one pass asks, the likeliest merges are asked.
+  return pairs
+    .toSorted(
+      (x, y) => y.score - x.score || compareCodeUnits(x.a, y.a) || compareCodeUnits(x.b, y.b),
+    )
+    .slice(0, maxPairs);
+}
+
+/**
+ * Model merge verdicts (design D10, `topic_same`): a `same` at or above
+ * the threshold joins the proposals (the model adds, never removes); a
+ * `different` at or above it annotates its Jaccard proposal and lists it
+ * last. Below the threshold, invalid, or on any failure today's
+ * proposals stand unchanged.
+ */
+function mergePairKey(pair: readonly [string, string]): string {
+  return [...pair].toSorted().join(",");
+}
+
+function applySameVerdicts(
+  fold: TopicFold,
+  merges: MergeProposal[],
+  same?: TopicVerdicts["sameTopics"],
+): MergeProposal[] {
+  if (same === undefined || same.length === 0) return merges;
+  const keyOf = mergePairKey;
+  const judged = new Map(same.map((entry) => [keyOf([entry.a, entry.b]), entry]));
+  const kept: MergeProposal[] = [];
+  const added: MergeProposal[] = [];
+  const annotated: MergeProposal[] = [];
+  for (const merge of merges) {
+    const entry = judged.get(keyOf(merge.topics));
+    // The decide pass keeps only verdicts at or above the stored `same_min`.
+    if (entry !== undefined) {
+      if (entry.option === "same") kept.push({ ...merge, verdict: entry.verdict });
+      else annotated.push({ ...merge, verdict: entry.verdict });
+      continue;
+    }
+    kept.push(merge);
+  }
+  // A model-only pair was judged before the planning lock: it is
+  // proposed only while both topics are still active in one scope.
+  const stillPair = (x: string, y: string): boolean => {
+    const tx = fold.topics.get(x);
+    const ty = fold.topics.get(y);
+    return (
+      tx !== undefined && ty !== undefined && isActive(tx) && isActive(ty) && tx.scope === ty.scope
+    );
+  };
+  for (const entry of same) {
+    if (entry.option !== "same") continue;
+    if (!stillPair(entry.a, entry.b)) continue;
+    const key = keyOf([entry.a, entry.b]);
+    const present = (m: MergeProposal): boolean => keyOf(m.topics) === key;
+    if (kept.some(present) || added.some(present) || annotated.some(present)) continue;
+    added.push({ topics: [entry.a, entry.b], score: 0, verdict: entry.verdict });
+  }
+  return [...kept, ...added, ...annotated];
+}
+
 /** Merge proposals and quiet-topic prompts: what the brief and digest ask the user. */
 export function reviewTopics(fold: TopicFold, nowMs: number, quietDays: number): TopicReview {
   const active = [...fold.topics.values()]
@@ -237,12 +363,21 @@ export function reviewTopics(fold: TopicFold, nowMs: number, quietDays: number):
   return { merges, quiet };
 }
 
-/** The plan for `candidates` against `fold`. */
+/**
+ * The plan for `candidates` against `fold`. `verdicts` (design D10,
+ * D20) refines the deterministic result: a verdict is applied only when
+ * its subject still matches this fold - the record is still unassigned,
+ * the topic still exists and is active, the route is not blocked, the
+ * group has exactly the same members - and a verdict that no longer
+ * matches is ignored, the deterministic rule applying. With `verdicts`
+ * absent the plan is exactly the deterministic one.
+ */
 export function planTopics(
   fold: TopicFold,
   candidates: ReadonlyArray<TopicCandidate>,
   settings: PlanSettings,
   nowMs: number,
+  verdicts?: TopicVerdicts,
 ): TopicPlan {
   const ordered = candidates.toSorted(byRecordOrder);
   const active = [...fold.topics.values()]
@@ -253,11 +388,44 @@ export function planTopics(
   const free: TopicCandidate[] = [];
   for (const candidate of ordered) {
     if (holder(fold, candidate) !== null) continue;
-    const topic = bestTopic(fold, candidate, active);
+    // The model's route (D10): a verdict that no longer matches this
+    // fold - the record assigned meanwhile, the topic merged, closed or
+    // of another scope, the route blocked - is ignored here and the
+    // deterministic `bestTopic` decides.
+    const routeVerdict = verdicts?.routes.get(candidate.id);
+    let topic: string | null = null;
+    let verdict: TopicVerdictBody | undefined;
+    let privateInput = false;
+    let modelNone = false;
+    if (routeVerdict !== undefined) {
+      if (routeVerdict.topic === null) {
+        modelNone = true;
+      } else {
+        const target = fold.topics.get(routeVerdict.topic);
+        if (
+          target !== undefined &&
+          isActive(target) &&
+          target.scope === scopeOf(candidate) &&
+          !fold.blockedRoutes.has(routeKey(candidate.id, target.id))
+        ) {
+          topic = routeVerdict.topic;
+          verdict = routeVerdict.verdict;
+          privateInput = routeVerdict.privateInput;
+        }
+      }
+    }
+    if (topic === null && !modelNone) topic = bestTopic(fold, candidate, active);
     if (topic !== null) {
       const target = fold.topics.get(topic)!;
-      routes.push({ record: candidate.id, topic, private: candidate.private || target.private });
+      routes.push({
+        record: candidate.id,
+        topic,
+        // A model route whose question carried a private input is private too.
+        private: candidate.private || target.private || privateInput,
+        ...(verdict !== undefined ? { verdict } : {}),
+      });
     } else if (candidate.project !== null && !fold.touched.has(candidate.id)) {
+      // A model `none` verdict also leaves the record free for grouping.
       free.push(candidate);
     }
   }
@@ -266,6 +434,14 @@ export function planTopics(
   for (const project of projects) {
     for (const group of groups(free.filter((c) => c.project === project))) {
       if (!qualifies(group, settings)) continue;
+      // `topic_new` (D10): a model veto skips the creation this pass
+      // only - the group is held in memory, the next pass asks again -
+      // and an approval rides the create record as its verdict. The
+      // count and session thresholds hold either way: the model can
+      // never create a group that does not qualify.
+      const key = topicGroupKey(group.members.map((m) => m.id));
+      const verdictEntry = verdicts?.vetoes.get(key);
+      if (verdictEntry !== undefined && verdictEntry.veto) continue;
       creates.push({
         title: draftTitle(group),
         goal: draftGoal(group),
@@ -273,6 +449,7 @@ export function planTopics(
         private: group.members.some((m) => m.private),
         members: group.members.map((m) => m.id),
         sessions: new Set(group.members.map((m) => m.session)).size,
+        ...(verdictEntry !== undefined ? { verdict: verdictEntry.verdict } : {}),
       });
     }
   }
@@ -284,5 +461,12 @@ export function planTopics(
       splits.push({ topic: topic.id, groups: parts.map((g) => g.members.map((m) => m.id)) });
     }
   }
-  return { routes, creates, splits, ...reviewTopics(fold, nowMs, settings.quietDays) };
+  const review = reviewTopics(fold, nowMs, settings.quietDays);
+  return {
+    routes,
+    creates,
+    splits,
+    merges: applySameVerdicts(fold, [...review.merges], verdicts?.sameTopics),
+    quiet: review.quiet,
+  };
 }

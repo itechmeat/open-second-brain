@@ -16,6 +16,7 @@ import {
   DECISION_MODEL_USES,
   type DecisionChoiceQuestion,
 } from "../../../src/core/decision-model/contract.ts";
+import { TOPIC_USES } from "../../../src/core/decision-model/questions-topics.ts";
 import {
   buildDecisionModelCheck,
   renderDecisionModelCheck,
@@ -185,7 +186,7 @@ describe("self-hosted presets", () => {
 });
 
 describe("threshold profiles", () => {
-  test("the Jev family enforces every use", () => {
+  test("the Jev baseline enforces the eight original uses; the topic uses need tuning", () => {
     const allEnforce = DECISION_MODEL_USES.map((u) => `${u}:enforce`).join(",");
     const jev = resolveDecisionModelConfig({
       env: { O2B_TEST_TS_KEY: FAKE_DECISION_KEY },
@@ -195,10 +196,12 @@ describe("threshold profiles", () => {
       }),
       vault: null,
     });
-    // Every use inherits the baseline.
-    expect(DECISION_MODEL_USES.filter((u) => decisionModelModeFor(jev, u) !== "enforce")).toEqual(
-      [],
+    // The baseline was measured on the eight original uses only; the nine
+    // topic and agent-context uses run shadow until they are tuned.
+    const shadowOnly = DECISION_MODEL_USES.filter(
+      (u) => decisionModelModeFor(jev, u) !== "enforce",
     );
+    expect(shadowOnly).toEqual([...TOPIC_USES]);
   });
 
   test("enforce on a profile without tuned thresholds runs as shadow", () => {

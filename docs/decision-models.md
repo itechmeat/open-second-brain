@@ -73,7 +73,12 @@ the day's spend reaches it ("Accounting"). A vault opts out with
   send no request and write no record at all.
 - **Decisions never write to the vault.** They filter or reorder what is
   returned. Only an accounting record (identifiers and numbers, never text) is
-  persisted.
+  persisted. The topic uses in `enforce` do write to the brain store -
+  `topic_route`, `event_kind`, `human_readable`, `topic_new`,
+  `question_resolved` and `milestone_done` store their effect as records so
+  every machine folds the same result - always with `authority: "model"`,
+  which a person's or an agent's record always beats, and never a delete,
+  merge, split, close or completion on its own.
 - **No training on recorded answers.** Nothing in Open Second Brain trains,
   fine-tunes or distils a model on decision records, and the main hosted
   vendor's terms forbid training a model that imitates its outputs. Do not
@@ -127,10 +132,14 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_output_price_usd_per_mtok` | output price, read only for the chat-shaped routes (`llm-emulation`, `converse`), whose cost is `unknown` unless both prices are set | none |
 | `decision_model_allow_uncalibrated` | allow an uncalibrated provider in `enforce` | `false` |
 | `decision_model_threshold_profile` | the built-in model family a `compatible` server serves (`jev-1.13` is the only one), so its uses may enforce on the shipped thresholds; every other model is tuned through the local thresholds store instead (see "Thresholds") | from preset |
+| `decision_model_private_uses` | comma list of the nine topic and agent-context uses whose private records may go to a hosted provider on this machine; an unknown use makes the config invalid; the vault can only narrow the feature, never set this key | empty |
 
 Uses: `rerank`, `answerable`, `skills`, `extract_prefilter`, `dedup`,
-`tension`, `labels`, `recall_inject`. Every use is implemented; each one is
-`off` until you set it, and each has its own page (see "Uses" below).
+`tension`, `labels`, `recall_inject`, `topic_route`, `event_kind`,
+`human_readable`, `topic_new`, `topic_same`, `question_resolved`,
+`milestone_done`, `head_select`, `neighbour_relevant`. Every use is
+implemented; each one is `off` until you set it, and each has its own page
+(see "Uses" below).
 
 Modes:
 
@@ -289,8 +298,10 @@ directory:
 - The threshold `values` are named per use (`low_priority_min` for `dedup`
   and `tension`, `drop_below` for `extract_prefilter`, `suggest_min` for
   `labels`, and so on; `o2b decision-model thresholds set` names the
-  valid ones). They are what a later tune converge against; the enforce
-  gate reads the entry's presence.
+  valid ones). The nine topic and agent-context uses compare their
+  answers against these stored values, keyed by the model that answered;
+  for the original eight uses they are what a later tune converges
+  against. The enforce gate reads the entry's presence.
 
 ### Tuning a model
 
@@ -329,7 +340,8 @@ and its own evaluation metric in `o2b decision-model report --use <use>`.
 Context uses change what the host receives in `enforce` and fall back to
 the deterministic result on any failure. Advisory uses only add a field
 next to a deterministic proposal and omit it on any failure. No use ever
-blocks a write or an answer, and no use writes to the vault.
+blocks a write or an answer, and no use writes to the vault; the topic uses'
+store records are covered in "Decisions never write to the vault" above.
 
 | Use | Surface | Kind | What `enforce` changes | On failure | Page |
 |---|---|---|---|---|---|
@@ -341,6 +353,15 @@ blocks a write or an answer, and no use writes to the vault.
 | `tension` | `brain_tension verify`, `o2b brain tension verify` | advisory | adds a verdict; a confident `compatible` or `unrelated` is listed last | the field is absent | [dedup and tension](decision-models/dedup-tension.md) |
 | `labels` | `brain_labels suggest`, `o2b brain label --suggest` | advisory | returns a suggestion per dimension; never assigns | `available: false` with the reason | [labels](decision-models/labels.md) |
 | `recall_inject` | the prompt-time recall-inject hook | context | drops notes that would not help, or withholds the brief; never adds material | today's brief | [recall-inject hook filter](decision-models/recall-inject.md) |
+| `topic_route` | the dream-time decide pass, applied in the topic planner | context | routes an unassigned record to the topic the model chose (an `assign` with `authority: "model"`); `none` leaves the record free | the word-overlap route | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `event_kind` | the dream-time decide pass, applied under the planning lock | context | derives one item record from a held record (decision, open question or log entry) | no page item | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `human_readable` | the dream-time decide pass, read by the weekly history | context | hides a note from the weekly history page through a `history-verdict` record | every note is shown | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `topic_new` | the dream-time decide pass, applied in the topic planner | context | vetoes the creation of a qualifying group for one pass; an approval rides the create record | the group is created | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `topic_same` | the dream-time decide pass, shown in the dream report | advisory | adds merge proposals with confidence, or annotates a Jaccard proposal; never merges | the Jaccard proposals alone | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `question_resolved` | the dream-time decide pass, applied under the planning lock | advisory | proposes a question-resolved record ("looks answered") | no proposal | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `milestone_done` | the dream-time decide pass, applied under the planning lock | advisory | proposes a milestone-done record ("looks done, confirm") | no proposal | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `head_select` | the SessionStart digest | context | reorders the topic heads by relevance and leaves the ones below the threshold out | recency and scope order | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `neighbour_relevant` | the neighbour-updates hook before a turn | context | injects the neighbour records the model marks relevant, at most five lines | the deterministic gate | [topics and agent context](decision-models/topics-and-agent-context.md) |
 
 In `shadow` every use sends and records its request and returns today's
 result; for `labels` the suggestions are null and for `dedup` and `tension`
@@ -412,6 +433,39 @@ Only while the feature is active and a use is in `shadow` or `enforce`:
   multilingual self-hosted model, or keep the uses in `shadow`.
 - Vault text may try to steer an answer. That is acceptable only because no
   decision authorises a write.
+
+### Privacy defaults of the topic and agent-context uses
+
+The nine topic and agent-context uses carry one guard more than the original
+eight: a private record - one in the `private` partition, a private topic, a
+private head field or a private item - may leave the machine only when the
+provider chain is local end to end (every entry's base URL is a loopback
+URL), or when you opted the use in through `decision_model_private_uses` on
+this machine. A chain that mixes a local and a hosted entry counts as
+hosted: a fallthrough must not carry private text to the hosted entry. A
+withheld record gets no verdict and keeps the deterministic result, and a
+request whose every candidate is withheld is not sent at all. `<private>`
+regions never leave the machine, opt-in or not: they are stripped from every
+text a request carries, the topic titles, descriptions, goals, question and
+milestone texts beside the records included. A loopback provider keeps
+everything on the machine, private records included.
+
+### Shadow first, then enforce
+
+Start every new use in `shadow`, read `o2b decision-model report --use <use>`
+over a few days, and switch to `enforce` only with evidence. The nine topic
+and agent-context uses have no per-use report yet: for them `report --use`
+prints the generic summary (calls, outcomes, latency, tokens, cost), and the
+evidence is in their shadow records, the `decision_model_call` records whose
+details carry what the use would have done. Those records are written to the
+vault's continuity log, so a store-only machine (no vault) records none:
+measure such a use on a machine with a vault. The nine uses are not covered by the shipped `jev-1.13` baseline,
+so `enforce` for them needs a thresholds-store entry for the answering model
+first (`o2b decision-model thresholds set --model <id> --use <use> --value
+<n>`); without one the resolver holds the use to `shadow` and
+`o2b decision-model check` names it. The value you set is the threshold the
+use applies to that model's answers, not only the key that unlocks
+`enforce`.
 
 ## Rerank kind `decision-model`
 
@@ -491,7 +545,10 @@ cost and p50/p95 latency, so an arm whose requests all failed (and so equals
 off) shows as failing. The decision-model arm always runs in `enforce`, so
 every query sends its top candidates to the endpoint. Nothing
 is enabled by default whatever the numbers are; switching to `enforce` is your
-decision.
+decision. The nine topic and agent-context uses have no eval harness yet:
+measure them through their shadow records and set a threshold with
+`o2b decision-model thresholds set` before `enforce` acts (see "Shadow
+first, then enforce" above).
 
 ## Accounting
 

@@ -105,14 +105,15 @@ const CROWDED_HOT_NOTES = 6;
 const CROWDED_QUERY = "widget calibration";
 
 /**
- * One modification time for every crowded note. The hot notes tie on score,
- * and the ranker's tie-break ladder reaches `mtime` (newest first) before
- * the chunk id. Written back to back, the six files got one coarse clock
- * tick on Linux and so fell through to the chunk id, but straddled ticks on
- * a Windows runner, which then answered with the newest notes first. A
- * fixed time makes the fixture as clock-free as its config claims.
+ * One modification time for every note a fixture expects in a fixed order.
+ * Notes that tie on score reach the ranker's tie-break ladder, which orders
+ * by `mtime` (newest first, at the index's one-second resolution) before
+ * the chunk id. Notes written back to back usually share one second and so
+ * fall through to the chunk id, but a run whose writes straddle a second
+ * boundary (seen on a Windows runner) answers with the newest notes first.
+ * A fixed time makes each fixture as clock-free as its config claims.
  */
-const CROWDED_MTIME = new Date("2026-01-01T00:00:00Z");
+const FIXTURE_MTIME = new Date("2026-01-01T00:00:00Z");
 
 function writeCrowdedVault(vaultDir: string): void {
   for (let i = 0; i < CROWDED_HOT_NOTES; i += 1) {
@@ -123,7 +124,7 @@ function writeCrowdedVault(vaultDir: string): void {
         `The widget calibration routine number ${i}. Widget calibration is repeated here. ` +
         `Widget calibration matters to this note.\n`,
     );
-    utimesSync(path, CROWDED_MTIME, CROWDED_MTIME);
+    utimesSync(path, FIXTURE_MTIME, FIXTURE_MTIME);
   }
   for (const session of ["b", "c", "d"]) {
     const path = writeMd(
@@ -132,7 +133,7 @@ function writeCrowdedVault(vaultDir: string): void {
       `---\ntitle: Other ${session}\nsession_ref: sess-${session}\n---\n\n# Other ${session}\n\n` +
         `The widget calibration routine of session ${session}.\n`,
     );
-    utimesSync(path, CROWDED_MTIME, CROWDED_MTIME);
+    utimesSync(path, FIXTURE_MTIME, FIXTURE_MTIME);
   }
 }
 
@@ -478,12 +479,15 @@ test("a pre-existing backfill under the cap notes the final pass's drops exactly
   try {
     for (let i = 0; i < 40; i += 1) {
       const visibility = i % 2 === 1 ? "visibility: private\n" : "";
-      writeMd(
+      const path = writeMd(
         v.vault,
         `solo-${i}.md`,
         `---\ntitle: Solo ${i}\n${visibility}session_ref: sess-a\n---\n\n# Solo ${i}\n\n` +
           `The widget calibration routine number ${i}.\n`,
       );
+      // Every row ties on score, so the expected order is the chunk id's
+      // (path order); a shared mtime keeps the newest-first rung out of it.
+      utimesSync(path, FIXTURE_MTIME, FIXTURE_MTIME);
     }
     const cold = withRecall(
       makeConfig({ vault: v.vault, dbPath: v.dbPath, maxHops: 0, mmrLambda: 1 }),

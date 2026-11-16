@@ -240,7 +240,34 @@ describe("budgetActiveBody: the headline tier ladder", () => {
     expect(out.split("low_confidence on").length - 1).toBe(3);
     expect(out).not.toContain("`r3`");
     // The tier notice names the one section actually compacted.
+    // The cut count does not fit beside the tiered body: the plain notice rides.
     expect(out).toContain("Headlines kept to fit the injection budget: Recently retired (last 4).");
+    expect(out).not.toContain("Injection truncated");
+  });
+
+  test("with room beside the tiered body the tier-alone notice counts the rule lines cut", () => {
+    const retired = Array.from(
+      { length: 20 },
+      (_, i) => `- \`r${i}\` — low_confidence on 2026-05-${String(i + 1).padStart(2, "0")}`,
+    ).join("\n");
+    const input = [
+      "# Active Brain Preferences",
+      "",
+      "## Confirmed (1)",
+      "",
+      "- `c0` (confidence: high (0.95)) — Rule C",
+      "",
+      "## Recently retired (last 20)",
+      "",
+      retired,
+    ].join("\n");
+    const budget = input.length - 200;
+    const out = budgetActiveBody(input, budget);
+    expect(out.split("low_confidence on").length - 1).toBe(3);
+    expect(out).toContain(
+      "_Headlines kept to fit the injection budget: Recently retired (last 20); 17 rule lines cut.",
+    );
+    expect(out.length).toBeLessThanOrEqual(budget);
     expect(out).not.toContain("Injection truncated");
   });
 
@@ -274,7 +301,7 @@ describe("budgetActiveBody: the headline tier ladder", () => {
     const tiered = expectedTieredJoin();
     const out = budgetActiveBody(tierableBody(), tiered.length - 10);
     expect(out).toContain("Injection truncated to budget");
-    expect(out).toContain("Dropped: Quarantine (5)");
+    expect(out).toContain("Dropped 1 section (Quarantine (5))");
     expect(out).toContain("Headlines kept in: Most-applied (30d)");
     expect(out).not.toContain("## Quarantine");
     expect(out).toContain("- `m2` (applied_in_window: 9)");
@@ -285,7 +312,10 @@ describe("budgetActiveBody: the headline tier ladder", () => {
     const clauseStart = out.indexOf("_Headlines kept in:");
     expect(clauseStart).toBeGreaterThanOrEqual(0);
     const clause = out.slice(clauseStart, out.indexOf("._", clauseStart) + 2);
-    expect(clause).toBe("_Headlines kept in: Most-applied (30d) (5)._");
+    // Its count is of the surviving sections only: the two Most-applied lines.
+    expect(clause).toBe("_Headlines kept in: Most-applied (30d) (5); 2 rule lines cut._");
+    // The total of both tiered sections rides the drop notice.
+    expect(out).toContain("Dropped 1 section (Quarantine (5)); 4 rule lines cut.");
     expect(clause).not.toContain("Quarantine");
   });
 
@@ -349,7 +379,7 @@ describe("budgetActiveBody: the headline tier ladder", () => {
     // (everything else survives intact).
     const budget = input.length - (quarantine.length - tiered.length) - 1;
     const out = budgetActiveBody(input, budget);
-    expect(out).toContain("Dropped: Quarantine (5)");
+    expect(out).toContain("Dropped 1 section (Quarantine (5))");
     expect(out).toContain("## Most-applied");
     expect(out).not.toContain("Headlines kept in: Quarantine");
     expect(out).not.toContain("Headlines kept in");

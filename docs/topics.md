@@ -58,12 +58,46 @@ o2b topic archive <topic>
 
 The dream pass plans topics on the view writer only, and two passes on one machine never create the same topic. Two machines can, in one case: when both claim the view writer role at about the same time and sync takes longer than the one catch-up a fresh claim waits, each may plan once before the other's claim arrives; the brief then proposes merging the two topics. Otherwise:
 
-- **Routes** a new record of a project to the active topic of that project it clearly belongs to. Only shared text decides: a private item, or a title, description or goal you set privately, never pulls a shared record into a topic.
+- **Routes** a new record of a project to the active topic of that project it clearly belongs to. Only shared text decides: a private item, or a title, description or goal you set privately, never pulls a shared record into a topic. A `<private>` region inside a record is left out of everything the planner reads: its words never route or group a record, and never appear in a drafted title or goal.
 - **Creates** a topic when enough related records of one project that no topic holds (5 by default, the shared setting `topics.new_min_records`) come from at least two sessions (`topics.new_min_sessions`, default 2). One busy session never makes a topic on its own. The topic gets a drafted title and goal, which you can change.
 - **Proposes** merges of two topics that look like one, and splits of a topic whose material falls into two groups. Nothing proposed is applied: the digest and the dream report list the proposal with the command that applies it.
 - **Asks** about a topic that had no news for 30 days (`topics.quiet_days`): keep it, put it on hold, mark it done or close it. Its status does not change until you answer.
 
 Every create and route is listed in the dream report with the command that undoes it; a pass run with `--config` names that file in the command.
+
+### What a decision model may do here
+
+With the decision-model uses on (see
+[decision-models](decision-models.md)), the dream pass can refine what the
+planner does on its own. Everything a model writes carries the model's
+authority, which your records and an agent's records always beat, and you can
+undo any topic record of it with `o2b topic undo <record>` like every
+automatic write. A `human_readable` verdict is the exception: it is a
+`history-verdict` record of the log, not a topic record, and that command
+does not take it back:
+
+- **Model routes.** A record the word-overlap rule would leave free can be
+  assigned to a topic the model chose (`topic_route`); the assignment names
+  the model and its confidence in a `verdict` field, and a route you took
+  back is never taken again.
+- **Derived items.** A record a topic holds can gain the item it describes -
+  a decision, an open question or a log entry - with the model's kind choice
+  (`event_kind`). The item names the record it came from in its `source`
+  field.
+- **Model proposals.** A milestone the model thinks is done shows `looks
+  done, confirm` and stays open until you or an agent with evidence marks it
+  (`milestone_done`); an open question a model thinks a record answers shows
+  as "looks answered" until you confirm it (`question_resolved`); merge
+  proposals the model adds appear in the dream report next to the Jaccard
+  ones, with their confidence (`topic_same`). A model never merges,
+  splits, closes or completes anything on its own.
+- **A model can also say no:** a topic creation it does not believe in is
+  skipped for that pass (`topic_new`), and a note it does not think belongs
+  in your weekly history is hidden from that page (`human_readable`, stored
+  as a `history-verdict` record; a note it keeps is stored as kept, so it
+  is not asked about again). Other answers that change nothing are
+  remembered on the machine that runs the dream, so the same record is
+  not asked twice and older records get their turn.
 
 ## Undo
 

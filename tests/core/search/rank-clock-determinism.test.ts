@@ -100,13 +100,19 @@ function identityProjection(results: ReadonlyArray<BrainSearchResult>) {
 
 test("two live searches over a scored tie return the same rows in the same order", async () => {
   // Byte-identical bodies in two files: identical term frequencies and
-  // identical document lengths, so FTS5 scores them identically, and the
-  // same indexing pass gives them the same second-resolution mtime. Every
-  // ranked layer - keyword, recency, link, tag - is therefore equal, and
-  // the composite score is an exact float tie.
+  // identical document lengths, so FTS5 scores them identically, and one
+  // pinned mtime gives them the same recency (two back-to-back writes can
+  // straddle a second boundary, which the index's one-second mtime would
+  // turn into a recency gap). Every ranked layer - keyword, recency, link,
+  // tag - is therefore equal, and the composite score is an exact float
+  // tie.
   const body = "The rollback strategy reverts the migration in one step.\n";
-  writeMd(tmp.vault, "left.md", `---\ntitle: Left\n---\n\n${body}`);
-  writeMd(tmp.vault, "right.md", `---\ntitle: Right\n---\n\n${body}`);
+  const tiedMtime = new Date("2026-01-01T00:00:00Z");
+  for (const name of ["left", "right"]) {
+    const title = name === "left" ? "Left" : "Right";
+    const path = writeMd(tmp.vault, `${name}.md`, `---\ntitle: ${title}\n---\n\n${body}`);
+    utimesSync(path, tiedMtime, tiedMtime);
+  }
   writeMd(tmp.vault, "other.md", `---\ntitle: Other\n---\n\nUnrelated prose about gardening.\n`);
   const config = makeConfig({ vault: tmp.vault, dbPath: tmp.dbPath, cacheEnabled: false });
   await indexVault(config, {});

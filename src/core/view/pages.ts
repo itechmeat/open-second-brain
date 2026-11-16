@@ -64,6 +64,8 @@ export const ID_LINE_KEY = "#id";
 
 /** Log event types the pages show. */
 const NOTE_EVENT = "note";
+/** A model verdict on whether a note belongs in the weekly history (design D10). */
+const HISTORY_VERDICT_KIND = "history-verdict";
 const DECISION_RECORD_EVENT = "decision-record";
 const DECISION_RESOLVED_EVENT = "decision-resolved";
 
@@ -208,11 +210,31 @@ function humanRetirement(pref: PreferenceState): StoreRecord | null {
  * was confirmed, and the day the user retired a rule. `prefs` is every
  * shared preference ({@link sharedPreferences}).
  */
+/**
+ * The note records the weekly history leaves out: the newest
+ * `history-verdict` record per note (design D10, `human_readable`)
+ * decides - a model verdict with `keep: false` hides the note, a later
+ * `keep: true` brings it back. Decisions and confirmed rules are never
+ * named by a verdict and never hidden.
+ */
+function historyHiddenNotes(shared: ReadonlyArray<StoreRecord>): Set<string> {
+  const hidden = new Set<string>();
+  for (const record of shared) {
+    if (record.kind !== HISTORY_VERDICT_KIND) continue;
+    const note = record.body["record"];
+    if (typeof note !== "string") continue;
+    if (record.body["keep"] === false) hidden.add(note);
+    else hidden.delete(note);
+  }
+  return hidden;
+}
+
 export function viewEntries(
   shared: ReadonlyArray<StoreRecord>,
   prefs: ReadonlyArray<PreferenceState>,
 ): ViewEntry[] {
   const entries: ViewEntry[] = [];
+  const hiddenNotes = historyHiddenNotes(shared);
   for (const record of shared) {
     if (record.kind !== LOG_EVENT_KIND || valueCarriesPrivateRegion(record.body)) continue;
     const type = record.body["event_type"];
@@ -222,7 +244,9 @@ export function viewEntries(
     const key = `rec:${record.id}`;
     if (type === NOTE_EVENT) {
       const text = textField(payload, "text");
-      if (text !== null) entries.push({ key, day, kind: "note", text, order: record, at });
+      if (text !== null && !hiddenNotes.has(record.id)) {
+        entries.push({ key, day, kind: "note", text, order: record, at });
+      }
     } else if (type === DECISION_RECORD_EVENT || type === DECISION_RESOLVED_EVENT) {
       const text = textField(payload, type === DECISION_RECORD_EVENT ? "chosen" : "choice");
       if (text === null) continue;

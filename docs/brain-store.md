@@ -710,7 +710,8 @@ machines: each apply's audit row names the records it wrote and the
 records rows it had seen already attest, and the migration's import
 attests the records it imported. A record no apply wrote (a settings write,
 a hand-made line) still reports the pack as modified, even when it leaves
-the pack as it was, and the next
+the pack as it was or removes the last entry so that no pack is left, and
+the next
 store-only apply refuses with `unattested_schema_records`, naming the
 records. A row attests each record in the version it saw, so another body
 written under the id of an attested record counts as unattested too. Look

@@ -33,6 +33,13 @@ export type ScriptedAnswer = number | string | { readonly invalid: true };
 export interface FakeDecisionProviderOptions {
   /** Answer per question id; a function receives the id and the request. */
   readonly answer?: (id: string, req: DecisionRequest) => ScriptedAnswer | undefined;
+  /**
+   * The probability the fake reports for the chosen option of a
+   * scripted `choice` answer (a number, or per question id): the wire
+   * format always carries a distribution for `choice`, and uses that
+   * read the probability of the option they acted on.
+   */
+  readonly probability?: number | ((id: string, req: DecisionRequest) => number);
   readonly latencyMs?: number;
   readonly fail?: DecisionDegradeReason;
   readonly model?: string;
@@ -67,7 +74,18 @@ export class FakeDecisionProvider implements DecisionProvider {
       } else if (typeof scripted === "object") {
         answers[id] = { type: q.type, value: Number.NaN, valid: false };
       } else {
-        answers[id] = { type: q.type, value: scripted, valid: true };
+        const probability =
+          typeof this.opts.probability === "number"
+            ? this.opts.probability
+            : this.opts.probability?.(id, req);
+        answers[id] = {
+          type: q.type,
+          value: scripted,
+          valid: true,
+          ...(q.type === "choice" && typeof probability === "number"
+            ? { probabilities: { [String(scripted)]: probability } }
+            : {}),
+        };
       }
     }
     return {
@@ -179,6 +197,10 @@ export async function startFakeSystemOne(): Promise<FakeSystemOne> {
     connections++;
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
+    // A client that gives up (an aborted fetch) resets the connection, and
+    // the reply written after that fails on the socket: a client the
+    // product abandons is a scenario, never a crash of the test process.
+    socket.on("error", () => {});
     let buffer = Buffer.alloc(0);
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);

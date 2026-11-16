@@ -262,6 +262,14 @@ export interface DreamOptions {
    * render at the end of the pass use (absent: the process's own).
    */
   readonly configPath?: string;
+  /**
+   * Model verdicts computed before the pass (design D10, D20) by an
+   * asynchronous front door that awaited `prepareTopicVerdicts`;
+   * `planTopics` applies them only where their subject still matches the
+   * fold read under the planning lock. Absent (sync callers, dry runs,
+   * previews): the deterministic plan.
+   */
+  readonly topicVerdicts?: import("../topics/verdicts.ts").TopicVerdicts;
   /** Wall clock for the run. Defaults to `new Date()`. */
   readonly now?: Date;
   /** When true, compute the plan but make no writes. */

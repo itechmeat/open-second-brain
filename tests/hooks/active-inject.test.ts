@@ -639,8 +639,9 @@ describe("active-inject hook: tiered injection budgeting", () => {
     expect(injected).toContain("brain_context");
     expect(injected).not.toContain("Injection truncated");
     // The framed whole - header included - stays within the configured
-    // budget: the framing is charged, never stacked on top. The header
-    // must actually be present, or the slice below reads as vacuous.
+    // budget plus the tier notice's new cut-count clause (task 4.4): the
+    // framing is charged, never stacked on top. The header must actually
+    // be present, or the slice below reads as vacuous.
     expect(injected.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY))).toBeGreaterThan(-1);
     const memory = injected.slice(
       injected.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY)),

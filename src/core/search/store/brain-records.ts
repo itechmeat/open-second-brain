@@ -308,6 +308,79 @@ export function recordsAfter(db: Database, since: number, limit: number): Stored
     .map(toStored);
 }
 
+/** The highest ingest sequence of the index; 0 when it holds no record. */
+export function headSeq(db: Database): number {
+  const row = db
+    .query<{ seq: number | null }, []>(`SELECT MAX(seq) AS seq FROM ${RECORDS_TABLE}`)
+    .get();
+  return row?.seq ?? 0;
+}
+
+/** What {@link neighbourRecords} keeps: one stream, some kinds, never one writer. */
+export interface NeighbourRecordFilter {
+  /** Sequences above `after` and at most `upTo`. */
+  readonly after: number;
+  readonly upTo: number;
+  readonly stream: string;
+  readonly kinds: ReadonlyArray<string>;
+  /** The writer left out: this device and this agent. */
+  readonly device: string;
+  readonly agent: string;
+}
+
+const NEIGHBOUR_WHERE =
+  "seq > ? AND seq <= ? AND stream = ? AND kind IN (SELECT value FROM json_each(?)) " +
+  "AND NOT (device = ? AND agent = ?)";
+
+function neighbourArgs(f: NeighbourRecordFilter): [number, number, string, string, string, string] {
+  return [f.after, f.upTo, f.stream, JSON.stringify(f.kinds), f.device, f.agent];
+}
+
+/**
+ * The newest `limit` records that match `filter`, oldest first, and how
+ * many older matches the limit left out. The limit applies to the
+ * matches, never to the records of other streams and kinds in between.
+ */
+export function neighbourRecords(
+  db: Database,
+  filter: NeighbourRecordFilter,
+  limit: number,
+): { readonly rows: StoredRecord[]; readonly skipped: number } {
+  const args = neighbourArgs(filter);
+  const rows = db
+    .query<RecordSqlRow, [number, number, string, string, string, string, number]>(
+      `SELECT ${RECORD_COLUMNS} FROM ${RECORDS_TABLE} WHERE ${NEIGHBOUR_WHERE} ` +
+        "ORDER BY seq DESC LIMIT ?",
+    )
+    .all(...args, limit)
+    .map(toStored)
+    .toReversed();
+  if (rows.length < limit) return { rows, skipped: 0 };
+  const total =
+    db
+      .query<{ n: number }, [number, number, string, string, string, string]>(
+        `SELECT COUNT(*) AS n FROM ${RECORDS_TABLE} WHERE ${NEIGHBOUR_WHERE}`,
+      )
+      .get(...args)?.n ?? rows.length;
+  return { rows, skipped: Math.max(0, total - rows.length) };
+}
+
+/** The newest `limit` records one device and agent wrote, at most `upTo`, newest first. */
+export function ownRecordsTail(
+  db: Database,
+  self: { readonly device: string; readonly agent: string },
+  upTo: number,
+  limit: number,
+): StoredRecord[] {
+  return db
+    .query<RecordSqlRow, [string, string, number, number]>(
+      `SELECT ${RECORD_COLUMNS} FROM ${RECORDS_TABLE} WHERE device = ? AND agent = ? AND seq <= ? ` +
+        "ORDER BY seq DESC LIMIT ?",
+    )
+    .all(self.device, self.agent, upTo, limit)
+    .map(toStored);
+}
+
 /** The source of each of `documentIds` that is indexed. */
 export function documentSources(
   db: Database,

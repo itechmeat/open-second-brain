@@ -16,6 +16,7 @@
 
 import { test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { utimesSync } from "node:fs";
 
 import { runFtsQueryDetailed } from "../../../src/core/search/fts.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
@@ -176,24 +177,31 @@ test("a pool the cap really did cut still names the code and the cap", async () 
 test("a session cap that drops rows names them beside the floor's drops", async () => {
   // Four hot notes in one source session, two weak notes in another: a
   // floor between the clusters removes the weak session, and the cap
-  // bounds the crowded one - both codes ride the same trail.
+  // bounds the crowded one - both codes ride the same trail. The hot
+  // notes tie on every intrinsic signal, so the kept row is the chunk id's
+  // pick (`a-0`) only while they also share one mtime: the freshness prior
+  // and the newest-first tie-break rung both read it, and back-to-back
+  // writes can straddle a second boundary. One fixed time for every note.
+  const mtime = new Date("2026-01-01T00:00:00Z");
   const v = createTempVault("trail-session-cap");
   cleanups.push(v.cleanup);
   for (let i = 0; i < 4; i += 1) {
-    writeMd(
+    const path = writeMd(
       v.vault,
       `a-${i}.md`,
       "---\ntitle: Hot\nsession_ref: sess-a\n---\n\n# Hot\n\n" +
         `fox fox fox fox the quick brown fox jumps over note ${i}.\n`,
     );
+    utimesSync(path, mtime, mtime);
   }
   for (const b of ["b-0", "b-1"]) {
-    writeMd(
+    const path = writeMd(
       v.vault,
       `${b}.md`,
       "---\ntitle: Weak\nsession_ref: sess-b\n---\n\n# Weak\n\n" +
         `A note mostly about cats, with one fox mention (${b}).\n`,
     );
+    utimesSync(path, mtime, mtime);
   }
   const cfg = makeConfig({ vault: v.vault, dbPath: v.dbPath, maxHops: 0, mmrLambda: 1 });
   const cappedCfg = Object.freeze({

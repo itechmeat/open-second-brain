@@ -34,6 +34,19 @@ export const DECISION_MODEL_USES = Object.freeze([
   "tension",
   "labels",
   "recall_inject",
+  // The topic and agent-context uses (brain-store-and-topics, design
+  // D10): dream-time uses refine the deterministic topic planner, the
+  // last two refine hook-time injections. Each stays off unless
+  // `decision_model_uses` names it.
+  "topic_route",
+  "event_kind",
+  "human_readable",
+  "topic_new",
+  "topic_same",
+  "question_resolved",
+  "milestone_done",
+  "head_select",
+  "neighbour_relevant",
 ] as const);
 
 export type DecisionModelUse = (typeof DECISION_MODEL_USES)[number];

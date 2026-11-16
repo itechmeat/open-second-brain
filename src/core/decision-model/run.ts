@@ -85,6 +85,12 @@ export type DecisionRunResult<C> =
       readonly response: DecisionResponse;
       readonly context: C;
       readonly latencyMs: number;
+      /**
+       * The chain entry that answered: its configured provider name and
+       * model. Stored thresholds are keyed by this model, and a stored
+       * verdict names this provider.
+       */
+      readonly answeredBy: { readonly provider: string; readonly model: string | null };
     }
   | {
       readonly status: "degraded";
@@ -124,6 +130,8 @@ export interface RunDecisionOptions<C> {
   readonly recordDetails?: (
     response: DecisionResponse | null,
     context: C | null,
+    /** The chain entry this record is for (the one that answered, on `ok`). */
+    answeredBy: { readonly provider: string; readonly model: string | null },
   ) => Readonly<Record<string, unknown>> | undefined;
 }
 
@@ -217,7 +225,10 @@ export async function runDecision<C>(
   ): void => {
     let details: Readonly<Record<string, unknown>> | undefined;
     try {
-      details = opts.recordDetails?.(extra.response ?? null, extra.context ?? null);
+      details = opts.recordDetails?.(extra.response ?? null, extra.context ?? null, {
+        provider: attempt.entry.name,
+        model: attempt.entry.model,
+      });
     } catch {
       details = undefined;
     }
@@ -343,7 +354,14 @@ export async function runDecision<C>(
         context: ready.context,
         latencyMs,
       });
-      return { status: "ok", mode: attempt.mode, response, context: ready.context, latencyMs };
+      return {
+        status: "ok",
+        mode: attempt.mode,
+        response,
+        context: ready.context,
+        latencyMs,
+        answeredBy: { provider: attempt.entry.name, model: attempt.entry.model },
+      };
     }
     return {
       status: "degraded",

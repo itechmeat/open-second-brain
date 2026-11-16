@@ -117,8 +117,24 @@ Pick the use that matches what the user wants to improve:
 - `dedup`, `tension`, `labels`: advisory verdicts on proposals the
   deterministic detectors made (`brain_hygiene scan`, `brain_tension
   verify`, `brain_labels suggest`).
+- `topic_route`: which topic an unassigned record lands on in the dream
+  pass. Mention that the planner's word overlap stays the fallback.
+- `event_kind`: which item a record a topic holds derives.
+- `human_readable`: which notes stay in the weekly history page.
+- `topic_new`: whether a qualifying cluster becomes a topic this pass.
+- `topic_same`: which topic pairs the dream report proposes for a merge.
+- `question_resolved`: which open question a record answers (a proposal
+  only).
+- `milestone_done`: whether a milestone looks done (a proposal only).
+- `head_select`: which topic heads lead the session start digest.
+- `neighbour_relevant`: which neighbour records reach the agent before a
+  turn. The nine topic and agent-context uses are not covered by the
+  shipped baseline: `enforce` needs a thresholds-store entry first,
+  and the value set there is the threshold the use applies to that
+  model's answers.
 
-Each use has its own page under `docs/decision-models/`.
+Each use has its own page under `docs/decision-models/`; the nine new ones
+share one page, `docs/decision-models/topics-and-agent-context.md`.
 
 ## Step 5: measure, then decide
 
@@ -132,6 +148,11 @@ o2b search rerank-eval --dataset <queries.json> --kind decision-model --compare-
 `report` prints the calls, outcomes, latency, tokens and cost, plus the
 use's own evaluation metric. Recommend `enforce` only when that metric
 shows a gain against the deterministic baseline without a regression.
+The nine topic and agent-context uses (`head_select` among them) have no
+per-use metric yet: `report` prints only the generic summary for them, so
+keep them in shadow and do not recommend `enforce` from `report` alone.
+Their shadow records are written to the vault's log, so a store-only
+machine records none.
 For `extract_prefilter`, `enforce` needs zero regret (no committed signal
 from a turn the filter would have dropped); otherwise stay in shadow.
 Switching to `enforce` is the user's decision, one use at a time:

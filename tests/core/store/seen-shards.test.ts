@@ -5,7 +5,7 @@
  * or a human retired the device that wrote it.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -312,5 +312,29 @@ describe("a tracking update that gave way to a busy lock", () => {
     expect(events(env).unreadable).toEqual([]);
     rmSync(peer);
     expect(events(env).unreadable).toEqual(["events/dev-b/" + peer.split(/[\\/]/).at(-1)]);
+  });
+
+  test("stays queued in this process: the ledger file another process reads does not hold it yet", () => {
+    env = makeStoreEnv("osb-seen-queued-file-", { legacyTree: false });
+    note(env, "dev-a");
+    events(env);
+    const storeId = readStoreId(partitionDir(env.storeRoot, "shared")) as string;
+    const dir = deviceStateDirFor(storeId, processDirsEnv());
+    const ledger = readdirSync(dir).find(
+      (n) => n.startsWith("seen-shards-") && n.endsWith(".json"),
+    );
+    mkdirSync(join(dir, `${ledger!}.lock`));
+    const peer = note(env, "dev-b");
+    events(env);
+    rmSync(peer);
+    const rel = "events/dev-b/" + peer.split(/[\\/]/).at(-1);
+    // This process names the shard from its queue...
+    expect(withoutSeenRecording(() => events(env!).unreadable)).toEqual([rel]);
+    // ...but the file holds only what an update wrote, so a process that
+    // ends before its next update leaves no claim another one can check.
+    const file = JSON.parse(readFileSync(join(dir, ledger!), "utf8")) as {
+      shards: { shared: string[] };
+    };
+    expect(file.shards.shared).not.toContain(rel);
   });
 });

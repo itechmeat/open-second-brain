@@ -34,6 +34,7 @@ import {
   SETTING_TOPIC_MIN_SESSIONS,
   SETTING_TOPIC_QUIET_DAYS,
   type StorePartition,
+  type StoreStream,
 } from "../store/constants.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { withLocalLock } from "../store/local-lock.ts";
@@ -51,6 +52,12 @@ import { topicCandidates } from "./candidates.ts";
 import { topicBodyRejection } from "./records.ts";
 import { foldTopics } from "./fold.ts";
 import { planTopics, type MergeProposal, type QuietPrompt, type SplitProposal } from "./plan.ts";
+import type { TopicVerdictBody, TopicVerdicts } from "./verdicts.ts";
+import {
+  judgedHistoryNotes,
+  writeVerdictRecords,
+  type VerdictWriteCounts,
+} from "./verdict-writes.ts";
 
 /** The command that undoes one automatic topic record. */
 export const TOPIC_UNDO_COMMAND = "o2b topic undo";
@@ -64,6 +71,8 @@ export interface CreatedTopic {
   readonly record: string;
   readonly members: number;
   readonly undo: string;
+  /** Set when the model let the group through (`topic_new`, design D10). */
+  readonly verdict?: TopicVerdictBody;
 }
 
 export interface RoutedRecord {
@@ -71,6 +80,8 @@ export interface RoutedRecord {
   readonly topic: string;
   readonly assign: string;
   readonly undo: string;
+  /** Set when a model verdict chose this route (`topic_route`, design D10). */
+  readonly verdict?: TopicVerdictBody;
 }
 
 export type TopicPlanningReport =
@@ -94,6 +105,16 @@ export type TopicPlanningReport =
       readonly skipped: number;
       /** Planned topics not created because their record would not be valid. */
       readonly invalid: number;
+      /** Item records derived from `event_kind` model verdicts (design D10). */
+      readonly derived: number;
+      /** `question-resolved` proposals from model verdicts. */
+      readonly resolutions: number;
+      /** `milestone-done` proposals from model verdicts. */
+      readonly completions: number;
+      /** `history-verdict` records that hide a note, from `human_readable` model verdicts. */
+      readonly hidden: number;
+      /** `history-verdict` records that keep a note, from `human_readable` model verdicts. */
+      readonly kept: number;
     };
 
 /**
@@ -106,10 +127,26 @@ export interface TopicPlanningError {
   readonly error: string;
   readonly created: ReadonlyArray<CreatedTopic>;
   readonly routed: ReadonlyArray<RoutedRecord>;
+  /** Item records derived from model verdicts before the failure. */
+  readonly derived: number;
+  /** `question-resolved` proposals written before the failure. */
+  readonly resolutions: number;
+  /** `milestone-done` proposals written before the failure. */
+  readonly completions: number;
+  /** `history-verdict` records that hide a note, written before the failure. */
+  readonly hidden: number;
+  /** `history-verdict` records that keep a note, written before the failure. */
+  readonly kept: number;
 }
 
 export interface TopicPlanningOptions {
   readonly agent: string;
+  /**
+   * Model verdicts computed before the pass (design D10, D20): applied
+   * only where their subject still matches the fold read under the
+   * lock. Absent: the deterministic plan.
+   */
+  readonly topicVerdicts?: TopicVerdicts;
   /** Wall clock (default `Date.now`). */
   readonly now?: () => number;
   /**
@@ -158,8 +195,12 @@ type WriterGate =
  * instead; and a writer by its own fresh claim waits until the render
  * has settled the claim, so a rival claim with a lower clock has one
  * catch-up to arrive before this machine creates a topic.
+ *
+ * Exported for the decide pass (`decide.ts`), which refuses to decide
+ * on anything but the view writer - the same gate, so one machine
+ * decides and every machine folds the stored result (design D20).
  */
-function writerGate(store: StoreHandle, options: TopicPlanningOptions): WriterGate {
+export function writerGate(store: StoreHandle, options: TopicPlanningOptions): WriterGate {
   const settings = catchUpSettings(store, options.now);
   if (settings === null) {
     return { ok: false, report: { status: "incomplete-read", shards: ["shared/settings"] } };
@@ -231,15 +272,17 @@ function planUnderLock(
   const records = [...read.records.values()].flat();
   const fold = foldTopics(records, { privateIds });
   const shared = foldSettings(partitionRecords(read, "shared"));
+  const candidates = topicCandidates(records, privateIds);
   const plan = planTopics(
     fold,
-    topicCandidates(records, privateIds),
+    candidates,
     {
       minRecords: settingValue(shared, SETTING_TOPIC_MIN_RECORDS) as number,
       minSessions: settingValue(shared, SETTING_TOPIC_MIN_SESSIONS) as number,
       quietDays: settingValue(shared, SETTING_TOPIC_QUIET_DAYS) as number,
     },
     clock(),
+    options.topicVerdicts,
   );
   // A lock taken over from a holder that looked stale (a paused process)
   // lets two passes plan at once: a pass whose topic records changed since
@@ -248,12 +291,21 @@ function planUnderLock(
   if (options.mayPlan !== undefined && !options.mayPlan()) return { status: "deferred" };
   let skipped = 0;
   let invalid = 0;
+  // Grown as each verdict record lands, so a failed write still reports them.
+  const verdictCounts: VerdictWriteCounts = {
+    derived: 0,
+    resolutions: 0,
+    completions: 0,
+    hidden: 0,
+    kept: 0,
+  };
   const append = (
     isPrivate: boolean,
     kind: string,
-    topic: string,
+    topic: string | null,
     body: Record<string, unknown>,
     scope: string | null = null,
+    stream: StoreStream = TOPIC_STREAM,
   ): string | null => {
     const partition: StorePartition = isPrivate ? "private" : "shared";
     if (!store.partitions.has(partition)) {
@@ -264,7 +316,7 @@ function planUnderLock(
       store,
       {
         partition,
-        stream: TOPIC_STREAM,
+        stream,
         kind,
         agent: options.agent,
         scope,
@@ -280,7 +332,13 @@ function planUnderLock(
     writePlan();
   } catch (err) {
     // What landed before the failure stays listed, with its undo command.
-    return { status: "error", error: errorText(err), created, routed };
+    return {
+      status: "error",
+      error: errorText(err),
+      created,
+      routed,
+      ...verdictCounts,
+    };
   }
   return {
     status: "planned",
@@ -291,6 +349,7 @@ function planUnderLock(
     quiet: plan.quiet,
     skipped,
     invalid,
+    ...verdictCounts,
   };
 
   function writePlan(): void {
@@ -312,17 +371,18 @@ function planUnderLock(
         plannedTopic.private,
         TOPIC_CREATE_KIND,
         topic,
-        body,
+        plannedTopic.verdict !== undefined ? { ...body, verdict: plannedTopic.verdict } : body,
         plannedTopic.scope,
       );
       if (record === null) continue;
       // Listed as soon as it lands; `members` counts the assigns written.
-      const entry = {
+      const entry: Mutable<CreatedTopic> = {
         topic,
         title: plannedTopic.title,
         record,
         members: 0,
         undo: undoOf(record, options.configPath),
+        ...(plannedTopic.verdict !== undefined ? { verdict: plannedTopic.verdict } : {}),
       };
       created.push(entry);
       for (const member of plannedTopic.members) {
@@ -332,12 +392,29 @@ function planUnderLock(
       }
     }
     for (const route of plan.routes) {
-      const assign = append(route.private, TOPIC_ASSIGN_KIND, route.topic, {
-        record: route.record,
-      });
+      const assign = append(
+        route.private,
+        TOPIC_ASSIGN_KIND,
+        route.topic,
+        route.verdict !== undefined
+          ? { authority: "model", record: route.record, verdict: route.verdict }
+          : { record: route.record },
+      );
       if (assign !== null)
         routed.push({ ...route, assign, undo: undoOf(assign, options.configPath) });
     }
+    // The item and proposal records the model verdicts decide (design
+    // D10): behind the same fence, in the partition the subject or its
+    // topic dictates, skipped and counted without that partition.
+    writeVerdictRecords({
+      append,
+      fold,
+      plan,
+      candidatesById: new Map(candidates.map((c) => [c.id, c])),
+      verdicts: options.topicVerdicts,
+      counts: verdictCounts,
+      judgedNotes: judgedHistoryNotes(partitionRecords(read, "shared")),
+    });
   }
 }
 
@@ -354,6 +431,12 @@ export function runAutoTopicPlanning(
   options: {
     readonly configPath?: string;
     readonly now?: () => number;
+    /**
+     * Model verdicts computed before the pass (design D10, D20);
+     * `planTopics` applies them only where their subject still matches
+     * the fold read under the lock. Absent: the deterministic plan.
+     */
+    readonly topicVerdicts?: TopicVerdicts;
     /**
      * Asked once the store is known to be in use, right before planning:
      * `false` plans nothing and answers `null` (a dream pass past its
@@ -372,12 +455,23 @@ export function runAutoTopicPlanning(
     const store = openStore({ root, device });
     return runTopicPlanning(store, {
       agent: resolveAgentName(options.configPath),
+      ...(options.topicVerdicts !== undefined ? { topicVerdicts: options.topicVerdicts } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
       ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
       ...(options.mayPlan !== undefined ? { mayPlan: options.mayPlan } : {}),
     });
   } catch (err) {
-    return { status: "error", error: errorText(err), created: [], routed: [] };
+    return {
+      status: "error",
+      error: errorText(err),
+      created: [],
+      routed: [],
+      derived: 0,
+      resolutions: 0,
+      completions: 0,
+      hidden: 0,
+      kept: 0,
+    };
   }
 }
 
@@ -400,19 +494,50 @@ export function describeTopicPlanning(
       return "topics were not planned: another pass wrote topic records meanwhile";
     case "deferred":
       return "topics were not planned: the pass ran out of time while it waited for the planning lock";
-    case "error": {
-      const done = report.created.length + report.routed.length;
-      const landed =
-        done > 0
-          ? ` (${report.created.length} topic(s) created and ${report.routed.length} record(s) routed before it)`
-          : "";
-      return `topics could not be planned: ${report.error}${landed}`;
-    }
+    case "error":
+      return describeError(report);
     case "planned":
       return (
         `${report.created.length} topic(s) created, ${report.routed.length} record(s) routed, ` +
-        `${report.merges.length} merge and ${report.splits.length} split proposal(s), ` +
-        `${report.quiet.length} quiet topic(s)`
+        `${report.merges.length} merge and ${report.splits.length} split proposal(s)` +
+        `${modelMergeNote(report.merges)}, ${report.quiet.length} quiet topic(s)` +
+        decidedNote(report)
       );
   }
+}
+
+/** ", N decided by a decision model" when records of the pass carry a verdict (design D10). */
+function decidedNote(
+  report: Extract<TopicPlanningReport, { status: "planned" } | { status: "error" }>,
+): string {
+  const decided =
+    report.routed.filter((r) => r.verdict !== undefined).length +
+    report.created.filter((c) => c.verdict !== undefined).length +
+    report.derived +
+    report.resolutions +
+    report.completions +
+    report.hidden +
+    report.kept;
+  return decided > 0 ? `, ${decided} decided by a decision model` : "";
+}
+
+/** A failed pass: its error, and what landed before it. */
+function describeError(report: Extract<TopicPlanningReport, { status: "error" }>): string {
+  const done = report.created.length + report.routed.length;
+  const landed =
+    done > 0
+      ? ` (${report.created.length} topic(s) created and ${report.routed.length} record(s) routed before it)`
+      : "";
+  return `topics could not be planned: ${report.error}${landed}${decidedNote(report)}`;
+}
+
+/** The model-judged merge proposals, with their confidence (design D10). */
+function modelMergeNote(merges: ReadonlyArray<MergeProposal>): string {
+  const judged = merges.filter((m) => m.verdict !== undefined);
+  if (judged.length === 0) return "";
+  return (
+    ` (of which ${judged.length} judged by a decision model, confidence ` +
+    judged.map((m) => m.verdict!.confidence.toFixed(2)).join(", ") +
+    ")"
+  );
 }

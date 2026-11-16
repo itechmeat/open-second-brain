@@ -13,6 +13,7 @@ import {
   DECISION_MODEL_USES,
   type DecisionModelUse,
 } from "../../src/core/decision-model/contract.ts";
+import { USE_REPORTS } from "../../src/core/decision-model/reports/index.ts";
 import { emitDecisionModelCall } from "../../src/core/decision-model/record.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
@@ -78,8 +79,10 @@ describe("o2b decision-model report --use", () => {
         const parsed = JSON.parse(res.stdout) as ReportJson;
         expect(parsed.total).toBe(expectedCalls);
         expect(parsed.uses.map((u) => u.use)).toEqual(expectedCalls === 0 ? [] : [use]);
-        if (use === "rerank") {
-          // The rerank metric is the summary's shadow agreement.
+        if (USE_REPORTS[use] === null) {
+          // The rerank metric is the summary's shadow agreement, and the
+          // topic and agent-context uses have no per-use report yet (the
+          // generic summary covers them).
           expect(parsed.use_report).toBeUndefined();
         } else {
           expect(parsed.use_report?.use).toBe(use);
@@ -89,7 +92,7 @@ describe("o2b decision-model report --use", () => {
         const text = await report(use, false);
         expect(text.returncode).toBe(0);
         expect(text.stdout).toContain(`decision model calls: ${expectedCalls}`);
-        if (use !== "rerank") expect(text.stdout).toContain(use);
+        if (USE_REPORTS[use] !== null) expect(text.stdout).toContain(use);
       });
     }
   }

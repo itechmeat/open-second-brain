@@ -52,6 +52,7 @@ import {
   DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
   decisionModelPreset,
 } from "./presets.ts";
+import { isLoopbackUrl, parseDecisionModelPrivateUses, withoutUserinfo } from "./egress-guard.ts";
 import { machineTunedMarkReader } from "./eval/mark.ts";
 import {
   DECISION_THRESHOLD_PROFILE_NAMES,
@@ -78,6 +79,7 @@ export type {
   ResolvedDecisionModelConfig,
 } from "./config-types.ts";
 export type { ResolvedDecisionProvider } from "./config-types.ts";
+export { resolvedProviderEntries } from "./provider-entries.ts";
 import type {
   DecisionModelStatus,
   DecisionModelUses,
@@ -94,37 +96,6 @@ const ENV_PREFIX = "OPEN_SECOND_BRAIN_DECISION_MODEL_";
  * the value is never repeated in a message.
  */
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-
-/**
- * The base URL without any `user:password@` part, and whether it had one.
- * Credentials never belong in the URL (the key travels in a header), and
- * a URL that carries them is never printed as is.
- */
-function withoutUserinfo(raw: string): { readonly url: string; readonly hadUserinfo: boolean } {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return { url: raw, hadUserinfo: false };
-  }
-  if (parsed.username === "" && parsed.password === "") return { url: raw, hadUserinfo: false };
-  parsed.username = "";
-  parsed.password = "";
-  return { url: parsed.toString().replace(/\/+$/, ""), hadUserinfo: true };
-}
-
-/** Hosts where a self-hosted server runs on this machine. */
-function isLoopbackUrl(raw: string | null): boolean {
-  if (raw === null) return false;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
-}
 
 /**
  * The modes the uses actually run in: `enforce` becomes `shadow` for every
@@ -309,8 +280,14 @@ export interface ResolveDecisionModelOptions {
  * store: the empty store tunes nothing.
  */
 function thresholdsStoreFor(opts: ResolveDecisionModelOptions): DecisionThresholdsStore {
-  if (opts.thresholdsPath === null) return EMPTY_THRESHOLD_STORE;
-  if (opts.thresholdsPath !== undefined) return readThresholdsStore(opts.thresholdsPath);
+  const path = thresholdsPathFor(opts);
+  return path === null ? EMPTY_THRESHOLD_STORE : readThresholdsStore(path);
+}
+
+/** The thresholds store path this resolution reads; null when disabled. */
+function thresholdsPathFor(opts: ResolveDecisionModelOptions): string | null {
+  if (opts.thresholdsPath === null) return null;
+  if (opts.thresholdsPath !== undefined) return opts.thresholdsPath;
   // The file beside the config path this process resolves: an explicit
   // OPEN_SECOND_BRAIN_CONFIG in the resolution's environment names it, as
   // it does for every other config read; otherwise the process's default
@@ -322,7 +299,7 @@ function thresholdsStoreFor(opts: ResolveDecisionModelOptions): DecisionThreshol
   const coreConfig = require("../config.ts") as typeof import("../config.ts");
   const configPath =
     typeof explicit === "string" && explicit !== "" ? explicit : coreConfig.defaultConfigPath();
-  return readThresholdsStore(decisionThresholdsPath(configPath));
+  return decisionThresholdsPath(configPath);
 }
 
 /**
@@ -588,6 +565,10 @@ export function resolveDecisionModelConfig(
   }
   const maxStateTokens = Math.min(maxStateRequested, presetMax);
   const configured = parseDecisionModelUses(setting(env, config, "uses"), errors);
+  const privateHostedUses = parseDecisionModelPrivateUses(
+    setting(env, config, "private_uses"),
+    errors,
+  );
   const dailyCostGateUsd =
     parseNonNegativeSetting(
       setting(env, config, "cost_gate_usd"),
@@ -883,6 +864,7 @@ export function resolveDecisionModelConfig(
     maxChoiceOptions: firstEntry.maxChoiceOptions,
     uses,
     configuredUses: configured,
+    privateHostedUses,
     dailyCostGateUsd,
     inputPriceUsdPerMtok,
     outputPriceUsdPerMtok,
@@ -893,6 +875,7 @@ export function resolveDecisionModelConfig(
     licenceNote: firstEntry.licenceNote,
     processor: firstEntry.processor,
     vault: opts.vault,
+    thresholdsPath: thresholdsPathFor(opts),
   });
 }
 
@@ -906,38 +889,4 @@ export function decisionModelModeFor(
 ): DecisionModelMode {
   if (cfg === null || cfg === undefined || cfg.status !== "active") return "off";
   return cfg.uses[use];
-}
-
-/**
- * The provider chain of a resolved config, first entry first. A config
- * resolved from `decision_model_providers` carries its entries; a config
- * built before the chain existed (hand-built test configs, older stored
- * objects) derives the single implied entry from its top-level fields, so
- * the callers of the chain behave identically on both shapes.
- */
-export function resolvedProviderEntries(
-  cfg: ResolvedDecisionModelConfig,
-): ReadonlyArray<ResolvedDecisionProvider> {
-  if (cfg.providers !== undefined && cfg.providers.length > 0) return cfg.providers;
-  return Object.freeze([
-    {
-      name: cfg.provider ?? "unknown",
-      adapter: cfg.adapter,
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
-      envKey: cfg.envKey,
-      keyPresent: cfg.keyPresent,
-      keyRequired: cfg.keyRequired !== false,
-      maxStateTokens: cfg.maxStateTokens,
-      maxChoiceOptions: cfg.maxChoiceOptions ?? DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
-      calibrated: cfg.calibrated,
-      inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
-      outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok ?? null,
-      thresholdProfile: cfg.thresholdProfile ?? null,
-      licenceNote: cfg.licenceNote ?? null,
-      processor: cfg.processor,
-      uses: cfg.uses,
-      shadowOnlyUses: cfg.shadowOnlyUses ?? Object.freeze([]),
-    },
-  ]);
 }

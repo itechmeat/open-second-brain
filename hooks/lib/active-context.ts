@@ -127,10 +127,21 @@ export function createInjectionMeter(configuredBudgetChars: number): InjectionMe
  * standing-rules cap bounds what the operator wrote. Reading them
  * together is only an efficiency - one config open instead of two.
  */
+/** Defaults of the session-start digest's topic and pinned lanes (task 4.2). */
+export const TOPIC_HEADS_MAX_DEFAULT = 12;
+export const TOPIC_HEADS_MAX_CHARS_DEFAULT = 1600;
+export const PINNED_MAX_CHARS_DEFAULT = 1200;
+
 export interface InjectionLimits {
   readonly injectBudgetChars: number;
   readonly standingRulesMaxChars: number;
   readonly scopedRulesMaxChars: number;
+  /** Most topic heads the session start digest shows (task 4.2). */
+  readonly topicHeadsMax: number;
+  /** Characters for the whole topic heads block. */
+  readonly topicHeadsMaxChars: number;
+  /** Characters for the pinned context block. */
+  readonly pinnedMaxChars: number;
 }
 
 /**
@@ -166,6 +177,9 @@ export function resolveInjectionLimits(vault: string): InjectionLimits {
     injectBudgetChars: cfg?.active?.inject_budget_chars ?? INJECT_BUDGET_CHARS_DEFAULT,
     standingRulesMaxChars: resolveStandingRulesMaxChars(cfg),
     scopedRulesMaxChars: resolveScopedRulesMaxChars(cfg),
+    topicHeadsMax: cfg?.active?.topic_heads_max ?? TOPIC_HEADS_MAX_DEFAULT,
+    topicHeadsMaxChars: cfg?.active?.topic_heads_max_chars ?? TOPIC_HEADS_MAX_CHARS_DEFAULT,
+    pinnedMaxChars: cfg?.active?.pinned_max_chars ?? PINNED_MAX_CHARS_DEFAULT,
   };
 }
 
