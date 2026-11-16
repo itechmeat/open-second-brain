@@ -72,10 +72,18 @@ const FULL_VIEW_POINTER =
  * project renders, never operator or user text: no content crosses into
  * the notice, only keys and two integers.
  */
-export function activeTruncationNotice(report: SectionTruncationReport): string {
+export function activeTruncationNotice(
+  report: SectionTruncationReport,
+  tieredLinesCut = 0,
+): string {
   const dropped =
     report.droppedKeys.length > 0
-      ? ` Dropped: ${report.droppedKeys.map(sectionLabel).join(", ")}.`
+      ? ` Dropped ${report.droppedKeys.length} ` +
+        `section${report.droppedKeys.length === 1 ? "" : "s"} ` +
+        `(${report.droppedKeys.map(sectionLabel).join(", ")})` +
+        (tieredLinesCut > 0
+          ? `; ${tieredLinesCut} rule ${tieredLinesCut === 1 ? "line" : "lines"} cut.`
+          : ".")
       : "";
   return (
     `${TRUNCATION_NOTICE_OPEN} kept ${report.keptChars} of ${report.totalChars} ` +
@@ -228,8 +236,11 @@ export function budgetActiveBody(body: string, budgetChars: number): string {
     // Tiering alone brought the body within budget: nothing was
     // dropped, but the body the consumer sees is no longer the body the
     // vault holds. Say so through the tier notice, mirroring the drop
-    // notice's shape so a reduction is never silent.
-    return joinSections(ladder.sections) + SECTION_SEPARATOR + activeTierNotice(tieredLabels);
+    // notice's shape so a reduction is never silent. The cut-count clause
+    // rides only when it still fits the budget; the notice stays.
+    const tiered = joinSections(ladder.sections) + SECTION_SEPARATOR;
+    const counted = tiered + activeTierNotice(tieredLabels, ladder.linesCut);
+    return counted.length <= budgetChars ? counted : tiered + activeTierNotice(tieredLabels);
   }
   const result = applySectionBudget(ladder.sections, budgetChars, {
     totalChars: originalTotal,
@@ -241,9 +252,14 @@ export function budgetActiveBody(body: string, budgetChars: number): string {
             // kept-headlines clause too made the notice contradict
             // itself. No tiered section survived - the clause stays out.
             const keptTiered = ladder.tieredKeys.filter((k) => !report.droppedKeys.includes(k));
+            // Its count is of those survivors; the total rides the drop notice.
+            const keptCut = keptTiered.reduce(
+              (sum, k) => sum + (ladder.linesCutByKey.get(k) ?? 0),
+              0,
+            );
             const clause =
-              keptTiered.length > 0 ? tierNoticeClause(keptTiered.map(sectionLabel)) : "";
-            return `${activeTruncationNotice(report)}${clause}`;
+              keptTiered.length > 0 ? tierNoticeClause(keptTiered.map(sectionLabel), keptCut) : "";
+            return `${activeTruncationNotice(report, ladder.linesCut)}${clause}`;
           }
         : activeTruncationNotice,
   });
@@ -284,12 +300,14 @@ const TIER_CLAUSE_CLOSE = "._";
  * project renders, never operator text - the same safety the drop
  * notice's naming relies on.
  */
-export function activeTierNotice(tieredLabels: ReadonlyArray<string>): string {
-  return `${TIER_NOTICE_OPEN}${tieredLabels.join(", ")}${TIER_NOTICE_POINTER}`;
+export function activeTierNotice(tieredLabels: ReadonlyArray<string>, linesCut = 0): string {
+  const counted = linesCut > 0 ? `; ${linesCut} rule ${linesCut === 1 ? "line" : "lines"} cut` : "";
+  return `${TIER_NOTICE_OPEN}${tieredLabels.join(", ")}${counted}${TIER_NOTICE_POINTER}`;
 }
 
-function tierNoticeClause(tieredLabels: ReadonlyArray<string>): string {
-  return `${TIER_CLAUSE_OPEN}${tieredLabels.join(", ")}${TIER_CLAUSE_CLOSE}`;
+function tierNoticeClause(tieredLabels: ReadonlyArray<string>, linesCut: number): string {
+  const counted = linesCut > 0 ? `; ${linesCut} rule ${linesCut === 1 ? "line" : "lines"} cut` : "";
+  return `${TIER_CLAUSE_OPEN}${tieredLabels.join(", ")}${counted}${TIER_CLAUSE_CLOSE}`;
 }
 
 /**
@@ -312,13 +330,14 @@ function tierNoticeClause(tieredLabels: ReadonlyArray<string>): string {
 export function tierSection(
   section: BudgetSection,
   topItems: number = HEADLINE_TIER_TOP_ITEMS,
-): { section: BudgetSection; tiered: boolean } {
-  if (section.priority <= KEEP_GUARD_PRIORITY) return { section, tiered: false };
+): { section: BudgetSection; tiered: boolean; linesCut: number } {
+  if (section.priority <= KEEP_GUARD_PRIORITY) return { section, tiered: false, linesCut: 0 };
   const split = splitSectionBullets(section.text);
-  if (split.itemLines.length <= topItems) return { section, tiered: false };
+  if (split.itemLines.length <= topItems) return { section, tiered: false, linesCut: 0 };
   const kept = topItemLines(split.itemLines, topItems);
   return {
     tiered: true,
+    linesCut: split.itemLines.length - kept.length,
     section: {
       ...section,
       headLines: split.headLines.length,
@@ -332,6 +351,10 @@ export interface HeadlineTierResult {
   readonly sections: ReadonlyArray<BudgetSection>;
   /** Keys of the sections the ladder actually compacted, in render order. */
   readonly tieredKeys: ReadonlyArray<string>;
+  /** How many rule lines the tier cut in total, across the tiered sections. */
+  readonly linesCut: number;
+  /** How many rule lines the tier cut in each tiered section, by key. */
+  readonly linesCutByKey: ReadonlyMap<string, number>;
 }
 
 /**
@@ -356,9 +379,13 @@ export function applyHeadlineTiers(
   budgetChars: number,
   topItems: number = HEADLINE_TIER_TOP_ITEMS,
 ): HeadlineTierResult {
-  if (joinedSectionsLength(sections) <= budgetChars) return { sections, tieredKeys: [] };
+  if (joinedSectionsLength(sections) <= budgetChars) {
+    return { sections, tieredKeys: [], linesCut: 0, linesCutByKey: new Map() };
+  }
   const out: BudgetSection[] = [...sections];
   const tieredAt = new Set<number>();
+  const linesCutByKey = new Map<string, number>();
+  let linesCut = 0;
   const order = sections
     .map((_, index) => index)
     .toSorted((a, b) => sections[b]!.priority - sections[a]!.priority || b - a);
@@ -367,10 +394,12 @@ export function applyHeadlineTiers(
     if (!step.tiered) continue;
     out[index] = step.section;
     tieredAt.add(index);
+    linesCut += step.linesCut;
+    linesCutByKey.set(sections[index]!.key, step.linesCut);
     if (joinedSectionsLength(out) <= budgetChars) break;
   }
   // Keys in render order: the notice names the compacted sections the
   // way the body renders them, whichever order the ladder visited them.
   const tieredKeys = sections.filter((_, i) => tieredAt.has(i)).map((s) => s.key);
-  return { sections: out, tieredKeys };
+  return { sections: out, tieredKeys, linesCut, linesCutByKey };
 }

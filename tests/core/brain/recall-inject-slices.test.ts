@@ -4,6 +4,7 @@ import {
   decideRecallInject,
   RECALL_INJECT_CONFIDENCE_FLOOR,
   type RecallCandidate,
+  type RecallInjectOptions,
   type RecallResultSet,
   type RecallRetriever,
 } from "../../../src/core/brain/recall-inject.ts";
@@ -89,6 +90,25 @@ const threeNotes: RecallRetriever = async () => ({
   total: 3,
   idfWeightedCoverage: 0.8,
 });
+
+/** Two slices of three notes each, optionally through a decision filter. */
+const decideSixSliced = (maxChars: number, filter?: RecallInjectOptions["decisionFilter"]) =>
+  decideRecallInject("receipts", unused, {
+    maxChars,
+    maxNotes: 8,
+    slices: [slice("first"), slice("second")],
+    sliceRetriever: slicesOf({
+      first: { candidates: notes("Brain/f", 3), total: 3 },
+      second: { candidates: notes("Brain/s", 3), total: 3 },
+    }),
+    ...(filter !== undefined ? { decisionFilter: filter } : {}),
+  });
+
+/** The count a brief's cut line names, or null without one. */
+const sliceCutOf = (brief: string): number | null => {
+  const m = /_(\d+) more recalled notes? (is|are) not shown\./.exec(brief);
+  return m === null ? null : Number(m[1]);
+};
 
 describe("decideRecallInject with operator-declared slices", () => {
   test("two slices render inside one fence under their headings, in declared order", async () => {
@@ -274,11 +294,76 @@ describe("decideRecallInject with operator-declared slices", () => {
     if (decision.kind !== "inject") return;
     expect(decision.brief.length).toBeLessThanOrEqual(maxChars);
     expect(decision.brief.endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
+    // The cut line does not fit even beside one note, so no note gives
+    // way for it: the two notes stay and the line is left out.
     expect(decision.slices).toEqual([
       { name: "first", outcome: "inject", notes: 2 },
       { name: "second", outcome: "inject", notes: 0 },
     ]);
+    expect(decision.injectedNotes).toHaveLength(2);
     expect(decision.brief).not.toContain("Brain/s/");
+  });
+
+  test("across caps the cut line counts exactly what is left out and injectedNotes match the brief", async () => {
+    let cutSeen = false;
+    for (let maxChars = 50; maxChars <= 1400; maxChars += 25) {
+      // oxlint-disable-next-line no-await-in-loop -- one decision per cap
+      const decision = await decideRecallInject("receipts", unused, {
+        maxChars,
+        maxNotes: 8,
+        slices: [slice("first"), slice("second")],
+        sliceRetriever: slicesOf({
+          first: { candidates: notes("Brain/f", 3), total: 3 },
+          second: { candidates: notes("Brain/s", 3), total: 3 },
+        }),
+      });
+      if (decision.kind !== "inject") continue;
+      const shown = decision.brief.split("\n").filter((l) => l.startsWith("- ")).length;
+      expect(decision.injectedNotes).toHaveLength(shown);
+      for (const note of decision.injectedNotes) expect(decision.brief).toContain(note.path);
+      expect(decision.slices!.reduce((sum, s) => sum + s.notes, 0)).toBe(shown);
+      expect(shown).toBeGreaterThan(0);
+      const m = /_(\d+) more recalled notes? (is|are) not shown\./.exec(decision.brief);
+      if (m !== null) {
+        cutSeen = true;
+        expect(Number(m[1])).toBe(6 - shown);
+      }
+      expect(decision.brief.length).toBeLessThanOrEqual(maxChars);
+    }
+    expect(cutSeen).toBe(true);
+  });
+
+  test("the hint counts the notes shown, and a note the enforce filter drops keeps the budget's omissions", async () => {
+    let checked = false;
+    for (let maxChars = 50; maxChars <= 1400; maxChars += 25) {
+      // oxlint-disable-next-line no-await-in-loop -- one decision per cap
+      const plain = await decideSixSliced(maxChars);
+      if (plain.kind !== "inject") continue;
+      const hint = /Recalled (\d+) of/.exec(plain.brief);
+      if (hint !== null)
+        expect({ maxChars, hint: Number(hint[1]) }).toEqual({ maxChars, hint: plain.noteCount });
+      const omitted = sliceCutOf(plain.brief);
+      if (omitted === null || plain.noteCount < 2 || checked) continue;
+      const shown = plain.noteCount;
+      // oxlint-disable-next-line no-await-in-loop -- the one cap the filter case needs
+      const filtered = await decideSixSliced(maxChars, {
+        mode: "enforce",
+        run: async () => ({
+          status: "ok",
+          mode: "enforce",
+          latencyMs: 1,
+          helps: Array.from({ length: shown }, (_, i) => (i === 0 ? 0 : 1)),
+          sent: Array.from({ length: shown }, () => true),
+          injectAny: 1,
+        }),
+      });
+      expect(filtered.kind).toBe("inject");
+      if (filtered.kind !== "inject") continue;
+      expect(filtered.noteCount).toBe(shown - 1);
+      expect(sliceCutOf(filtered.brief)).toBe(omitted);
+      checked = true;
+    }
+    expect(checked).toBe(true);
   });
 
   test("a slice's own maxChars bounds its rendered lines", async () => {

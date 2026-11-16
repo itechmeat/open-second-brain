@@ -1669,6 +1669,21 @@ export interface BrainActiveConfig {
    */
   readonly inject_budget_chars?: number;
   /**
+   * Most topic heads the session start digest shows (task 4.2). Absent
+   * means 12.
+   */
+  readonly topic_heads_max?: number;
+  /**
+   * Characters for the whole topic heads block of the session start
+   * digest. Absent means 1600.
+   */
+  readonly topic_heads_max_chars?: number;
+  /**
+   * Characters for the pinned context block of the session start
+   * digest. Absent means 1200.
+   */
+  readonly pinned_max_chars?: number;
+  /**
    * Character cap for the operator-authored `Brain/standing-rules.md`
    * block. Separate from `inject_budget_chars` because the standing
    * block is EXEMPT from that budget: it is injected ahead of the memory

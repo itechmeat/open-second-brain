@@ -54,6 +54,10 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
+import {
+  prepareTopicVerdicts,
+  type PrepareTopicVerdictsOptions,
+} from "../../../core/topics/decide-auto.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
@@ -536,11 +540,21 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ? attachProgress({ command: "brain", argv: ["dream"], jsonRequested: asJson })
       : null;
   reportProgressRefusal(observation);
+  // The model verdicts are decided before the pass (design D10, D20):
+  // only a live pass decides; a dry run gets the deterministic result.
+  const dryRun = Boolean(flags["dry-run"]);
+  // The same config and run date the pass below plans with.
+  const decideOptions: PrepareTopicVerdictsOptions = {
+    ...(config !== undefined ? { configPath: config } : {}),
+    ...(now !== null ? { runAt: now } : {}),
+  };
+  const topicVerdicts = dryRun ? undefined : await prepareTopicVerdicts(decideOptions);
   let summary;
   try {
     summary = dream(vault, {
       ...(now !== null ? { now } : {}),
-      dryRun: Boolean(flags["dry-run"]),
+      dryRun,
+      ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
       ...(agent ? { agentName: agent } : {}),
       safeguard: guard(),
       ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),

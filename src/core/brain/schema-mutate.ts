@@ -42,6 +42,7 @@ import {
 } from "./schema-pack.ts";
 import {
   SCHEMA_VOCAB_CATEGORIES,
+  resolveSchemaVocabulary,
   validateSchemaDeclarations,
   validateSchemaToken,
   type BrainSchemaDeclarations,
@@ -541,6 +542,17 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
       const token = validateSchemaToken(mutation.token, "schema.link_types");
       removeValue(pack.link_types, token);
       delete pack.link_constraints[token];
+      // A pair of another link type may name the link type as an endpoint;
+      // it goes with it unless a vocabulary type keeps the token declared.
+      const vocabulary = resolveSchemaVocabulary(pruneDeclarations(pack.declarations));
+      if (SCHEMA_VOCAB_CATEGORIES.some((category) => vocabulary[category].includes(token))) {
+        return;
+      }
+      for (const [linkType, pairs] of Object.entries(pack.link_constraints)) {
+        const kept = pairs.filter((pair) => !pairEndpoints(pair).includes(token));
+        if (kept.length > 0) pack.link_constraints[linkType] = kept;
+        else delete pack.link_constraints[linkType];
+      }
       return;
     }
     case "set_extractable": {

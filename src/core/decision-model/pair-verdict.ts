@@ -31,6 +31,7 @@
 import { randomUUID } from "node:crypto";
 
 import { decisionModelModeFor, type ResolvedDecisionModelConfig } from "./config.ts";
+import { mayStartRequest } from "./request-floor.ts";
 import type {
   DecisionChoiceQuestion,
   DecisionModelMode,
@@ -61,7 +62,7 @@ export interface VerdictPairInput {
 }
 
 export interface PairVerdictSpec {
-  readonly use: Extract<DecisionModelUse, "dedup" | "tension">;
+  readonly use: Extract<DecisionModelUse, "dedup" | "tension" | "topic_same">;
   /** What the pairs are, for the record (`preference`, `entity`, `tension`). */
   readonly pairKind: string;
   readonly options: ReadonlyArray<string>;
@@ -73,6 +74,14 @@ export interface PairVerdictRunOptions {
   readonly config: ResolvedDecisionModelConfig | null | undefined;
   readonly provider?: DecisionProvider;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * No request starts at or after this moment of `clock`: a caller with a
+   * share of a larger budget (the decide pass) stops between batches, and
+   * no request is given more time than is left before it.
+   * Absent: every batch runs, each with the configured timeout.
+   */
+  readonly until?: number;
+  readonly clock?: () => number;
 }
 
 export type PairVerdictRun =
@@ -82,9 +91,23 @@ export type PairVerdictRun =
       readonly mode: Exclude<DecisionModelMode, "off">;
       /** Aligned with the input pairs; null where no verdict exists. */
       readonly verdicts: ReadonlyArray<PairVerdict | null>;
+      /**
+       * Aligned with the input pairs: the chain entry that answered each
+       * verdict and the mode it held (a fallback entry may answer as
+       * shadow while the configured mode is enforce); null where no
+       * verdict exists.
+       */
+      readonly answered: ReadonlyArray<PairAnswer | null>;
       /** The first degrade reason, when a request degraded. */
       readonly degraded?: string;
     };
+
+/** Who answered one pair's request, and under which mode. */
+export interface PairAnswer {
+  readonly provider: string;
+  readonly model: string | null;
+  readonly mode: Exclude<DecisionModelMode, "off">;
+}
 
 interface Prepared {
   readonly index: number;
@@ -213,6 +236,7 @@ export async function runPairVerdicts(
   const mode: Exclude<DecisionModelMode, "off"> = configured;
   const correlationId = randomUUID();
   const verdicts: (PairVerdict | null)[] = pairs.map(() => null);
+  const answered: (PairAnswer | null)[] = pairs.map(() => null);
 
   const prepared: Prepared[] = [];
   let withheld = 0;
@@ -225,11 +249,14 @@ export async function runPairVerdicts(
     }
     prepared.push({ index, a, b });
   });
-  if (prepared.length === 0) return { status: "done", mode, verdicts };
+  if (prepared.length === 0) return { status: "done", mode, verdicts, answered };
 
   const { batches, unfit } = planPairBatches(prepared, spec, cfg.maxStateTokens);
   let degraded: string | undefined;
+  const clock = opts.clock ?? Date.now;
   for (let n = 0; n < batches.length; n++) {
+    // No batch starts with less than the minimum request time left.
+    if (opts.until !== undefined && !mayStartRequest(clock(), opts.until, cfg.timeoutMs)) break;
     const batch = batches[n]!;
     // Sequential on purpose: a degraded request stops the remaining ones,
     // and each one is checked against the daily cost gate in turn.
@@ -245,6 +272,10 @@ export async function runPairVerdicts(
       () => batch.questions,
       {
         config: cfg,
+        // A request never runs past `until`: it gets what is left of it.
+        ...(opts.until !== undefined
+          ? { timeoutMs: Math.max(1, Math.min(cfg.timeoutMs, opts.until - clock())) }
+          : {}),
         ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
         ...(opts.env !== undefined ? { env: opts.env } : {}),
         recordDetails: (response) => ({
@@ -276,12 +307,14 @@ export async function runPairVerdicts(
     if (result.status !== "ok") continue;
     batch.pairs.forEach((p, k) => {
       verdicts[p.index] = verdictOf(result.response, k, spec.options);
+      answered[p.index] = { ...result.answeredBy, mode: result.mode };
     });
   }
   return {
     status: "done",
     mode,
     verdicts,
+    answered,
     ...(degraded !== undefined ? { degraded } : {}),
   };
 }

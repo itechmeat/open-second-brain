@@ -85,6 +85,16 @@ export function resolveHookCeilingMs(
   return Math.floor(value);
 }
 
+/**
+ * How long a hook may still wait on a decision model, `elapsedMs` after it
+ * started: at most half of its ceiling, so the work after the answer (or
+ * the cutoff) and the output always run before the ceiling exits the
+ * process. A wait that ran to the ceiling would lose the whole output.
+ */
+export function decisionWaitMs(ceilingMs: number, elapsedMs: number): number {
+  return Math.max(0, Math.floor(ceilingMs / 2) - elapsedMs);
+}
+
 /** Operation name the cooperative ceiling reports on a timeout. */
 export const HOOK_CEILING_OPERATION = "hook";
 

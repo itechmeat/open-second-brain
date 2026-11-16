@@ -314,6 +314,9 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("inject_budget_chars", INJECT_BUDGET_CHARS_DEFAULT),
       def("standing_rules_max_chars", STANDING_RULES_MAX_CHARS_DEFAULT),
       def("scoped_rules_max_chars", SCOPED_RULES_MAX_CHARS_DEFAULT),
+      def("topic_heads_max", 12),
+      def("topic_heads_max_chars", 1600),
+      def("pinned_max_chars", 1200),
     ],
   },
   {

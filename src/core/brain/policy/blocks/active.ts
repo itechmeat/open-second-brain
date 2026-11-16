@@ -84,6 +84,9 @@ const KNOWN_KEYS = [
   "inject_budget_chars",
   "standing_rules_max_chars",
   "scoped_rules_max_chars",
+  "topic_heads_max",
+  "topic_heads_max_chars",
+  "pinned_max_chars",
 ] as const;
 
 /**
@@ -119,6 +122,21 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
     SCOPED_RULES_MAX_CHARS_MAX,
     ctx.source,
   );
+  const topicHeadsMax = optionalIntCount(activeMap, "topic_heads_max", 1, 1000, ctx.source);
+  const topicHeadsMaxChars = optionalCharCount(
+    activeMap,
+    "topic_heads_max_chars",
+    0,
+    INJECT_BUDGET_CHARS_MAX,
+    ctx.source,
+  );
+  const pinnedMaxChars = optionalCharCount(
+    activeMap,
+    "pinned_max_chars",
+    0,
+    INJECT_BUDGET_CHARS_MAX,
+    ctx.source,
+  );
 
   warnUnknownKeys(ctx, activeMap, KNOWN_KEYS, BLOCK);
   return {
@@ -128,6 +146,9 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
       ? { standing_rules_max_chars: standingRulesMaxChars }
       : {}),
     ...(scopedRulesMaxChars !== undefined ? { scoped_rules_max_chars: scopedRulesMaxChars } : {}),
+    ...(topicHeadsMax !== undefined ? { topic_heads_max: topicHeadsMax } : {}),
+    ...(topicHeadsMaxChars !== undefined ? { topic_heads_max_chars: topicHeadsMaxChars } : {}),
+    ...(pinnedMaxChars !== undefined ? { pinned_max_chars: pinnedMaxChars } : {}),
   };
 }
 
@@ -148,6 +169,17 @@ function optionalCharCount(
   if (!(key in activeMap)) return undefined;
   requireIntegerInRange(`${BLOCK}.${key}`, activeMap[key], min, max, source);
   return activeMap[key] as number;
+}
+
+/** {@link optionalCharCount} for a whole-number count knob (`topic_heads_max`). */
+function optionalIntCount(
+  activeMap: Readonly<Record<string, unknown>>,
+  key: string,
+  min: number,
+  max: number,
+  source: string | null,
+): number | undefined {
+  return optionalCharCount(activeMap, key, min, max, source);
 }
 
 /**

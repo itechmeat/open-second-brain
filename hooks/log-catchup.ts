@@ -391,7 +391,12 @@ async function main(): Promise<void> {
         timestamp: entry.timestamp,
       }));
       const notes: string[] = [];
-      if (olderCount > 0) notes.push(`${olderCount} older not shown`);
+      // The cut line (task 4.4): the count names itself and the pointer
+      // names the surface that carries the full log - the day pages the
+      // view renders, which no single command lists.
+      if (olderCount > 0) {
+        notes.push(`${olderCount} older not shown - the log pages carry the rest`);
+      }
       if (unscannedOlderDays > 0) notes.push(`${unscannedOlderDays} older day(s) not scanned`);
       // The lower bound the header names: a cursor run reads since its
       // last look, but a FIRST run has no last look - "since your last

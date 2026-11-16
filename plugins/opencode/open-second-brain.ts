@@ -174,9 +174,10 @@ const PRETOOL_SHIMS: ReadonlyArray<{
 ];
 
 /**
- * The UserPromptSubmit relay: the prompt-time shims and the default-OFF
- * flag each answers to, restated from src/core/config.ts exactly as the
- * PreToolUse pairs above. The opencode prompt hook observes the prompt
+ * The UserPromptSubmit relay: the prompt-time shims and the flag each
+ * answers to, restated from src/core/config.ts exactly as the PreToolUse
+ * pairs above. Every flag is default-OFF except the ones marked
+ * `defaultOn` (neighbour updates run on every host unless turned off). The opencode prompt hook observes the prompt
  * before durable admission and is not a delivery channel, so the shims'
  * additionalContext rides the per-turn queue below instead.
  */
@@ -184,6 +185,7 @@ const PROMPT_SHIMS: ReadonlyArray<{
   readonly name: string;
   readonly envKey: string;
   readonly configKey: string;
+  readonly defaultOn?: boolean;
 }> = [
   {
     name: "recall-inject",
@@ -194,6 +196,12 @@ const PROMPT_SHIMS: ReadonlyArray<{
     name: "nav-inject",
     envKey: "OPEN_SECOND_BRAIN_NAV_TIER_ENABLED",
     configKey: "nav_tier_enabled",
+  },
+  {
+    name: "neighbour-updates",
+    envKey: "OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED",
+    configKey: "neighbour_updates_enabled",
+    defaultOn: true,
   },
   {
     name: "counterparty-brief",
@@ -466,23 +474,37 @@ function stripUnquotedComment(value: string): string {
  * zero spawns.
  */
 function configFlagOn(envKey: string, configKey: string): boolean {
+  const raw = configFlagRaw(envKey, configKey);
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * Default-ON flag read, the twin of `resolveNeighbourUpdatesEnabled`:
+ * only literal `false`/`0` turns it off; unset or anything else is on.
+ */
+function configFlagNotOff(envKey: string, configKey: string): boolean {
+  const raw = configFlagRaw(envKey, configKey);
+  return raw !== "false" && raw !== "0";
+}
+
+/** The flag's value: env (trimmed) first, then the top-level config key; null when unset. */
+function configFlagRaw(envKey: string, configKey: string): string | null {
   const env = process.env[envKey]?.trim();
-  if (env) return env === "true" || env === "1";
+  if (env) return env;
   let text: string;
   try {
     text = readFileSync(osbConfigPath(), "utf8");
   } catch {
-    return false;
+    return null;
   }
   // Anchored at column 0: a top-level YAML key has no indentation, and
   // an indented match would arm the gate off a key nested under some
   // other mapping - the canonical resolver reads top-level keys only.
   const match = new RegExp(`^${configKey}\\s*:\\s*(.+?)\\s*$`, "m").exec(text);
-  if (match === null) return false;
-  const value = stripUnquotedComment(match[1]!)
+  if (match === null) return null;
+  return stripUnquotedComment(match[1]!)
     .trim()
     .replace(/^["']|["']$/g, "");
-  return value === "true" || value === "1";
 }
 
 /**
@@ -781,7 +803,11 @@ function runPromptShims(call: {
     cwd: call.cwd,
   };
   for (const shim of PROMPT_SHIMS) {
-    if (!configFlagOn(shim.envKey, shim.configKey)) continue;
+    const on =
+      shim.defaultOn === true
+        ? configFlagNotOff(shim.envKey, shim.configKey)
+        : configFlagOn(shim.envKey, shim.configKey);
+    if (!on) continue;
     const verdict = spawnHookVerdict(shim.name, payload);
     if (verdict.context !== null) call.queue.offer(call.sessionId, verdict.context);
   }

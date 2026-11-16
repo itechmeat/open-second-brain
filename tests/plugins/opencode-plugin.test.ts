@@ -44,6 +44,7 @@ const FLAG_ENV_KEYS = [
   "OPEN_SECOND_BRAIN_NAV_TIER_ENABLED",
   "OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED",
   "OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED",
+  "OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED",
 ] as const;
 
 beforeEach(() => {
@@ -154,6 +155,22 @@ function recordedCalls(): string[] {
     .filter((line) => line.length > 0);
 }
 
+/** One prompt through a fresh plugin; the shims it spawned. */
+async function promptShimCalls(): Promise<string[]> {
+  const plugin = await makeV2Plugin([]);
+  try {
+    plugin.sessionHooks.get("prompt")!({ sessionID: "s", prompt: "work" } as never);
+    return recordedCalls();
+  } finally {
+    plugin.cleanup();
+  }
+}
+
+/** Forget the invocations recorded so far. */
+function resetRecordedCalls(): void {
+  rmSync(join(binDir, "calls.log"), { force: true });
+}
+
 /** The stdin payload the dispatch stub recorded for one shim name. */
 function recordedStdin(shim: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(binDir, `stdin-${shim}`), "utf8")) as Record<string, unknown>;
@@ -180,6 +197,7 @@ function stubPromptLane(active: string | null, recall: string | null, nav: strin
         : JSON.stringify({
             hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: nav },
           }),
+    "neighbour-updates": null,
     "counterparty-brief": null,
     "reground-deliver": null,
   });
@@ -1352,6 +1370,7 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
         expect(recordedCalls()).toEqual([
           "recall-inject",
           "nav-inject",
+          "neighbour-updates",
           "counterparty-brief",
           "reground-deliver",
         ]);
@@ -1369,6 +1388,8 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
 
   dispatchTest("the prompt flags off mean zero spawns and no queued delivery", async () => {
     process.env["OSB_HOOK_BIN"] = stubPromptLane("ACTIVE BLOCK", "RECALL BLOCK", null);
+    // The default-on lane is off only when its key says so.
+    process.env["OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED"] = "false";
     const plugin = await makeV2Plugin([]);
     try {
       const prompt = plugin.sessionHooks.get("prompt")!;
@@ -1381,6 +1402,20 @@ describe("opencode plugin - prompt-time injection (UserPromptSubmit relay)", () 
       plugin.cleanup();
     }
   });
+
+  dispatchTest(
+    "neighbour updates run by default, as on every host; false and 0 turn them off",
+    async () => {
+      process.env["OSB_HOOK_BIN"] = stubPromptLane(null, null, null);
+      // No key at all: the default-off shims stay silent, this one runs.
+      expect(await promptShimCalls()).toEqual(["neighbour-updates"]);
+      resetRecordedCalls();
+      process.env["OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED"] = "false";
+      expect(await promptShimCalls()).toEqual([]);
+      process.env["OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED"] = "0";
+      expect(await promptShimCalls()).toEqual([]);
+    },
+  );
 
   dispatchTest("an event without observable prompt text spawns nothing", async () => {
     process.env["OSB_HOOK_BIN"] = stubPromptLane(null, "RECALL BLOCK", null);

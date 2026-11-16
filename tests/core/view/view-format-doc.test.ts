@@ -17,4 +17,10 @@ describe("FORMAT.md", () => {
   test.each([...VIEW_RECORD_KINDS])("documents the human view record kind %s", (kind) => {
     expect(doc).toMatch(new RegExp(`^- \`${kind}\`:`, "m"));
   });
+
+  test("history-verdict goes to the log stream of shared, and a kept note is stored as kept", () => {
+    const line = doc.split("\n").find((l) => l.startsWith("- `history-verdict`:")) ?? "";
+    expect(line).toContain("written to `log` in `shared`");
+    expect(line).toContain("`keep: true`, so a note with any stored verdict is settled");
+  });
 });

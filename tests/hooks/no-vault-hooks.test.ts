@@ -234,6 +234,10 @@ describe("hooks with no vault", () => {
       payload: () => ({ hook_event_name: "UserPromptSubmit", prompt: "map" }),
       flags: { OPEN_SECOND_BRAIN_NAV_TIER_ENABLED: "true" },
     },
+    "neighbour-updates": {
+      payload: () => ({ hook_event_name: "UserPromptSubmit", prompt: "next", session_id: "s1" }),
+      flags: {},
+    },
     "counterparty-brief": {
       payload: () => ({ hook_event_name: "UserPromptSubmit", prompt: "Ada said hi" }),
       flags: { OPEN_SECOND_BRAIN_COUNTERPARTY_BRIEF_ENABLED: "true" },

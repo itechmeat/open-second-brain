@@ -31,7 +31,9 @@
  * waits at most {@link TRACK_LOCK_BUDGET_MS} (a read must not stall on a
  * lock a crashed process left), and a lock still busy then leaves the
  * change queued in the process: the next update of the ledger writes it
- * with its own, so a skip delays tracking a shard, it does not drop it. After a
+ * with its own, so a skip delays tracking a shard, it does not drop it,
+ * unless the process ends before its next update: the queue lives in the
+ * process, and only the file is seen by another one. After a
  * skip behind a lock one holder kept through the whole wait (a crashed
  * process's) the process leaves the ledger alone for
  * {@link TRACK_BACKOFF_MS} without waiting, so a hook that lists several

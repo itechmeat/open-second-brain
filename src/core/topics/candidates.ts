@@ -13,9 +13,15 @@
  *    busy session never makes a topic on its own (spec "One busy session
  *    does not make a topic").
  *
- * A signal a `signal-removed` record forgot is left out. Pure.
+ * A signal a `signal-removed` record forgot is left out. The text is
+ * taken with every `<private>` region removed, tags and placeholder
+ * included: a word that exists only inside a region never groups,
+ * routes, titles or describes a topic, and never reaches a derived
+ * item or a decision model, whatever the egress rule allows for the
+ * record itself. A record whose text is all region is left out. Pure.
  */
 
+import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../redactor.ts";
 import { scopeFromFrontmatter } from "../scope-key.ts";
 import { LOG_EVENT_KIND, SIGNAL_KIND } from "../store/constants.ts";
 import type { StoreRecord } from "../store/envelope.ts";
@@ -72,7 +78,8 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
     meta = obj(record.body["body"]);
     text = fields.map((f) => str(meta[f])).find((t) => t !== null) ?? null;
   }
-  if (text === null) return null;
+  if (text !== null) text = withoutPrivateRegions(text);
+  if (text === null || text === "") return null;
   const scope = scopeFromFrontmatter(meta);
   return {
     id: record.id,
@@ -83,6 +90,17 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
     private: isPrivate,
     topic: record.topic,
   };
+}
+
+/** `text` with every `<private>` region cut out, no placeholder left behind. */
+function withoutPrivateRegions(text: string): string {
+  const stripped = stripPrivateRegions(text);
+  if (stripped === text) return text;
+  return stripped
+    .split(PRIVATE_REGION_PLACEHOLDER)
+    .join(" ")
+    .replaceAll(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 /** The candidates among `records`; `privateIds` names those of the `private` partition. */

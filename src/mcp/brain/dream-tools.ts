@@ -8,6 +8,11 @@
 
 import { resolveAgentName, resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import { dream, type DreamGateOverrides } from "../../core/brain/dream.ts";
+import {
+  decideBudgetWithin,
+  prepareTopicVerdicts,
+  type PrepareTopicVerdictsOptions,
+} from "../../core/topics/decide-auto.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import {
   DREAM_GATE_NAMES,
@@ -343,6 +348,7 @@ export async function toolBrainDream(
   // spends the run's budget - which is the honest reading of a budget the
   // operator set for this operation.
   const safeguard = toolSafeguard(ctx, OPERATION.dream);
+  const startedAt = Date.now();
   // The retire-siblings key honours the server's own config file, as
   // `brain_review_candidates` does.
   const retireSiblingsEnabled = resolveNearDuplicateRetireSiblingsEnabled(
@@ -377,6 +383,19 @@ export async function toolBrainDream(
   // happen at all, and a client that saw the same five stages twice
   // would read the second pass as a restart. Progress describes the run
   // the caller asked for.
+  // The model verdicts are decided before the pass (design D10, D20):
+  // only a live pass decides; a dry run gets the deterministic result.
+  // The same config and run date the pass below plans with.
+  // The pass spends the call's one deadline too: it gets what is left,
+  // so the dream pass after it is not already out of time.
+  const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, Date.now() - startedAt);
+  const decideOptions: PrepareTopicVerdictsOptions = {
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    ...(nowDate ? { runAt: nowDate } : {}),
+    ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+  };
+  const topicVerdicts =
+    dryRun || deadlineMs === 0 ? undefined : await prepareTopicVerdicts(decideOptions);
   const summary = dream(vault, {
     dryRun,
     safeguard,
@@ -384,6 +403,7 @@ export async function toolBrainDream(
     retireSiblingsEnabled,
     ...previewScope,
     ...(nowDate ? { now: nowDate } : {}),
+    ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),
     ...(onProgress ? { onProgress } : {}),

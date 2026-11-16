@@ -7,6 +7,7 @@ import {
   RECALL_INJECT_MAX_NOTES,
   recallInjectNoteKey,
   type RecallCandidate,
+  type RecallInjectOptions,
   type RecallResultSet,
   type RecallRetriever,
 } from "../../../src/core/brain/recall-inject.ts";
@@ -302,6 +303,30 @@ const three = (): ReadonlyArray<RecallCandidate> => [
   candidate({ path: "Brain/c.md", title: "Gamma", score: 0.5 }),
 ];
 
+/** The note bullets of a brief (one per shown note). */
+function noteLines(brief: string): string[] {
+  return brief.split("\n").filter((l) => l.startsWith("- "));
+}
+const cutCount = (brief: string): number | null => {
+  const m = /_(\d+) more recalled notes? (is|are) not shown\./.exec(brief);
+  return m === null ? null : Number(m[1]);
+};
+const longNotes = (n: number) =>
+  Array.from({ length: n }, (_, i) =>
+    candidate({
+      path: `Brain/really-long-note-path-number-${i}.md`,
+      title: `A reasonably long note title number ${i}`,
+      score: 0.9,
+    }),
+  );
+
+/** Six long notes under a 700-character cap, optionally through a decision filter. */
+const decideLongSix = (filter?: RecallInjectOptions["decisionFilter"]) =>
+  decideRecallInject("receipts", retrieverOf({ candidates: longNotes(6), total: 6 }), {
+    maxChars: 700,
+    ...(filter !== undefined ? { decisionFilter: filter } : {}),
+  });
+
 describe("per-session dedupe and the cross-lane digest filter", () => {
   // Captured from the renderer before dedupe existed: no option set must
   // keep this brief byte for byte.
@@ -465,6 +490,141 @@ describe("per-session dedupe and the cross-lane digest filter", () => {
     expect(decision.noteCount).toBeLessThan(4);
     expect(decision.injectedNotes).toHaveLength(decision.noteCount);
     for (const note of decision.injectedNotes) expect(decision.brief).toContain(note.path);
+  });
+
+  test("an overflow keeps the notes that fit and names exactly the ones left out", async () => {
+    for (const maxChars of [520, 700, 900]) {
+      // oxlint-disable-next-line no-await-in-loop -- one decision per cap
+      const over = await decideRecallInject(
+        "receipts",
+        retrieverOf({ candidates: longNotes(6), total: 6 }),
+        { maxChars },
+      );
+      expect(over.kind).toBe("inject");
+      if (over.kind !== "inject") continue;
+      const shown = noteLines(over.brief).length;
+      expect(shown).toBeGreaterThan(0);
+      expect(over.noteCount).toBe(shown);
+      for (const note of over.injectedNotes) expect(over.brief).toContain(note.path);
+      expect(over.injectedNotes).toHaveLength(shown);
+      const count = cutCount(over.brief);
+      if (count !== null) expect(count).toBe(6 - shown);
+      expect(over.brief.length).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
+  test("the cut line never evicts the last note: a cap too tight for both keeps the note", async () => {
+    const over = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: longNotes(4), total: 4 }),
+      { maxChars: 240 },
+    );
+    expect(over.kind).toBe("inject");
+    if (over.kind !== "inject") return;
+    expect(noteLines(over.brief).length).toBeGreaterThan(0);
+    expect(over.noteCount).toBe(noteLines(over.brief).length);
+  });
+
+  test("no cap gives a brief with a cut line and no note", async () => {
+    for (let maxChars = 60; maxChars <= 400; maxChars += 5) {
+      // Each cap is its own decision: sequential keeps the sweep simple.
+      // oxlint-disable-next-line no-await-in-loop
+      const out = await decideRecallInject(
+        "receipts",
+        retrieverOf({ candidates: longNotes(4), total: 4 }),
+        { maxChars },
+      );
+      if (out.kind !== "inject") continue;
+      expect({ maxChars, notes: noteLines(out.brief).length }).toEqual({
+        maxChars,
+        notes: out.noteCount,
+      });
+      if (cutCount(out.brief) !== null) {
+        expect({ maxChars, noteCount: out.noteCount > 0 }).toEqual({ maxChars, noteCount: true });
+      }
+    }
+  });
+
+  test("the cut line names a real way to get the rest: the search tool with the prompt", async () => {
+    const over = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: longNotes(4), total: 4 }),
+      { maxChars: 520 },
+    );
+    expect(over.kind).toBe("inject");
+    if (over.kind !== "inject") return;
+    expect(over.brief).toContain("`brain_search`");
+    expect(over.brief).not.toContain("o2b brain export");
+    const fits = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: [candidate({ title: "Alpha" })], total: 1 }),
+    );
+    expect(fits.kind).toBe("inject");
+    if (fits.kind !== "inject") return;
+    expect(fits.brief).not.toContain("more recalled notes");
+  });
+
+  test("a note the enforce decision filter dropped is not a budget cut: the cut line stays out", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3 }),
+      {
+        decisionFilter: {
+          mode: "enforce",
+          run: async () => ({
+            status: "ok",
+            mode: "enforce",
+            latencyMs: 1,
+            helps: [1, 0, 1],
+            sent: [true, true, true],
+            injectAny: 1,
+          }),
+        },
+      },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(cutCount(decision.brief)).toBeNull();
+  });
+
+  test("the recall hint counts the notes the brief shows, after the cut line's evictions", async () => {
+    for (let maxChars = 200; maxChars <= 1400; maxChars += 5) {
+      // oxlint-disable-next-line no-await-in-loop -- one decision per cap
+      const out = await decideRecallInject(
+        "receipts",
+        retrieverOf({ candidates: longNotes(6), total: 6 }),
+        { maxChars },
+      );
+      if (out.kind !== "inject") continue;
+      const m = /Recalled (\d+) of/.exec(out.brief);
+      if (m === null) continue;
+      expect({ maxChars, hint: Number(m[1]) }).toEqual({ maxChars, hint: out.noteCount });
+    }
+  });
+
+  test("a note the enforce filter drops keeps the budget's own omissions in the cut line", async () => {
+    const plain = await decideLongSix();
+    expect(plain.kind).toBe("inject");
+    if (plain.kind !== "inject") return;
+    const omitted = cutCount(plain.brief);
+    expect(omitted).not.toBeNull();
+    const shown = plain.noteCount;
+    expect(shown).toBeGreaterThan(1);
+    const filtered = await decideLongSix({
+      mode: "enforce",
+      run: async () => ({
+        status: "ok",
+        mode: "enforce",
+        latencyMs: 1,
+        helps: Array.from({ length: shown }, (_, i) => (i === 0 ? 0 : 1)),
+        sent: Array.from({ length: shown }, () => true),
+        injectAny: 1,
+      }),
+    });
+    expect(filtered.kind).toBe("inject");
+    if (filtered.kind !== "inject") return;
+    expect(filtered.noteCount).toBe(shown - 1);
+    expect(cutCount(filtered.brief)).toBe(omitted);
   });
 
   test("a note removed by the enforce decision filter is absent from injectedNotes", async () => {

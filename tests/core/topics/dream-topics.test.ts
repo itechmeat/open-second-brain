@@ -12,6 +12,7 @@ import { withTopicPass } from "../../../src/core/brain/dream-tail.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
+import { emptyTopicVerdicts } from "../../../src/core/topics/verdicts.ts";
 import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import {
   AUTO_NOW,
@@ -125,6 +126,28 @@ describe("topic planning in a dream pass", () => {
     expect(out.changed).toBe(stub.changed);
     const records = readPartition(join(env.root, "shared")).flatMap((s) => s.records);
     expect(records.some((r) => r.kind === "topic-create")).toBe(false);
+  });
+
+  test("a pass that writes only a model verdict reports the change", () => {
+    dream(vault); // the claim's wait
+    const stub = dream(vault, { dryRun: true });
+    expect(stub.changed).not.toBe(true);
+    const verdict = {
+      use: "human_readable",
+      model: "m",
+      provider: "compatible",
+      version: 2,
+      mode: "enforce",
+      confidence: 0.9,
+    } as const;
+    // A kept note's verdict is a write of its own: the note is settled.
+    const out = withTopicPass(stub, {
+      topicVerdicts: { ...emptyTopicVerdicts(), kept: new Map([["note-1", verdict]]) },
+    });
+    expect(out.topics?.report.status).toBe("planned");
+    const records = readPartition(join(env.root, "shared")).flatMap((s) => s.records);
+    expect(records.filter((r) => r.kind === "history-verdict")).toHaveLength(1);
+    expect(out.changed).toBe(true);
   });
 
   test("the pass plans on the run's own clock: a topic quiet by that date is offered", () => {

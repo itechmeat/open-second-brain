@@ -132,12 +132,25 @@ export interface ResolvedDecisionModelConfig {
   readonly thresholdProfile?: string | null;
   /** Uses configured `enforce` that run as `shadow` for want of tuned thresholds. */
   readonly shadowOnlyUses?: ReadonlyArray<DecisionModelUse>;
+  /**
+   * The topic and agent-context uses opted in for private-record egress
+   * to a hosted provider (`decision_model_private_uses`). Absent means
+   * empty.
+   */
+  readonly privateHostedUses?: ReadonlyArray<DecisionModelUse>;
   /** Licence restriction note for the diagnostics; null when none. */
   readonly licenceNote?: string | null;
   /** Who processes the data, for the diagnostics. */
   readonly processor: string | null;
   /** The vault whose `_brain.yaml` was consulted and where records go; null when none. */
   readonly vault: string | null;
+  /**
+   * The thresholds store this resolution reads (`decision-thresholds.json`
+   * beside the config), null when the store is disabled. The uses compare
+   * their answers against the values stored there for the answering
+   * model. Absent (hand-built configs) means no store: built-in values.
+   */
+  readonly thresholdsPath?: string | null;
   /**
    * Set by a caller that runs requests outside an ordinary use (the rerank
    * eval gate); stamped on each record. Never set by the resolver.

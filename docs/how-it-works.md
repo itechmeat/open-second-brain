@@ -517,6 +517,37 @@ flowchart LR
   many, and points the agent at `brain_context` for the full set.
   When `Brain/lessons.md` exists, its (separately budgeted) body is
   appended so the unified lessons corpus loads on the same surface.
+  Two more blocks ride the same digest between the scoped rules and
+  the memory body, both charged against the same budget: the heads of
+  the session's project topics (title, status, id, description and
+  goal, at most `active.topic_heads_max` - default 12 - within
+  `active.topic_heads_max_chars`, default 1600, whole lines lowest-ranked
+  first, with a cut line naming how many more topics exist and the
+  `o2b topic list` / `brain_topic` commands that show them) and the
+  pinned context (neutralised, capped by `active.pinned_max_chars`,
+  default 1200, with a cut line naming `brain_pinned_context`). Both
+  ride the untrusted fence as stored, agent-authored text, and each
+  block fits its cap whole - heading, fence and cut line included. The
+  two together take at most half of what the budget leaves after the
+  scoped rules (both caps shrink in proportion when they would take
+  more), so the confirmed preferences always keep the other half and say
+  when they were cut; a heads block always shows at least one head. Both
+  fail open: without a brain store, a project with topics or pinned
+  context the digest is byte-identical to before. With the
+  `head_select` decision model on, the heads are ordered by relevance
+  instead of recency (see
+  [decision-models](decision-models.md#uses)). Neighbour updates before
+  each turn ride a separate hook (see
+  [decision-models/topics-and-agent-context](decision-models/topics-and-agent-context.md));
+  they run whenever a brain store is in use, on every host OpenCode
+  included, and the machine-config key `neighbour_updates_enabled` set to
+  `false` or `0` (environment `OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED`)
+  turns them off. Each turn asks the index for the records other devices
+  wrote on topics since the last turn, so a large import of other records
+  in between hides nothing; the session's own topics come from its own
+  newest records. The first prompt of a session, the first after an index
+  rebuild and the first after a day without a prompt start at the head of
+  the store, so old history is never replayed.
   Fails soft - every error path in the memory lane exits 0 and the
   runtime proceeds unaffected, emitting no memory context. The
   standing-rules block is the one

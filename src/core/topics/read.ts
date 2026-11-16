@@ -37,6 +37,11 @@ export interface TopicRead {
   readonly recordTopics: ReadonlyMap<string, string>;
   /** Ids of the topic records read from the `private` partition. */
   readonly privateRecords: ReadonlySet<string>;
+  /**
+   * The `source` record each model-authority topic record names (a
+   * dream-derived item), record id to source id.
+   */
+  readonly recordSources: ReadonlyMap<string, string>;
   /** The store id, `null` without a store. */
   readonly storeId: string | null;
 }
@@ -47,6 +52,7 @@ const EMPTY: TopicRead = Object.freeze({
   partitions: new Set<StorePartition>(),
   recordTopics: new Map<string, string>(),
   privateRecords: new Set<string>(),
+  recordSources: new Map<string, string>(),
   storeId: null,
 });
 
@@ -74,14 +80,21 @@ export function readTopicsOf(store: StoreInspection): TopicRead {
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
   }
   const recordTopics = new Map<string, string>();
-  for (const record of records)
+  const recordSources = new Map<string, string>();
+  for (const record of records) {
     if (record.topic !== null) recordTopics.set(record.id, record.topic);
+    const source = record.body["source"];
+    if (record.body["authority"] === "model" && typeof source === "string") {
+      recordSources.set(record.id, source);
+    }
+  }
   return {
     fold: foldTopics(records, { privateIds }),
     unreadable,
     partitions: new Set(partitions),
     recordTopics,
     privateRecords: privateIds,
+    recordSources,
     storeId: store.storeId,
   };
 }

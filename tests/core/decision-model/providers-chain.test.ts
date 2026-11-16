@@ -230,6 +230,10 @@ describe("chain fallback in runDecision", () => {
       expect(cfg.status).toBe("active");
       const result = await runDecision("rerank", build, QUESTIONS, { config: cfg, env: CHAIN_ENV });
       expect(result.status).toBe("ok");
+      // The result names the entry that answered, not the first one.
+      if (result.status === "ok") {
+        expect(result.answeredBy).toEqual({ provider: "typesafe", model: "fake-model-1.0" });
+      }
       const records = listDecisionModelCalls(vault);
       expect(records).toHaveLength(2);
       expect(records[0]?.payload).toMatchObject({

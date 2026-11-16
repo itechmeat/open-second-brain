@@ -24,6 +24,7 @@ import {
 
 /** Schema tokens used by the cases below. */
 const DEPENDS_ON = "depends_on";
+const SUPPORTS = "supports";
 
 const BASE = [
   "schema_version: 1",
@@ -287,6 +288,37 @@ describe("ontology mutations", () => {
     ]);
     const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: DEPENDS_ON }]);
     expect(removed.link_constraints).toEqual({});
+  });
+
+  test("remove_link_type drops the pairs of other link types that name it, then an emptied link type", () => {
+    const added = applyMutationsToPack(base, [
+      { op: "add_link_type", token: "cites" },
+      { op: "add_link_type", token: SUPPORTS },
+      { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "cites", target: "paper" },
+      { op: "add_link_constraint", link_type: "supports", source: "paper", target: "cites" },
+    ]);
+    const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: "cites" }]);
+    expect(removed.link_types).toEqual(["depends_on", "supports"]);
+    expect(removed.link_constraints).toEqual({ depends_on: ["paper->person"] });
+  });
+
+  test("remove_link_type keeps the pairs that name a page type of the same token", () => {
+    const added = applyMutationsToPack(base, [
+      { op: "add_link_type", token: "paper" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
+    ]);
+    const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: "paper" }]);
+    expect(removed.link_constraints).toEqual({ depends_on: ["paper->person"] });
+  });
+
+  test("remove_link_type keeps the pairs that name a built-in type of the same token", () => {
+    const added = applyMutationsToPack(base, [
+      { op: "add_link_type", token: "note" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "note", target: "person" },
+    ]);
+    const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: "note" }]);
+    expect(removed.link_constraints).toEqual({ depends_on: ["note->person"] });
   });
 
   test("remove_type drops the type's attributes alongside extractable/aliases", () => {

@@ -12,7 +12,24 @@
  * (`passages.P0`), the convention the `systemone` wire format documents.
  */
 
-import type { DecisionChoiceQuestion, DecisionModelUse, DecisionNoulQuestion } from "./contract.ts";
+import {
+  DECISION_MODEL_USES,
+  type DecisionChoiceQuestion,
+  type DecisionModelUse,
+  type DecisionNoulQuestion,
+} from "./contract.ts";
+import {
+  EVENT_KIND_MIN,
+  HEAD_SELECT_DROP_BELOW,
+  HUMAN_READABLE_HIDE_BELOW,
+  MILESTONE_DONE_MIN,
+  NEIGHBOUR_INJECT_MIN,
+  QUESTION_RESOLVED_MIN,
+  TOPIC_NEW_VETO_BELOW,
+  TOPIC_ROUTE_MIN,
+  TOPIC_SAME_MIN,
+  TOPIC_USES,
+} from "./questions-topics.ts";
 import { SKILLS_FINAL_MIN, SKILLS_NEEDS_ANY_MIN } from "./questions-skills.ts";
 
 /** Default per-candidate clip for any use that does not set its own. */
@@ -102,9 +119,20 @@ export const RERANK_QUESTIONS = Object.freeze({
  */
 export interface DecisionThresholdProfile {
   readonly name: string;
-  /** `baseline`: the thresholds in this file; otherwise the uses tuned for it. */
+  /** `baseline`: the thresholds of `BASELINE_TUNED_USES` in this file; otherwise the uses tuned for it. */
   readonly tuned: "baseline" | ReadonlyArray<DecisionModelUse>;
 }
+
+/**
+ * The uses the shipped `jev-1.13` baseline was measured on: the eight
+ * original uses (`BASELINE_TUNED_USES`). The nine topic and agent-context
+ * uses are not covered by it: `enforce` for them needs a thresholds-store
+ * entry or a measured mark first, and otherwise the resolver holds them
+ * to `shadow` and names them (`shadowOnlyUses`).
+ */
+export const BASELINE_TUNED_USES: ReadonlyArray<DecisionModelUse> = Object.freeze(
+  DECISION_MODEL_USES.filter((use) => !(TOPIC_USES as ReadonlyArray<string>).includes(use)),
+);
 
 export const DECISION_THRESHOLD_PROFILES: Readonly<Record<string, DecisionThresholdProfile>> =
   Object.freeze({
@@ -124,11 +152,11 @@ export function isDecisionThresholdProfile(name: string): boolean {
  * Whether `use` has tuned thresholds on `profile`.
  *
  * The source table decides first: the baseline profile ships tuned for
- * every use, a hand-registered list carries its own. An unknown profile
- * name (a self-hosted family the code does not carry) has no table entry,
- * so the measured mark decides, exactly as for a known-but-untuned one -
- * the store gate (`thresholds.ts`, keyed by model id) is applied beside
- * this by the config resolver.
+ * the eight uses of `BASELINE_TUNED_USES`, a hand-registered list carries
+ * its own. An unknown profile name (a self-hosted family the code does
+ * not carry) has no table entry, so the measured mark decides, exactly as
+ * for a known-but-untuned one - the store gate (`thresholds.ts`, keyed by
+ * model id) is applied beside this by the config resolver.
  *
  * The measured reader is consulted only when the table leaves the pair
  * untuned, so its read is never paid for a hand-registered or baseline
@@ -141,7 +169,7 @@ export function thresholdsTunedFor(
 ): boolean {
   if (profile === null) return false;
   const tuned = DECISION_THRESHOLD_PROFILES[profile]?.tuned;
-  if (tuned === "baseline") return true;
+  if (tuned === "baseline") return BASELINE_TUNED_USES.includes(use);
   if (tuned !== undefined && tuned.includes(use)) return true;
   return measuredTuned !== null && measuredTuned !== undefined && measuredTuned();
 }
@@ -161,6 +189,8 @@ export const ANSWERABLE_HIGH = 0.8;
 // ----- skills (skills_attach two-stage selection) -----------------------------
 
 export * from "./questions-skills.ts";
+
+export * from "./questions-topics.ts";
 
 // ----- extract_prefilter (turn pre-filter before brain_extract_signals) -------
 
@@ -357,6 +387,15 @@ export const BUILTIN_USE_THRESHOLDS: Readonly<
     any_min: RECALL_INJECT_ANY_MIN,
     note_min: RECALL_INJECT_NOTE_MIN,
   }),
+  topic_route: Object.freeze({ route_min: TOPIC_ROUTE_MIN }),
+  event_kind: Object.freeze({ kind_min: EVENT_KIND_MIN }),
+  human_readable: Object.freeze({ hide_below: HUMAN_READABLE_HIDE_BELOW }),
+  topic_new: Object.freeze({ veto_below: TOPIC_NEW_VETO_BELOW }),
+  topic_same: Object.freeze({ same_min: TOPIC_SAME_MIN }),
+  question_resolved: Object.freeze({ resolved_min: QUESTION_RESOLVED_MIN }),
+  milestone_done: Object.freeze({ done_min: MILESTONE_DONE_MIN }),
+  head_select: Object.freeze({ drop_below: HEAD_SELECT_DROP_BELOW }),
+  neighbour_relevant: Object.freeze({ inject_min: NEIGHBOUR_INJECT_MIN }),
 });
 
 /** The one value a threshold `fit` derives for a use: the action threshold. */
@@ -369,4 +408,13 @@ export const PRIMARY_THRESHOLD_NAME: Readonly<Record<DecisionModelUse, string>> 
   tension: "low_priority_min",
   labels: "suggest_min",
   recall_inject: "any_min",
+  topic_route: "route_min",
+  event_kind: "kind_min",
+  human_readable: "hide_below",
+  topic_new: "veto_below",
+  topic_same: "same_min",
+  question_resolved: "resolved_min",
+  milestone_done: "done_min",
+  head_select: "drop_below",
+  neighbour_relevant: "inject_min",
 });

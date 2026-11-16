@@ -16,6 +16,7 @@
  */
 
 import { dream } from "../dream.ts";
+import { decideBudgetWithin, prepareTopicVerdicts } from "../../topics/decide-auto.ts";
 import {
   discoverBridges,
   readDismissedBridges,
@@ -104,7 +105,29 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
     {
       name: LANE_TASK.dream,
       run: async () => {
-        dream(vault, { now, safeguard: safeguardFor(LANE_TASK.dream), ...laneProgress });
+        // The task's one deadline starts with the task: the decide pass
+        // spends it first, never more than its own budget, and the dream
+        // pass gets the same guard (as the MCP dream tool shares its call's).
+        const safeguard = safeguardFor(LANE_TASK.dream);
+        const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, 0);
+        // The model verdicts are decided before the pass (design D10,
+        // D20); the lane runs live passes only.
+        // The lane's config and run date, as the pass below plans with them.
+        const topicVerdicts =
+          deadlineMs === 0
+            ? undefined
+            : await prepareTopicVerdicts({
+                ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+                runAt: now,
+                ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+              });
+        dream(vault, {
+          now,
+          ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+          ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
+          safeguard,
+          ...laneProgress,
+        });
       },
     },
     reindex.task,

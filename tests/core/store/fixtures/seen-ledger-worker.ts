@@ -7,8 +7,12 @@
  * the shard again, as a sync tool taking it away would. A later read
  * names it only if the ledger kept it. Prints each removed shard's
  * partition-relative path on its own line, after `kept` when the ledger
- * held it right after the read, `skipped` when the best-effort update gave
- * way to a busy lock, then the round's milliseconds. The leaver prints its
+ * file on disk held it right after the read, `skipped` when the
+ * best-effort update gave way to a busy lock, then the round's
+ * milliseconds. The file, not a read of this process: a skipped update
+ * stays queued in this process (its own reads still name the shard) and
+ * is written only by a later update, which the last rounds may never get,
+ * so a queued shard is no claim another process can check. The leaver prints its
  * round count and run time at the end, for a failure message.
  * `leave`: reads the `private` shard of device `leave-0` (recording it) and
  * clears the partition's entries again, round after round, until the stop
@@ -22,17 +26,15 @@
  *
  * argv: <root> <role> <rounds> <ready dir> <go file> <stop file>
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { processDirsEnv } from "../../../../src/core/platform-dirs.ts";
 import { appendRecord } from "../../../../src/core/store/appender.ts";
 import { readStreamRecords } from "../../../../src/core/store/read/stream-read.ts";
-import {
-  forgetSeenPartition,
-  withoutSeenRecording,
-} from "../../../../src/core/store/seen-shards.ts";
+import { forgetSeenPartition } from "../../../../src/core/store/seen-shards.ts";
 import { openStore, readStoreId } from "../../../../src/core/store/store-open.ts";
-import { partitionDir } from "../../../../src/core/store/store-paths.ts";
+import { deviceStateDirFor, partitionDir } from "../../../../src/core/store/store-paths.ts";
 
 const [root, role, roundsText, readyDir, goFile, stopFile] = process.argv.slice(2) as [
   string,
@@ -56,6 +58,23 @@ while (!existsSync(goFile)) {
 const storeId = readStoreId(partitionDir(root, "shared")) as string;
 const progressFile = `${stopFile}.progress`;
 const STALL_MS = 120_000;
+/**
+ * Whether the seen-shards ledger file on disk names `rel` in `shared`. A
+ * file read that fails (a rename in flight on Windows) makes no claim.
+ */
+function ledgerFileHolds(rel: string): boolean {
+  try {
+    const dir = deviceStateDirFor(storeId, processDirsEnv());
+    const name = readdirSync(dir).find((n) => n.startsWith("seen-shards-") && n.endsWith(".json"));
+    if (name === undefined) return false;
+    const parsed = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
+      shards?: { shared?: unknown };
+    };
+    return Array.isArray(parsed.shards?.shared) && parsed.shards.shared.includes(rel);
+  } catch {
+    return false;
+  }
+}
 function readProgress(): string {
   try {
     return readFileSync(progressFile, "utf8");
@@ -75,15 +94,11 @@ if (role === "track") {
     });
     readStreamRecords(root, "shared", { stream: "events" });
     rmSync(path);
-    // Whether the ledger kept the shard: a read that records nothing names
-    // it gone only if it is in the ledger. A tracking update is best
-    // effort (it skips on a busy lock), so only a kept shard is a claim.
+    // Whether the ledger file kept the shard. A tracking update is best
+    // effort (it skips on a busy lock and queues the change in this
+    // process), so only a shard the file holds is a claim.
     const rel = `events/track-${i}/${basename(path)}`;
-    const kept = withoutSeenRecording(
-      () =>
-        readStreamRecords(root, "shared", { stream: "events" }, { device: `track-${i}` })
-          .unreadable,
-    ).includes(rel);
+    const kept = ledgerFileHolds(rel);
     process.stdout.write(`${kept ? "kept" : "skipped"} ${rel} ${Date.now() - started}\n`);
     // The round count, which keeps the other process going: it stops when
     // the parent writes the stop file and gives up only when this count

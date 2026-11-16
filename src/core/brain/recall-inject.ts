@@ -31,6 +31,7 @@ import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
 import { fenceUntrustedContent, neutralizeSingleLine } from "./untrusted-source.ts";
+import { budgetCutLine } from "../agent-context/budget-line.ts";
 import { RECALL_INJECT_ANY_MIN, RECALL_INJECT_NOTE_MIN } from "../decision-model/questions.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
 import type { RecallSliceSpec } from "./types.ts";
@@ -596,7 +597,9 @@ async function decideOverRetrieval(
   }
 
   const chosen = fresh.slice(0, maxNotes);
-  const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars);
+  // Every fresh candidate the brief does not show is counted, the ones
+  // past `maxNotes` included.
+  const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars, fresh.length);
   const today: Extract<RecallInjectDecision, { kind: "inject" }> = Object.freeze({
     kind: "inject",
     brief,
@@ -611,7 +614,14 @@ async function decideOverRetrieval(
     query,
     rendered: chosen.slice(0, noteCount),
     render: (kept) => {
-      const out = renderRecallBrief(kept, resultSet.total, maxChars);
+      // The notes the budget left out stay counted; the ones the model
+      // dropped are not a budget cut.
+      const out = renderRecallBrief(
+        kept,
+        resultSet.total,
+        maxChars,
+        kept.length + fresh.length - noteCount,
+      );
       return { ...out, injectedNotes: injectedNotesOf(kept.slice(0, out.noteCount)) };
     },
     remainingMs: timeBudgetMs - (clock() - started),
@@ -719,8 +729,8 @@ async function decideSliced(
   // Fixed before any layout: a slice the session had already seen in full.
   const shownBefore = verdicts.map((v, i) => v.outcome === "inject" && groups[i]!.length === 0);
 
-  const layout = (pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>) => {
-    const out = renderSlicedBrief(verdicts, pools, total, caps);
+  const layout = (pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>, omittedBefore = 0) => {
+    const out = renderSlicedBrief(verdicts, pools, total, caps, omittedBefore);
     const outcomes = verdicts.map((v, i): RecallSliceOutcome => {
       const placed = out.placed[i]!.length;
       if (v.outcome !== "inject") return { name: v.spec.name, outcome: v.outcome, notes: 0 };
@@ -761,8 +771,11 @@ async function decideSliced(
     rendered,
     render: (kept) => {
       const keep = new Set(kept.map(recallInjectNoteKey));
+      // The notes the budget left out stay counted; the ones the model
+      // dropped are not a budget cut.
       const out = layout(
         first.placed.map((pool) => pool.filter((c) => keep.has(recallInjectNoteKey(c)))),
+        new Set(groups.flat().map(recallInjectNoteKey)).size - rendered.length,
       );
       const notes = out.placed.flat();
       return {
@@ -814,7 +827,12 @@ interface RenderedBrief {
 interface FilterContext {
   readonly query: string;
   readonly rendered: ReadonlyArray<RecallCandidate>;
-  /** The same renderer and caps that produced today's brief. */
+  /**
+   * The same renderer and caps that produced today's brief. Its cut line
+   * names only the notes the budget left out (task 4.4): a note the
+   * decision filter judged unhelpful is not a budget cut, and naming it
+   * would spend the characters the filter saved.
+   */
   readonly render: (kept: ReadonlyArray<RecallCandidate>) => RenderedBrief;
   readonly remainingMs: number;
   readonly clock: () => number;
@@ -959,14 +977,10 @@ function renderRecallBrief(
   chosen: ReadonlyArray<RecallCandidate>,
   total: number,
   maxChars: number,
+  /** How many candidates were on offer (the cut line counts the rest); `chosen.length` by default. */
+  offered: number = chosen.length,
 ): { readonly brief: string; readonly noteCount: number } {
   const safe = chosen.map((c) => ({ ...c, title: neutralizeTitle(c.title) }));
-  const hintInputs: ReadonlyArray<RecallHintInput> = safe.map((c) => ({
-    searchType: c.searchType,
-    score: c.score,
-    title: c.title,
-  }));
-  const hint = deriveRecallHint(hintInputs, total);
   // Charge the fence delimiter overhead against the cap so the FENCED brief
   // (not merely its inner body) is what stays within `maxChars`.
   const innerBudget = Math.max(0, maxChars - fenceOverhead());
@@ -974,15 +988,48 @@ function renderRecallBrief(
   // tiny `maxChars` must never be exceeded just to carry the header.
   const header = RECALL_BRIEF_HEADER;
   const lines: string[] = header.length <= innerBudget ? [header] : [];
-  // The hint is orientation, not a pointer: keep it only while it fits, so a
-  // tight budget spends its characters on the actual note pointers instead.
-  if (hint !== null && [...lines, hint].join("\n").length <= innerBudget) lines.push(hint);
   let noteCount = 0;
   for (const note of safe) {
     const line = renderNoteLine(note);
     if ([...lines, line].join("\n").length > innerBudget) break;
     lines.push(line);
     noteCount += 1;
+  }
+  // The budget-cut line (task 4.4): the notes this cap left out are
+  // named, with a real way to get them. The
+  // line rides INSIDE the budget: a note gives way when the line would
+  // not fit, the count is recomputed after each eviction, and the last
+  // note is never evicted for it - the line is dropped instead.
+  // Evictions are tried on a copy and kept only when the line then fits.
+  // A brief that shows no note carries no cut line either.
+  if (noteCount > 0 && offered - noteCount > 0) {
+    const trial = [...lines];
+    let shown = noteCount;
+    for (;;) {
+      const cut = recallCutLine(offered - shown);
+      if ([...trial, cut].join("\n").length <= innerBudget) {
+        lines.splice(0, lines.length, ...trial, cut);
+        noteCount = shown;
+        break;
+      }
+      if (shown <= 1) break;
+      trial.pop();
+      shown -= 1;
+    }
+  }
+  // The hint is orientation, not a pointer: it describes the notes the
+  // brief finally shows and goes in after the header only while it fits,
+  // so a tight budget spends its characters on the note pointers instead.
+  const hintInputs: ReadonlyArray<RecallHintInput> = safe.slice(0, noteCount).map((c) => ({
+    searchType: c.searchType,
+    score: c.score,
+    title: c.title,
+  }));
+  const hint = deriveRecallHint(hintInputs, total);
+  if (hint !== null) {
+    const at = lines[0] === header ? 1 : 0;
+    const withHint = lines.toSpliced(at, 0, hint);
+    if (withHint.join("\n").length <= innerBudget) lines.splice(at, 0, hint);
   }
   return { brief: fenceUntrustedContent(lines.join("\n"), RECALL_FENCE_ORIGIN), noteCount };
 }
@@ -1005,6 +1052,8 @@ function renderSlicedBrief(
   pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>,
   total: number,
   caps: Pick<ResolvedCaps, "maxNotes" | "maxChars">,
+  /** Notes an earlier layout's budget left out of `pools`: still counted in the cut line. */
+  omittedBefore = 0,
 ): {
   readonly brief: string;
   readonly placed: ReadonlyArray<ReadonlyArray<RecallCandidate>>;
@@ -1038,6 +1087,33 @@ function renderSlicedBrief(
     for (const note of chosen) seen.add(recallInjectNoteKey(note));
     placed.push(chosen);
   }
+  // The budget-cut line (task 4.4), as renderRecallBrief renders it: a
+  // tail note gives way (and leaves `placed`, so it is not recorded as
+  // injected), a heading left without notes goes with it, the count is
+  // recomputed after each eviction, and the last note is never evicted.
+  // Evictions are tried on copies and kept only when the line then fits.
+  const offered = new Set(pools.flat().map(recallInjectNoteKey));
+  const notShownOf = (p: RecallCandidate[][]): number =>
+    omittedBefore + offered.size - p.flat().length;
+  if (notShownOf(placed) > 0) {
+    const trialLines = [...lines];
+    const trialPlaced = placed.map((p) => [...p]);
+    for (;;) {
+      const cut = recallCutLine(notShownOf(trialPlaced));
+      if ([...trialLines, cut].join("\n").length <= innerBudget) {
+        lines.splice(0, lines.length, ...trialLines, cut);
+        placed.splice(0, placed.length, ...trialPlaced);
+        break;
+      }
+      if (trialPlaced.flat().length <= 1) break;
+      const lastSlice = trialPlaced.findLastIndex((p) => p.length > 0);
+      trialPlaced[lastSlice]!.pop();
+      trialLines.pop();
+      if (trialPlaced[lastSlice]!.length === 0) trialLines.pop();
+    }
+  }
+  // The hint describes the notes the brief finally shows, after the cut
+  // line's evictions, and goes in only while it still fits.
   const hint = deriveRecallHint(
     placed.flat().map((c) => ({
       searchType: c.searchType,
@@ -1056,6 +1132,18 @@ function renderSlicedBrief(
     placed,
     onlyRepeats,
   };
+}
+
+/** Where the notes a recall brief leaves out can be read: the search tool with this prompt. */
+const RECALL_CUT_COMMAND = "Search for them with `brain_search` and this prompt";
+
+function recallCutLine(dropped: number): string {
+  return budgetCutLine({
+    dropped,
+    what: "recalled notes",
+    whatOne: "recalled note",
+    command: RECALL_CUT_COMMAND,
+  });
 }
 
 /** A slice heading is operator text: neutralised like a title, never empty. */

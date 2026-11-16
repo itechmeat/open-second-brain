@@ -28,6 +28,7 @@ export function withTopicPass(summary: DreamRunSummary, opts: DreamOptions): Dre
     // The run's own clock, when it has one: quiet topics and record times
     // follow the date the run is for.
     ...(runAt !== undefined ? { now: () => runAt.getTime() } : {}),
+    ...(opts.topicVerdicts !== undefined ? { topicVerdicts: opts.topicVerdicts } : {}),
     ...(safeguard !== undefined
       ? {
           mayPlan: () => {
@@ -42,11 +43,19 @@ export function withTopicPass(summary: DreamRunSummary, opts: DreamOptions): Dre
       : {}),
   });
   if (report === null) return summary;
-  // Topics created or records routed are writes of this pass.
-  // A pass that failed midway lists what it wrote before the failure.
+  // Topics created, records routed and model verdict records are writes
+  // of this pass. A pass that failed midway counts what it wrote before
+  // the failure.
   const wrote =
     (report.status === "planned" || report.status === "error") &&
-    report.created.length + report.routed.length > 0;
+    report.created.length +
+      report.routed.length +
+      report.derived +
+      report.resolutions +
+      report.completions +
+      report.hidden +
+      report.kept >
+      0;
   return {
     ...summary,
     ...(wrote ? { changed: true } : {}),

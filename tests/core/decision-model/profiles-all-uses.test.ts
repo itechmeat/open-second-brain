@@ -1,9 +1,9 @@
 /**
  * Threshold profiles hold for every use, not only rerank: `enforce` on a
  * profile without tuned thresholds (`laya`, `openjev`, `llm-emulation`)
- * runs as `shadow` for each of the eight uses, `runDecision` reports and
- * records `shadow`, and `check` lists every use with its configured mode
- * and names each shadow-only one.
+ * runs as `shadow` for each use, `runDecision` reports and records
+ * `shadow`, and `check` lists every use with its configured mode and
+ * names each shadow-only one.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -99,7 +99,7 @@ describe("enforce on an untuned threshold profile runs as shadow for every use",
     });
   }
 
-  test("check lists all eight uses and names each shadow-only one", async () => {
+  test("check lists every use and names each shadow-only one", async () => {
     const report = await buildDecisionModelCheck({ config: config("laya"), vault, env: ENV });
     expect(report.shadow_only_uses).toEqual([...DECISION_MODEL_USES]);
     const text = renderDecisionModelCheck(report);
