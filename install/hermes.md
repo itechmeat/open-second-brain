@@ -167,7 +167,8 @@ Until the host issue is resolved, avoid installing separate copies in multiple
 profile homes. See [Hermes issue #138702](https://github.com/NousResearch/hermes-agent/issues/138702)
 for the host-side status. A shared clone was reported as a workaround in
 [issue #308](https://github.com/itechmeat/open-second-brain/issues/308), but
-has not been validated on every Hermes version or platform.
+has not been validated on every Hermes version or platform. Updating a shared
+clone affects every profile that uses it.
 
 ### How Hermes discovers the provider
 
