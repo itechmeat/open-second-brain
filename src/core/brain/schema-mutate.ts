@@ -33,6 +33,7 @@ import {
   parseSchemaPack,
   renderSchemaBlock,
   replaceSchemaBlock,
+  pairEndpoints,
   schemaPackTokens,
   validateEndpointPair,
   FRONTMATTER_TIERS,
@@ -140,6 +141,8 @@ export interface ApplySchemaMutationsOptions {
    * the CLI, `agent` from MCP. Absent: decided by the process's origin.
    */
   readonly authority?: "human" | "agent";
+  /** Store-only: adopt unattested deciding records (operator only; `./schema-mutate-store.ts`). */
+  readonly adoptUnattested?: boolean;
 }
 
 export interface ApplySchemaMutationsResult {
@@ -188,6 +191,11 @@ export interface PreviewSchemaMutationsResult {
   readonly diff: ReadonlyArray<SchemaPackDiffEntry>;
 }
 
+/** The refusal of an adoption with no mutation on an unswitched machine. */
+export const SCHEMA_ADOPT_ONLY_UNSWITCHED =
+  "schema apply --adopt-unattested without a mutation is for a store-only machine; " +
+  "this one reads its schema from the vault file, which has no records to adopt";
+
 /**
  * Separates a leaf's path from its value when keying a list MEMBER, so two
  * members of the same list do not collide in the flat map the diff walks. A
@@ -226,6 +234,12 @@ export async function applySchemaMutations(
   // A store-only machine checks the store's identity on the write itself;
   // the vault identity guard is the legacy tree's.
   if (!storeOnly) assertVaultIdentityForWrite(vault);
+  // Adoption alone (an empty batch) is for a store-only machine: the file
+  // path has no records to adopt, and an empty apply there would rewrite
+  // and re-attest `_brain.yaml` as it stands.
+  if (!storeOnly && mutations.length === 0 && opts.adoptUnattested === true) {
+    throw new Error(SCHEMA_ADOPT_ONLY_UNSWITCHED);
+  }
   // Deny-consulted evidence (write-side trust, PR #247 review M3 residual,
   // schema sibling): a schema batch rewrites the operator's vocabulary pack
   // - the same mutation-lane shape as update, append and delete_by_source -
@@ -249,6 +263,7 @@ export async function applySchemaMutations(
       ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
       ...(opts.lockStaleMs !== undefined ? { lockStaleMs: opts.lockStaleMs } : {}),
       ...(opts.authority !== undefined ? { authority: opts.authority } : {}),
+      ...(opts.adoptUnattested === true ? { adoptUnattested: true } : {}),
       next: (current) => applyMutationsToPack(current, mutations),
     });
   }
@@ -455,6 +470,11 @@ function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
       removeValue(pack.extractable, token);
       delete pack.expert_routing[token];
       delete pack.attributes[token];
+      for (const [linkType, pairs] of Object.entries(pack.link_constraints)) {
+        const kept = pairs.filter((pair) => !pairEndpoints(pair).includes(token));
+        if (kept.length > 0) pack.link_constraints[linkType] = kept;
+        else delete pack.link_constraints[linkType];
+      }
       return;
     }
     case "update_type": {
@@ -680,9 +700,14 @@ function validateSchemaPackReferences(pack: SchemaPack): void {
       throw new Error(`schema.expert_routing.${token}: token is not declared`);
     }
   }
-  for (const linkType of Object.keys(pack.link_constraints)) {
+  for (const [linkType, pairs] of Object.entries(pack.link_constraints)) {
     if (!pack.link_types.includes(linkType)) {
       throw new Error(`schema.link_constraints.${linkType}: link type is not declared`);
+    }
+    for (const pair of pairs) {
+      if (!pairEndpoints(pair).every((token) => tokens.has(token))) {
+        throw new Error(`schema.link_constraints.${linkType}: ${pair}: token is not declared`);
+      }
     }
   }
   for (const type of Object.keys(pack.attributes)) {

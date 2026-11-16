@@ -168,3 +168,11 @@ Settings that every machine must agree on (the view writer, topic thresholds, th
 #### Scenario: Setting changed on one machine
 - **WHEN** the user changes the topic creation threshold on machine A
 - **THEN** machine B applies the new threshold after the record syncs
+
+#### Scenario: Schema field edited on two machines before they sync
+- **WHEN** machine A adds a page type and machine B removes another page type of the same schema field before either has the other's records
+- **THEN** once both sync, both machines read one list that holds A's addition and lacks B's removal, whatever order the records arrive in; an add and a remove of the same entry resolve to the stronger authority, then the later clock
+
+#### Scenario: A type removed on one machine while another adds a reference to it
+- **WHEN** machine A removes a page type and machine B adds an alias or a prefix for that type before either has the other's records
+- **THEN** once both sync, both machines read one pack without the type and without the references to it, and the next apply on either machine succeeds and removes the references from the records

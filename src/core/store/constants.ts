@@ -166,6 +166,11 @@ export const PINNED_CLEAR_KIND = "pinned-clear";
 /** Shared setting records (`settings` stream): a value and its removal. */
 export const SETTING_SET_KIND = "setting-set";
 export const SETTING_UNSET_KIND = "setting-unset";
+/**
+ * One entry of a list setting added or removed (`settings` stream): a list
+ * setting folds per entry, so concurrent edits on two devices both apply.
+ */
+export const SETTING_ENTRY_KIND = "setting-entry";
 
 /** A human record that takes a device off the digest roster (`settings` stream). */
 export const DEVICE_RETIRE_KIND = "device-retire";
@@ -182,6 +187,7 @@ export const FOLD_RECORD_KINDS = Object.freeze([
   PINNED_CLEAR_KIND,
   SETTING_SET_KIND,
   SETTING_UNSET_KIND,
+  SETTING_ENTRY_KIND,
   DEVICE_RETIRE_KIND,
   STATE_DIGEST_KIND,
 ] as const);

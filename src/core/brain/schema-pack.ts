@@ -3,10 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { isStoreOnly } from "../store/store-only.ts";
 import { escapeRegex } from "../strings.ts";
 import { brainConfigPath } from "./paths.ts";
-import { STORE_SCHEMA_PACK_SOURCE, storeSchemaConfigText } from "./schema-pack-store.ts";
+import {
+  readStoreSchemaRecords,
+  STORE_SCHEMA_PACK_SOURCE,
+  type StoreSchemaRecords,
+} from "./schema-pack-store.ts";
 import {
   SCHEMA_VOCAB_CATEGORIES,
   resolveSchemaVocabulary,
+  splitCompoundSchemaKey,
   validateSchemaDeclarations,
   validateSchemaToken,
   type BrainSchemaDeclarations,
@@ -85,20 +90,37 @@ export function readSchemaPackSource(vault: string | null): SchemaPackSource {
   // A store-only machine keeps the pack in the shared settings records
   // `brain.schema.<field>` (design D14 item 3), never in `_brain.yaml`.
   // No vault means store-only too.
-  if (vault === null || isStoreOnly({ vault })) {
-    const stored = storeSchemaConfigText();
-    const text = stored ?? ABSENT_SCHEMA_CONFIG_TEXT;
-    return Object.freeze({
-      path: STORE_SCHEMA_PACK_SOURCE,
-      present: stored !== null,
-      text,
-      pack: parseSchemaPack(text),
-    });
-  }
+  if (vault === null || isStoreOnly({ vault })) return readStoreSchemaPack().source;
   const path = brainConfigPath(vault);
   const present = existsSync(path);
   const text = present ? readFileSync(path, "utf8") : ABSENT_SCHEMA_CONFIG_TEXT;
   return Object.freeze({ path, present, text, pack: parseSchemaPack(text) });
+}
+
+/** The store's schema pack with the records it was read from, one read of them. */
+export interface StoreSchemaPack extends StoreSchemaRecords {
+  readonly source: SchemaPackSource;
+}
+
+/**
+ * The pack of a store-only machine together with the field lists and the
+ * deciding records it was parsed from, all from one read of the shared
+ * settings stream (task 3.12, design D19 item 1). An apply and the
+ * integrity read take the pack, its deciding records and the entries a
+ * repair may remove from here, so no record can sync in between them.
+ */
+export function readStoreSchemaPack(configPath?: string): StoreSchemaPack {
+  const records = readStoreSchemaRecords(configPath);
+  const text = records.text ?? ABSENT_SCHEMA_CONFIG_TEXT;
+  const source: SchemaPackSource = Object.freeze({
+    path: STORE_SCHEMA_PACK_SOURCE,
+    present: records.text !== null,
+    text,
+    // Fields merge per entry (task 3.12), so a removal from one device
+    // can meet a reference another device added: repaired on read.
+    pack: dropDanglingReferences(parseSchemaPack(text)),
+  });
+  return { ...records, source };
 }
 
 export function loadSchemaPack(vault: string | null): SchemaPack {
@@ -181,6 +203,57 @@ export function parseSchemaPack(configText: string): SchemaPack {
     attributes,
     frontmatter_tiers: frontmatterTiers,
   });
+}
+
+/**
+ * The pack without its references to undeclared tokens (design D19 item
+ * 1): the aliases, prefixes, extractable entries, expert routes and
+ * attributes of a token the vocabulary does not hold, the constraint pairs
+ * whose source or target it does not hold, and the constraints of an
+ * undeclared link type or of one left with no pair. That is the cascade
+ * `remove_type` and `remove_link_type` apply. A store's fields merge per entry, so a type
+ * removed on one device and a reference to it added on another meet in
+ * the merged records; every machine drops the reference the same way when
+ * it reads the pack, so the pack in force always passes the reference
+ * check an apply runs, and the next apply writes the drop as removals.
+ */
+export function dropDanglingReferences(pack: SchemaPack): SchemaPack {
+  const tokens = schemaPackTokens(pack);
+  return freezeSchemaPack({
+    declarations: pack.declarations,
+    vocabulary: pack.vocabulary,
+    aliases: keep(pack.aliases, (token) => tokens.has(token)),
+    prefixes: keep(pack.prefixes, (_, token) => tokens.has(token)),
+    link_types: pack.link_types,
+    extractable: pack.extractable.filter((token) => tokens.has(token)),
+    expert_routing: keep(pack.expert_routing, (token) => tokens.has(token)),
+    labels: pack.labels,
+    link_constraints: keep(
+      Object.fromEntries(
+        Object.entries(pack.link_constraints).map(([type, pairs]) => [
+          type,
+          Object.freeze(pairs.filter((pair) => pairEndpoints(pair).every((t) => tokens.has(t)))),
+        ]),
+      ),
+      (type, pairs) => pack.link_types.includes(type) && pairs.length > 0,
+    ),
+    attributes: keep(pack.attributes, (type) => tokens.has(type)),
+    frontmatter_tiers: pack.frontmatter_tiers,
+  });
+}
+
+/** The entries of `record` that `ok` keeps, frozen. */
+function keep<T>(
+  record: Readonly<Record<string, T>>,
+  ok: (key: string, value: T) => boolean,
+): Readonly<Record<string, T>> {
+  return Object.freeze(Object.fromEntries(Object.entries(record).filter(([k, v]) => ok(k, v))));
+}
+
+/** The source and target tokens of a normalized `source->target` pair. */
+export function pairEndpoints(pair: string): [string, string] {
+  const arrow = pair.indexOf("->");
+  return [pair.slice(0, arrow), pair.slice(arrow + 2)];
 }
 
 /** Validate and normalize a `source->target` endpoint pair value. */
@@ -341,12 +414,12 @@ function parseCompoundMapField<T extends string>(
     const flat = /^    -\s+(.+?)\s*$/.exec(line);
     if (!flat) continue;
     const [rawKey, rawValue] = splitPair(flat[1]!);
-    const dot = rawKey.indexOf(".");
-    if (dot <= 0 || dot === rawKey.length - 1) {
+    const halves = splitCompoundSchemaKey(rawKey);
+    if (halves === null) {
       throw new Error(`${field}: "${rawKey}" must use a compound type.field key`);
     }
-    const outer = validateSchemaToken(rawKey.slice(0, dot), `${field}.${rawKey}`);
-    const inner = validateSchemaToken(rawKey.slice(dot + 1), `${field}.${outer}`);
+    const outer = validateSchemaToken(halves[0], `${field}.${rawKey}`);
+    const inner = validateSchemaToken(halves[1], `${field}.${outer}`);
     const value = validateValue(rawValue, `${field}.${outer}.${inner}`);
     out[outer] = out[outer] ?? {};
     out[outer]![inner] = value;

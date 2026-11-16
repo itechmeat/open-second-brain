@@ -17,6 +17,11 @@
  * default is neither written nor reported; the store's settings reader
  * falls back to the same default.
  *
+ * The schema fields it writes (`brain.schema.<field>`) are attested by a
+ * baseline row in the store's audit ledger (task 3.12, design D19 item
+ * 1): no audited apply wrote them, and an apply refuses over a deciding
+ * record no row attests.
+ *
  * `_permissions.yaml` rides along (review finding F461): its text becomes
  * the operator-only `permissions.document` setting at `human` authority,
  * never over a value the store already holds, so the deny rules stay in
@@ -34,10 +39,17 @@ import {
 import { brainConfigPath } from "../brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../brain/policy/defaults.ts";
 import { brainConfigKey, brainKeyHome, brainSettingKey } from "../brain/policy/settings-keys.ts";
+import {
+  SCHEMA_DECIDED_RECORDS_FIELD,
+  SCHEMA_IMPORT_BASELINE_ACTION,
+  SCHEMA_MUTATION_AUDIT_DIR,
+} from "../brain/schema-integrity.ts";
+import { schemaRecordAttestation, STORE_SCHEMA_PACK_SOURCE } from "../brain/schema-pack-store.ts";
 import { parseBrainYaml } from "../brain/yaml-parse.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import { appendRecord } from "../store/appender.ts";
-import { AUTHORITY_FIELD, SETTING_SET_KIND } from "../store/constants.ts";
+import { AUTHORITY_FIELD, LEDGER_ROW_KIND, SETTING_SET_KIND } from "../store/constants.ts";
+import { DUAL_WRITE_LEDGERS } from "../store/dual-write-records.ts";
 import { foldSettings } from "../store/fold-settings.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { heldRecords } from "./journal.ts";
@@ -124,6 +136,7 @@ export function importBrainSettings(
     unknown: [] as string[],
   };
   const fold = foldSettings(heldRecords(store));
+  const schemaAttestations: string[] = [];
   // `_permissions.yaml` becomes the operator-only `permissions.document`
   // setting (review finding F461): its text exactly as the file holds it,
   // at human authority, so a deny rule stays in force once the legacy tree
@@ -174,7 +187,7 @@ export function importBrainSettings(
       result.unchanged.push(key);
       continue;
     }
-    appendRecord(store, {
+    const written = appendRecord(store, {
       partition: "shared",
       stream: "settings",
       kind: SETTING_SET_KIND,
@@ -182,6 +195,32 @@ export function importBrainSettings(
       body: { [AUTHORITY_FIELD]: "human", key, value },
     });
     result.written.push(key);
+    if (block === "schema") schemaAttestations.push(schemaRecordAttestation(written.record));
   }
+  if (schemaAttestations.length > 0) appendSchemaBaseline(store, agent, schemaAttestations);
   return result;
+}
+
+/**
+ * The baseline row attesting the schema records the import wrote, each
+ * bound to its content (`<id>:<digest>`), in `shared` like every apply's
+ * attesting row (`../brain/schema-mutate-store.ts`).
+ */
+function appendSchemaBaseline(store: StoreHandle, agent: string, attestations: string[]): void {
+  const record = {
+    timestamp: new Date().toISOString(),
+    actor: agent,
+    action: SCHEMA_IMPORT_BASELINE_ACTION,
+    target: STORE_SCHEMA_PACK_SOURCE,
+    ok: true,
+    details: { [SCHEMA_DECIDED_RECORDS_FIELD]: attestations },
+  };
+  appendRecord(store, {
+    partition: "shared",
+    stream: "ledgers",
+    ledger: DUAL_WRITE_LEDGERS.reliabilityAudit,
+    kind: LEDGER_ROW_KIND,
+    agent,
+    body: { row: { audit_dir: SCHEMA_MUTATION_AUDIT_DIR, record } },
+  });
 }

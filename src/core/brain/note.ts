@@ -172,11 +172,12 @@ function appendJudgedNote(
   const mirror =
     shared === null || vault === null
       ? undefined
-      : mirrorNote(shared, vault, {
-          text: sanitised,
-          agent,
-          ...(input.now ? { now: input.now } : {}),
-        });
+      : mirrorNote(
+          shared,
+          vault,
+          { text: sanitised, agent, ...(input.now ? { now: input.now } : {}) },
+          input.configPath,
+        );
   return {
     logged_at: timestamp,
     log_path: reportedLogPath(res, vault),

@@ -29,6 +29,17 @@ import {
 } from "../../../src/core/store/constants.ts";
 import { DUAL_WRITE_LEDGERS } from "../../../src/core/store/dual-write-records.ts";
 import { formatDocVersion, shippedFormatDoc } from "../../../src/core/store/format-doc.ts";
+import {
+  IF_DECIDED_BY_FIELD,
+  KEYED_LIST_SETTINGS,
+} from "../../../src/core/store/fold-setting-lists.ts";
+import {
+  SCHEMA_DECIDED_RECORDS_FIELD,
+  SCHEMA_IMPORT_BASELINE_ACTION,
+  SCHEMA_MUTATION_AUDIT_ACTION,
+  SCHEMA_MUTATION_AUDIT_DIR,
+} from "../../../src/core/brain/schema-integrity.ts";
+import { SCHEMA_PACK_FIELDS } from "../../../src/core/brain/schema-pack-store.ts";
 
 const doc = shippedFormatDoc();
 
@@ -100,6 +111,102 @@ describe("FORMAT.md", () => {
   test("declares the format version the code writes", () => {
     expect(formatDocVersion(doc)).toBe(STORE_FORMAT_VERSION);
     expect(doc).toContain(`Format version: ${STORE_FORMAT_VERSION}`);
+  });
+
+  test("states which keys are list settings and how an entry's register is named", () => {
+    expect(doc).toContain(
+      "a `setting-entry` record for any other key is not applied, so a key that holds one value stays one register",
+    );
+    for (const key of KEYED_LIST_SETTINGS) expect(codeSpans.has(key)).toBe(true);
+    expect(doc).toContain("NFC-normalised");
+  });
+
+  test("names the schema attestation rows the code writes", () => {
+    for (const name of [
+      SCHEMA_MUTATION_AUDIT_ACTION,
+      SCHEMA_IMPORT_BASELINE_ACTION,
+      SCHEMA_DECIDED_RECORDS_FIELD,
+      SCHEMA_MUTATION_AUDIT_DIR,
+      "adopted",
+      "adopted_by",
+    ]) {
+      expect(codeSpans.has(name)).toBe(true);
+    }
+  });
+
+  test("binds each attested record to its content and names the fields the pack reads", () => {
+    expect(codeSpans.has("<id>:<sha256>")).toBe(true);
+    expect(doc).toContain("the sha256 of the record's canonical JSON");
+    for (const field of SCHEMA_PACK_FIELDS) expect(codeSpans.has(field)).toBe(true);
+    expect(doc).toContain("each side of a `name=value` line normalised on its own");
+  });
+
+  test("rejects a whole-list value of a list setting that is no list, and reads the schema once", () => {
+    expect(doc).toContain(
+      "A `setting-set` of a list setting whose value is not a list of one-line strings, numbers or booleans is not applied",
+    );
+    expect(doc).not.toContain("a `setting-set` of any other value and a `setting-unset` offer");
+    expect(doc).toContain("from one read of the `settings` stream");
+  });
+
+  test("drops a link constraint pair whose endpoint is undeclared", () => {
+    expect(doc).toContain(
+      "a link constraint pair whose source or target the vocabulary does not hold, and the constraints of an undeclared link type or of one left with no pair",
+    );
+  });
+
+  test("dual-writes the tombstone of a lane page an unswitched machine removes or moves", () => {
+    expect(doc).toContain(
+      "writes it beside a removed or moved legacy page whose entry the store holds",
+    );
+  });
+
+  test("a deciding record no row attests is a finding even when the pack digests as recorded", () => {
+    expect(doc).toContain("even when the pack matches the newest row's digest");
+    expect(doc).toContain("still decides the entry's slot when the removal is written");
+  });
+
+  test("a lane move replaces a shared destination with a private one by its tombstone first", () => {
+    expect(doc).toContain("a move that replaces a shared entry with a private one");
+    expect(doc).toContain("A move onto the entry it moves writes nothing");
+    expect(doc).toContain("built from the page as it is on disk after the move");
+  });
+
+  test("a repair's removal is conditional on the record it judged, and compound keys split like the parser", () => {
+    expect(codeSpans.has(IF_DECIDED_BY_FIELD)).toBe(true);
+    expect(doc).toContain("applies only while the record it names decides the entry's slot");
+    expect(doc).toContain("a compound `type.field` name is split at its first `.`");
+  });
+
+  test("a moved lane page that is a link is not read, and a folder is never moved into itself", () => {
+    expect(doc).toContain("never read through a symbolic link");
+    expect(doc).toContain("that of a destination entry the rename overwrote");
+    expect(doc).toContain(
+      "A folder is never moved into its own subfolder, nor into a folder that holds it",
+    );
+    expect(doc).toContain(
+      "a record in `private` whose body blob has not arrived, quarantined on this machine or not",
+    );
+  });
+
+  test("if_decided_by is ignored on other kinds, and a key that names no entry is removed", () => {
+    expect(doc).toContain("on a `setting-set` or `setting-unset` it is ignored");
+    expect(doc).toContain("name no entry at all once the conditional removals");
+  });
+
+  test("a move keeps a private destination private, stays in the lanes, and replaces an overwritten entry", () => {
+    expect(doc).toContain(
+      "A move lands in `private` when the entry it replaces at its destination is private",
+    );
+    expect(doc).toContain(
+      "to a path that is no lane entry (outside `Brain/`, or not in a lane folder) is refused",
+    );
+    expect(doc).toContain("so the store never keeps the content the rename replaced");
+  });
+
+  test("describes no earlier release that misreads setting-entry", () => {
+    expect(doc).not.toContain("from before `setting-entry`");
+    expect(doc).toContain("Format version 1 includes `setting-entry` from the first release");
   });
 
   test("follows the documentation style rules", () => {

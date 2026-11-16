@@ -14,7 +14,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { laneStoreFold } from "./lane-fold-cache.ts";
+import { laneFoldIncomplete, laneStoreFold } from "./lane-fold-cache.ts";
 import { laneNameRefusal, lanePlaceOf } from "./lane-paths.ts";
 import {
   laneEntryKey,
@@ -101,12 +101,14 @@ export function storeEntry(vault: string, path: string): LaneEntryValue | null {
 }
 
 /**
- * Whether the lane fold misses an `events` shard (unreadable, or gone
- * since this machine read it): an entry's private records may be in it,
- * so every privacy verdict over the fold fails closed (design D14).
+ * Whether the lane fold may miss a record ({@link laneFoldIncomplete}: an
+ * `events` shard unreadable or gone since this machine read it, or a
+ * record in `private` whose body blob has not arrived): an entry's private records may
+ * be among them, so every privacy verdict over the fold fails closed
+ * (design D14).
  */
 export function foldIncomplete(): boolean {
-  return laneStoreFold().unreadable.length > 0;
+  return laneFoldIncomplete(laneStoreFold());
 }
 
 /** Whether the live entry `value` was written to the `private` partition. */
@@ -119,8 +121,9 @@ export function livesInPrivate(value: LaneEntryValue): boolean {
  * `private` partition. An entry can be private by partition alone, with no
  * `visibility:` in its fields, so an exporter that turns entries back into
  * pages asks here to keep the privacy (review finding F333). A path the
- * store does not hold is no private entry. While the fold misses a shard,
- * every lane entry reads as private (fail closed).
+ * store does not hold is no private entry. While the fold may miss a
+ * record ({@link foldIncomplete}), every lane entry reads as private (fail
+ * closed).
  */
 export function laneEntryInPrivate(vault: string, path: string): boolean {
   if (!heldInStore(vault, path)) return false;
@@ -140,10 +143,14 @@ export function partitionOf(value: LaneEntryValue): StorePartition {
  * whatever the rest of its operation is (`Located`, content-free): a
  * device that holds only `shared` must see a shared entry's tombstone.
  * `onlyIfApart`: the tombstone of an entry a write replaces, needed only
- * when the replacement lands in another partition.
+ * when the replacement lands in another partition. `partition`: where the
+ * entry lives, when the caller read it from the same fold as `value`.
  */
-export function tombstoneOf(value: LaneEntryValue, onlyIfApart = false): DualWriteRecord {
-  const partition = partitionOf(value);
+export function tombstoneOf(
+  value: LaneEntryValue,
+  onlyIfApart = false,
+  partition: StorePartition = partitionOf(value),
+): DualWriteRecord {
   return {
     ...laneEntryRemoveRecord({
       lane: value.lane,
@@ -275,8 +282,8 @@ export function legacyPagePrivate(vault: string, path: string): boolean {
 }
 
 /**
- * See {@link legacyPagePrivate}. While the fold misses a shard, the entry
- * may be private in it: the write is judged private (on a machine without
+ * See {@link legacyPagePrivate}. While the fold may miss a record
+ * ({@link foldIncomplete}), the entry may be private in it: the write is judged private (on a machine without
  * the `private` partition, refused).
  */
 export function storedEntryPrivate(vault: string, path: string): boolean {

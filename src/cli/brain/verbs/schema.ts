@@ -15,7 +15,10 @@ import {
   SCHEMA_PACK_INTEGRITY,
   type SchemaPackIntegrity,
 } from "../../../core/brain/schema-integrity.ts";
-import { previewSchemaMutations } from "../../../core/brain/schema-mutate.ts";
+import {
+  previewSchemaMutations,
+  SCHEMA_ADOPT_ONLY_UNSWITCHED,
+} from "../../../core/brain/schema-mutate.ts";
 import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
 import {
   buildSchemaReport,
@@ -23,6 +26,7 @@ import {
   type SchemaReportFinding,
 } from "../../../core/brain/schema-report.ts";
 import { SCHEMA_VOCAB_CATEGORIES } from "../../../core/brain/schema-vocab.ts";
+import { isStoreOnly } from "../../../core/store/store-only.ts";
 import { fail, parse, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainSchema(argv: string[]): Promise<number> {
@@ -51,6 +55,7 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
     actor: { type: "string", default: "cli" },
     reason: { type: "string" },
     "dry-run": { type: "boolean" },
+    "adopt-unattested": { type: "boolean" },
     "batch-size": { type: "string", default: "100" },
   });
   const config = defaultConfigPath();
@@ -99,8 +104,20 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
         return writeResult(reviewSchemaOrphans(vault), Boolean(flags["json"]), renderGenericText);
       case "apply": {
         const mutationPayloads = (flags["mutation"] as string[] | undefined) ?? [];
-        if (mutationPayloads.length === 0) throw new Error("schema apply requires --mutation JSON");
+        // Judged on the parsed batch, so `--mutation '[]'` is no mutation
+        // either. Adoption runs on its own too, on a store-only machine: an
+        // empty batch that changes no entry and records the adopted records
+        // in its audit row. The lane refuses it on an unswitched machine,
+        // where an empty apply would rewrite and re-attest `_brain.yaml`.
         const mutations = parseSchemaMutationPayloads(mutationPayloads);
+        if (mutations.length === 0) {
+          if (!flags["adopt-unattested"]) {
+            throw new Error("schema apply requires --mutation JSON (or --adopt-unattested alone)");
+          }
+          if (!isStoreOnly({ vault, configPath: config })) {
+            throw new Error(SCHEMA_ADOPT_ONLY_UNSWITCHED);
+          }
+        }
         // `--dry-run` is parsed for every schema subcommand. Until the
         // preview existed, `apply` accepted the flag and wrote anyway - an
         // operator asking to look first got a mutated vault schema.
@@ -118,6 +135,7 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
           // The operator's own change (store-only machines write it as a
           // human-authority settings record).
           authority: "human",
+          ...(flags["adopt-unattested"] ? { adoptUnattested: true } : {}),
         });
         return writeResult(result, Boolean(flags["json"]), renderGenericText);
       }

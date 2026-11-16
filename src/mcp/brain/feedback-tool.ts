@@ -560,7 +560,7 @@ export async function toolBrainFeedback(
   const mirror =
     sharedNamespace === null || vault === null
       ? undefined
-      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts);
+      : mirrorSignal(sharedNamespace, vault, signalInput, writeOpts, ctx.configPath);
 
   try {
     timeStageSync(ROUTE_STAGE.logAppend, () =>

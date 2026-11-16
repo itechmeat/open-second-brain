@@ -16,6 +16,7 @@ import {
   type SchemaMutation,
 } from "../../../src/core/brain/schema-mutate.ts";
 import {
+  dropDanglingReferences,
   FRONTMATTER_TIERS,
   parseSchemaPack,
   renderSchemaBlock,
@@ -214,6 +215,14 @@ describe("ontology mutations", () => {
     ).toThrow(/link_constraints\.mystery.*not declared/);
   });
 
+  test("add_link_constraint requires declared endpoint tokens", () => {
+    expect(() =>
+      applyMutationsToPack(base, [
+        { op: "add_link_constraint", link_type: "depends_on", source: "memo", target: "person" },
+      ]),
+    ).toThrow(/link_constraints\.depends_on.*memo->person.*not declared/);
+  });
+
   test("remove_link_constraint drops one pair and prunes empty entries", () => {
     const added = applyMutationsToPack(base, [
       { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
@@ -289,6 +298,39 @@ describe("ontology mutations", () => {
       { op: "remove_type", category: "page_types", token: "book" },
     ]);
     expect(removed.attributes).toEqual({});
+  });
+
+  test("remove_type drops the constraint pairs that name the type, then an emptied link type", () => {
+    const added = applyMutationsToPack(base, [
+      { op: "add_type", category: "page_types", token: "book" },
+      { op: "add_link_type", token: "cites" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
+      { op: "add_link_constraint", link_type: "depends_on", source: "book", target: "person" },
+      { op: "add_link_constraint", link_type: "cites", source: "paper", target: "book" },
+    ]);
+    const removed = applyMutationsToPack(added, [
+      { op: "remove_type", category: "page_types", token: "book" },
+    ]);
+    expect(removed.link_constraints).toEqual({ depends_on: ["paper->person"] });
+  });
+});
+
+describe("dropDanglingReferences on link_constraints", () => {
+  test("drops a pair with an undeclared endpoint, then a link type left with none", () => {
+    const pack = parseSchemaPack(
+      [
+        BASE,
+        "    - cites",
+        "  link_constraints:",
+        "    - depends_on=paper->person",
+        "    - depends_on=memo->person",
+        "    - cites=paper->memo",
+        "    - mystery=paper->person",
+      ].join("\n") + "\n",
+    );
+    expect(dropDanglingReferences(pack).link_constraints).toEqual({
+      depends_on: ["paper->person"],
+    });
   });
 });
 
