@@ -15,12 +15,20 @@ import { fileURLToPath } from "node:url";
 import { main } from "../../src/cli/main.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
+import { CLI_CHILD_LIMIT_MS, EXIT_DRAIN_GRACE_MS, KILL_REAP_MS } from "./cli-timeout.ts";
 import { DEFAULT_STORE_ROOT_ENV } from "./test-store.ts";
+import { windowsProcessAfterKill, windowsProcessState } from "./windows-process-probe.ts";
 
 export interface RunResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly returncode: number;
+  /**
+   * Set only when the child exited but its output pipes stayed open past a
+   * short grace period (a process it started holds them); says which and
+   * for how long. The same line goes to this process's stderr.
+   */
+  readonly warning?: string;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -94,6 +102,13 @@ export interface RunCliOptions {
    * long-running server command, signal handling). Passing `stdin` implies it.
    */
   readonly subprocess?: boolean;
+  /**
+   * The longest a spawned child may run (default {@link CLI_CHILD_LIMIT_MS}).
+   * Only the subprocess path has one; a caller whose test timeout is
+   * shorter than `CLI_SPAWN_BUDGET_MS` passes
+   * `cliChildLimitFor(<its timeout>)` (`cli-timeout.ts`).
+   */
+  readonly limitMs?: number;
 }
 
 /**
@@ -199,33 +214,212 @@ function captureWrite(sink: (s: string) => void) {
   };
 }
 
+/** A stream being read into a sink, and the way to stop reading it. */
+interface Drain {
+  readonly done: Promise<void>;
+  /** Whether end-of-file has arrived. */
+  readonly ended: () => boolean;
+  /** Stops reading and closes the pipe, so its writers see it closed. */
+  readonly cancel: () => void;
+}
+
+/** Appends a stream's decoded text to `sink` as it arrives. */
+function drain(stream: ReadableStream<Uint8Array>, sink: (s: string) => void): Drain {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let ended = false;
+  const pump = (): Promise<void> =>
+    reader.read().then((chunk) => {
+      if (chunk.done) {
+        ended = true;
+        sink(decoder.decode());
+        return undefined;
+      }
+      sink(decoder.decode(chunk.value, { stream: true }));
+      return pump();
+    });
+  return {
+    done: pump(),
+    ended: () => ended,
+    cancel: () => {
+      reader.cancel().catch(() => undefined);
+    },
+  };
+}
+
+/** Resolves `"late"` after `ms`; `clear` cancels the timer. */
+function lateAfter(ms: number): { readonly late: Promise<"late">; readonly clear: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((done) => {
+    timer = setTimeout(() => done("late"), ms);
+  });
+  return { late, clear: () => clearTimeout(timer) };
+}
+
+export interface SpawnWithLimitOptions {
+  readonly env: Record<string, string>;
+  readonly cwd?: string;
+  /** Written to the child's stdin, then closed; absent, stdin is ignored. */
+  readonly stdin?: string;
+  readonly limitMs: number;
+}
+
+/**
+ * Runs `cmd` to completion and captures its output, but never longer than
+ * `limitMs`: a child still running then is killed, and the call fails with
+ * the command line, the elapsed time, when its last output arrived and the
+ * stdout and stderr captured so far. A child that hangs (seen on the
+ * Windows runner) thus fails its test with evidence instead of a bare test
+ * timeout. No retry.
+ *
+ * The child's exit decides, not end-of-file on its pipes: a process the
+ * child started can inherit the pipes and keep them open long after the
+ * child is gone. After the exit the pipes get {@link EXIT_DRAIN_GRACE_MS}
+ * to deliver what is buffered; a pipe still open then is closed on this
+ * side, and the result carries a `warning` (also written to this process's
+ * stderr) naming the open pipes, so a leaked handle is seen, not hidden.
+ * The readers are stopped with a limit failure too, so they never outlive
+ * the call. On Windows the failure also names the child's state from the
+ * operating system at the limit and whether it is gone after the kill
+ * (`windows-process-probe.ts`).
+ */
+export async function spawnWithLimit(
+  cmd: ReadonlyArray<string>,
+  opts: SpawnWithLimitOptions,
+): Promise<RunResult> {
+  const started = Date.now();
+  const proc = Bun.spawn([...cmd], {
+    cwd: opts.cwd ?? ROOT,
+    env: opts.env,
+    stdin: opts.stdin === undefined ? "ignore" : "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let stdout = "";
+  let stderr = "";
+  let lastOutputAt: number | null = null;
+  const outputAt = (): void => {
+    lastOutputAt = Date.now();
+  };
+  const drains = [
+    drain(proc.stdout, (s) => {
+      if (s !== "") outputAt();
+      stdout += s;
+    }),
+    drain(proc.stderr, (s) => {
+      if (s !== "") outputAt();
+      stderr += s;
+    }),
+  ];
+  const stopReading = (): void => {
+    for (const d of drains) d.cancel();
+  };
+  const output = Promise.all(drains.map((d) => d.done));
+  // A reader's failure surfaces after the exit, where `output` is awaited.
+  output.catch(() => undefined);
+  const run = (async (): Promise<number> => {
+    if (opts.stdin !== undefined && proc.stdin !== undefined) {
+      proc.stdin.write(opts.stdin);
+      await proc.stdin.end();
+    }
+    return await proc.exited;
+  })();
+  const limit = lateAfter(opts.limitMs);
+  let outcome: number | "late";
+  try {
+    outcome = await Promise.race([run, limit.late]);
+  } catch (err) {
+    // A failed run (stdin delivery) must not leave the child running
+    // without its limit.
+    proc.kill("SIGKILL");
+    stopReading();
+    throw err;
+  } finally {
+    limit.clear();
+  }
+  if (outcome !== "late") return await afterExit(outcome);
+  const elapsedMs = Date.now() - started;
+  const windows = process.platform === "win32";
+  const atLimit = windows ? await windowsProcessState(proc.pid, started) : null;
+  proc.kill("SIGKILL");
+  await Promise.race([proc.exited, new Promise((r) => setTimeout(r, KILL_REAP_MS))]);
+  const afterKill = windows
+    ? windowsProcessAfterKill(proc.pid, proc.exitCode ?? proc.signalCode)
+    : null;
+  stopReading();
+  // Keep the run's late rejection (if any) from surfacing unhandled.
+  run.catch(() => undefined);
+  const lastOutput: number | null = lastOutputAt;
+  throw new Error(
+    [
+      `CLI child still running after the ${opts.limitMs} ms per-call limit: killed.`,
+      `command: ${cmd.map((part) => JSON.stringify(part)).join(" ")}`,
+      `cwd: ${opts.cwd ?? ROOT}`,
+      `pid: ${proc.pid}, elapsed ${elapsedMs} ms, exit after kill: ${proc.exitCode ?? "not reaped"}, stdin: ${opts.stdin === undefined ? "ignored" : `${opts.stdin.length} chars, closed`}`,
+      // Output that arrived after the limit (during the probe and the
+      // kill) means a slow child, not a stuck one.
+      `last output: ${lastOutput === null ? "none" : `${lastOutput - started} ms after the spawn`}`,
+      ...(atLimit === null ? [] : [atLimit]),
+      ...(afterKill === null ? [] : [afterKill]),
+      `--- stdout so far (${stdout.length} chars) ---`,
+      stdout,
+      `--- stderr so far (${stderr.length} chars) ---`,
+      stderr,
+    ].join("\n"),
+  );
+
+  /** The result once the child exited, with at most a short wait for its pipes. */
+  async function afterExit(returncode: number): Promise<RunResult> {
+    const grace = lateAfter(EXIT_DRAIN_GRACE_MS);
+    let drained: void[] | "late";
+    try {
+      drained = await Promise.race([output, grace.late]);
+    } finally {
+      grace.clear();
+    }
+    if (drained !== "late") return { stdout, stderr, returncode };
+    const open = [drains[0]?.ended() ? null : "stdout", drains[1]?.ended() ? null : "stderr"]
+      .filter((name): name is string => name !== null)
+      .join(" and ");
+    stopReading();
+    const warning =
+      `${open} still open ${EXIT_DRAIN_GRACE_MS} ms after the child exited with ${returncode}: ` +
+      "a process it started holds the pipe; the result is returned without waiting for it";
+    process.stderr.write(
+      `spawnWithLimit: ${warning}\ncommand: ${cmd.map((part) => JSON.stringify(part)).join(" ")}\n`,
+    );
+    return { stdout, stderr, returncode, warning };
+  }
+}
+
 /** Fresh-process invocation - the original behavior, kept for isolation cases. */
 async function runCliSubprocess(
   args: ReadonlyArray<string>,
   opts: RunCliOptions,
 ): Promise<RunResult> {
   const { env, cleanupDir } = resolveEnv(opts.env ?? {});
+  let result: RunResult;
   try {
-    const proc = Bun.spawn(["bun", "run", CLI_ENTRY, ...args], {
-      cwd: opts.cwd ?? ROOT,
+    result = await spawnWithLimit(["bun", "run", CLI_ENTRY, ...args], {
       env,
-      stdin: opts.stdin === undefined ? "ignore" : "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      ...(opts.stdin !== undefined ? { stdin: opts.stdin } : {}),
+      limitMs: opts.limitMs ?? CLI_CHILD_LIMIT_MS,
     });
-    if (opts.stdin !== undefined && proc.stdin !== undefined) {
-      proc.stdin.write(opts.stdin);
-      await proc.stdin.end();
+  } catch (err) {
+    // After a killed child (Windows keeps its files busy for a moment) a
+    // failed cleanup must not replace the evidence.
+    if (cleanupDir !== null) {
+      try {
+        rmSync(cleanupDir, { recursive: true, force: true });
+      } catch {
+        // the evidence below matters more than the temp directory
+      }
     }
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const returncode = await proc.exited;
-    return { stdout, stderr, returncode };
-  } finally {
-    if (cleanupDir !== null) rmSync(cleanupDir, { recursive: true, force: true });
+    throw err;
   }
+  if (cleanupDir !== null) rmSync(cleanupDir, { recursive: true, force: true });
+  return result;
 }
 
 /**

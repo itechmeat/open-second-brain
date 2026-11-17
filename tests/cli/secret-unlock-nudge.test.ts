@@ -55,7 +55,7 @@ describe("the unlock nudge", () => {
     expect(unlock.stdout).toContain("unlocked");
     expect(unlock.stderr).toContain("unrecoverable");
     expect(unlock.stderr).toContain("o2b brain secret export");
-  }, 20000);
+  });
 
   test("a re-unlock prints the nudge too", async () => {
     await seedSecret();
@@ -68,7 +68,7 @@ describe("the unlock nudge", () => {
     });
     expect(again.returncode).toBe(0);
     expect(again.stderr).toContain("o2b brain secret export");
-  }, 20000);
+  });
 
   test("the other custody ops are unchanged: set prints no nudge", async () => {
     const set = await runCli(["brain", "secret", "set", "plain", "--vault", vault], {
@@ -76,5 +76,5 @@ describe("the unlock nudge", () => {
     });
     expect(set.returncode).toBe(0);
     expect(set.stderr).not.toContain("o2b brain secret export");
-  }, 20000);
+  });
 });

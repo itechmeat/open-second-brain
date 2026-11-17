@@ -91,7 +91,7 @@ import {
   readRecallInjected,
   recordRecallInjected,
 } from "./lib/injection-ledger.ts";
-import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
+import { armProcessCeiling, decisionWaitMs, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { isHookStateCorrupt } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
@@ -328,9 +328,11 @@ async function main(): Promise<void> {
   // ceiling armed, no payload read, no output - byte-identical to before.
   if (!resolveRecallInjectEnabled()) return;
 
+  const startedAt = Date.now();
+  const ceilingMs = resolveHookCeilingMs();
   let auditVault: string | null = null;
   const disarm = armProcessCeiling({
-    ceilingMs: resolveHookCeilingMs(),
+    ceilingMs,
     onExpire: () => {
       if (auditVault !== null) {
         recordDecision(auditVault, {
@@ -375,7 +377,15 @@ async function main(): Promise<void> {
       defaultRecallRetriever(configPath, vault, caps.maxNotes),
       {
         ...caps,
-        ...(decisionFilter !== undefined ? { decisionFilter } : {}),
+        ...(decisionFilter !== undefined
+          ? {
+              decisionFilter,
+              // The decision wait ends at half the ceiling: on a hung
+              // provider the brief goes out without the model's filter
+              // instead of being lost to the ceiling.
+              decisionWaitLeftMs: () => decisionWaitMs(ceilingMs, Date.now() - startedAt),
+            }
+          : {}),
         ...(sliceConfig.slices.length > 0
           ? {
               slices: sliceConfig.slices,

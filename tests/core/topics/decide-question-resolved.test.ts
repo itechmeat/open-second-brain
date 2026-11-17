@@ -42,6 +42,8 @@ import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
 let clock = T0;
 const now = () => (clock += 1000);
+/** Does not advance on read: the decide pass's budget clock. */
+const still = (): number => clock;
 
 let m: Machines;
 let a: StoreHandle;
@@ -236,7 +238,11 @@ describe("question_resolved after a merge", () => {
       answer: (id) => (id.startsWith("answers_") ? "Q1" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
     const written = readPartition(join(m.root("dev-a"), "shared"))
       .flatMap((s) => s.records)
@@ -270,7 +276,7 @@ describe("question_resolved in the decide pass", () => {
         ...envFor("shadow"),
         OPEN_SECOND_BRAIN_DECISION_MODEL_MAX_STATE_TOKENS: String(maxStateTokens),
       },
-      now,
+      now: still,
     });
     for (const request of fake.requests) {
       expect(estimateTokens(request.state) + QUESTION_TOKEN_ALLOWANCE).toBeLessThanOrEqual(
@@ -287,7 +293,7 @@ describe("question_resolved in the decide pass", () => {
       answer: (id) => (id.startsWith("answers_") ? "Q0" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now });
+    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now: still });
     expect([...verdicts.resolutions.keys()]).toEqual([]);
     expect(fake.requests).toEqual([]);
     expect(listDecisionModelCalls(vault)).toEqual([]);
@@ -303,7 +309,11 @@ describe("question_resolved in the decide pass", () => {
       probability: 0.9,
       model: "res-shadow-1",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("shadow"),
+      now: still,
+    });
     expect([...verdicts.resolutions.keys()]).toEqual([]);
     expect(fake.requests).toHaveLength(1);
     expect(fake.requests[0]!.use).toBe("question_resolved");
@@ -328,7 +338,11 @@ describe("question_resolved in the decide pass", () => {
       answer: (id) => (id.startsWith("answers_") ? "Q0" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     expect(verdicts.resolutions.get(record)).toMatchObject({ topic, question });
     expect(verdicts.resolutions.get(second)).toMatchObject({ topic, question });
     const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
@@ -344,7 +358,11 @@ describe("question_resolved in the decide pass", () => {
       probability: 0.9,
       model: "res-model-2",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     expect(verdicts.resolutions.get(record)).toMatchObject({ topic, question });
     const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
     expect(report.status === "planned" ? report.resolutions : -1).toBe(1);
@@ -381,7 +399,7 @@ describe("question_resolved in the decide pass", () => {
     const timedOut = await decideTopicPlan(a, {
       provider: timeoutFake,
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect(timeoutFake.requests).toHaveLength(1);
     expect([...timedOut.resolutions.keys()]).toEqual([]);
@@ -390,7 +408,7 @@ describe("question_resolved in the decide pass", () => {
       answer: (id) => (id.startsWith("answers_") ? "Q0" : undefined),
       probability: 0.5,
     });
-    const low = await decideTopicPlan(a, { provider: lowFake, env: envFor("enforce"), now });
+    const low = await decideTopicPlan(a, { provider: lowFake, env: envFor("enforce"), now: still });
     expect(lowFake.requests).toHaveLength(1);
     expect([...low.resolutions.keys()]).toEqual([]);
     // That answer entered the record in the asked set: `none` gets a record of its own.
@@ -400,7 +418,11 @@ describe("question_resolved in the decide pass", () => {
       answer: (id) => (id.startsWith("answers_") ? "none" : undefined),
       probability: 0.95,
     });
-    const none = await decideTopicPlan(a, { provider: noneFake, env: envFor("enforce"), now });
+    const none = await decideTopicPlan(a, {
+      provider: noneFake,
+      env: envFor("enforce"),
+      now: still,
+    });
     expect(noneFake.requests).toHaveLength(1);
     expect(JSON.stringify(noneFake.requests[0]!.state)).toContain("still open");
     expect([...none.resolutions.keys()]).toEqual([]);
@@ -426,7 +448,7 @@ describe("question_resolved in the decide pass", () => {
       { now },
     );
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now: still });
     expect(fake.requests).toEqual([]);
     void record;
   });
@@ -440,7 +462,11 @@ describe("resolved_min from the thresholds store", () => {
       answer: (id) => (id.startsWith("answers_") ? "Q0" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     // Asked once, in enforce: the stored value is what rejected the answer.
     expect(fake.requests).toHaveLength(1);
     const calls = listDecisionModelCalls(vault);

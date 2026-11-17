@@ -61,7 +61,17 @@ import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
 
 /** The whole lane's budget: the decision request gets the rest of it. */
-const LANE_BUDGET_MS = 1500;
+export const LANE_BUDGET_MS = 1500;
+
+/**
+ * How long the lane may still wait on the decision model, `elapsedMs`
+ * after the hook started under a ceiling of `ceilingMs`: the rest of the
+ * lane's budget, and never past half the ceiling, so a hung provider gives
+ * way to the deterministic gate while there is still time to emit.
+ */
+export function neighbourDecisionWaitMs(ceilingMs: number, elapsedMs: number): number {
+  return Math.min(Math.max(0, LANE_BUDGET_MS - elapsedMs), decisionWaitMs(ceilingMs, elapsedMs));
+}
 
 async function main(): Promise<void> {
   const ceilingMs = resolveHookCeilingMs();
@@ -192,13 +202,7 @@ async function main(): Promise<void> {
       if (assigned !== undefined && assigned !== null) sessionTopics.add(assigned);
     }
 
-    // Inside the process ceiling too: a hung provider gives way to the
-    // deterministic gate while there is still time to emit.
-    const elapsed = Date.now() - startedAt;
-    const remaining = Math.min(
-      Math.max(0, LANE_BUDGET_MS - elapsed),
-      decisionWaitMs(ceilingMs, elapsed),
-    );
+    const remaining = neighbourDecisionWaitMs(ceilingMs, Date.now() - startedAt);
     const decision = await runNeighbourRelevant({
       config: resolveDecisionModelConfig({
         config: discoverConfig().data,

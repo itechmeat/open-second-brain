@@ -454,10 +454,6 @@ test("json shapes: keygen paths, sign record, list rows, verify K4", async () =>
   expect(verifyJson.storeDigestMatches).toBe(true);
 });
 
-// Each of these three rungs boots two cold CLIs (bun startup, the full
-// import graph, Ed25519 keygen and sign), which the 5 s default does not
-// leave headroom for in CI; the plugin suite's hung-shim test carries the
-// same explicit bound.
 test("passphrase ladder: wrap at keygen, sign from stdin in a fresh process", async () => {
   append(1);
   const first = await runCli(["brain", "attest", "keygen", "--vault", vault], {
@@ -477,7 +473,7 @@ test("passphrase ladder: wrap at keygen, sign from stdin in a fresh process", as
   });
   expect(signed.returncode).toBe(0);
   expect(recordFiles()).toHaveLength(1);
-}, 30_000);
+});
 
 test("passphrase ladder: a wrapped key with no source refuses by name", async () => {
   append(1);
@@ -489,7 +485,7 @@ test("passphrase ladder: a wrapped key with no source refuses by name", async ()
   expect(res.returncode).toBe(1);
   expect(res.stderr).toContain("passphrase");
   expect(recordFiles()).toEqual([]);
-}, 30_000);
+});
 
 test("passphrase ladder: --passphrase-from-env with an unset variable exits two", async () => {
   const res = await runCli(
@@ -517,4 +513,4 @@ test("passphrase ladder: --passphrase-from-env with a set variable wraps and sig
   );
   expect(signed.returncode).toBe(0);
   expect(recordFiles()).toHaveLength(1);
-}, 30_000);
+});

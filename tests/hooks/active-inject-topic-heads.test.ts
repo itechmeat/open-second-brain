@@ -571,12 +571,17 @@ describe("head_select at hook level", () => {
     server = await startFakeSystemOne();
     server.setReply(() => ({ hang: true }));
     await seedThresholdEntry("head-model", "head_select");
+    // Half the ceiling leaves the hook 6 s from its start to the request,
+    // several times what a slow runner needs to get there; the budget
+    // still runs far past the ceiling.
     const result = await runHook(hookPayload(), {
       ...decisionEnv("enforce", server.url),
       OPEN_SECOND_BRAIN_DECISION_MODEL_HOOK_BUDGET_MS: "60000",
-      OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "1400",
+      OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "12000",
     });
     expect(result.exit).toBe(0);
+    // The stalled provider was really asked: the wait ended, not a skip.
+    expect(server.requests).toHaveLength(1);
     const context = injected(result.stdout);
     expect(context).toContain("Memory body line.");
     expect(context.split("\n").filter((l) => /^- .*\[active\] \(/.test(l))).toHaveLength(2);

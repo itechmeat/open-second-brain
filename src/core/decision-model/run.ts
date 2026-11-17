@@ -42,6 +42,7 @@ import type { ResolvedDecisionProvider } from "./config-types.ts";
 import { noteDecisionLatency } from "./latency.ts";
 import { makeEntryDecisionProvider } from "./provider.ts";
 import { emitDecisionModelCall, todaySpendUsd } from "./record.ts";
+import { attemptTimeoutMs } from "./request-floor.ts";
 import { estimateTokens } from "./state.ts";
 
 /** Estimated cost of requests in flight in this process, per vault. */
@@ -114,6 +115,16 @@ export interface RunDecisionOptions<C> {
   readonly secretsVault?: string | null;
   /** Overrides `decision_model_timeout_ms` (e.g. a hook sub-budget). */
   readonly timeoutMs?: number;
+  /**
+   * Holds the minimum request time (`request-floor.ts`, design D20) for
+   * the topic and hook uses: the budget runs from this call's start, so
+   * the time spent preparing the request counts; no attempt of the chain
+   * starts with less than the floor, and an entry whose share would fall
+   * below it is not attempted (its time goes to the entries that are).
+   * When not even the first attempt fits, nothing is built, sent or
+   * recorded and the call degrades as `budget`.
+   */
+  readonly requestFloor?: boolean;
   /**
    * The caller's cancellation (the search's composite hybrid deadline).
    * Handed to the provider, whose transport stops the request when it
@@ -207,10 +218,17 @@ export async function runDecision<C>(
   if (configured === "off" || cfg === null || cfg === undefined) return { status: "off" };
   const mode = opts.modeOverride ?? configured;
   const env = opts.env ?? process.env;
+  const budgetMs = opts.timeoutMs ?? cfg.timeoutMs;
+  // With the floor the budget runs from here, so preparation counts,
+  // the construction of the provider chain included.
+  const floorDeadline = opts.requestFloor === true ? Date.now() + budgetMs : null;
   const chain = buildChain(cfg, use, mode, opts, env, opts.secretsVault);
   if (chain.length === 0 || chain[0] === undefined) return { status: "off" };
   const primary = chain[0];
   const now = opts.now ?? (() => new Date());
+  const floorLeft = (): boolean =>
+    floorDeadline === null || attemptTimeoutMs(floorDeadline - Date.now(), 1) !== null;
+  if (!floorLeft()) return { status: "degraded", mode, reason: "budget" };
 
   const record = (
     attempt: ChainAttempt,
@@ -289,6 +307,8 @@ export async function runDecision<C>(
     record(primary, "budget");
     return { status: "degraded", mode, reason: "budget" };
   }
+  // Preparation may have spent the margin above the floor.
+  if (!floorLeft()) return { status: "degraded", mode, reason: "budget" };
 
   const ready: Extract<BuiltDecisionState<C>, { kind: "ok" }> = built;
   const qs = questions(ready);
@@ -302,17 +322,23 @@ export async function runDecision<C>(
   // The whole chain shares the caller's one budget (`timeout_ms`, or the
   // hook sub-budget): each attempt gets an even slice of what remains, so
   // a dead first server can never stretch the call past the budget, and
-  // the last entry always keeps a real slice to answer in.
-  const budgetMs = opts.timeoutMs ?? cfg.timeoutMs;
+  // the last entry always keeps a real slice to answer in. With the
+  // floor, no slice is below it and the budget began at the call's start.
   const send = async (): Promise<DecisionRunResult<C>> => {
-    const deadline = Date.now() + budgetMs;
+    const deadline = floorDeadline ?? Date.now() + budgetMs;
     let last: {
       readonly reason: DecisionDegradeReason;
       readonly mode: Exclude<DecisionModelMode, "off">;
     } | null = null;
     for (const [index, attempt] of chain.entries()) {
       const remaining = chain.length - index;
-      const slice = Math.max(1, Math.floor((deadline - Date.now()) / remaining));
+      const left = deadline - Date.now();
+      const slice =
+        floorDeadline === null
+          ? Math.max(1, Math.floor(left / remaining))
+          : attemptTimeoutMs(left, remaining);
+      // No later entry fits either: the call ends with what it has.
+      if (slice === null) break;
       const started = Date.now();
       let response: DecisionResponse;
       try {
@@ -366,7 +392,8 @@ export async function runDecision<C>(
     return {
       status: "degraded",
       mode: last?.mode ?? mode,
-      reason: last?.reason ?? "network",
+      // No attempt fitted the floor: a budget skip.
+      reason: last?.reason ?? (floorDeadline === null ? "network" : "budget"),
     };
   };
   const release = reserveInFlight(gated ? cfg.vault : null, reservation);

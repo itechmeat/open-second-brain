@@ -302,4 +302,32 @@ describe("recall-inject hook with the decision-model use", () => {
     // The hook never waits for the slow server (process start included).
     expect(r.wallMs).toBeLessThan(4_500);
   }, 30_000);
+
+  test("a provider that never answers within a configured budget past the ceiling still leaves the brief", async () => {
+    const today = await baseline();
+    server.delayMs = 60_000;
+    writeConfig({
+      ...DECISION(),
+      decision_model_uses: "recall_inject:enforce",
+      decision_model_hook_budget_ms: "60000",
+      // The longest retrieval budget the setting accepts.
+      recall_inject_time_budget_ms: "6000",
+    });
+    // The retrieval budget (6 s) outlasts this ceiling (5.8 s): a wait
+    // bounded by the budget alone would let the ceiling end the process
+    // first. Half the ceiling leaves the hook 2.9 s from its start to the
+    // request, several times what a slow runner needs to get there.
+    const r = await runHook({
+      [KEY_VAR]: FAKE_DECISION_KEY,
+      OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "5800",
+    });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe(today);
+    // The stalled provider was really asked: the wait ended, not a skip.
+    expect(server.requests).toHaveLength(1);
+    expect(lastDetails()["decision_model"]).toMatchObject({
+      outcome: "degraded",
+      degrade_reason: "timeout",
+    });
+  }, 30_000);
 });

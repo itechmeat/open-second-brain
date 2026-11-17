@@ -252,6 +252,12 @@ interface Kind {
    * holds a second subject or whose input the egress rule withholds.
    */
   readonly cells?: Partial<Record<Variant, Record<Share, Partition[]>>>;
+  /**
+   * The partitions of every decided record under a hosted provider, for
+   * the variants whose private input the egress rule withholds: the
+   * subject is not asked (`[]`), or it is asked without that input.
+   */
+  readonly hosted?: Partial<Record<Variant, Partition[]>>;
   seed(variant: Variant): void;
   answer(id: string, req: DecisionRequest): number | string | undefined;
 }
@@ -262,6 +268,9 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "topic_route",
     threshold: { route_min: 0.5 },
     writes: TOPIC_ASSIGN_KIND,
+    // A private topic is no option and a private subject is not asked;
+    // withheld evidence leaves the shared subject to decide in shared.
+    hosted: { topic: [], subject: [], region: [], evidence: ["shared"] },
     variants: [
       "none",
       "topic",
@@ -309,6 +318,8 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "event_kind",
     threshold: { kind_min: 0.5 },
     writes: TOPIC_DECISION_KIND,
+    // A note of a private topic still derives, into the private partition.
+    hosted: { topic: ["private"], subject: [], region: [], evidence: ["shared"] },
     variants: [
       "none",
       "topic",
@@ -359,6 +370,7 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "question_resolved",
     threshold: { resolved_min: 0.5 },
     writes: "question-resolved",
+    hosted: { topic: [], subject: [], item: [], evidence: ["shared"] },
     variants: ["none", "topic", "subject", "item", "evidence", "region", "withheld-field"],
     hostedSends: ["region"],
     // One request per record: no other subject rides it.
@@ -403,6 +415,7 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "milestone_done",
     threshold: { done_min: 0.5 },
     writes: "milestone-done",
+    hosted: { topic: [], item: [], evidence: [], region: [] },
     variants: ["none", "topic", "item", "evidence", "region", "side-region"],
     hostedSends: ["side-region"],
     seed(variant) {
@@ -450,6 +463,9 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "topic_new",
     threshold: { veto_below: 0.3 },
     writes: TOPIC_CREATE_KIND,
+    // A group that holds a private record (withheld from the request)
+    // creates its topic in the private partition.
+    hosted: { subject: ["private"], region: ["private"] },
     variants: ["none", "subject", "region"],
     seed(variant) {
       const texts = [
@@ -532,9 +548,19 @@ describe("the partition of every record a dream-time use writes", () => {
             return;
           }
           if (share === "hosted") {
-            if (variant === "none") expect(decidedIn(kind)).toEqual(["shared"]);
-            if (kind.hostedSends?.includes(variant)) expect(decidedIn(kind)).toEqual(["private"]);
-            if (kind.absent?.includes(variant)) expect(decidedIn(kind)).toEqual([]);
+            // Every hosted cell names its partitions: the text checks
+            // above cannot see a shared verdict that holds only private
+            // record identifiers.
+            const expected: Partition[] | undefined =
+              variant === "none"
+                ? ["shared"]
+                : kind.hostedSends?.includes(variant)
+                  ? ["private"]
+                  : kind.absent?.includes(variant)
+                    ? []
+                    : kind.hosted?.[variant];
+            expect(expected).toBeDefined();
+            expect(decidedIn(kind)).toEqual(expected!);
             return;
           }
           const expected: Partition[] = kind.absent?.includes(variant)

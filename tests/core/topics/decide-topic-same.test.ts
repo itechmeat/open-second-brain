@@ -33,6 +33,8 @@ import { FakeDecisionProvider, startFakeSystemOne } from "../../helpers/fake-dec
 const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
 let clock = T0;
 const now = () => (clock += 1000);
+/** Does not advance on read: the decide pass's budget clock. */
+const still = (): number => clock;
 
 let m: Machines;
 let a: StoreHandle;
@@ -128,7 +130,7 @@ describe("topic_same in the decide pass", () => {
       answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now });
+    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now: still });
     expect(verdicts.sameTopics).toEqual([]);
     expect(fake.requests).toEqual([]);
     expect(listDecisionModelCalls(vault)).toEqual([]);
@@ -146,7 +148,11 @@ describe("topic_same in the decide pass", () => {
       probability: 0.9,
       model: "shadow-model-5",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("shadow"),
+      now: still,
+    });
     expect(verdicts.sameTopics).toEqual([]);
     expect(fake.requests).toHaveLength(1);
     expect(fake.requests[0]!.use).toBe("topic_same");
@@ -166,7 +172,11 @@ describe("topic_same in the decide pass", () => {
       probability: 0.9,
       model: "same-model-1",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     expect(verdicts.sameTopics).toHaveLength(3);
     const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
     expect(report.status).toBe("planned");
@@ -193,7 +203,11 @@ describe("topic_same in the decide pass", () => {
       answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     expect(verdicts.sameTopics).toHaveLength(3);
     // Between the decide pass and planning, the third topic is merged away.
     clock += 1000;
@@ -222,7 +236,11 @@ describe("topic_same in the decide pass", () => {
       probability: 0.9,
       model: "diff-model-2",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
     expect(report.status).toBe("planned");
     if (report.status !== "planned") return;
@@ -246,7 +264,7 @@ describe("topic_same in the decide pass", () => {
         probability: 0.5,
       }),
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect(low.sameTopics).toEqual([]);
     const timedOut = await decideTopicPlan(a, {
@@ -256,7 +274,7 @@ describe("topic_same in the decide pass", () => {
         fail: "timeout",
       }),
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect(timedOut.sameTopics).toEqual([]);
     const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: low });
@@ -284,7 +302,11 @@ describe("same_min from the thresholds store", () => {
       answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
       probability: 0.9,
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     // The built-in 0.7 would accept 0.9; the stored 0.95 decides.
     expect(verdicts.sameTopics).toEqual([]);
   });

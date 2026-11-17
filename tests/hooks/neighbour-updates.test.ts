@@ -11,6 +11,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 
+import { DEFAULT_HOOK_CEILING_MS } from "../../hooks/lib/process-ceiling.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import {
   injected,
@@ -220,15 +221,17 @@ describe("neighbour_relevant at hook level", () => {
       await reindex();
       const server = await startFakeSystemOne();
       h.server = server;
-      let asks = 0;
-      server.setReply(() => {
-        asks += 1;
-        return { hang: true };
-      });
+      server.setReply(() => ({ hang: true }));
+      // At the shipped ceiling the lane's own budget ends the wait, which
+      // leaves the hook 6.5 s past it to emit. Whether the request was
+      // started depends on how fast this process got to it (the lane's
+      // budget runs from the hook's start), so this test does not count
+      // requests: `neighbour-decision-wait.test.ts` proves the wait's
+      // bounds and that a hung provider is asked, without a subprocess.
       const env = {
         ...decisionEnv(mode, server.url),
         OPEN_SECOND_BRAIN_DECISION_MODEL_HOOK_BUDGET_MS: "60000",
-        OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "1400",
+        OPEN_SECOND_BRAIN_HOOK_CEILING_MS: String(DEFAULT_HOOK_CEILING_MS),
       };
       await runHook(hookPayload("Work.", "s1"), env);
       decision(
@@ -238,11 +241,8 @@ describe("neighbour_relevant at hook level", () => {
         NEIGHBOUR_AGENT,
       );
       await reindex();
-      const asksBefore = asks;
       const hung = await runHook(hookPayload("Work.", "s1"), env);
       expect(hung.exit).toBe(0);
-      // The hanging provider was asked: the update came through the timeout path.
-      expect(asks).toBeGreaterThan(asksBefore);
       expect(injected(hung.stdout)).toContain("pending decision on the session topic");
     },
   );

@@ -161,6 +161,14 @@ export interface RecallInjectOptions {
    */
   readonly decisionFilter?: RecallInjectFilter;
   /**
+   * The longest the decision filter may still wait, read when it is
+   * consulted: the hook passes what is left of half its process ceiling
+   * (`decisionWaitMs`), so a hung provider gives way while the brief can
+   * still be emitted. The filter waits the smaller of this and what is
+   * left of {@link timeBudgetMs}; absent, only the time budget bounds it.
+   */
+  readonly decisionWaitLeftMs?: () => number;
+  /**
    * Notes this session was already shown, as {@link recallInjectNoteKey} values
    * (origin, path and line span). Absent or empty filters nothing. Applied
    * after the floor check, so the set never moves a floor verdict.
@@ -624,7 +632,7 @@ async function decideOverRetrieval(
       );
       return { ...out, injectedNotes: injectedNotesOf(kept.slice(0, out.noteCount)) };
     },
-    remainingMs: timeBudgetMs - (clock() - started),
+    remainingMs: filterWaitMs(timeBudgetMs - (clock() - started), options),
     clock,
   });
 }
@@ -785,7 +793,7 @@ async function decideSliced(
         slices: out.slices,
       };
     },
-    remainingMs: caps.timeBudgetMs - (clock() - started),
+    remainingMs: filterWaitMs(caps.timeBudgetMs - (clock() - started), options),
     clock,
   });
 }
@@ -836,6 +844,15 @@ interface FilterContext {
   readonly render: (kept: ReadonlyArray<RecallCandidate>) => RenderedBrief;
   readonly remainingMs: number;
   readonly clock: () => number;
+}
+
+/**
+ * How long the decision filter may wait: what is left of the time budget,
+ * never past the caller's own bound ({@link RecallInjectOptions.decisionWaitLeftMs}).
+ */
+function filterWaitMs(budgetLeftMs: number, options: RecallInjectOptions): number {
+  const bound = options.decisionWaitLeftMs?.();
+  return bound === undefined ? budgetLeftMs : Math.min(budgetLeftMs, bound);
 }
 
 /**

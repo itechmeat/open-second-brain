@@ -23,6 +23,7 @@ import {
   decisionModelCheckExitCode,
   renderDecisionModelCheck,
 } from "../../../src/core/decision-model/diagnostics.ts";
+import { MIN_REQUEST_MS } from "../../../src/core/decision-model/request-floor.ts";
 import { runDecision } from "../../../src/core/decision-model/run.ts";
 import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
 import { FAKE_DECISION_KEY, fakeCredential } from "../../helpers/fake-credentials.ts";
@@ -281,6 +282,43 @@ describe("chain fallback in runDecision", () => {
       expect(records[0]?.payload).toMatchObject({ provider: "compatible", outcome: "timeout" });
       expect(records[1]?.payload).toMatchObject({ provider: "typesafe", outcome: "ok" });
       expect(fast.requests).toHaveLength(1);
+    } finally {
+      await hang.close();
+      await fast.close();
+    }
+  });
+
+  test("with the request floor, an entry whose share would fall below it is not attempted", async () => {
+    const vault = tempVault();
+    const hang = await startFakeSystemOne();
+    const fast = await startFakeSystemOne();
+    hang.setReply(() => ({ hang: true }));
+    try {
+      const cfg = resolveDecisionModelConfig({
+        env: CHAIN_ENV,
+        config: chainConfig({
+          decision_model_base_url: hang.url,
+          decision_model_providers_typesafe_base_url: fast.url,
+          decision_model_providers_typesafe_id: "fake-model-1.0",
+          decision_model_uses: "rerank:shadow",
+        }),
+        vault,
+      });
+      // Room for one attempt only: an even split would give each entry
+      // less than the floor. The first entry gets the whole budget, and
+      // once it hangs through it nothing is left for the second.
+      const result = await runDecision("rerank", build, QUESTIONS, {
+        config: cfg,
+        env: CHAIN_ENV,
+        timeoutMs: MIN_REQUEST_MS * 2 - 1,
+        requestFloor: true,
+      });
+      expect(result).toMatchObject({ status: "degraded", reason: "timeout" });
+      expect(hang.requests).toHaveLength(1);
+      expect(fast.requests).toHaveLength(0);
+      const records = listDecisionModelCalls(vault);
+      expect(records).toHaveLength(1);
+      expect(records[0]?.payload).toMatchObject({ provider: "compatible", outcome: "timeout" });
     } finally {
       await hang.close();
       await fast.close();
