@@ -158,6 +158,18 @@ location shadows the plugin `hermes plugins install` and
 `hermes plugins update` manage, so an update appears to change nothing.
 Remove such a copy and restart the gateway.
 
+**Current Hermes limitation:** The per-profile configuration above describes
+what this provider supports. With separate copies of this buildable plugin in
+two profile homes on the same machine, Hermes's plugin manager can fail to
+resolve its workspace on `hermes update` because both copies declare the same
+Python package name. The update may disable the plugin in the second profile.
+Until the host issue is resolved, avoid installing separate copies in multiple
+profile homes. See [Hermes issue #138702](https://github.com/NousResearch/hermes-agent/issues/138702)
+for the host-side status. A shared clone was reported as a workaround in
+[issue #308](https://github.com/itechmeat/open-second-brain/issues/308), but
+has not been validated on every Hermes version or platform. Updating a shared
+clone affects every profile that uses it.
+
 ### How Hermes discovers the provider
 
 The primary route needs no packaging metadata at all: `hermes plugins
