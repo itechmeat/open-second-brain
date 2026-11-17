@@ -360,7 +360,6 @@ describe("o2b store shard", () => {
       expect(r.returncode).toBe(1);
       expect((JSON.parse(r.stdout) as { reason: string }).reason).toBe("shard-unreadable");
     },
-    30_000,
   );
 
   test.skipIf(CHMOD_CANNOT_DENY)(
@@ -383,7 +382,6 @@ describe("o2b store shard", () => {
       const listed = await cli(["list", "--json"]);
       expect((JSON.parse(listed.stdout) as { lines: unknown[] }).lines).toEqual([]);
     },
-    30_000,
   );
 
   test("a corrupt line too long to hash is refused as line-too-long, with no advice to retry", async () => {

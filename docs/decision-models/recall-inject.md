@@ -46,8 +46,12 @@ The request gets `min(decision_model_hook_budget_ms, remaining retrieval
 budget)`, where the retrieval budget is the hook's time budget (2,500 ms
 unless `recall_inject_time_budget_ms` sets another value in 250..6000). The
 sub-budget is passed to the provider as its timeout and is also enforced
-around the call, so it never extends the total. With no time left
-after retrieval, nothing is sent.
+around the call, so it never extends the total. The wait also ends at
+half the hook's process ceiling (`OPEN_SECOND_BRAIN_HOOK_CEILING_MS`),
+counted from the hook's start: with a ceiling set below the retrieval
+budget, a provider that never answers gives way and today's brief goes
+out without the filter, instead of the ceiling ending the hook before
+any output. With no time left after retrieval, nothing is sent.
 
 The search the hook runs still skips the decision-model rerank kind: with
 `search_rerank_kind: decision-model` the hook uses the heuristic order, so a

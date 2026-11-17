@@ -1,3 +1,5 @@
+import { OS_PROBE_LIMIT_MS } from "./windows-process-probe.ts";
+
 /**
  * The per-test budget for a test FILE whose tests drive the real `o2b`
  * command line, applied with `setDefaultTimeout(CLI_SPAWN_BUDGET_MS)` at the
@@ -39,3 +41,74 @@
  * under `bun test`, `bun test <file>`, and `bun run test`.
  */
 export const CLI_SPAWN_BUDGET_MS = 60_000;
+
+/** How long a killed child gets to be reaped before the failure is raised. */
+export const KILL_REAP_MS = 2_000;
+
+/**
+ * How long the output pipes get, after the child exited, to deliver what is
+ * already buffered and reach end-of-file. Past it a process the child
+ * started holds a pipe, and the result is returned without waiting for it.
+ */
+export const EXIT_DRAIN_GRACE_MS = 2_000;
+
+/** Slack for the timers and the event loop between those steps. */
+const LIMIT_MARGIN_MS = 1_000;
+
+/**
+ * What a call may still need after its per-call limit fired, or after a
+ * child that exited just before it: the Windows process probe
+ * (`OS_PROBE_LIMIT_MS`), the reap wait after the kill ({@link KILL_REAP_MS}),
+ * the drain grace after an exit ({@link EXIT_DRAIN_GRACE_MS}) and a margin.
+ * The probe and the reap follow a limit, the drain follows an exit, so one
+ * call never needs all three; adding them keeps the sum simple and safe.
+ */
+const AFTER_LIMIT_MS = OS_PROBE_LIMIT_MS + KILL_REAP_MS + EXIT_DRAIN_GRACE_MS + LIMIT_MARGIN_MS;
+
+/**
+ * The per-call limit that fits a test whose own timeout is `testTimeoutMs`:
+ * that timeout minus what the call may need after the limit
+ * (`AFTER_LIMIT_MS`, 7 s). A single-spawn test then gets the limit
+ * failure, with its evidence, before its own timeout. A test whose
+ * timeout leaves no room for a limit is refused, not given a silent one.
+ */
+export function cliChildLimitFor(testTimeoutMs: number): number {
+  const limit = testTimeoutMs - AFTER_LIMIT_MS;
+  if (limit <= 0) {
+    throw new Error(
+      `a ${testTimeoutMs} ms test timeout leaves no room for a per-call limit: ` +
+        `the failure path alone needs ${AFTER_LIMIT_MS} ms`,
+    );
+  }
+  return limit;
+}
+
+/**
+ * The longest one spawned `o2b` child may run (`runCli` with a subprocess,
+ * `tests/helpers/run-cli.ts`) before it is killed and its test fails with
+ * the command line, the elapsed time and the output so far:
+ * `cliChildLimitFor(CLI_SPAWN_BUDGET_MS)`, 60 s - 7 s = 53 s.
+ *
+ * It is a hang check, not a speed check, so it follows the test's own time
+ * budget instead of a fixed guess: a diagnostic must not lower the pass
+ * threshold. A CLI call usually costs a few seconds, but one call on the
+ * Windows runner has taken about 25 s, and a single-spawn test with the
+ * 60 s budget must still pass at that speed, as it did before the limit
+ * existed. Every file that spawns the CLI runs with
+ * {@link CLI_SPAWN_BUDGET_MS}; a file or test that has to keep a shorter
+ * timeout passes `limitMs: cliChildLimitFor(<its timeout>)`.
+ *
+ * For one spawn in a 60 s test: a hung child is killed at 53 s and the
+ * failure, with up to 2 s of Windows probe and 2 s of reap wait, is raised
+ * by about 57 s; a child that exits just before the limit returns, after
+ * at most 2 s of pipe drain, by about 55 s. Both are inside the test.
+ *
+ * A test that spawns several times shares its one test timeout between
+ * those calls, and the limit bounds each call alone. If the earlier calls
+ * took time, a later hung call reaches the test timeout before its own
+ * limit: the test then fails with bun's timeout instead of the limit's
+ * evidence. That is accepted: the limit exists to make a single hung call
+ * diagnosable, and it never fails a test that the test timeout would have
+ * passed.
+ */
+export const CLI_CHILD_LIMIT_MS = cliChildLimitFor(CLI_SPAWN_BUDGET_MS);

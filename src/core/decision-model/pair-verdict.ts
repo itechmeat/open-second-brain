@@ -272,9 +272,14 @@ export async function runPairVerdicts(
       () => batch.questions,
       {
         config: cfg,
-        // A request never runs past `until`: it gets what is left of it.
+        // A request never runs past `until`: it gets what is left of it,
+        // and with less than the minimum request time left (or per
+        // attempt of the chain) it is not sent.
         ...(opts.until !== undefined
-          ? { timeoutMs: Math.max(1, Math.min(cfg.timeoutMs, opts.until - clock())) }
+          ? {
+              timeoutMs: Math.max(0, Math.min(cfg.timeoutMs, opts.until - clock())),
+              requestFloor: true,
+            }
           : {}),
         ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
         ...(opts.env !== undefined ? { env: opts.env } : {}),

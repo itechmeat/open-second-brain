@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { MIN_REQUEST_MS } from "../../../src/core/decision-model/request-floor.ts";
 import { runDecision } from "../../../src/core/decision-model/run.ts";
 import { buildCandidateState } from "../../../src/core/decision-model/state.ts";
 import {
@@ -33,6 +34,9 @@ function tempVault(): string {
   dirs.push(v);
   return v;
 }
+
+/** Time a state builder spends preparing in the floor test. */
+const PREPARATION_MS = 60;
 
 const SECRET_TEXT = "the passage text that must never be recorded";
 
@@ -421,5 +425,88 @@ describe("state builder", () => {
       frame,
     });
     expect(res.kind).toBe("budget");
+  });
+});
+
+describe("the minimum request time (requestFloor)", () => {
+  test("a budget below the floor sends nothing: a budget skip, with no record", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider();
+    let built = 0;
+    const result = await runDecision(
+      "rerank",
+      () => {
+        built++;
+        return build();
+      },
+      QUESTIONS,
+      {
+        config: activeDecisionConfig({ vault }),
+        provider,
+        timeoutMs: MIN_REQUEST_MS - 1,
+        requestFloor: true,
+      },
+    );
+    expect(result).toMatchObject({ status: "degraded", reason: "budget" });
+    expect(built).toBe(0);
+    expect(provider.requests).toHaveLength(0);
+    expect(listDecisionModelCalls(vault)).toHaveLength(0);
+  });
+
+  test("time spent building the state counts: the floor is checked again before the request", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider();
+    const result = await runDecision(
+      "rerank",
+      () => {
+        // Preparation eats the margin above the floor: what is left
+        // after it is below the floor, so no request starts.
+        Bun.sleepSync(PREPARATION_MS);
+        return build();
+      },
+      QUESTIONS,
+      {
+        config: activeDecisionConfig({ vault }),
+        provider,
+        timeoutMs: MIN_REQUEST_MS + PREPARATION_MS - 1,
+        requestFloor: true,
+      },
+    );
+    expect(result).toMatchObject({ status: "degraded", reason: "budget" });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  test("time spent building the provider chain counts too", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider();
+    // A provider list that is slow to read: the chain is built from it,
+    // and that cost belongs to the call's budget like the state's.
+    const config = Object.defineProperty(activeDecisionConfig({ vault }), "providers", {
+      get: () => {
+        Bun.sleepSync(PREPARATION_MS);
+        return undefined;
+      },
+    });
+    const result = await runDecision("rerank", build, QUESTIONS, {
+      config,
+      provider,
+      timeoutMs: MIN_REQUEST_MS + PREPARATION_MS - 1,
+      requestFloor: true,
+    });
+    expect(result).toMatchObject({ status: "degraded", reason: "budget" });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  test("with the floor met the request runs as before", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider();
+    const result = await runDecision("rerank", build, QUESTIONS, {
+      config: activeDecisionConfig({ vault }),
+      provider,
+      timeoutMs: MIN_REQUEST_MS * 4,
+      requestFloor: true,
+    });
+    expect(result.status).toBe("ok");
+    expect(provider.requests).toHaveLength(1);
   });
 });

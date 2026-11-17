@@ -33,6 +33,8 @@ import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
 let clock = T0;
 const now = () => (clock += 1000);
+/** Does not advance on read: the decide pass's budget clock. */
+const still = (): number => clock;
 
 let m: Machines;
 let a: StoreHandle;
@@ -127,7 +129,7 @@ function asked(fake: FakeDecisionProvider): string[] {
 /** One enforce pass that keeps every note, applied under the planning lock. */
 async function keepAllPass(): Promise<FakeDecisionProvider> {
   const fake = new FakeDecisionProvider({ answer: () => 0.9 });
-  const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+  const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now: still });
   runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
   return fake;
 }
@@ -141,7 +143,7 @@ describe("human_readable in the decide pass", () => {
     const fake = new FakeDecisionProvider({
       answer: (id) => (id.startsWith("history_") ? 0.1 : undefined),
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now });
+    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now: still });
     expect([...verdicts.hidden.keys()]).toEqual([]);
     expect(fake.requests).toEqual([]);
     expect(listDecisionModelCalls(vault)).toEqual([]);
@@ -161,7 +163,11 @@ describe("human_readable in the decide pass", () => {
       answer: (id) => (id.startsWith("history_") ? 0.1 : undefined),
       model: "hist-shadow-1",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("shadow"),
+      now: still,
+    });
     expect([...verdicts.hidden.keys()]).toEqual([]);
     expect(fake.requests).toHaveLength(1);
     expect(fake.requests[0]!.use).toBe("human_readable");
@@ -190,7 +196,11 @@ describe("human_readable in the decide pass", () => {
       },
       model: "hist-model-4",
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     // The model read both notes; only the low-probability one is hidden.
     expect(Object.keys(fake.requests[0]!.questions)).toHaveLength(2);
     expect([...verdicts.hidden.keys()]).toEqual([routine]);
@@ -219,7 +229,7 @@ describe("human_readable in the decide pass", () => {
         answer: (id) => (id.startsWith("history_") ? 0.5 : undefined),
       }),
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect([...low.hidden.keys()]).toEqual([]);
     const timedOut = await decideTopicPlan(a, {
@@ -228,7 +238,7 @@ describe("human_readable in the decide pass", () => {
         fail: "timeout",
       }),
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect([...timedOut.hidden.keys()]).toEqual([]);
     expect(runTopicPlanning(a, { agent: "dream", now, topicVerdicts: low }).status).toBe("planned");
@@ -251,7 +261,7 @@ describe("human_readable in the decide pass", () => {
       { now },
     );
     const fake = new FakeDecisionProvider({ answer: () => 0.1 });
-    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now: still });
     expect(fake.requests).toEqual([]);
     // The page still hides the note: the stored verdict decides.
     expect(pageMentions("Routine heartbeat of the nightly compaction job")).toBe(false);
@@ -280,7 +290,7 @@ describe("human_readable in the decide pass", () => {
     for (let i = 0; i < 50; i++) note(`Future dated note ${i}`, MONTH_AHEAD + i * 60_000);
     note("A present note from this week", WEEK_AGO);
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now: still });
     const first = asked(fake);
     expect(first).toHaveLength(50);
     expect(first[0]).toBe("A present note from this week");
@@ -289,7 +299,7 @@ describe("human_readable in the decide pass", () => {
   test("a note older than eight weeks is never asked about", async () => {
     note("A very old note from the summer sprint", T0 - 10 * 7 * 24 * 60 * 60 * 1000);
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now });
+    await decideTopicPlan(a, { provider: fake, env: envFor("shadow"), now: still });
     expect(fake.requests).toEqual([]);
   });
 });
@@ -301,7 +311,11 @@ describe("hide_below from the thresholds store", () => {
     const fake = new FakeDecisionProvider({
       answer: (qid) => (qid.startsWith("history_") ? 0.2 : undefined),
     });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("enforce"), now });
+    const verdicts = await decideTopicPlan(a, {
+      provider: fake,
+      env: envFor("enforce"),
+      now: still,
+    });
     // The built-in 0.3 would hide at 0.2; the stored 0.05 decides.
     expect([...verdicts.hidden.keys()]).toEqual([]);
     expect([...verdicts.kept.keys()]).toEqual([id]);
@@ -318,7 +332,7 @@ describe("history verdicts under the lock", () => {
     const first = await decideTopicPlan(a, {
       provider: new FakeDecisionProvider({ answer: () => 0.9 }),
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     // human_readable keeps no asked entry: a note is skipped only once a
     // stored verdict judges it, and none is written before the lock, so
@@ -327,7 +341,7 @@ describe("history verdicts under the lock", () => {
     const second = await decideTopicPlan(a, {
       provider: secondProvider,
       env: envFor("enforce"),
-      now,
+      now: still,
     });
     expect(asked(secondProvider)).toHaveLength(2);
     expect(second.hidden.size).toBe(2);

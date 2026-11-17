@@ -161,7 +161,7 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   });
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
-}, 20000);
+});
 
 test("a wrapped store works from a SECOND command: passphrase from env or stdin, per verb", async () => {
   // The unlock holds the key for ITS process only, so every command below
@@ -239,7 +239,7 @@ test("a wrapped store works from a SECOND command: passphrase from env or stdin,
     (await runCli(["brain", "secret", "list", "--vault", fresh, "--json"])).stdout,
   ) as { secrets: Array<{ name: string }> };
   expect(listed.secrets.map((s) => s.name)).toEqual(["api-key"]);
-}, 30000);
+});
 
 test("the well-known environment variable alone reaches a wrapped store from a fresh process", async () => {
   await runCli(["brain", "secret", "set", "api-key", "--allow", "bun -e *", "--vault", vault], {
@@ -270,7 +270,7 @@ test("the well-known environment variable alone reaches a wrapped store from a f
     { env: { OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE: passphrase }, subprocess: true },
   );
   expect(run.returncode).toBe(0);
-}, 20000);
+});
 
 test("unwrap writes the raw keyfile back; a later command needs no passphrase; unwrap refuses when raw", async () => {
   await runCli(["brain", "secret", "set", "api-key", "--allow", "bun -e *", "--vault", vault], {
@@ -309,7 +309,7 @@ test("unwrap writes the raw keyfile back; a later command needs no passphrase; u
   // The wrong passphrase leaves the wrap intact (nothing was unwrapped by
   // the refusals above, so re-wrap first is unnecessary: the store is raw,
   // which the refusal above already proved).
-}, 20000);
+});
 
 test("lock refuses a store that was never wrapped, creating nothing; lock after unlock reports cleared", async () => {
   const lock = await runCli(["brain", "secret", "lock", "--vault", vault]);
@@ -419,7 +419,7 @@ test("export --out writes the bundle; import restores it; collisions need --repl
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
   expect(existsSync(join(empty, ".open-second-brain", "secrets", "secrets.json"))).toBe(false);
-}, 20000);
+});
 
 describe("secret refusals and help accuracy", () => {
   test("an unset --passphrase-from-env var names both ingestion routes", async () => {

@@ -179,10 +179,12 @@ export function holderOf(fold: TopicFold, candidate: TopicCandidate): string | n
 /**
  * The time one request of the running use may take: the configured
  * timeout, never past {@link PassContext.until}, so a request started
- * late in a use's share cannot run past the pass's budget.
+ * late in a use's share cannot run past the pass's budget. Read after
+ * the request is prepared; `runDecision` (`requestFloor`) sends nothing
+ * when it is below the minimum request time.
  */
 export function requestTimeoutMs(ctx: PassContext): number {
-  return Math.max(1, Math.min(ctx.cfg.timeoutMs, ctx.until - ctx.clock()));
+  return Math.max(0, Math.min(ctx.cfg.timeoutMs, ctx.until - ctx.clock()));
 }
 
 /** The state candidate of one store record, guarded by the egress rule. */
@@ -299,6 +301,9 @@ export function requestOptions(
 ): Record<string, unknown> {
   return {
     recordDetails,
+    // The floor holds for each attempt of the chain, and the time spent
+    // preparing the request counts (`runDecision`).
+    requestFloor: true,
     ...(ctx.options.provider !== undefined ? { provider: ctx.options.provider } : {}),
     ...(ctx.options.env !== undefined ? { env: ctx.options.env } : {}),
   };

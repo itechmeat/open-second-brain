@@ -142,6 +142,8 @@ export async function runHeadSelect(input: {
     {
       config: cfg,
       timeoutMs: budgetMs,
+      // The floor holds for each attempt of the chain, not only here.
+      requestFloor: true,
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.env !== undefined ? { env: input.env } : {}),
       recordDetails: (response, context) => {

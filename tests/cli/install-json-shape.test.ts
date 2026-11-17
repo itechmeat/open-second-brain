@@ -83,13 +83,6 @@ async function payloadOf(args: ReadonlyArray<string>): Promise<Record<string, un
   return JSON.parse(r.stdout) as Record<string, unknown>;
 }
 
-/**
- * Every case here spawns a real `o2b` child, which costs about two seconds
- * of module graph on an unloaded machine. The default five would make this
- * file fail for being slow rather than for being wrong.
- */
-const CLI_TIMEOUT_MS = 30_000;
-
 /** Sorted key list, so a failure names the field rather than a count. */
 function keys(value: unknown): string {
   return Object.keys(value as object)
@@ -98,138 +91,102 @@ function keys(value: unknown): string {
 }
 
 describe("every install --json payload declares its schema version", () => {
-  test(
-    "detect",
-    async () => {
-      const payload = await payloadOf(["install", "--json"]);
-      expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("detect", async () => {
+    const payload = await payloadOf(["install", "--json"]);
+    expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
+  });
 
-  test(
-    "plan",
-    async () => {
-      const payload = await payloadOf(["install", "--target", "cursor", "--json"]);
-      expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("plan", async () => {
+    const payload = await payloadOf(["install", "--target", "cursor", "--json"]);
+    expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
+  });
 
-  test(
-    "apply - the one mode that changes the machine, and the one that had none",
-    async () => {
-      const payload = await payloadOf([
-        "install",
-        "--target",
-        "cursor",
-        "--apply",
-        "--yes",
-        "--json",
-      ]);
-      expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("apply - the one mode that changes the machine, and the one that had none", async () => {
+    const payload = await payloadOf([
+      "install",
+      "--target",
+      "cursor",
+      "--apply",
+      "--yes",
+      "--json",
+    ]);
+    expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
+  });
 
-  test(
-    "verify",
-    async () => {
-      const payload = await payloadOf(["install", "--check", "--json"]);
-      expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("verify", async () => {
+    const payload = await payloadOf(["install", "--check", "--json"]);
+    expect(payload["schema_version"]).toBe(INSTALL_JSON_SCHEMA_VERSION);
+  });
 });
 
 describe("every install --json payload names its fields", () => {
-  test(
-    "detect carries a target row per adapter",
-    async () => {
-      const payload = await payloadOf(["install", "--json"]);
-      expect(keys(payload)).toBe("schema_version,targets");
-      const targets = payload["targets"] as ReadonlyArray<unknown>;
-      expect(targets.length).toBeGreaterThan(0);
-      for (const row of targets) expect(keys(row)).toBe("config_path,notes,status,target");
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("detect carries a target row per adapter", async () => {
+    const payload = await payloadOf(["install", "--json"]);
+    expect(keys(payload)).toBe("schema_version,targets");
+    const targets = payload["targets"] as ReadonlyArray<unknown>;
+    expect(targets.length).toBeGreaterThan(0);
+    for (const row of targets) expect(keys(row)).toBe("config_path,notes,status,target");
+  });
 
-  test(
-    "plan carries the plan verbatim",
-    async () => {
-      const payload = await payloadOf(["install", "--target", "cursor", "--json"]);
-      expect(keys(payload)).toBe("plan,schema_version");
-      expect(keys(payload["plan"])).toBe("postNotes,steps,target");
-      // `diff` is additive and present only when the file would change;
-      // a first install into an empty home always changes it.
-      for (const step of (payload["plan"] as { steps: ReadonlyArray<unknown> }).steps) {
-        expect(keys(step)).toBe("diff,kind,path,preview");
-      }
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("plan carries the plan verbatim", async () => {
+    const payload = await payloadOf(["install", "--target", "cursor", "--json"]);
+    expect(keys(payload)).toBe("plan,schema_version");
+    expect(keys(payload["plan"])).toBe("postNotes,steps,target");
+    // `diff` is additive and present only when the file would change;
+    // a first install into an empty home always changes it.
+    for (const step of (payload["plan"] as { steps: ReadonlyArray<unknown> }).steps) {
+      expect(keys(step)).toBe("diff,kind,path,preview");
+    }
+  });
 
-  test(
-    "apply carries the manifest it wrote, at the top level as before",
-    async () => {
-      const payload = await payloadOf([
-        "install",
-        "--target",
-        "cursor",
-        "--apply",
-        "--yes",
-        "--json",
-      ]);
-      // `schema_version` is ADDED beside the result's own fields rather than
-      // nesting the result under a key: an existing consumer reading
-      // `.manifest` or `.steps_executed` keeps working and gains a version,
-      // which a re-nesting would have broken for no benefit.
-      expect(keys(payload)).toContain("manifest");
-      expect(keys(payload)).toContain("steps_executed");
-      expect(keys(payload)).toContain("target");
-      // t_b6bcd984: the consent verdict rides the CLI receipt (not the
-      // sidecar manifest), additive under schema_version 1.
-      expect(keys(payload)).toContain("consent");
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("apply carries the manifest it wrote, at the top level as before", async () => {
+    const payload = await payloadOf([
+      "install",
+      "--target",
+      "cursor",
+      "--apply",
+      "--yes",
+      "--json",
+    ]);
+    // `schema_version` is ADDED beside the result's own fields rather than
+    // nesting the result under a key: an existing consumer reading
+    // `.manifest` or `.steps_executed` keeps working and gains a version,
+    // which a re-nesting would have broken for no benefit.
+    expect(keys(payload)).toContain("manifest");
+    expect(keys(payload)).toContain("steps_executed");
+    expect(keys(payload)).toContain("target");
+    // t_b6bcd984: the consent verdict rides the CLI receipt (not the
+    // sidecar manifest), additive under schema_version 1.
+    expect(keys(payload)).toContain("consent");
+  });
 
-  test(
-    "verify carries a verify row per adapter",
-    async () => {
-      const payload = await payloadOf(["install", "--check", "--json"]);
-      expect(keys(payload)).toBe("schema_version,targets");
-      const targets = payload["targets"] as ReadonlyArray<unknown>;
-      expect(targets.length).toBeGreaterThan(0);
-      for (const row of targets) expect(keys(row)).toBe("details,fix_hint,status,target");
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("verify carries a verify row per adapter", async () => {
+    const payload = await payloadOf(["install", "--check", "--json"]);
+    expect(keys(payload)).toBe("schema_version,targets");
+    const targets = payload["targets"] as ReadonlyArray<unknown>;
+    expect(targets.length).toBeGreaterThan(0);
+    for (const row of targets) expect(keys(row)).toBe("details,fix_hint,status,target");
+  });
 });
 
 describe("the opencode V2 config shape in the apply payload", () => {
-  test(
-    "apply to an existing mcp.servers config records the nested owned keys",
-    async () => {
-      const opencodeConfig = join(home, ".config", "opencode", "opencode.json");
-      mkdirSync(dirname(opencodeConfig), { recursive: true });
-      writeFileSync(opencodeConfig, JSON.stringify({ mcp: { servers: {} } }, null, 2) + "\n");
-      const payload = await payloadOf([
-        "install",
-        "--target",
-        "opencode",
-        "--apply",
-        "--yes",
-        "--json",
-      ]);
-      const manifest = payload["manifest"] as Record<string, unknown>;
-      expect(manifest["config_path"]).toBe(opencodeConfig);
-      expect(manifest["owned_keys"]).toEqual([
-        "mcp.servers.open-second-brain",
-        "mcp.servers.open-second-brain-writer",
-      ]);
-    },
-    CLI_TIMEOUT_MS,
-  );
+  test("apply to an existing mcp.servers config records the nested owned keys", async () => {
+    const opencodeConfig = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(opencodeConfig), { recursive: true });
+    writeFileSync(opencodeConfig, JSON.stringify({ mcp: { servers: {} } }, null, 2) + "\n");
+    const payload = await payloadOf([
+      "install",
+      "--target",
+      "opencode",
+      "--apply",
+      "--yes",
+      "--json",
+    ]);
+    const manifest = payload["manifest"] as Record<string, unknown>;
+    expect(manifest["config_path"]).toBe(opencodeConfig);
+    expect(manifest["owned_keys"]).toEqual([
+      "mcp.servers.open-second-brain",
+      "mcp.servers.open-second-brain-writer",
+    ]);
+  });
 });

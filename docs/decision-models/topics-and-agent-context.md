@@ -71,7 +71,11 @@ Shared mechanics:
   starts when that time is less than 250 ms: a request that could not
   finish might still be billed. The same 250 ms hold for the two
   hook-time uses against the time their request gets, the smaller of
-  `decision_model_hook_budget_ms` and what is left of the hook. A question's or
+  `decision_model_hook_budget_ms` and what is left of the hook. The time
+  spent preparing a request counts, and with a provider chain
+  (`decision_model_providers`) the 250 ms hold for each provider asked:
+  the chain splits the request's time evenly, and a provider whose share
+  would be less is not asked, its time going to the providers before it. A question's or
   milestone's text counts toward `decision_model_max_state_tokens` beside
   the records it is sent with.
 - **Private records stay local.** A private record, private topic, private

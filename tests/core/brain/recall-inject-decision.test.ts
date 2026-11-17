@@ -589,6 +589,28 @@ describe("abstentions and errors never trigger a request", () => {
   });
 });
 
+describe("the caller's bound on the decision wait (the hook ceiling)", () => {
+  test("with no wait left the brief goes out unfiltered and the model is not asked", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider({ answer: answerBy({ b: 0.05 }) });
+    const filter = createRecallInjectDecisionFilter({
+      config: config(vault, "enforce"),
+      vault,
+      provider,
+    });
+    const today = await decide(THREE, null);
+    const bounded = await decideRecallInject(PROMPT, retriever(THREE, {}), {
+      decisionFilter: filter!,
+      decisionWaitLeftMs: () => 0,
+    });
+    expect(bounded.kind === "inject" && today.kind === "inject").toBe(true);
+    if (bounded.kind !== "inject" || today.kind !== "inject") return;
+    expect(bounded.brief).toBe(today.brief);
+    expect(bounded.decisionModel).toMatchObject({ outcome: "degraded", degradeReason: "timeout" });
+    expect(provider.requests).toHaveLength(0);
+  });
+});
+
 describe("telemetry, audit and record hold no prompt or note text", () => {
   test("shadow, enforce drop and enforce abstain", async () => {
     for (const [mode, injectAny] of [
