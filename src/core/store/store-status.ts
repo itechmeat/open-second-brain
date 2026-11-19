@@ -20,6 +20,7 @@ import { resolveSearchConfig } from "../search/index.ts";
 import { isDualWriteEnabled } from "./dual-write.ts";
 import { migrationAvailability } from "./migration-availability.ts";
 import { autoMigrationReport, autoMigrationReportJson } from "../store-migration/auto-report.ts";
+import { cohortStatusHere } from "../store-migration/cohort-here.ts";
 import { describeConfiguredStoreLocation, type StoreLocationReport } from "./store-location.ts";
 
 export interface StoreStatusSource {
@@ -80,6 +81,10 @@ function migrationBlock(source: StoreStatusSource): Record<string, unknown> {
               availability: m,
             }),
           ),
+    // Each cohort device as switched, pending or retired by silence (change
+    // stale-device-retirement): null unless this machine switched and the
+    // vault still holds the legacy tree.
+    cohort: cohortStatusHere(source.vault, source.configPath ?? undefined, new Date()),
     ...(m.error !== null ? { error: m.error } : {}),
   };
 }

@@ -188,11 +188,21 @@ function rollbackMayHoldGate(): boolean {
 /** `--remove-legacy [--force]`: move the legacy tree out of the vault when the cohort allows. */
 export function removeLegacy(
   vault: string,
-  options: { readonly configPath?: string; readonly agent?: string; readonly force?: boolean } = {},
+  options: {
+    readonly configPath?: string;
+    readonly agent?: string;
+    readonly force?: boolean;
+    /** This machine's wall clock (the silence rule's cap and the archive's date). */
+    readonly now?: Date;
+  } = {},
 ): RemovalResult {
   const store = openMigrationStore(vault, options.configPath);
   const agent = options.agent ?? safeAgent(options.configPath);
-  return removeLegacyTree(vault, store, { agent, ...(options.force ? { force: true } : {}) });
+  return removeLegacyTree(vault, store, {
+    agent,
+    ...(options.force ? { force: true } : {}),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
 }
 
 /** `--rollback`: take this machine back to the legacy layout. */

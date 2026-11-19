@@ -195,6 +195,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "freshen-failing",
   "git-tracked-derived-state",
   "inbox-archivable",
+  "legacy-tree-can-leave",
   "log-chain-broken",
   "low-evidence-confirmed",
   "migration-available",

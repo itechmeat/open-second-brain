@@ -2417,7 +2417,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2466,7 +2466,8 @@ var init_constants = __esm(() => {
     SETTING_VIEW_LANGUAGE,
     SETTING_TOPIC_MIN_RECORDS,
     SETTING_TOPIC_MIN_SESSIONS,
-    SETTING_TOPIC_QUIET_DAYS
+    SETTING_TOPIC_QUIET_DAYS,
+    SETTING_SILENT_DEVICE_DAYS
   ]);
   STATE_DIGEST_FOLDS = Object.freeze([
     "preferences",
@@ -5380,7 +5381,7 @@ var init_fold_setting_lists = __esm(() => {
 });
 
 // src/core/store/fold-settings.ts
-var positiveInt = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 1, LANGUAGE_RE, SETTING_RULES;
+var positiveInt = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 1, SILENT_DEVICE_DAYS_MAX = 3650, silenceDays = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= SILENT_DEVICE_DAYS_MAX, LANGUAGE_RE, SETTING_RULES;
 var init_fold_settings = __esm(() => {
   init_constants();
   init_fold_setting_lists();
@@ -5394,7 +5395,12 @@ var init_fold_settings = __esm(() => {
     },
     [SETTING_TOPIC_MIN_RECORDS]: { valid: positiveInt, expected: "a positive integer", fallback: 5 },
     [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 },
-    [SETTING_TOPIC_QUIET_DAYS]: { valid: positiveInt, expected: "a positive integer", fallback: 30 }
+    [SETTING_TOPIC_QUIET_DAYS]: { valid: positiveInt, expected: "a positive integer", fallback: 30 },
+    [SETTING_SILENT_DEVICE_DAYS]: {
+      valid: silenceDays,
+      expected: `an integer from 0 (off) to ${SILENT_DEVICE_DAYS_MAX}`,
+      fallback: 30
+    }
   });
 });
 
@@ -6608,6 +6614,8 @@ var init_migration_records = __esm(() => {
   init_record_path();
   init_constants();
   init_device_retirement();
+  init_fold_settings();
+  init_hlc();
   init_envelope();
   init_state_digest();
   init_stream_read();

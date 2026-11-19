@@ -37,6 +37,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -395,6 +396,15 @@ describe("docs/brain-store.md", () => {
     ]) {
       rmSync(join(legacy.vault, ...rel.split("/")), { recursive: true });
     }
+    // The desktop (dev-b) is a machine in use: it wrote a legacy log row
+    // today, so it is pending until it migrates whatever the date the suite
+    // runs on. dev-c last wrote in 2026-09 and never upgrades: once more
+    // than 30 days old it is retired by silence.
+    const now = new Date();
+    writeFileSync(
+      join(legacy.vault, "Brain", "log", `${now.toISOString().slice(0, 10)}.dev-b.jsonl`),
+      `${JSON.stringify({ ts: now.toISOString(), kind: "note", payload: { text: "in use" }, prev: null, h: "0".repeat(64) })}\n`,
+    );
     // The fixture's cohort is dev-a, dev-b and dev-c; dev-c never upgrades.
     const machines = [
       makeMachine(root, "laptop", "dev-a", PARTITIONS),

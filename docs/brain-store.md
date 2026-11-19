@@ -645,6 +645,14 @@ and the command that clears it:
 9. A vault configured after the switch whose deny rules differ from the
    store's: it stays unbound, and doctor names the file
    (`permissions-legacy-only`) until you reconcile the two policies.
+10. Every device of the migration cohort switched or is retired, by you or
+    by silence, and the legacy tree is still in the vault: doctor reports
+    `legacy-tree-can-leave` and the `migration.cohort` block of the status
+    says `can_leave`. Nothing is removed on its own; run
+    `o2b brain migrate-store --remove-legacy` when you want the tree gone.
+11. A device retired by silence writes the legacy layout after the
+    removal: doctor reports `legacy-tree-reappeared` and names it. Update
+    Open Second Brain on that machine, then run the removal again.
 
 A rollback that finished every step but could not open its gate (another
 process held the gate lock past its wait) needs no one either: the next
@@ -749,7 +757,9 @@ o2b brain doctor
 ```
 
 Doctor now reports `legacy-devices-pending` with the devices of the cohort
-that have not switched yet.
+that have not switched yet, and lists every cohort device with its state:
+`switched`, `pending` with the date of its last evidence of life, or
+`retired by silence` (see "Removing the legacy tree" below).
 
 ### 3. Migrate the later machines
 
@@ -797,7 +807,9 @@ o2b brain migrate-store
 
 A switched machine never writes into the legacy tree. Doctor on every
 switched machine names the devices still on the legacy layout
-(`legacy-devices-pending`) until each has migrated or been retired.
+(`legacy-devices-pending`) until each has migrated or been retired, by you
+or by silence. The `migration` block of `o2b status --json` carries the
+same list as `cohort`.
 
 ### 5. Rolling back a machine
 
@@ -826,9 +838,10 @@ machine reports `migration-available` again; to switch again, run
 ### 6. Removing the legacy tree
 
 The legacy tree leaves the vault only when every device of the migration
-cohort (every device id found anywhere in the legacy tree, however old) has
-switched or been retired. Until then the removal refuses and names the
-devices it waits for:
+cohort (every device id found anywhere in the legacy tree) has switched,
+been retired by you, or been retired by silence. Until then the removal
+refuses and names the devices it waits for, each with the date of its last
+evidence of life:
 
 <!-- doc-test: scenario=migration machine=laptop exit=1 expect="the legacy layout" -->
 ```sh
@@ -844,11 +857,54 @@ was `retired`:
 o2b store device list
 ```
 
-Migrate each named machine that is still in use. Retire a machine that is
-gone for good, from any other machine (never from the machine itself,
-which is refused). Retiring writes one record in the shared settings that
-takes the machine off the digest roster (`store-digest-silent` stops naming
-it) and out of the devices the removal waits for:
+Migrate each named machine that is still in use.
+
+**Retired by silence.** A vault usually carries ids of machines that no
+longer exist (a reinstalled laptop, an old phone, a test device). A cohort
+device that has not switched counts as retired by silence once its last
+evidence of life is older than the shared setting
+`migration.silent_device_days` (30 days by default; `0` turns the rule off,
+and then the cohort has no age limit). Its last evidence is the newest of:
+the dates in the names of its legacy per-device files (`2026-11-01.dev-c.jsonl`
+counts as that day, a month file as the month's first day), the times its
+rows carry, and the clocks of the records it wrote to the store. Row times
+are read from the end of each shard: its last 64 KiB, or more when its
+newest row is longer, so that row always counts. File modification
+times never count: the sync tool rewrites them. An id with no
+dated trace at all takes the date of the migration's cohort record, so it
+is retired one threshold after the migration began.
+
+The age is measured against the newest evidence of any device, this
+machine's own records included, that is not later than this machine's
+clock. Evidence stamped in the future is left out of that reference rather
+than taken as now, so ages stay relative to what this machine has seen. A
+machine whose clock runs years ahead therefore counts as alive now and
+retires no one; a clock that runs behind retires fewer devices. A clock
+set far ahead on this machine changes nothing until this machine writes
+under it; after that, nothing tells it from a machine that really outlived
+the others, so the report prints the date it measured against (`as of`).
+Check that date before you run the removal.
+
+Nothing is recorded: a device retired by silence that writes again is
+pending again at once when what it writes carries a date within the
+threshold of the reference (a date later than the reference counts as the
+reference); a write stamped older than that leaves it retired by silence.
+The setting is shared by every machine of the store,
+and only you set it:
+
+<!-- doc-test: scenario=migration machine=laptop exit=0 expect="migration.silent_device_days" -->
+```sh
+o2b brain settings set migration.silent_device_days 30
+```
+
+A change of the threshold takes effect on a machine once the setting has
+synced to it, and the removal report prints the threshold it used.
+
+Retire a machine that is gone for good before its silence counts, from any
+other machine (never from the machine itself, which is refused). Retiring
+writes one record in the shared settings that takes the machine off the
+digest roster (`store-digest-silent` stops naming it) and out of the
+devices the removal waits for:
 
 <!-- doc-test: scenario=migration machine=laptop exit=0 expect="Retired dev-c" -->
 ```sh
@@ -867,8 +923,11 @@ again first:
 o2b brain migrate-store
 ```
 
-Now every cohort device has switched or been retired, and the removal
-goes ahead:
+Now every cohort device has switched or been retired, so doctor reports
+`legacy-tree-can-leave` with the command. It is advice: nothing is removed
+until you run it. The removal goes ahead, and its report names the devices
+that switched and, apart from them, each device retired by silence with its
+last evidence (`switched` and `retired_by_silence` under `--json`):
 
 <!-- doc-test: scenario=migration machine=laptop exit=0 expect="nothing was deleted" -->
 ```sh
@@ -895,8 +954,41 @@ o2b brain migrate-store --rollback
 
 If a `Brain/` folder appears in the vault again (an agent or tool still
 follows old instructions), doctor reports `legacy-tree-reappeared` with the
-writer when a file names it. Nothing reads that folder; stop the writer and
-move the folder out of the vault.
+writer when a file names it. Stop the writer and move the folder out of the
+vault.
+
+The `legacy-tree-removed` record names the devices retired by silence when
+the tree left, so the doctor on every machine can say why it left.
+
+#### A device retired by silence that comes back
+
+1. **On an old release** it writes `Brain/` again. Doctor reports
+   `legacy-tree-reappeared`, names the device as retired by silence and
+   tells you to update Open Second Brain on that machine. Until then the
+   switched machines import what it writes there. Once it has updated, its
+   migration imports its legacy records as a later machine and records its
+   switch; then remove the tree again with
+   `o2b brain migrate-store --remove-legacy`.
+2. **On the new release, with its own copy of the tree still in place**
+   (the sync tool has not removed it yet), its automatic migration runs as
+   a later machine and imports every legacy record the store lacks,
+   including what it wrote while it was offline.
+3. **On the new release, with its tree gone** (the sync tool applied the
+   removal), it is store-only: it writes the store and nothing waits for
+   it. Its start records no switch for it, because the identity marker
+   left with the tree and one store serves every vault of a machine, so a
+   vault without its tree looks the same as another vault whose tree has
+   not arrived yet, and switching there would leave that vault's legacy
+   records unimported. `o2b store device list` shows it on the `legacy`
+   layout until you run `o2b init --vault <vault>` on that machine, which
+   records its switch.
+
+**What the threshold costs.** In the third case the records that device
+wrote into its legacy tree after its last sync, and that never synced
+before its copy of the tree was removed, are lost. Everything it synced
+before is in the store. A longer `migration.silent_device_days` makes that
+window less likely; `0` rules it out and keeps the tree until every device
+switched or you retired it.
 
 ## Shards read only in part
 

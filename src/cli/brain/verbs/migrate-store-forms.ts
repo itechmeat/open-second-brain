@@ -10,6 +10,7 @@
 
 import { removeLegacy, rollback } from "../../../core/store-migration/outcome.ts";
 import { forceReleaseGate, MigrationGateBusyError } from "../../../core/store-migration/quiesce.ts";
+import type { SilenceReport } from "../../../core/store-migration/removal.ts";
 import { RollbackRefusedError } from "../../../core/store-migration/rollback.ts";
 import { failWith, writeJson } from "../helpers.ts";
 
@@ -61,7 +62,10 @@ export function runRemoveLegacy(
     return result.removed ? 0 : 1;
   }
   if (!result.removed) {
-    process.stdout.write(`The legacy tree stays in the vault: ${keptBecause(result)}.\n`);
+    const cohort = result.reason === "cohort-pending" ? cohortLines(result) : [];
+    process.stdout.write(
+      [`The legacy tree stays in the vault: ${keptBecause(result)}.`, ...cohort].join("\n") + "\n",
+    );
     return 1;
   }
   const lines = [
@@ -71,6 +75,7 @@ export function runRemoveLegacy(
       result.skipped.length > 0 ? result.skipped.join(", ") : "none"
     }`,
   ];
+  lines.push(...cohortLines(result));
   if (result.forced && result.stopped.length > 0) {
     lines.push(
       `forced: ${result.stopped.join(", ")} will no longer reach the brain store until migrated`,
@@ -78,6 +83,27 @@ export function runRemoveLegacy(
   }
   process.stdout.write(`${lines.join("\n")}\n`);
   return 0;
+}
+
+/** A date of the report, as a day. */
+function dayOf(iso: string | null): string {
+  return iso === null ? "none" : iso.slice(0, 10);
+}
+
+/** The cohort devices that switched and, apart from them, those retired by silence. */
+function cohortLines(result: SilenceReport): string[] {
+  const lines: string[] = [];
+  if (result.switched.length > 0) lines.push(`switched: ${result.switched.join(", ")}`);
+  if (result.retired_by_silence.length > 0) {
+    const listed = result.retired_by_silence
+      .map((d) => `${d.device} (last evidence ${dayOf(d.last_evidence)})`)
+      .join(", ");
+    lines.push(
+      `retired by silence (no evidence of life for more than ${result.silence_threshold_days} ` +
+        `days before ${dayOf(result.as_of)}): ${listed}`,
+    );
+  }
+  return lines;
 }
 
 /** The warning line for ledger rows the legacy ledgers do not get back, or none. */
@@ -98,8 +124,12 @@ function keptBecause(result: KeptResult): string {
   switch (result.reason) {
     case "cohort-pending": {
       const verb = result.pending.length === 1 ? "writes" : "write";
+      const dated =
+        result.pending_evidence.length === 1
+          ? dayOf(result.pending_evidence[0]!.last_evidence)
+          : result.pending_evidence.map((d) => `${d.device} ${dayOf(d.last_evidence)}`).join(", ");
       return (
-        `${result.pending.join(", ")} still ${verb} the legacy layout; ` +
+        `${result.pending.join(", ")} still ${verb} the legacy layout (last evidence ${dated}); ` +
         "upgrade and migrate each one, retire the ones that are gone with " +
         "`o2b store device retire <device-id>`, or pass --force"
       );

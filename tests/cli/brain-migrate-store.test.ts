@@ -194,6 +194,13 @@ describe("o2b brain migrate-store", () => {
       "already switched to the brain store; imported late legacy writes",
     );
     expect(again.stdout).toContain("devices still on the legacy layout: dev-b, dev-c");
+    // The silence rule off, so the fixture's dated devices stay pending
+    // whatever the date (the rule has its own test).
+    const off = await runCli(
+      ["brain", "settings", "set", "migration.silent_device_days", "0", "--vault", fx.vault],
+      { env },
+    );
+    expect([off.returncode, off.stderr]).toEqual([0, ""]);
     const blocked = await migrate("--remove-legacy");
     expect(blocked.returncode).toBe(1);
     expect(blocked.stdout).toContain("dev-b, dev-c still write the legacy layout");
