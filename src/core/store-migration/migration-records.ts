@@ -32,7 +32,7 @@ import { returnedAfterRetirement } from "../store/device-retirement.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { compareRecords, type StoreRecord } from "../store/envelope.ts";
-import { readPartition, type CutEntry } from "../store/state-digest.ts";
+import { forEachPartitionShard, readPartition, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import { partitionDir } from "../store/store-paths.ts";
@@ -174,12 +174,27 @@ export function unseenSettingsShards(
  * `store/device-retirement.ts`).
  */
 function returnedRetiredDeviceIds(store: Pick<StoreHandle, "root" | "partitions">): Set<string> {
-  const all = STORE_PARTITIONS.filter((p) => store.partitions.has(p)).flatMap((partition) =>
-    readPartition(partitionDir(store.root, partition), { onUnreadable: () => {} }).flatMap(
-      (shard) => shard.all,
-    ),
+  // The rule reads each device's last record and the retirements: shard by
+  // shard, only those are kept, never the whole store.
+  const lastOf = new Map<string, StoreRecord>();
+  const retirements: StoreRecord[] = [];
+  for (const partition of STORE_PARTITIONS.filter((p) => store.partitions.has(p))) {
+    forEachPartitionShard(
+      partitionDir(store.root, partition),
+      { onUnreadable: () => {} },
+      (shard) => {
+        for (const record of shard.all) {
+          if (record.kind === DEVICE_RETIRE_KIND) retirements.push(record);
+          const last = lastOf.get(record.device);
+          if (last === undefined || compareRecords(record, last) > 0)
+            lastOf.set(record.device, record);
+        }
+      },
+    );
+  }
+  return new Set(
+    returnedAfterRetirement([...retirements, ...lastOf.values()]).map((r) => r.device),
   );
-  return new Set(returnedAfterRetirement(all).map((r) => r.device));
 }
 
 function isHuman(record: StoreRecord): boolean {

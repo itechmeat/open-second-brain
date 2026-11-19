@@ -20,6 +20,7 @@ import { legacyRootNames, migrationCatalogue, recordDestination } from "./catalo
 import type { Locator } from "./destinations.ts";
 import { migrationDir } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
+import { findSyncLeftovers, SYNC_COPY_RULE } from "./sync-leftovers.ts";
 
 const WATERMARK_FILE = "transition-watermark.json";
 
@@ -90,7 +91,7 @@ export function recordImportWatermark(
   });
 }
 
-/** The stamp of every legacy file a record mapping reads. */
+/** The stamp of every legacy file a record mapping reads, conflict copies of them included. */
 export function legacyFileStamps(vault: string): Record<string, string> {
   const catalogue = migrationCatalogue(vault);
   const locators: Locator[] = catalogue
@@ -121,5 +122,16 @@ export function legacyFileStamps(vault: string): Record<string, string> {
     }
   };
   for (const top of legacyRootNames(vault, catalogue)) walk(join(vault, top));
+  // A conflict copy of a record-shaped file is imported like its original
+  // (`sync-leftovers.ts`): one that appears or changes is new content too.
+  for (const copy of findSyncLeftovers(vault, catalogue).copies) {
+    if (copy.rule !== SYNC_COPY_RULE.rows && copy.rule !== SYNC_COPY_RULE.file) continue;
+    try {
+      const stat = lstatSync(copy.path);
+      if (stat.isFile()) out[copy.rel] = `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+    } catch {
+      // gone since it was listed
+    }
+  }
   return out;
 }

@@ -32,6 +32,8 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+
 import { WRITE_LANE } from "../brain/freeze-marker.ts";
 import { asMigrationGateHolder } from "../migration-gate.ts";
 import { sleepSync } from "../fs-atomic.ts";
@@ -45,8 +47,11 @@ import { DESTINATION_KIND } from "./destinations.ts";
 import {
   MIGRATION_BACKUP_DIR as BACKUP_DIR,
   MIGRATION_BACKUP_FILES_DIR as FILES_DIR,
+  MIGRATION_SYNC_COPIES_DIR,
+  MIGRATION_SYNC_COPIES_LIST,
 } from "./device-state-layout.ts";
 import { rawLines } from "./legacy-scan.ts";
+import type { SyncCopyKept } from "./sync-leftovers.ts";
 import { copyOwnerOnly, ensureOwnerOnlyRoot } from "./owner-only-copy.ts";
 
 /** A backup that could not be taken or did not verify. */
@@ -420,4 +425,87 @@ export function restoreMigrationBackups(vault: string, backup: MigrationBackup):
     }
   }
   return backup.files.length;
+}
+
+/** The kept sync conflict copies of a migration, as its backup lists them. */
+export interface SyncCopiesArchive {
+  /** The folder the copies are kept in, by their vault-relative paths. */
+  readonly dir: string;
+  readonly copies: ReadonlyArray<SyncCopyKept & { readonly sha256: string }>;
+}
+
+/**
+ * Keep every sync conflict copy the migration did not import in the
+ * backup folder (`backup/sync-conflict-copies/<vault-relative path>`),
+ * each copy verified against its source, and list them with their
+ * originals and why they were kept (`backup/sync-conflict-copies.json`),
+ * replacing an earlier list. A copy gone since the pass read it is left
+ * out. Returns the archive, or null when nothing was kept or every copy
+ * was gone.
+ */
+export function archiveSyncCopies(
+  vault: string,
+  migrationDir: string,
+  kept: ReadonlyArray<SyncCopyKept>,
+): SyncCopiesArchive | null {
+  const root = join(migrationDir, BACKUP_DIR);
+  const dir = join(root, MIGRATION_SYNC_COPIES_DIR);
+  const list = join(root, MIGRATION_SYNC_COPIES_LIST);
+  if (kept.length === 0) {
+    rmSync(list, { force: true });
+    return null;
+  }
+  const copies: Array<SyncCopyKept & { readonly sha256: string }> = [];
+  for (const copy of kept) {
+    const source = join(vault, ...copy.path.split("/"));
+    const target = join(dir, ...copy.path.split("/"));
+    try {
+      copyInto(source, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new MigrationBackupError(
+        `the sync conflict copy ${copy.path} could not be kept: ${String(error)}`,
+      );
+    }
+    const sha256 = sha256File(target);
+    let sourceSum: string;
+    try {
+      sourceSum = sha256File(source);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Sync removed it after the copy: left out, and its copy with it.
+      rmSync(target, { force: true });
+      continue;
+    }
+    if (sha256 !== sourceSum) {
+      throw new MigrationBackupError(`the kept sync conflict copy ${copy.path} does not match it`);
+    }
+    copies.push({ ...copy, sha256 });
+  }
+  if (copies.length === 0) {
+    // Every copy was gone before it could be kept: no list, no archive.
+    rmSync(list, { force: true });
+    return null;
+  }
+  mkdirSync(root, { recursive: true });
+  atomicWriteFileSync(list, `${JSON.stringify({ dir, copies }, null, 2)}\n`);
+  return { dir, copies };
+}
+
+/** Where a migration lists the sync conflict copies it kept. */
+export function syncCopiesListPath(migrationDir: string): string {
+  return join(migrationDir, BACKUP_DIR, MIGRATION_SYNC_COPIES_LIST);
+}
+
+/** The kept sync conflict copies a migration listed, or null when none. */
+export function readSyncCopiesArchive(migrationDir: string): SyncCopiesArchive | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(syncCopiesListPath(migrationDir), "utf8"),
+    ) as SyncCopiesArchive;
+    if (typeof parsed.dir !== "string" || !Array.isArray(parsed.copies)) return null;
+    return parsed.copies.length === 0 ? null : parsed;
+  } catch {
+    return null;
+  }
 }

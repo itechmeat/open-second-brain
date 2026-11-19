@@ -4133,11 +4133,20 @@ function update(deviceStateDir, device, step) {
     return next;
   });
 }
-function tickClock(deviceStateDir, device, now = systemWallClock, floor = null) {
-  return update(deviceStateDir, device, (local) => {
+function tickClockMany(deviceStateDir, device, count, now = systemWallClock, floor = null) {
+  const out = [];
+  if (count <= 0)
+    return out;
+  update(deviceStateDir, device, (local) => {
     const wall = now();
-    return sendHlc(floor === null ? local : receiveHlc(local, floor, wall), wall);
+    let at = floor === null ? local : receiveHlc(local, floor, wall);
+    for (let i = 0;i < count; i += 1) {
+      at = sendHlc(at, wall);
+      out.push(at);
+    }
+    return at;
   });
+  return out;
 }
 var systemWallClock = () => Date.now();
 var init_clock_store = __esm(() => {
@@ -4904,11 +4913,10 @@ function appendLine(partitionRoot, path, bytes) {
     fsyncDirBestEffort(dirname9(path));
 }
 function appendRecord(store, input, options = {}) {
-  if (!store.partitions.has(input.partition)) {
-    throw new PartitionUnavailableError(input.partition, store.root);
-  }
+  return appendRecords(store, [input], options)[0];
+}
+function prepareLine(store, input, hlc) {
   const ref = input.ledger === undefined ? { stream: input.stream } : { stream: input.stream, ledger: input.ledger };
-  const hlc = tickClock(store.deviceStateDir, store.device, options.now, observedClockFloor(store.root));
   const month = shardMonth(hlc.physical);
   const rel = shardRelPath(ref, store.device, month);
   const record = buildRecord({
@@ -4937,8 +4945,33 @@ function appendRecord(store, input, options = {}) {
     spilled = true;
   }
   const path = shardPath(store.root, input.partition, ref, store.device, month);
-  withLocalLock(shardLockTarget(store.deviceStateDir, input.partition, rel), () => appendLine(partitionDir(store.root, input.partition), path, bytes));
-  return { record, path, rel, spilled };
+  return { result: { record, path, rel, spilled }, bytes, partition: input.partition };
+}
+function appendRecords(store, inputs, options = {}) {
+  for (const input of inputs) {
+    if (!store.partitions.has(input.partition)) {
+      throw new PartitionUnavailableError(input.partition, store.root);
+    }
+  }
+  if (inputs.length === 0)
+    return [];
+  const stamps = tickClockMany(store.deviceStateDir, store.device, inputs.length, options.now, observedClockFloor(store.root));
+  const lines = inputs.map((input, i) => prepareLine(store, input, stamps[i]));
+  const byShard = new Map;
+  for (const line of lines) {
+    const at = `${line.partition}\x00${line.result.rel}`;
+    const group = byShard.get(at);
+    if (group === undefined)
+      byShard.set(at, [line]);
+    else
+      group.push(line);
+  }
+  for (const group of byShard.values()) {
+    const first = group[0];
+    withLocalLock(shardLockTarget(store.deviceStateDir, first.partition, first.result.rel), () => appendLine(partitionDir(store.root, first.partition), first.result.path, Buffer.concat(group.map((line) => line.bytes))));
+    options.afterShard?.();
+  }
+  return lines.map((line) => line.result);
 }
 var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10;
 var init_appender = __esm(() => {
@@ -7543,13 +7576,32 @@ function readGateState(source) {
 function progressPath(source = processDirsEnv()) {
   return join21(stateRootDir(source), PROGRESS_FILE);
 }
-function readGateProgress(gate) {
+function readMigrationGateProgress(runId) {
   try {
     const parsed = JSON.parse(readFileSync16(progressPath(), "utf8"));
-    return parsed.run_id === gate.run_id && typeof parsed.progress === "string" ? parsed.progress : null;
+    if (parsed["run_id"] !== runId || typeof parsed["progress"] !== "string")
+      return null;
+    const journaled = parsed["journaled"];
+    const planned = parsed["planned"];
+    const counted = Number.isInteger(journaled) && Number.isInteger(planned);
+    return {
+      run_id: runId,
+      progress: parsed["progress"],
+      ...counted ? { journaled, planned } : {}
+    };
   } catch {
     return null;
   }
+}
+function describeImportCounts(p) {
+  return `${p.journaled} of about ${Math.max(p.planned, p.journaled)} legacy items imported so far`;
+}
+function describeMigrationGateProgress(p) {
+  return p.journaled !== undefined && p.planned !== undefined ? `${p.progress}, ${describeImportCounts({ journaled: p.journaled, planned: p.planned })}` : p.progress;
+}
+function readGateProgress(gate) {
+  const p = readMigrationGateProgress(gate.run_id);
+  return p === null ? null : describeMigrationGateProgress(p);
 }
 function assertNoMigrationInProgress(vault) {
   const refusal = migrationGateRefusal(vault);
@@ -7868,12 +7920,18 @@ function brainDirsForWrite(vault, notices, lane) {
   return brainDirs(vault);
 }
 function preferencePath(vault, slug) {
+  return preferencePathUnder(brainDirs(vault), vault, slug);
+}
+function preferencePathUnder(dirs, vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join23(brainDirs(vault).preferences, `pref-${s}.md`), vault);
+  return ensureInsideVault(join23(dirs.preferences, `pref-${s}.md`), vault);
 }
 function retiredPath(vault, slug) {
+  return retiredPathUnder(brainDirs(vault), vault, slug);
+}
+function retiredPathUnder(dirs, vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join23(brainDirs(vault).retired, `ret-${s}.md`), vault);
+  return ensureInsideVault(join23(dirs.retired, `ret-${s}.md`), vault);
 }
 function validateSlug(slug) {
   const trimmed = slug.trim();
@@ -8870,13 +8928,17 @@ function namesAPage(ref) {
   const trimmed = ref.trim();
   return ANCHORED_WIKILINK_RE.test(trimmed) || trimmed.endsWith(PAGE_EXTENSION);
 }
-function preferenceIdIsPrivate(vault, id, fromStore = vault === null || judgesFromStore(vault)) {
+function preferenceIdIsPrivate(vault, id, fromStore = vault === null || judgesFromStore(vault), scope) {
   if (fromStore || vault === null)
     return storePreferenceIdIsPrivate(id);
   let paths;
   try {
     const slug = stripBrainIdPrefix(id);
-    paths = [preferencePath(vault, slug), retiredPath(vault, slug)].filter((p) => existsSync12(p));
+    const pages = scope === undefined ? [preferencePath(vault, slug), retiredPath(vault, slug)] : [
+      preferencePathUnder(scope.dirs(), vault, slug),
+      retiredPathUnder(scope.dirs(), vault, slug)
+    ];
+    paths = pages.filter((p) => existsSync12(p));
   } catch {
     return true;
   }
@@ -8892,7 +8954,31 @@ function preferenceIdOfPath(ref) {
   return extractId(target.slice(slash + 1));
 }
 function logRefsNamePrivatePage(vault, refs, guessed) {
-  return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+  if (judgingOff)
+    return false;
+  if (batch === null) {
+    return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+  }
+  const fromStore = batchFromStore(batch, vault);
+  return refsNamePrivatePage(vault, refs, guessed, fromStore, batchScope(batch, vault, fromStore));
+}
+function batchFromStore(b, vault) {
+  let fromStore = b.fromStore.get(vault);
+  if (fromStore === undefined) {
+    fromStore = vault === null || judgesFromStore(vault);
+    b.fromStore.set(vault, fromStore);
+  }
+  return fromStore;
+}
+function batchScope(b, vault, fromStore) {
+  if (vault === null)
+    return;
+  let scope = b.scopes.get(vault);
+  if (scope === undefined) {
+    scope = artifactRefScope(vault, fromStore);
+    b.scopes.set(vault, scope);
+  }
+  return scope;
 }
 function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
   let guessSpared = guessed === undefined;
@@ -8903,8 +8989,9 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
     if (isGuess)
       guessSpared = true;
     const id = extractId(ref) ?? (fromStore ? preferenceIdOfPath(ref) : undefined);
-    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore))
+    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore, scope)) {
       return true;
+    }
     if (fromStore) {
       const signal = signalIdOf(ref);
       if (signal !== undefined) {
@@ -8932,7 +9019,7 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
   }
   return false;
 }
-var PAGE_EXTENSION = ".md", PREFERENCE_DIRS;
+var PAGE_EXTENSION = ".md", PREFERENCE_DIRS, batch = null, judgingOff = false;
 var init_reference_privacy = __esm(() => {
   init_artifact_ref_resolve();
   init_note_path();

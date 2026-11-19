@@ -26,6 +26,13 @@
  * legacy tree can leave the vault and names the command (both in the same
  * channel); and a legacy directory that is back in the vault after the
  * tree was removed (a warning, with the writer its files name).
+ *
+ * Once this device switched, one advice names the sync conflict copies
+ * its migration kept in the backup and did not import (change
+ * migration-sync-conflict-copies): versions of a record or of a single
+ * document that differ from the original, which the person may want to
+ * look at. It never stops anything, and it goes away once the person
+ * removes the list the migration wrote.
  */
 
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
@@ -40,6 +47,10 @@ import { cohortStatusHere, migrationStoreHere } from "../../store-migration/coho
 import type { CohortStatus } from "../../store-migration/cohort-status.ts";
 import { legacyDeviceEvidence } from "../../store-migration/device-evidence.ts";
 import type { StoreHandle } from "../../store/store-open.ts";
+import { deviceSwitchedHere } from "../../store/store-only.ts";
+import { withholdsPrivate } from "./store-check.ts";
+import { readSyncCopiesArchive, syncCopiesListPath } from "../../store-migration/backup.ts";
+import { migrationDir } from "../../store-migration/journal.ts";
 import { readVaultIdentity } from "../vault-identity.ts";
 
 import {
@@ -73,6 +84,9 @@ export const LEGACY_TREE_REAPPEARED_CODE = "legacy-tree-reappeared";
 
 /** The last automatic store migration attempt on this machine failed (change auto-store-migration). */
 export const STORE_MIGRATION_FAILED_CODE = "store-migration-failed";
+
+/** The migration kept sync conflict copies in its backup, not imported (advice). */
+export const SYNC_COPIES_KEPT_CODE = "sync-conflict-copies-kept";
 
 /** Two devices each ran the first migration of this vault (D11: one first machine). */
 export const MIGRATION_DONE_TWICE_CODE = "migration-done-twice";
@@ -161,6 +175,44 @@ function doubleFirstFinding(ctx: DoctorCheckContext, out: DoctorFindings): void 
       "twice (nothing was lost; duplicated log events and ledger rows show twice). Keep both " +
       "records; for every other machine, run the first migration on one machine and wait for " +
       "its completion record to sync before migrating the others.",
+  });
+}
+
+/** The advice on the conflict copies this device's migration kept, once it switched. */
+function keptCopiesFinding(ctx: DoctorCheckContext, out: DoctorFindings): void {
+  const store = migrationStoreHere(ctx.configPath);
+  if (store === null || !deviceSwitchedHere(store, store.device)) return;
+  const dir = migrationDir(store);
+  const kept = readSyncCopiesArchive(dir);
+  if (kept === null) return;
+  // Below local reach a copy's path can name a private page, and the count
+  // and the device-local archive say what the caller cannot read: the
+  // advice keeps its code and points at this machine's own doctor.
+  if (withholdsPrivate(ctx)) {
+    out.uncertain.push({
+      code: SYNC_COPIES_KEPT_CODE,
+      message:
+        "the migration to the brain store kept sync conflict copies that differ from their " +
+        "originals and imported none of them. Run `o2b brain doctor` on this machine to see " +
+        "which and where they are kept; nothing is waiting on them.",
+    });
+    return;
+  }
+  const n = kept.copies.length;
+  const named = kept.copies
+    .slice(0, 5)
+    .map((c) => c.path)
+    .join(", ");
+  out.uncertain.push({
+    code: SYNC_COPIES_KEPT_CODE,
+    path: kept.dir,
+    message:
+      `the migration to the brain store kept ${n} sync conflict ${n === 1 ? "copy" : "copies"} ` +
+      `that ${n === 1 ? "differs" : "differ"} from ${n === 1 ? "its original" : "their originals"} ` +
+      `and imported none of them (${named}${n > 5 ? ", ..." : ""}): another version of a record ` +
+      `or of a single document such as the pinned context. They are kept in ${kept.dir}; look at ` +
+      "them and copy what you want into the brain. Nothing is waiting on them; remove " +
+      `${syncCopiesListPath(dir)} once you have looked, and this advice goes away.`,
   });
 }
 
@@ -337,6 +389,7 @@ export const migrationCheck: DoctorCheck = {
     withoutSeenRecording(() => {
       doubleFirstFinding(ctx, out);
       transitionFindings(ctx, out);
+      keptCopiesFinding(ctx, out);
     });
     const m = migrationAvailability({ vault: ctx.vault, configPath: ctx.configPath });
     const unreadable =

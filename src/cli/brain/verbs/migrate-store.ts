@@ -34,6 +34,7 @@ import {
   type MigrationResult,
 } from "../../../core/store-migration/migrate.ts";
 import { migrateStore, type MigrateStoreOutcome } from "../../../core/store-migration/outcome.ts";
+import type { SyncCopyReport } from "../../../core/store-migration/sync-leftovers.ts";
 import {
   clearAutoMigrationState,
   readAutoMigrationRunning,
@@ -249,6 +250,39 @@ export function renderOutcome(outcome: MigrateStoreOutcome): string {
   return lines.join("\n") + "\n";
 }
 
+/**
+ * The conflict-copy section of a dry run or a migration report: per
+ * surface, what its sync conflict copies became, then every copy kept and
+ * not imported, then the ignored sync temp files.
+ */
+export function renderSyncCopies(report: SyncCopyReport, archive: string | null): string[] {
+  const files = report.surfaces.reduce((sum, s) => sum + s.copies, 0);
+  const out = [
+    `Sync conflict copies: ${files} file(s); sync temp files ignored: ${report.temps_ignored}`,
+  ];
+  for (const s of report.surfaces) {
+    out.push(
+      `  ${s.surface}: ${s.copies} copy file(s): ${s.imported} item(s) imported as records, ` +
+        `${s.identical} identical (add nothing), ${s.kept} kept in the backup and not imported, ` +
+        `${s.dropped} dropped with their original`,
+    );
+  }
+  if (report.kept.length > 0) {
+    out.push(
+      archive === null
+        ? "  kept in the backup, not imported (versions you may want to look at):"
+        : `  kept in ${archive}, not imported (versions you may want to look at):`,
+    );
+    for (const k of report.kept)
+      out.push(`    ${k.path} (a version of ${k.original}): ${k.reason}`);
+  }
+  for (const gone of report.kept_gone ?? []) {
+    out.push(`  gone before the backup could keep it (removed by sync): ${gone}`);
+  }
+  for (const temp of report.temps) out.push(`  ignored temp file: ${temp}`);
+  return out;
+}
+
 /** The migration result as text. */
 export function renderMigration(result: MigrationResult): string {
   const out = [
@@ -269,6 +303,7 @@ export function renderMigration(result: MigrationResult): string {
   }
   out.push(
     `unparseable items kept in the backup: ${result.unparseable} (${result.unparseable_archive})`,
+    ...renderSyncCopies(result.sync_copies, result.sync_copies_archive),
   );
   if (result.gaps.length > 0) {
     out.push(`items not in the store (${result.gaps.length}); the legacy tree is untouched:`);
@@ -359,6 +394,8 @@ export function renderDryRun(plan: MigrationDryRun): string {
     out.push(`  and ${plan.unparseable_not_listed} more not listed`);
   }
   out.push("");
+
+  out.push(...renderSyncCopies(plan.sync_copies, null), "");
 
   out.push(`Unmapped entries: ${plan.totals.unmapped}`);
   for (const u of plan.unmapped) out.push(`  ${u.path}${u.type === "directory" ? "/" : ""}`);

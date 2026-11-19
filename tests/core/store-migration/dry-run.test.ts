@@ -76,7 +76,7 @@ describe("planMigrationDryRun", () => {
 
   test("lists every entry no mapping covers and fails the plan", () => {
     expect(plan.unmapped).toEqual([
-      { path: "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl", type: "file" },
+      { path: "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt", type: "file" },
       { path: "Brain/log/stray.txt", type: "file" },
       { path: "Brain/procedures/index.bin", type: "file" },
     ]);
@@ -95,7 +95,7 @@ describe("planMigrationDryRun", () => {
       fx.write(rel, "meta");
     }
     expect(planMigrationDryRun(fx.vault).unmapped.map((u) => u.path)).toEqual([
-      "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+      "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
       "Brain/log/stray.txt",
       "Brain/procedures/index.bin",
     ]);
@@ -106,7 +106,7 @@ describe("planMigrationDryRun", () => {
     // migration walks the tree; the delta pass imports what it becomes.
     fx.write("Brain/inbox/.sig-2026-11-06-wc-15.md.5662.1794166644414.b6642d26b8a8f8.tmp", "x");
     expect(planMigrationDryRun(fx.vault).unmapped.map((u) => u.path)).toEqual([
-      "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+      "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
       "Brain/log/stray.txt",
       "Brain/procedures/index.bin",
     ]);
@@ -116,7 +116,7 @@ describe("planMigrationDryRun", () => {
     const clean = makeLegacyVault("osb-legacy-clean-");
     try {
       for (const rel of [
-        "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+        "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
         "Brain/log/stray.txt",
         "Brain/procedures/index.bin",
       ]) {

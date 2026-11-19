@@ -115,6 +115,9 @@ import { FileAlreadyExistsError, renameWithRetry, unlinkWithRetry } from "../fs-
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
+import { compareKey, foldsCase, isStoreFamilyEntry } from "../search/store-family.ts";
+
+export { isStoreFamilyEntry };
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
 import {
   acquireWriterLeaseSync,
@@ -2892,19 +2895,6 @@ export type StorePlacement =
   | { readonly kind: "brain" };
 
 /**
- * True where the filesystem compares names without case by default
- * (APFS, HFS+, NTFS), so `Index.sqlite` and `index.sqlite` are one file.
- */
-function foldsCase(platform: NodeJS.Platform): boolean {
-  return platform === "darwin" || platform === "win32";
-}
-
-/** `name` as the platform compares it. */
-function compareKey(name: string, platform: NodeJS.Platform): string {
-  return foldsCase(platform) ? name.toLowerCase() : name;
-}
-
-/**
  * A path with every existing ancestor resolved through symlinks. Where the
  * platform folds case, an absent component takes the spelling of the one
  * entry of its parent that matches it without case, so a store configured
@@ -2988,58 +2978,6 @@ export function storePlacement(
   // whatever it holds, so a store inside one does not meet the swap.
   if (isSnapshotExcludedEntry(parts[0]!)) return { kind: "outside" };
   return parts.length === 1 ? { kind: "top", base: parts[0]! } : { kind: "nested", top: parts[0]! };
-}
-
-/** SQLite's journal siblings of a database file: WAL mode and DELETE mode. */
-const STORE_JOURNAL_SUFFIXES: ReadonlyArray<string> = Object.freeze(["-wal", "-shm", "-journal"]);
-
-/**
- * The database files the store layer keeps beside the store, as suffixes
- * of its name: the store itself, the reindex staging file (`.new`), the
- * parked previous index (`.bak`, also the restore's outgoing store, and
- * `.old`).
- */
-const STORE_DATABASE_SUFFIXES: ReadonlyArray<string> = Object.freeze(["", ".new", ".bak", ".old"]);
-
-/** The writer lock `proper-lockfile` takes on the store: a directory. */
-const STORE_LOCK_SUFFIX = ".lock";
-
-/** The restore's staged store: `<store>.restore-<pid>-<8 hex>`. */
-const STAGED_STORE_PATTERN = /^\.restore-\d+-[0-9a-f]{8}$/u;
-
-/**
- * True for a top-level `Brain/` entry that belongs to the store named
- * `base` when the store sits directly under `Brain/`. A closed list, so a
- * note or directory that merely starts with the store's name is restored
- * like any other entry:
- *
- *   - the store and each database file the store layer derives from it
- *     (`.new`, `.bak`, `.old`), each with its journals (`-wal`, `-shm`,
- *     `-journal`);
- *   - the restore's staged store (`.restore-<pid>-<hex>`) with its
- *     journals;
- *   - the writer lock directory (`.lock`), the only directory in the
- *     family.
- *
- * Names compare without case where the platform folds it. A suffix the
- * store layer adds later must be listed here; until it is, the Brain swap
- * treats that file as Brain content.
- */
-export function isStoreFamilyEntry(
-  name: string,
-  base: string,
-  isDirectory: boolean,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const key = compareKey(name, platform);
-  const stem = compareKey(base, platform);
-  if (!key.startsWith(stem)) return false;
-  const suffix = key.slice(stem.length);
-  if (isDirectory) return suffix === STORE_LOCK_SUFFIX;
-  // At most one journal suffix comes off: `-wal-shm` is not a journal.
-  const journal = STORE_JOURNAL_SUFFIXES.find((j) => suffix.endsWith(j));
-  const file = journal === undefined ? suffix : suffix.slice(0, -journal.length);
-  return STORE_DATABASE_SUFFIXES.includes(file) || STAGED_STORE_PATTERN.test(file);
 }
 
 /**

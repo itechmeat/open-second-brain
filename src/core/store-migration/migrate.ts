@@ -54,6 +54,7 @@ import {
 } from "../store/store-paths.ts";
 import type { StorePartition } from "../store/constants.ts";
 import {
+  archiveSyncCopies,
   archiveUnparseable,
   backupVaultMismatch,
   journalScopeFor,
@@ -62,7 +63,11 @@ import {
   takeMigrationSnapshot,
   type MigrationBackup,
 } from "./backup.ts";
-import { importBrainSettings, type BrainSettingsImport } from "./brain-settings.ts";
+import {
+  BrainSettingsUnreadableError,
+  importBrainSettings,
+  type BrainSettingsImport,
+} from "./brain-settings.ts";
 import { migrationCatalogue } from "./catalogue.ts";
 import {
   placeDeviceTokens,
@@ -80,10 +85,15 @@ import {
   type VerificationGap,
 } from "./convert.ts";
 import { planMigrationDryRun } from "./dry-run.ts";
+import { retainedSyncCopies, type SyncCopyReport } from "./sync-leftovers.ts";
+import { IncrementalReads, saveIncrementalReads } from "./incremental-reads.ts";
 import {
   clearRollbackRecord,
   describeUnseen,
-  loadJournal,
+  loadJournalAndUnmarked,
+  readFinalStoreView,
+  type UnseenShards,
+  type Journal,
   migrationDir,
   readMigrationState,
   unseenHeldShards,
@@ -201,6 +211,11 @@ export const MIGRATION_STEP = Object.freeze({
   gateClosed: "gate-closed",
   /** The snapshot and the backups are taken and verified. */
   backedUp: "backed-up",
+  /**
+   * The import is verified and every held shard read in full: the switch's
+   * steps follow (the settings import first).
+   */
+  verified: "verified",
   /** `migration-done` is recorded (the first machine only). */
   migrationDone: "migration-done",
   /** This device's `device-switched` is recorded. */
@@ -225,6 +240,12 @@ export interface MigrationOptions {
    * it because the wait only matters when writers are in flight.
    */
   readonly settleMs?: number;
+  /**
+   * How many items the import writes per batch (default
+   * `IMPORT_BATCH_ITEMS` in `import-batch.ts`). The CLI keeps the default; the crash tests
+   * use a small batch so a kill lands with part of a small vault imported.
+   */
+  readonly importBatchItems?: number;
   readonly hooks?: MigrationHooks;
   /** How long a later machine waits for the first machine's cut, in ms (default 0). */
   readonly waitMs?: number;
@@ -278,6 +299,27 @@ export interface MigrationResult {
   readonly device_config: DeviceConfigWrite | null;
   /** The MCP token map copied to device config; null when unfinished. */
   readonly device_tokens: DeviceTokenPlacement | null;
+  /** What the sync tool's conflict copies and temp files became (`sync-leftovers.ts`). */
+  readonly sync_copies: SyncCopyReport;
+  /** The backup folder the kept conflict copies are in; null when none was kept. */
+  readonly sync_copies_archive: string | null;
+}
+
+/** Items a journal holds, each version once. */
+function journaledItems(journal: Journal): number {
+  let n = 0;
+  for (const versions of journal.values()) n += versions.size;
+  return n;
+}
+
+/** Items the dry run found on the surfaces that become records. */
+function plannedRecordItems(plan: ReturnType<typeof planMigrationDryRun>): number {
+  let n = 0;
+  for (const s of plan.surfaces) {
+    if (s.partitions !== null)
+      n += s.partitions.shared + s.partitions.private + s.partitions["private-when-held"];
+  }
+  return n;
 }
 
 export function openMigrationStore(vault: string, configPath?: string): StoreHandle {
@@ -347,8 +389,8 @@ function partitionCuts(store: StoreHandle): Partial<Record<StorePartition, Parti
  * record in one could not be verified. So the run refuses before it
  * imports anything, and again before it switches.
  */
-function unseenRefusal(store: StoreHandle): string | null {
-  const named = describeUnseen(unseenHeldShards(store));
+function unseenRefusal(store: StoreHandle, unseen?: UnseenShards): string | null {
+  const named = describeUnseen(unseen ?? unseenHeldShards(store));
   return named === null
     ? null
     : `${named}; fix their permissions, let sync finish or repair the shard, then run the ` +
@@ -708,8 +750,15 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // says it is a migration's, which is how the next run on this vault
     // recognises it (`stoppedUnswitchedRun`).
     options.hooks?.atStep?.(MIGRATION_STEP.gateTaken);
-    // How far the run is, for the writers it refuses (`migration-gate.ts`).
-    const progress = (text: string): void => recordMigrationGateProgress(state.run_id, text);
+    // How far the run is, its step and, once its import began, its counts:
+    // the one progress file (`migration-gate.ts`), read by the writers it
+    // refuses, the status block and the doctor.
+    let step = "";
+    let counts: { journaled: number; planned: number } | undefined;
+    const progress = (text: string = step): void => {
+      step = text;
+      recordMigrationGateProgress(state.run_id, step, counts);
+    };
     progress("taking the backups");
     save({});
     options.hooks?.atStep?.(MIGRATION_STEP.gateClosed);
@@ -731,7 +780,13 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     }
 
     const scope = journalScopeFor(vault, store.device, dir);
-    const journal = loadJournal(dir, store, scope);
+    // One pass over the store, shard by shard, for the journal and the
+    // dual-written copies: the run never holds the store's records.
+    const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope);
+    const recordReads = new IncrementalReads(new Map(), false);
+    // How far the import is: rewritten after every batch it writes.
+    counts = { journaled: journaledItems(journal), planned: plannedRecordItems(plan) };
+    progress();
     const ctx = {
       vault,
       store,
@@ -740,8 +795,16 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       dir,
       journal,
       scope,
-      pool: dualWritePool(store, journal, scope),
+      pool: dualWritePool(store, journal, scope, unmarked),
       ...(options.hooks ? { hooks: options.hooks } : {}),
+      ...(options.importBatchItems !== undefined ? { batchItems: options.importBatchItems } : {}),
+      // Recorded, never used to skip: the first import after the switch
+      // starts from what this migration's final pass read.
+      incremental: recordReads,
+      onJournaled: (items: number): void => {
+        counts = { journaled: counts!.journaled + items, planned: counts!.planned };
+        progress();
+      },
     };
     let imported = 0;
     let passes = 0;
@@ -774,8 +837,14 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     }
     const archive = archiveUnparseable(vault, dir, last.problems);
     progress(`verifying ${imported} imported item(s)`);
+    // A conflict copy that is a second version of a record or a document
+    // is never merged: it is kept in the backup and named in the report.
+    const syncArchive = backupStep(() => archiveSyncCopies(vault, dir, last.syncCopies.kept));
     options.hooks?.beforeVerify?.();
-    const gaps = verifyImport(ctx, last.seen);
+    // One read of the store for the verification and the switch's check
+    // of unseen shards; the settings import reads its own stream later.
+    const final = readFinalStoreView(store);
+    const gaps = verifyImport(ctx, last.seen, final.sums);
     const base = {
       run_id: state.run_id,
       device: store.device,
@@ -792,6 +861,12 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       vault_files: skills.placed,
       vault_files_kept: skills.kept,
       skipped_partitions: wait?.skipped ?? [],
+      // Only the copies the archive holds are named as kept.
+      sync_copies: retainedSyncCopies(
+        last.syncCopies,
+        syncArchive === null ? null : new Set(syncArchive.copies.map((c) => c.path)),
+      ),
+      sync_copies_archive: syncArchive?.dir ?? null,
     };
     if (gaps.length > 0) {
       save({ phase: "failed", reason: `${gaps.length} legacy item(s) are not in the store` });
@@ -806,16 +881,32 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
         device_tokens: null,
       };
     }
+    // Every item the final pass read is in the store: the first import of
+    // late writes after the switch reads only what changed since.
+    saveIncrementalReads(dir, vault, recordReads);
     // The switch is the step a later run cannot take back: every held
     // shard reads in full first, or the run fails and this machine stays
     // on the legacy layout.
-    const unseen = unseenRefusal(store);
+    const unseen = unseenRefusal(store, final.unseen);
     if (unseen !== null) {
       save({ phase: "failed", reason: unseen });
       throw new MigrationRefusedError(`${unseen}; this machine was not switched`);
     }
     progress("switching this machine to the brain store");
-    const settings = importBrainSettings(vault, store, agent);
+    options.hooks?.atStep?.(MIGRATION_STEP.verified);
+    let settings: ReturnType<typeof importBrainSettings>;
+    try {
+      settings = importBrainSettings(vault, store, agent);
+    } catch (error) {
+      if (!(error instanceof BrainSettingsUnreadableError)) throw error;
+      // As an unreadable held shard before the switch: the run fails and
+      // this machine stays on the legacy layout.
+      const reason =
+        `${error.message}; fix their permissions, let sync finish or repair the shard, then ` +
+        "run the migration again";
+      save({ phase: "failed", reason });
+      throw new MigrationRefusedError(`${reason}; this machine was not switched`);
+    }
     // Device keys go to this machine's config and the token map beside it,
     // so neither falls back to a default once the vault's files stop
     // counting (D14 items 3 and 15).

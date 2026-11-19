@@ -137,6 +137,14 @@ describe("a run that is still running", () => {
       "importing: pass 2, 40 item(s) imported so far",
     );
     expect(refusalOfNote().message).toContain("importing: pass 2, 40 item(s) imported so far");
+    // With counts, the refusal names the step and how far the import is.
+    recordMigrationGateProgress("migrate-progress", "importing the legacy tree", {
+      journaled: 120,
+      planned: 370,
+    });
+    expect(refusalOfNote().message).toContain(
+      "importing the legacy tree, 120 of about 370 legacy items imported so far",
+    );
     // Another run's progress is never shown as this one's.
     recordMigrationGateProgress("migrate-other", "verifying 3 imported item(s)");
     expect(refusalOfNote().progress).toBeNull();
@@ -287,6 +295,8 @@ describe("a migration that is running", () => {
       expect(messages).toHaveLength(2);
       expect(messages[0]).toContain("backed up, importing the legacy tree");
       expect(messages[1]).toContain("verifying");
+      // Once the import began, the one progress file carries its counts too.
+      expect(messages[1]).toMatch(/\d+ of about \d+ legacy items imported so far/);
     } finally {
       bench.cleanup();
     }

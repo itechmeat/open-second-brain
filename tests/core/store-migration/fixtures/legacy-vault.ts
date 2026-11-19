@@ -2,10 +2,10 @@
  * A legacy vault with the real layout shapes a migration meets: per-device
  * shards of several ledgers written by three devices (one of them silent
  * for two months), legacy un-sharded files, a private preference and the
- * records that name it, a malformed line, a sync-conflict copy, a lane no
- * mapping covers and a stray file. Written byte by byte rather than through
- * the writers, so the fixture holds exactly these shapes and no writer's
- * side effects.
+ * records that name it, a malformed line, a lane no mapping covers, a
+ * stray file and a sync-conflict copy of it. Written byte by byte rather
+ * than through the writers, so the fixture holds exactly these shapes and
+ * no writer's side effects.
  *
  * Everything lives under one temp parent that {@link LegacyVaultFixture.cleanup}
  * removes.
@@ -26,11 +26,12 @@ const DAY_MS = 86_400_000;
 
 /**
  * Legacy entries the fixture plants on purpose that no mapping covers: a
- * sync-conflict log copy, a stray text file and a binary. A migration
+ * stray text file, a sync-conflict copy of it (a copy of a file no mapping
+ * covers is as unknown as its original) and a binary. A migration
  * refuses while they exist, so a bench that migrates removes them first.
  */
 export const UNMAPPED_LEGACY_ENTRIES: ReadonlyArray<string> = Object.freeze([
-  "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+  "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
   "Brain/log/stray.txt",
   "Brain/procedures/index.bin",
 ]);
@@ -89,7 +90,8 @@ export function makeLegacyVault(prefix = "osb-legacy-vault-"): LegacyVaultFixtur
   write("Brain/pinned.md", "Working on [[pref-secret]] today.\n");
 
   // The Brain log: two devices, a legacy un-sharded day, a private event,
-  // a malformed middle line, the day page and a sync-conflict copy.
+  // a malformed middle line, the day page and a sync-conflict copy of a
+  // file no mapping covers.
   write(
     "Brain/log/2026-11-01.dev-a.jsonl",
     jsonl(
@@ -106,7 +108,7 @@ export function makeLegacyVault(prefix = "osb-legacy-vault-"): LegacyVaultFixtur
   );
   write("Brain/log/2026-10-01.jsonl", jsonl(logRow("2026-10-01T09:00:00Z", "note", { text: "x" })));
   write("Brain/log/2026-11-01.dev-a.md", "# 2026-11-01\n");
-  write("Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl", "{}\n");
+  write("Brain/log/stray.sync-conflict-20261101-120000-ABC.txt", "{}\n");
 
   // Per-device ledgers.
   write(

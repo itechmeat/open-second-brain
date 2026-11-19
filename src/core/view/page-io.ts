@@ -51,6 +51,7 @@ import type { Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { READ_NO_FOLLOW_FLAGS } from "../derived-store-guard.ts";
+import { syncConflictOriginalName } from "../brain/ledger-shards.ts";
 import { NO_LINK_CODES } from "../store/blobs.ts";
 import { VIEW_PAGE_EXT, VIEW_TEMP_PREFIX } from "./constants.ts";
 
@@ -310,15 +311,12 @@ function putBackOther(away: string, path: string): void {
   }
 }
 
-/** Syncthing: `.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device id prefix>`. */
-const SYNCTHING_COPY_RE = /^\.sync-conflict-\d{8}-\d{6}-[a-z0-9]{7}$/;
-/** Dropbox, Nextcloud and similar: ` (<who>conflicted copy <date ...>)`. */
-const CONFLICTED_COPY_RE = /^ \([^)]*conflicted copy[^)]*\d{4}-\d{2}-\d{2}[^)]*\)$/;
-
 /**
  * Conflict copies a sync tool made of the page at `path`: Syncthing's
  * `<name>.sync-conflict-<stamp>.md`, and the `<name> (conflicted copy ...).md`
- * form other sync clients use.
+ * form other sync clients use. The names are recognised in one place
+ * (`brain/ledger-shards.ts`, `syncConflictOriginalName`): a user's own
+ * `about-me (conflict notes).md` is not a copy of the page.
  */
 export function conflictCopies(path: string): string[] {
   const dir = dirname(path);
@@ -329,16 +327,13 @@ export function conflictCopies(path: string): string[] {
   } catch {
     return [];
   }
+  const own = `${stem}${VIEW_PAGE_EXT}`;
   return names
     .filter((name) => {
       const lower = name.toLowerCase();
       if (!lower.endsWith(VIEW_PAGE_EXT) || lower.startsWith(VIEW_TEMP_PREFIX)) return false;
-      const middle = lower.slice(0, -VIEW_PAGE_EXT.length);
-      if (!middle.startsWith(stem)) return false;
-      // Only the stamped shapes sync tools make: a user's own
-      // `about-me (conflict notes).md` is not a copy of the page.
-      const rest = middle.slice(stem.length);
-      return SYNCTHING_COPY_RE.test(rest) || CONFLICTED_COPY_RE.test(rest);
+      // Matched on the lowercased name: a stamp spelled in capitals is a copy too.
+      return syncConflictOriginalName(lower) === own;
     })
     .toSorted()
     .map((name) => join(dir, name));

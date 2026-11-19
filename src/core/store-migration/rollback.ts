@@ -65,6 +65,7 @@ import { BRAIN_ROOT_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES } from "../brain/path-c
 import { snapshotPath } from "../brain/paths.ts";
 import { extractSnapshotToTemp } from "../brain/snapshot.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
+import { withoutReferenceJudging } from "../store/reference-privacy.ts";
 import { appendRecord } from "../store/appender.ts";
 import { AUTHORITY_FIELD, LEDGER_ROW_KIND } from "../store/constants.ts";
 import { readPartition } from "../store/state-digest.ts";
@@ -83,7 +84,8 @@ import {
 } from "./backup.ts";
 import { removeDeviceTokens } from "./device-config.ts";
 import { itemRecords, migrationCatalogue, recordDestination } from "./catalogue.ts";
-import { contentKey, itemKey, itemSum } from "./convert.ts";
+import { contentKey, fileCopyVerdicts, itemKey, itemSum, recordsSignature } from "./convert.ts";
+import type { DualWriteRecord } from "../store/dual-write.ts";
 import { EXPORTED_KINDS, exportRecords, type RefusedRecord, type StartMark } from "./exporters.ts";
 import {
   describeUnseen,
@@ -103,7 +105,9 @@ import {
   sameJournalVault,
   type JournalScope,
 } from "./journal-scope.ts";
-import { emptyTally, scanLocator } from "./legacy-scan.ts";
+import { emptyTally, readFileItem, scanCopyLines, scanLocator } from "./legacy-scan.ts";
+import { findSyncLeftovers, SYNC_COPY_RULE } from "./sync-leftovers.ts";
+import type { LegacyItem } from "./destinations.ts";
 import {
   DEVICE_UNSWITCHED_KIND,
   legacyTreeRemovedRecords,
@@ -252,20 +256,93 @@ function restoreBrain(vault: string, runId: string, archiveCopy: string | null):
 
 /** What the restored tree already holds: item keys with checksums, and record contents. */
 function restoredIdentity(vault: string): { items: Set<string>; contents: Map<string, number> } {
+  // Items are matched by key, checksum and record content alone: no
+  // partition is judged, so no reference is resolved.
+  return withoutReferenceJudging(() => restoredIdentityOf(vault));
+}
+
+function restoredIdentityOf(vault: string): {
+  items: Set<string>;
+  contents: Map<string, number>;
+} {
   const items = new Set<string>();
   const contents = new Map<string, number>();
-  for (const entry of migrationCatalogue(vault)) {
+  const count = (records: ReadonlyArray<DualWriteRecord>): void => {
+    for (const record of records) {
+      const key = contentKey(record.kind, record.body);
+      contents.set(key, (contents.get(key) ?? 0) + 1);
+    }
+  };
+  const catalogue = migrationCatalogue(vault);
+  const leftovers = findSyncLeftovers(vault, catalogue);
+  // The record contents of every original a JSONL copy is a version of,
+  // so a copy's row is matched as the pass matched it (`convert.ts`).
+  const families = new Map<string, Set<string>>();
+  for (const copy of leftovers.copies) {
+    if (copy.rule === SYNC_COPY_RULE.rows) families.set(copy.original, new Set());
+  }
+  for (const entry of catalogue) {
     const destination = recordDestination(entry);
     if (destination === null) continue;
     const tally = emptyTally();
     for (const locator of entry.locators) {
       scanLocator(locator, tally, (item) => {
         items.add(`${itemKey(vault, item)}\u0000${itemSum(item)}`);
-        for (const record of itemRecords(vault, destination, item)) {
-          const key = contentKey(record.kind, record.body);
-          contents.set(key, (contents.get(key) ?? 0) + 1);
-        }
+        const records = itemRecords(vault, destination, item);
+        count(records);
+        families.get(item.path)?.add(recordsSignature(records));
       });
+    }
+  }
+  const fileVerdicts = fileCopyVerdicts(leftovers.copies);
+  // A record imported from a sync conflict copy is keyed by the copy
+  // (`convert.ts`): the restored copy holds it, so it is not written back
+  // into the original. A copy's row the original did not hold also counts
+  // as content the tree holds, so a dual-written record the pass matched to
+  // it is not written back either; a row the original holds counts once.
+  for (const copy of leftovers.copies) {
+    const keyed = (item: LegacyItem): void => {
+      items.add(`${itemKey(vault, { ...item, path: copy.path })}\u0000${itemSum(item)}`);
+    };
+    const destination = recordDestination(copy.entry);
+    if (copy.rule === SYNC_COPY_RULE.rows) {
+      const family = families.get(copy.original)!;
+      const mine: string[] = [];
+      scanCopyLines(copy.locator, copy.path, copy.original, emptyTally(), (item) => {
+        keyed(item);
+        if (destination === null) return;
+        let records: ReadonlyArray<DualWriteRecord>;
+        try {
+          records = itemRecords(vault, destination, item);
+        } catch {
+          return;
+        }
+        const signature = recordsSignature(records);
+        if (family.has(signature)) return;
+        mine.push(signature);
+        count(records);
+      });
+      for (const signature of mine) family.add(signature);
+    } else if (copy.rule === SYNC_COPY_RULE.file) {
+      try {
+        const item = readFileItem(copy.locator, copy.original, copy.path);
+        if (item !== null) keyed(item);
+      } catch {
+        // unreadable as its surface: it was kept, never imported
+      }
+      // Each occurrence the restored tree holds counts once. A copy whose
+      // original is gone, and that the pass took as the record, is that
+      // occurrence: its content counts, so a dual-written record the pass
+      // matched to it is not written back. A copy beside its original,
+      // identical or kept, is no occurrence of its own: the original counts.
+      const verdict = fileVerdicts.get(copy.path);
+      if (verdict?.kind === "only" && destination !== null) {
+        try {
+          count(itemRecords(vault, destination, verdict.item));
+        } catch {
+          // not the shape its surface writes: it was never imported
+        }
+      }
     }
   }
   return { items, contents };

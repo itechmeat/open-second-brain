@@ -195,9 +195,60 @@ export function shardedFileName(base: string, shardId: string, ext: string): str
   return shardId === "" ? `${base}.${ext}` : `${base}.${shardId}.${ext}`;
 }
 
-/** True for a name Syncthing wrote as a conflict copy. */
+/**
+ * The conflict-copy marker of a sync tool inside a file name, removed to
+ * give the name of the file the copy is a version of:
+ *
+ *  - Syncthing: `<stem>.sync-conflict-<YYYYMMDD>-<HHMMSS>-<device>.<ext>`
+ *    (any `.sync-conflict-...` segment, as every reader has always
+ *    excluded it);
+ *  - Dropbox and Nextcloud: `<stem> (<who>'s conflicted copy <date>).<ext>`
+ *    and `<stem> (conflicted copy <date> <time>).<ext>`: a parenthesised
+ *    "conflicted copy" with a date, right before the extension.
+ *
+ * A name that only contains the word (`conflict-notes.md`,
+ * `notes (conflict).md`) is not a copy.
+ */
+const SYNCTHING_CONFLICT_RE = /\.sync-conflict-[^./\\]*/;
+const CONFLICTED_COPY_RE =
+  / \([^()/\\]*conflicted copy[^()/\\]*\d{4}-\d{2}-\d{2}[^()/\\]*\)(?=(?:\.[^./\\]*)?$)/i;
+
+/**
+ * True for a name a sync tool wrote as a conflict copy. The one place
+ * that knows these names, with {@link syncConflictOriginalName} and
+ * {@link isSyncTempName}.
+ */
 export function isSyncConflictName(name: string): boolean {
-  return name.includes(SYNC_CONFLICT_MARKER);
+  return name.includes(SYNC_CONFLICT_MARKER) || CONFLICTED_COPY_RE.test(name);
+}
+
+/**
+ * The name of the file a sync tool's conflict copy `name` is a version
+ * of (its marker removed), or null when `name` is no conflict copy.
+ */
+export function syncConflictOriginalName(name: string): string | null {
+  if (name.includes(SYNC_CONFLICT_MARKER)) return name.replace(SYNCTHING_CONFLICT_RE, "");
+  if (CONFLICTED_COPY_RE.test(name)) return name.replace(CONFLICTED_COPY_RE, "");
+  return null;
+}
+
+/**
+ * A sync tool's in-flight file: the temp name it downloads a file under
+ * before it renames it onto the real name. Syncthing writes
+ * `.syncthing.<name>.tmp` (`~syncthing~<name>.tmp` on older releases and
+ * where a leading dot is not allowed); the Nextcloud desktop client
+ * writes `.<name>.~<hex>`. It holds no data of its own: the file it
+ * becomes is read once it is there.
+ */
+const SYNC_TEMP_RES: ReadonlyArray<RegExp> = [
+  /^\.syncthing\..+\.tmp$/,
+  /^~syncthing~.+\.tmp$/,
+  /^\..+\.~[0-9a-f]+$/i,
+];
+
+/** True for a sync tool's in-flight temp file (see {@link SYNC_TEMP_RES}). */
+export function isSyncTempName(name: string): boolean {
+  return SYNC_TEMP_RES.some((re) => re.test(name));
 }
 
 /**

@@ -425,35 +425,80 @@ function progressPath(source: PlatformDirsEnv = processDirsEnv()): string {
   return join(stateRootDir(source), PROGRESS_FILE);
 }
 
+/** How far the run holding the gate is: its step, and its import's counts once known. */
+export interface MigrationGateProgress {
+  readonly run_id: string;
+  /** A few words ("backed up, importing the legacy tree"). */
+  readonly progress: string;
+  /** Items in the run's journal, once its import began. */
+  readonly journaled?: number;
+  /** Record items its dry run planned, once its import began. */
+  readonly planned?: number;
+}
+
 /**
- * Record how far the run `runId` holding the gate is, in a few words
- * ("backed up", "importing: pass 2, 1180 items so far"), so a writer it
- * refuses can say so. Best effort: a progress that cannot be written only
- * leaves the refusal without it.
+ * Record how far the run `runId` holding the gate is: its step in a few
+ * words, and, once its import began, how many items it journaled of how
+ * many it planned. The one progress file of a run, read by the writers
+ * the gate refuses, the status block and the doctor
+ * ({@link readMigrationGateProgress}). Best effort: a progress that cannot
+ * be written only leaves them without it.
  */
-export function recordMigrationGateProgress(runId: string, progress: string): void {
+export function recordMigrationGateProgress(
+  runId: string,
+  progress: string,
+  counts?: { readonly journaled: number; readonly planned: number },
+): void {
   try {
     const path = progressPath();
     mkdirSync(dirname(path), { recursive: true });
-    atomicWriteFileSync(path, `${JSON.stringify({ run_id: runId, progress })}\n`);
+    const body: MigrationGateProgress = { run_id: runId, progress, ...counts };
+    atomicWriteFileSync(path, `${JSON.stringify(body)}\n`);
   } catch {
     // the refusal is still made, only without the progress
   }
 }
 
-/** The progress the gate's run last recorded, or null (none, another run's, unreadable). */
-function readGateProgress(gate: MigrationGate): string | null {
+/**
+ * The progress the run `runId` last recorded, or null (none, another
+ * run's, unreadable). The one reader of the progress file.
+ */
+export function readMigrationGateProgress(runId: string): MigrationGateProgress | null {
   try {
-    const parsed = JSON.parse(readFileSync(progressPath(), "utf8")) as {
-      run_id?: unknown;
-      progress?: unknown;
+    const parsed = JSON.parse(readFileSync(progressPath(), "utf8")) as Record<string, unknown>;
+    if (parsed["run_id"] !== runId || typeof parsed["progress"] !== "string") return null;
+    const journaled = parsed["journaled"];
+    const planned = parsed["planned"];
+    const counted = Number.isInteger(journaled) && Number.isInteger(planned);
+    return {
+      run_id: runId,
+      progress: parsed["progress"],
+      ...(counted ? { journaled: journaled as number, planned: planned as number } : {}),
     };
-    return parsed.run_id === gate.run_id && typeof parsed.progress === "string"
-      ? parsed.progress
-      : null;
   } catch {
     return null;
   }
+}
+
+/** "N of about M legacy items imported so far", for a report sentence. */
+export function describeImportCounts(p: {
+  readonly journaled: number;
+  readonly planned: number;
+}): string {
+  return `${p.journaled} of about ${Math.max(p.planned, p.journaled)} legacy items imported so far`;
+}
+
+/** A run's progress as a refusal or a report says it: the step, then the counts when known. */
+export function describeMigrationGateProgress(p: MigrationGateProgress): string {
+  return p.journaled !== undefined && p.planned !== undefined
+    ? `${p.progress}, ${describeImportCounts({ journaled: p.journaled, planned: p.planned })}`
+    : p.progress;
+}
+
+/** The progress the gate's run last recorded, as the refusal says it, or null. */
+function readGateProgress(gate: MigrationGate): string | null {
+  const p = readMigrationGateProgress(gate.run_id);
+  return p === null ? null : describeMigrationGateProgress(p);
 }
 
 /**

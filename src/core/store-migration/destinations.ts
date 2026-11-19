@@ -138,7 +138,18 @@ export type Locator =
       readonly anyFile?: true;
       readonly exclude?: ReadonlyArray<Locator>;
     }
-  | { readonly shape: "tree"; readonly path: string; readonly grammar?: LedgerShardGrammar };
+  | {
+      readonly shape: "tree";
+      readonly path: string;
+      readonly grammar?: LedgerShardGrammar;
+      /**
+       * `path` is a search index store file, and the locator also reads
+       * every file the store layer keeps beside it (`isStoreFamilyEntry`,
+       * `search/store-family.ts`: the parked `.bak` and `.old`, the
+       * `.new` staging, the restore's staged store, each with its journals).
+       */
+      readonly family?: true;
+    };
 
 /**
  * Builds the store records of one legacy item (one record, or several in

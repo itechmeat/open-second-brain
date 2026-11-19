@@ -43,7 +43,12 @@ import {
 } from "../brain/artifact-ref-resolve.ts";
 import { resolveNotePath } from "../brain/note-path.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "../brain/path-constants.ts";
-import { preferencePath, retiredPath } from "../brain/paths.ts";
+import {
+  preferencePath,
+  preferencePathUnder,
+  retiredPath,
+  retiredPathUnder,
+} from "../brain/paths.ts";
 import { extractId } from "../brain/temporal/period-common.ts";
 import { pathIsInside } from "../path-safety.ts";
 import { extractWikilinks } from "../vault.ts";
@@ -79,12 +84,21 @@ function preferenceIdIsPrivate(
   vault: string | null,
   id: string,
   fromStore: boolean = vault === null || judgesFromStore(vault),
+  scope?: ArtifactRefScope,
 ): boolean {
   if (fromStore || vault === null) return storePreferenceIdIsPrivate(id);
   let paths: string[];
   try {
     const slug = stripBrainIdPrefix(id);
-    paths = [preferencePath(vault, slug), retiredPath(vault, slug)].filter((p) => existsSync(p));
+    // With a scope, the Brain folders are the ones it resolved once.
+    const pages =
+      scope === undefined
+        ? [preferencePath(vault, slug), retiredPath(vault, slug)]
+        : [
+            preferencePathUnder(scope.dirs(), vault, slug),
+            retiredPathUnder(scope.dirs(), vault, slug),
+          ];
+    paths = pages.filter((p) => existsSync(p));
   } catch {
     return true; // a slug no page can carry: nothing to judge
   }
@@ -124,7 +138,107 @@ export function logRefsNamePrivatePage(
   refs: ReadonlyArray<string | undefined>,
   guessed?: string,
 ): boolean {
-  return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+  if (judgingOff) return false;
+  if (batch === null) {
+    return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+  }
+  const fromStore = batchFromStore(batch, vault);
+  return refsNamePrivatePage(vault, refs, guessed, fromStore, batchScope(batch, vault, fromStore));
+}
+
+/** What one batch of many rows ({@link withPrivacyBatch}) works out once per vault. */
+interface PrivacyBatch {
+  readonly fromStore: Map<string | null, boolean>;
+  readonly scopes: Map<string, ArtifactRefScope>;
+  readonly judges: Map<string | null, RowPrivacyJudge>;
+}
+
+let batch: PrivacyBatch | null = null;
+
+function batchFromStore(b: PrivacyBatch, vault: string | null): boolean {
+  let fromStore = b.fromStore.get(vault);
+  if (fromStore === undefined) {
+    fromStore = vault === null || judgesFromStore(vault);
+    b.fromStore.set(vault, fromStore);
+  }
+  return fromStore;
+}
+
+function batchScope(
+  b: PrivacyBatch,
+  vault: string | null,
+  fromStore: boolean,
+): ArtifactRefScope | undefined {
+  if (vault === null) return undefined;
+  let scope = b.scopes.get(vault);
+  if (scope === undefined) {
+    scope = artifactRefScope(vault, fromStore);
+    b.scopes.set(vault, scope);
+  }
+  return scope;
+}
+
+/**
+ * Run `fn`, a synchronous read of many legacy rows that is one operation
+ * (a migration dry run, one import pass of the migration), with the
+ * judges of this module shared across its rows: the store-only verdict
+ * and the Brain folders are worked out once per vault, and on a machine
+ * that still judges by the legacy pages every distinct reference string a
+ * row judge meets is judged once ({@link rowPrivacyJudge}), so the
+ * verdicts are those of the moment the operation ran. Without it, every row re-reads the configuration and
+ * re-resolves every Brain folder, which on a vault of several hundred
+ * thousand log rows is most of a migration's time. A call inside another
+ * batch joins it.
+ */
+export function withPrivacyBatch<T>(fn: () => T): T {
+  return runPrivacyBatch(fn);
+}
+
+/**
+ * Run `fn` with every reference judge of this module answering "names
+ * nothing private" at once, without reading a page, the store or the
+ * configuration: for a caller that builds legacy items' records only for
+ * their content (their keys and checksums), never for the partition they
+ * would go to. The rollback's match of the restored tree against the
+ * store is one: a partition plays no part in it.
+ */
+export function withoutReferenceJudging<T>(fn: () => T): T {
+  if (judgingOff) return fn();
+  judgingOff = true;
+  try {
+    return fn();
+  } finally {
+    judgingOff = false;
+  }
+}
+
+let judgingOff = false;
+
+/**
+ * End one chunk of a {@link withPrivacyBatch} operation: the per-reference
+ * verdicts are forgotten, so a page that changed (a preference made
+ * private on another machine and delivered by sync) is judged afresh by
+ * the rows after it. The store-only verdict and the folder scope stay for
+ * the whole operation. The migration ends a chunk after every import
+ * batch it writes, and the dry run after as many rows, so a verdict is
+ * never older than one batch. Outside a batch it does nothing.
+ */
+export function endPrivacyBatchChunk(): void {
+  batch?.judges.clear();
+  // The folder scope also holds the store's memory entities a store-only
+  // machine resolves references through: a fresh scope reads them again,
+  // so a page that arrived in the folds is seen by the next chunk.
+  batch?.scopes.clear();
+}
+
+function runPrivacyBatch<T>(fn: () => T): T {
+  if (batch !== null) return fn();
+  batch = { fromStore: new Map(), scopes: new Map(), judges: new Map() };
+  try {
+    return fn();
+  } finally {
+    batch = null;
+  }
 }
 
 /** {@link logRefsNamePrivatePage} with the store-only verdict worked out once by the caller. */
@@ -146,7 +260,9 @@ function refsNamePrivatePage(
     // On a store-only machine a path to a preference page is the
     // preference too: the fold judges it, never the legacy page.
     const id = extractId(ref) ?? (fromStore ? preferenceIdOfPath(ref) : undefined);
-    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore)) return true;
+    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore, scope)) {
+      return true;
+    }
     if (fromStore) {
       // The folds, not the legacy pages, say what a preference or a signal is.
       const signal = signalIdOf(ref);
@@ -181,12 +297,14 @@ function refsNamePrivatePage(
  * tried as is and then with `.md`, inside the vault only.
  */
 export function claimSourceIsPrivate(vault: string | null, source: string): boolean {
+  if (judgingOff) return false;
   const trimmed = source.trim();
   const anchored = ANCHORED_WIKILINK_RE.exec(trimmed);
   const target = stripWikilinkDecoration(anchored !== null ? anchored[1]! : trimmed);
   if (target === "") return false;
   const pageRef = anchored !== null || target.endsWith(PAGE_EXTENSION);
-  const fromStore = vault === null || judgesFromStore(vault);
+  const fromStore =
+    batch === null ? vault === null || judgesFromStore(vault) : batchFromStore(batch, vault);
   const id = extractId(target) ?? (fromStore ? preferenceIdOfPath(target) : undefined);
   if (id !== undefined) return preferenceIdIsPrivate(vault, id, fromStore);
   if (fromStore) {
@@ -251,7 +369,19 @@ export function rowNamesPrivatePage(
   row: unknown,
   opaque: ReadonlySet<string> = new Set(),
 ): boolean {
-  return rowPrivacyJudge(vault)(row, opaque);
+  if (judgingOff) return false;
+  if (batch === null) return rowPrivacyJudge(vault)(row, opaque);
+  let judge = batch.judges.get(vault);
+  if (judge === undefined) {
+    const fromStore = batchFromStore(batch, vault);
+    // A store-only machine judges a reference by the store's folds, which
+    // the operation itself may be writing to: each row is judged afresh.
+    // A legacy machine judges by the pages on disk, which a migration
+    // only reads: each distinct reference is judged once.
+    judge = makeRowJudge(vault, fromStore, batchScope(batch, vault, fromStore), !fromStore);
+    batch.judges.set(vault, judge);
+  }
+  return judge(row, opaque);
 }
 
 /** Judges rows by {@link rowNamesPrivatePage}; see {@link rowPrivacyJudge}. */
@@ -268,8 +398,21 @@ export type RowPrivacyJudge = (row: unknown, opaque?: ReadonlySet<string>) => bo
  * the verdicts it remembers are those of the moment the operation ran.
  */
 export function rowPrivacyJudge(vault: string | null): RowPrivacyJudge {
-  let fromStore: boolean | undefined;
-  let scope: ArtifactRefScope | undefined;
+  return makeRowJudge(vault, undefined, undefined, true);
+}
+
+/**
+ * {@link rowPrivacyJudge} with the store-only verdict and the folder scope
+ * given, and the per-reference memory on or off.
+ */
+function makeRowJudge(
+  vault: string | null,
+  knownFromStore: boolean | undefined,
+  knownScope: ArtifactRefScope | undefined,
+  remember: boolean,
+): RowPrivacyJudge {
+  let fromStore: boolean | undefined = knownFromStore;
+  let scope: ArtifactRefScope | undefined = knownScope;
   const verdicts = new Map<string, boolean>();
   const refIsPrivate = (ref: string): boolean => {
     let verdict = verdicts.get(ref);
@@ -277,7 +420,7 @@ export function rowPrivacyJudge(vault: string | null): RowPrivacyJudge {
       fromStore ??= vault === null || judgesFromStore(vault);
       if (vault !== null) scope ??= artifactRefScope(vault, fromStore);
       verdict = refsNamePrivatePage(vault, [ref], undefined, fromStore, scope);
-      verdicts.set(ref, verdict);
+      if (remember) verdicts.set(ref, verdict);
     }
     return verdict;
   };

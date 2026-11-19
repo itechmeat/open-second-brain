@@ -607,7 +607,12 @@ the next start will do about it, and the `migration.automatic` field of
 `o2b status --json` and doctor report the state: not needed, pending,
 running, waiting for another device, failed, done, or rolled back. All of
 these, and the session start line, restate the one decision the worker
-takes, so they never disagree with what the next start does.
+takes, so they never disagree with what the next start does. While a
+migration runs they also say how far its import is: how many legacy items
+it has imported so far of about how many its dry run planned (`progress`,
+with `journaled` and `planned`, under `--json`), read from a small file
+the run rewrites after every batch it writes. The import writes items in
+batches, so a vault of several hundred thousand items migrates in minutes.
 
 To keep a machine from migrating on its own, set
 `auto_store_migration: false` in its machine config (consent is per
@@ -665,7 +670,10 @@ and the command that clears it:
 6. Legacy items with no destination or that cannot be parsed: status and
    doctor report the refusal with `o2b brain migrate-store --dry-run`; fix
    the items, or run the migration by hand, which keeps unparseable items
-   in its backup archive.
+   in its backup archive. A sync tool's conflict copy of a legacy file and
+   its in-flight temp file are never such items (see "Sync conflict
+   copies" below); a conflict copy of a file no mapping covers is unknown
+   like that file.
 7. This machine's migration run state cannot be read: status reports a
    wait; fix the file's permissions or restore it.
 8. The vault binding cannot be read: status names `o2b init --vault`.
@@ -732,7 +740,63 @@ legacy tree (the **migration cohort**), where each surface would go (a
 store stream and partition, the device-local state, an explicit backup, or
 drop with the reason), every item it cannot read, and every legacy file no
 mapping covers. It exits 1 while anything is unmapped; move such a file out
-of `Brain/` (or report it) and run the dry run again.
+of `Brain/` (or report it) and run the dry run again. Its "Sync conflict
+copies" section says what the sync tool's leftovers in the legacy tree
+would become; they never stop the run. Nor do the files Open Second Brain itself keeps
+beside a legacy file: the search index's parked previous index (`.bak`,
+`.old`), its `.new` staging and a restore's staged index, each with its
+SQLite journals, go by the index's rule (rebuilt on this machine: never
+read, imported or archived), and a writer's temp file or lock goes with
+the file it belongs to. The search freshen claim (`freshen.claim`, which a
+start whose process died can leave behind) and its pending marker go with
+the freshen state: never carried over.
+
+#### Sync conflict copies
+
+A vault that a sync tool keeps in step between machines collects that
+tool's conflict copies (Syncthing
+`<name>.sync-conflict-<date>-<time>-<device>.<ext>`, the Dropbox and
+Nextcloud `<name> (... conflicted copy <date> ...).<ext>`) and its
+in-flight temp files (`.syncthing.<name>.tmp`, `~syncthing~<name>.tmp`,
+the Nextcloud `.<name>.~<hex>`). The migration treats them as versions of
+the file the copy is named after, never as unknown files:
+
+- A copy of a JSONL ledger or log shard: its rows are imported like the
+  original's. A row the original already holds is stored once; a row only
+  the copy holds is imported under the copy's own path and line, exactly
+  once while the copy file is unchanged: a resumed run, a later machine
+  with the same copy, the transition import and a rollback do not import
+  it again. A row a person later moves into the original, or a copy
+  rewritten with its rows at other lines, is a new row and is imported as
+  one, so the store can then hold that event twice.
+- A copy of a signal page, a preference page or a lane entry: a copy equal
+  to its original adds nothing. A copy that differs is another version of
+  the same record, not a second record: it is kept in the migration
+  backup, not imported, and named in the report.
+- A copy of a single document (the pinned context, the settings file):
+  the original is imported; a copy that differs is kept in the backup and
+  named, never merged.
+- A copy of device-local, derived or dropped state (the freshen state, a
+  lock, a cache, a log day page): it goes with its original's rule and is
+  not carried over.
+- A temp file holds no data of its own: it is ignored and counted. When it
+  becomes the real file before the run ends, the next pass imports that
+  file.
+
+The dry run and the migration report (text and `--json` `sync_copies`)
+list, per surface, the copy rows or files imported as records, those
+identical to their original, those kept and not imported (each with the
+file it is a version of), those dropped with their original, and the temp
+files ignored. The kept copies are in
+`<migration folder>/backup/sync-conflict-copies/`, listed in
+`backup/sync-conflict-copies.json`; after the switch doctor names them once
+as advice (`sync-conflict-copies-kept`). Look at them, copy what you want
+into the brain, and delete the list to end the advice. A copy that
+arrives after the switch is imported by the transition import, and the
+legacy tree's removal moves every copy and temp file to its archive with
+the tree. The migration cohort is built from the original files only: a
+device known only from a conflict copy's name is not a device the removal
+waits for.
 
 ### 2. Migrate the first machine
 
@@ -753,8 +817,10 @@ The migration:
 2. snapshots `Brain/` and backs up every surface nothing can rebuild
    (secrets, keys, attestations, checkpoints) into the device-local state,
    each verified by a test restore;
-3. imports every item through a journal, then re-scans until a pass
-   imports nothing, and verifies every item against the store;
+3. imports every item through a journal, in batches, then re-scans until a
+   pass imports nothing, and verifies every item against the store; a sync
+   tool's conflict copies go where their originals go (see "Sync conflict
+   copies"), and each differing version it keeps is named in the report;
 4. records `migration-done` and this machine's `device-switched`, and makes
    this machine the view writer if no machine is.
 
@@ -839,6 +905,14 @@ start. To import them right away:
 ```sh
 o2b brain migrate-store
 ```
+
+An import reads what changed since the last one, not the whole tree: a
+legacy log or ledger file whose size, modification time, change time and
+inode are all unchanged is not opened, and a file that only grew is read
+from where the last import stopped, once the lines read before check out
+unchanged. Any other change (a line edited in the middle, a file replaced
+by a shorter one) is read whole, as before. The migration leaves the
+first such record, so the first import after the switch is quick too.
 
 A switched machine never writes into the legacy tree. Doctor on every
 switched machine names the devices still on the legacy layout
@@ -1268,6 +1342,7 @@ that come from the store, the migration and the view:
 | `migration-available` | This machine still keeps its brain in the vault's `Brain/` tree, or it switched before this vault was configured and the vault's legacy tree was never imported. | Follow [Moving an existing install](#moving-an-existing-install); on a switched machine run `o2b brain migrate-store`, which imports the tree and binds the vault. |
 | `store-migration-failed` | The last automatic migration attempt on this machine failed; the finding gives the reason and when the next automatic attempt is due. | Fix the cause the reason names and wait for the next start, or run `o2b brain migrate-store` yourself. |
 | `legacy-devices-pending` | This machine switched, but the named devices still write the legacy tree. | Migrate each named machine, and retire the ones that are gone with `o2b store device retire <device-id>`. |
+| `sync-conflict-copies-kept` | The migration kept sync conflict copies that differ from their originals (another version of a record or a single document) in its backup and imported none of them. Advice: nothing waits on it. | Look at the copies in the folder the finding names, copy what you want into the brain, then delete the list file it names. |
 | `legacy-tree-reappeared` | A `Brain/` folder is back in the vault after the legacy tree was removed. | Stop the writer the finding names and move the folder out of the vault. |
 | `migration-done-twice` | Two devices each ran the first migration of this vault, before either completion record had synced, so items both imported are in the store twice. | Nothing is lost and both records stay. Migrate every other machine only after one completion record has synced. |
 | `view-writer-silent` | The view writer has published nothing for more than 3 days. | Run `o2b view writer --here` on the machine that should render the view, with `--force` if the old writer is unreachable. |

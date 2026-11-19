@@ -8,13 +8,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PERMISSIONS_DOCUMENT_SETTING } from "../../../src/core/brain/permissions/document.ts";
 import { brainConfigKnownKeys } from "../../../src/core/brain/policy/validate.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
-import { SETTING_SET_KIND, SETTING_UNSET_KIND } from "../../../src/core/store/constants.ts";
+import {
+  SETTING_SET_KIND,
+  SETTING_UNSET_KIND,
+  STORE_LINE_CAP_BYTES,
+} from "../../../src/core/store/constants.ts";
 import { foldSettings, settingValue } from "../../../src/core/store/fold-settings.ts";
 import {
   BRAIN_YAML_KEYS,
   importBrainSettings,
 } from "../../../src/core/store-migration/brain-settings.ts";
 import { heldRecords } from "../../../src/core/store-migration/journal.ts";
+import { MIGRATION_STEP, runMigration } from "../../../src/core/store-migration/migrate.ts";
+import { isDeviceSwitched } from "../../../src/core/store-migration/migration-records.ts";
+import { blobPath } from "../../../src/core/store/store-paths.ts";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { makeMigrationBench, type MigrationBench } from "./fixtures/migration-env.ts";
 
 const known = brainConfigKnownKeys();
@@ -60,7 +69,80 @@ beforeEach(() => {
 });
 afterEach(() => bench.cleanup());
 
+/** A settings record whose body is a blob that has not arrived: the read cannot see it. */
+function pendingSettingsRecord(b: MigrationBench): string {
+  const store = b.store();
+  const { record } = appendRecord(store, {
+    partition: "shared",
+    stream: "settings",
+    kind: SETTING_UNSET_KIND,
+    agent: "human",
+    body: {
+      authority: "human",
+      key: "brain.primary_agent",
+      note: "x".repeat(STORE_LINE_CAP_BYTES),
+    },
+  });
+  rmSync(blobPath(join(b.storeRoot, "shared"), record.sum), { force: true });
+  return record.sum;
+}
+
 describe("importBrainSettings", () => {
+  test("refuses before it appends anything while a settings record cannot be read", () => {
+    const store = bench.store();
+    const blob = pendingSettingsRecord(bench);
+    const before = heldRecords(store).length;
+    expect(() => importBrainSettings(bench.vault, store, "test")).toThrow(
+      new RegExp(`cannot be read in full.*${blob.slice(0, 12)}`),
+    );
+    expect(heldRecords(bench.store()).length).toBe(before);
+  });
+
+  test("the migration refuses the switch on it, as on any unreadable held shard", () => {
+    const b = bench;
+    expect(() =>
+      runMigration(b.vault, {
+        settleMs: 0,
+        hooks: {
+          // Sync delivers a settings record without its blob after the final read.
+          atStep: (step) => {
+            if (step === MIGRATION_STEP.verified) pendingSettingsRecord(b);
+          },
+        },
+      }),
+    ).toThrow(/cannot be read in full.*this machine was not switched/);
+    expect(isDeviceSwitched(bench.store(), bench.store().device)).toBe(false);
+  });
+
+  test("a setting unset that syncs in during the migration's last steps is not overwritten", () => {
+    const store = bench.store();
+    const result = runMigration(bench.vault, {
+      settleMs: 0,
+      hooks: {
+        atStep: (step) => {
+          if (step !== MIGRATION_STEP.verified) return;
+          // Another machine unsets a key after the final read of the
+          // store and before the settings import; sync delivers it.
+          appendRecord(store, {
+            partition: "shared",
+            stream: "settings",
+            kind: SETTING_UNSET_KIND,
+            agent: "human",
+            body: { authority: "human", key: "brain.primary_agent" },
+          });
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    const sets = heldRecords(bench.store()).filter(
+      (r) => r.kind === SETTING_SET_KIND && r.body["key"] === "brain.primary_agent",
+    );
+    expect(sets).toEqual([]);
+    expect(
+      settingValue(foldSettings(heldRecords(bench.store())), "brain.primary_agent"),
+    ).toBeNull();
+  });
+
   test("changed shared keys become human settings records once; device keys are reported", () => {
     const store = bench.store();
     const first = importBrainSettings(bench.vault, store, "test");

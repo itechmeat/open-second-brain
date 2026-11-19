@@ -25,6 +25,7 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 
+import { syncConflictOriginalName } from "../brain/ledger-shards.ts";
 import { toPosix } from "../path-safety.ts";
 import {
   VIEW_ABOUT_ME_PAGE,
@@ -116,8 +117,18 @@ const SHARED_ROOT_DIRS: ReadonlySet<string> = new Set([
   VIEW_SOURCES_DIR,
 ]);
 
-/** A sync tool's conflict-copy suffix after a page's stem, as `page-io.ts` recognises it. */
-const COPY_SUFFIX_RE = /(?:\.sync-conflict-[^/]*| \([^)/]*conflicted copy[^)/]*\))(\.md)$/i;
+/**
+ * `path` with a sync tool's conflict-copy marker removed from its last
+ * segment when that segment is a copy of a page (`brain/ledger-shards.ts`
+ * knows the names), else `path` itself.
+ */
+function withoutCopyMarker(path: string): string {
+  const parts = path.split("/");
+  const original = syncConflictOriginalName(parts.at(-1)!);
+  if (original === null || !original.toLowerCase().endsWith(".md")) return path;
+  parts[parts.length - 1] = original;
+  return parts.join("/");
+}
 
 /**
  * Whether `path`, under a top folder a view at the vault root shares with
@@ -131,7 +142,7 @@ function isSharedRootViewPath(path: string, container: boolean): boolean {
   if (parts.length === 1) return container;
   const name = parts.at(-1)!;
   if (name.startsWith(VIEW_TEMP_PREFIX)) return true;
-  if (isRetiringPageShape(path) || isRetiringPageShape(path.replace(COPY_SUFFIX_RE, "$1"))) {
+  if (isRetiringPageShape(path) || isRetiringPageShape(withoutCopyMarker(path))) {
     return true;
   }
   return (

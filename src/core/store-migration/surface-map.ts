@@ -12,7 +12,7 @@
  * (`row-records.ts`); see `destinations.ts` for what each destination means.
  */
 
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { CONTINUITY_GRAMMAR } from "../brain/continuity/store.ts";
 import { RECEIPT_GRAMMAR } from "../brain/decisions/receipts.ts";
@@ -27,6 +27,7 @@ import { ANY_SURFACE_GRAMMAR } from "../brain/metrics.ts";
 import { DECISIONS_GRAMMAR } from "../brain/permissions/ledger.ts";
 import { PREF_AUDIT_GRAMMAR } from "../brain/pref-audit.ts";
 import { AUDIT_WEEK_SHARD_GRAMMAR } from "../reliability/audit.ts";
+import { FRESHEN_CLAIM_FILE, FRESHEN_PENDING_FILE } from "../search/freshen.ts";
 import { STATE_SURFACE_ID, type StateSurfaceId } from "../state/surfaces.ts";
 import { LEDGER_ROW_KIND, LEDGER_STREAM, LOG_EVENT_KIND } from "../store/constants.ts";
 import { DUAL_WRITE_LEDGERS, type RowPartition } from "../store/dual-write-records.ts";
@@ -109,6 +110,24 @@ function sqliteFiles(_vault: string, primary: string): ReadonlyArray<Locator> {
   return SQLITE_SIBLINGS.map((suffix) => ({ shape: "tree", path: primary + suffix }));
 }
 
+/** The search index store file and every file its store layer keeps beside it. */
+function searchStoreFiles(_vault: string, primary: string): ReadonlyArray<Locator> {
+  return [{ shape: "tree", path: primary, family: true }];
+}
+
+/**
+ * The freshen child's state and the two files it keeps beside it, named by
+ * the module that writes them (`search/freshen.ts`): the claim a reader
+ * takes before a run and the pending marker of a write waiting for one.
+ */
+function freshenFiles(_vault: string, primary: string): ReadonlyArray<Locator> {
+  const dir = dirname(primary);
+  return [primary, join(dir, FRESHEN_CLAIM_FILE), join(dir, FRESHEN_PENDING_FILE)].map((path) => ({
+    shape: "tree",
+    path,
+  }));
+}
+
 /** One JSON value per file in the surface's directory. */
 function jsonFiles(_vault: string, primary: string): ReadonlyArray<Locator> {
   return [{ shape: "json-files", dir: primary }];
@@ -163,7 +182,7 @@ export const SURFACE_MAP: Readonly<Record<StateSurfaceId, SurfaceMapping>> = Obj
       deviceLocal,
       REBUILT + "the index moves to device-local state (design D5) and is re-read from the store",
     ),
-    locate: sqliteFiles,
+    locate: searchStoreFiles,
   }),
   [STATE_SURFACE_ID.searchWriterLock]: rebuildable(
     plain(drop, "a writer lock, recreated beside the device-local index by its next writer"),
@@ -226,9 +245,15 @@ export const SURFACE_MAP: Readonly<Record<StateSurfaceId, SurfaceMapping>> = Obj
   [STATE_SURFACE_ID.selfHealUpgradeLock]: rebuildable(
     plain(drop, "a worker lock, recreated by the start that claims it next"),
   ),
-  [STATE_SURFACE_ID.freshenState]: rebuildable(
-    plain(deviceLocal, MOVED + "this machine's freshen backoff"),
-  ),
+  [STATE_SURFACE_ID.freshenState]: rebuildable({
+    ...plain(
+      deviceLocal,
+      MOVED +
+        "this machine's freshen backoff, with the claim and the pending marker the freshen " +
+        "child keeps beside it (transient: a claim a dead start left is never carried over)",
+    ),
+    locate: freshenFiles,
+  }),
   [STATE_SURFACE_ID.watchdogAudit]: ledger(
     DUAL_WRITE_LEDGERS.reliabilityAudit,
     "private-when-held",

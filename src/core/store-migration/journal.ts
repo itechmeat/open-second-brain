@@ -31,7 +31,12 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import type { StorePartition } from "../store/constants.ts";
-import { DIGEST_STREAM, readPartition } from "../store/state-digest.ts";
+import {
+  DIGEST_STREAM,
+  forEachPartitionShard,
+  readPartition,
+  type PartitionShard,
+} from "../store/state-digest.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
@@ -233,8 +238,14 @@ export function readJournal(dir: string, scope: JournalScope): Journal {
 }
 
 export function appendJournal(dir: string, row: JournalRow): void {
+  appendJournalRows(dir, [row]);
+}
+
+/** Append several journal rows with one write, in order. */
+export function appendJournalRows(dir: string, rows: ReadonlyArray<JournalRow>): void {
+  if (rows.length === 0) return;
   mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, JOURNAL_FILE), `${JSON.stringify(row)}\n`);
+  appendFileSync(join(dir, JOURNAL_FILE), rows.map((row) => `${JSON.stringify(row)}\n`).join(""));
 }
 
 /**
@@ -244,27 +255,68 @@ export function appendJournal(dir: string, row: JournalRow): void {
  * imported of the same vault, and an item with a part missing is completed
  * rather than imported again.
  */
-export function journalFromStore(store: StoreHandle, scope: JournalScope): Journal {
-  const out: Journal = new Map();
-  for (const partition of store.partitions) {
-    const shards = readPartition(partitionDir(store.root, partition), { onUnreadable: () => {} });
-    for (const shard of shards) {
-      for (const record of shard.all) {
-        const mark = migratedMark(record);
-        if (mark === null) continue;
-        const vault = markVault(scope, mark.vault, record);
-        const at = scopedKey(scope, vault, mark.key);
-        const found = out.get(at)?.get(mark.sum);
-        const ids = found ? [...found.ids] : Array.from({ length: mark.parts }, () => "");
-        const sums = found ? [...found.sums] : Array.from({ length: mark.parts }, () => "");
-        if (ids[mark.part] !== undefined && ids[mark.part] !== "") continue; // first copy wins
-        ids[mark.part] = record.id;
-        sums[mark.part] = record.sum;
-        journalSetAt(out, at, { key: mark.key, sum: mark.sum, ids, sums, partition, vault });
-      }
-    }
+export function journalFromStore(
+  store: StoreHandle,
+  scope: JournalScope,
+  held?: ReadonlyMap<StorePartition, ReadonlyArray<StoreRecord>>,
+): Journal {
+  const folder = markFolder(scope);
+  if (held !== undefined) {
+    for (const [partition, records] of held)
+      for (const record of records) folder.fold(partition, record);
+  } else {
+    // Shard by shard: only the journal (ids and checksums per item key)
+    // is kept, never the store's records.
+    forEachHeldShard(store, (partition, shard) => {
+      for (const record of shard.all) folder.fold(partition, record);
+    });
   }
-  return out;
+  return folder.journal;
+}
+
+/** Folds records carrying a `migrated` mark into a journal, as {@link journalFromStore} reads them. */
+function markFolder(scope: JournalScope): {
+  readonly journal: Journal;
+  /** Fold one record; false when it carries no mark. */
+  fold(partition: StorePartition, record: StoreRecord): boolean;
+} {
+  const out: Journal = new Map();
+  return {
+    journal: out,
+    fold: (partition, record) => {
+      const mark = migratedMark(record);
+      if (mark === null) return false;
+      const vault = markVault(scope, mark.vault, record);
+      const at = scopedKey(scope, vault, mark.key);
+      const found = out.get(at)?.get(mark.sum);
+      const ids = found ? [...found.ids] : Array.from({ length: mark.parts }, () => "");
+      const sums = found ? [...found.sums] : Array.from({ length: mark.parts }, () => "");
+      if (ids[mark.part] !== undefined && ids[mark.part] !== "") return true; // first copy wins
+      ids[mark.part] = record.id;
+      sums[mark.part] = record.sum;
+      journalSetAt(out, at, { key: mark.key, sum: mark.sum, ids, sums, partition, vault });
+      return true;
+    },
+  };
+}
+
+/**
+ * {@link loadJournal} and the store's records that carry no `migrated`
+ * mark (the dual-written copies `dualWritePool` matches items against),
+ * in one pass over the store, shard by shard: the run keeps the journal
+ * and the unmarked records, never the whole store.
+ */
+export function loadJournalAndUnmarked(
+  dir: string,
+  store: StoreHandle,
+  scope: JournalScope,
+): { readonly journal: Journal; readonly unmarked: StoreRecord[] } {
+  const unmarked: StoreRecord[] = [];
+  const folder = markFolder(scope);
+  forEachHeldShard(store, (partition, shard) => {
+    for (const record of shard.all) if (!folder.fold(partition, record)) unmarked.push(record);
+  });
+  return { journal: withDiskRows(folder.journal, dir, scope), unmarked };
 }
 
 /**
@@ -272,8 +324,17 @@ export function journalFromStore(store: StoreHandle, scope: JournalScope): Journ
  * that name records without a mark (dual-written copies the migration
  * matched instead of importing again).
  */
-export function loadJournal(dir: string, store: StoreHandle, scope: JournalScope): Journal {
-  const journal = journalFromStore(store, scope);
+export function loadJournal(
+  dir: string,
+  store: StoreHandle,
+  scope: JournalScope,
+  held?: ReadonlyMap<StorePartition, ReadonlyArray<StoreRecord>>,
+): Journal {
+  return withDiskRows(journalFromStore(store, scope, held), dir, scope);
+}
+
+/** `journal` with the rows on disk that complete it (see {@link loadJournal}). */
+function withDiskRows(journal: Journal, dir: string, scope: JournalScope): Journal {
   for (const [at, versions] of readJournal(dir, scope)) {
     for (const row of versions.values()) {
       const known = journal.get(at)?.get(row.sum);
@@ -283,10 +344,53 @@ export function loadJournal(dir: string, store: StoreHandle, scope: JournalScope
   return journal;
 }
 
+/**
+ * Every record this machine holds, by partition, read once: a run that
+ * needs them twice (the journal and the dual-write pool) passes the same
+ * read to both.
+ */
+export function heldRecordsByPartition(
+  store: Pick<StoreHandle, "root" | "partitions">,
+): Map<StorePartition, StoreRecord[]> {
+  const out = new Map<StorePartition, StoreRecord[]>();
+  for (const partition of store.partitions) {
+    const records: StoreRecord[] = [];
+    for (const shard of readPartition(partitionDir(store.root, partition), {
+      onUnreadable: () => {},
+    })) {
+      // Appended one by one: spreading a shard of several hundred thousand
+      // records into one call overflows the call stack.
+      for (const record of shard.all) records.push(record);
+    }
+    out.set(partition, records);
+  }
+  return out;
+}
+
+/**
+ * What the end of a migration reads of the store, in one pass, shard by
+ * shard: every held record's checksum by id (what verification checks
+ * against) and the shards it could not all see (what the switch refuses
+ * on).
+ */
+export function readFinalStoreView(store: StoreHandle): {
+  readonly sums: Map<string, string>;
+  readonly unseen: UnseenShards;
+} {
+  const sums = new Map<string, string>();
+  const unseen = forEachHeldShard(store, (_partition, shard) => {
+    for (const record of shard.all) sums.set(record.id, record.sum);
+  });
+  return { sums, unseen };
+}
+
 /** Every record this machine holds, by id: what verification checks against. */
 export function storeRecordSums(store: StoreHandle): Map<string, string> {
   const out = new Map<string, string>();
-  for (const record of heldRecords(store)) out.set(record.id, record.sum);
+  // Shard by shard: the ids and checksums are kept, never the records.
+  forEachHeldShard(store, (_partition, shard) => {
+    for (const record of shard.all) out.set(record.id, record.sum);
+  });
   return out;
 }
 
@@ -307,44 +411,61 @@ export interface UnseenShards {
   readonly partial: ReadonlyArray<string>;
 }
 
+/**
+ * Every held shard, one at a time, with its partition, and the shards
+ * whose records this machine could not all see. No shard is kept: a
+ * caller that needs only part of each shard never holds the whole store.
+ */
+export function forEachHeldShard(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  onShard: (partition: StorePartition, shard: PartitionShard) => void,
+): UnseenShards {
+  const unreadable: string[] = [];
+  const partial: string[] = [];
+  for (const partition of store.partitions) {
+    forEachPartitionShard(
+      partitionDir(store.root, partition),
+      {
+        onUnreadable: ({ rel, incomplete }) => {
+          if (rel.split("/")[0] === DIGEST_STREAM) return;
+          (incomplete === true ? partial : unreadable).push(`${partition}/${rel}`);
+        },
+      },
+      (shard) => {
+        onShard(partition, shard);
+        // A pending blob is a gap here even when this machine quarantined its
+        // line: rollback, the late import, the preflight and the legacy
+        // removal refuse on it, and none of them waits for it.
+        const rel = `${partition}/${shard.rel}`;
+        if (
+          shard.pending.length > 0 &&
+          shard.rel.split("/")[0] !== DIGEST_STREAM &&
+          !partial.includes(rel)
+        ) {
+          partial.push(rel);
+        }
+      },
+    );
+  }
+  return { unreadable: unreadable.toSorted(), partial: partial.toSorted() };
+}
+
 /** Every held record, and the shards whose records it could not all see. */
 export function readHeldRecords(store: Pick<StoreHandle, "root" | "partitions">): {
   readonly records: StoreRecord[];
   readonly unseen: UnseenShards;
 } {
   const records: StoreRecord[] = [];
-  const unreadable: string[] = [];
-  const partial: string[] = [];
-  for (const partition of store.partitions) {
-    for (const shard of readPartition(partitionDir(store.root, partition), {
-      onUnreadable: ({ rel, incomplete }) => {
-        if (rel.split("/")[0] === DIGEST_STREAM) return;
-        (incomplete === true ? partial : unreadable).push(`${partition}/${rel}`);
-      },
-    })) {
-      records.push(...shard.all);
-      // A pending blob is a gap here even when this machine quarantined its
-      // line: rollback, the late import, the preflight and the legacy
-      // removal refuse on it, and none of them waits for it.
-      const rel = `${partition}/${shard.rel}`;
-      if (
-        shard.pending.length > 0 &&
-        shard.rel.split("/")[0] !== DIGEST_STREAM &&
-        !partial.includes(rel)
-      ) {
-        partial.push(rel);
-      }
-    }
-  }
-  return {
-    records,
-    unseen: { unreadable: unreadable.toSorted(), partial: partial.toSorted() },
-  };
+  const unseen = forEachHeldShard(store, (_partition, shard) => {
+    // Appended one by one: spreading a shard of several hundred thousand
+    // records into one call overflows the call stack.
+    for (const record of shard.all) records.push(record);
+  });
+  return { records, unseen };
 }
 
-/** {@link readHeldRecords}'s unseen shards alone. */
 export function unseenHeldShards(store: Pick<StoreHandle, "root" | "partitions">): UnseenShards {
-  return readHeldRecords(store).unseen;
+  return forEachHeldShard(store, () => {});
 }
 
 /** Whether any shard is unseen, and how a refusal names them (the first five). */

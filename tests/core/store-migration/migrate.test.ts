@@ -313,6 +313,41 @@ describe("runMigration", () => {
     expect(readMigrationGate()).toBeNull();
   });
 
+  test("a run killed between two shards of one batch, with a torn store line, resumes losing and doubling nothing", () => {
+    // What a clean run imports, for the count to compare with.
+    expect(runMigration(bench.vault, FAST).ok).toBe(true);
+    const expected = [...bench.byKey().keys()].toSorted();
+    bench.cleanup();
+    bench = makeMigrationBench();
+
+    // The child SIGKILLs itself once the batch's first shard is written:
+    // the other shards and every journal row of the batch are not.
+    const child = Bun.spawnSync(
+      [process.execPath, "run", KILL_CHILD, "migrate-shard", bench.vault, "1"],
+      { env: { ...process.env, ...bench.env }, stdout: "ignore", stderr: "pipe" },
+    );
+    expect(child.success).toBe(false);
+    expect(child.exitCode).not.toBe(3);
+    if (process.platform !== "win32") expect(child.signalCode).toBe("SIGKILL");
+    resetFreezeMarkerCache();
+    const partial = bench.byKey().size;
+    expect(partial).toBeGreaterThan(0);
+    expect(partial).toBeLessThan(expected.length);
+
+    // A write the kill tore: a record line cut off mid-object, no newline.
+    const shards = (readdirSync(bench.storeRoot, { recursive: true }) as string[])
+      .map((rel) => rel.split("\\").join("/"))
+      .filter((rel) => rel.includes(`/${BENCH_DEVICE}/`) && rel.endsWith(".jsonl"))
+      .toSorted();
+    expect(shards.length).toBeGreaterThan(0);
+    appendFileSync(join(bench.storeRoot, ...shards.at(-1)!.split("/")), '{"v":1,"id":"01');
+
+    const result = runMigration(bench.vault, { ...FAST, resume: true });
+    expect(result.ok).toBe(true);
+    expect([...bench.byKey().keys()].toSorted()).toEqual(expected);
+    for (const [key, records] of bench.byKey()) expect([key, records.length]).toEqual([key, 1]);
+  });
+
   test("a write attempted during the migration is refused and leaves no legacy file", () => {
     const inbox = join(bench.vault, "Brain", "inbox");
     const before = readdirSync(inbox).toSorted();

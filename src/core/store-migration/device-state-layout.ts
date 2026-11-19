@@ -9,6 +9,10 @@
  *    (`state/machine-state.ts`).
  *  - `backup/files/<vault-relative path>`: the verified copy of every
  *    surface the map sends to `backup` (`backup.ts`).
+ *  - `backup/sync-conflict-copies/<vault-relative path>`: the verified
+ *    copy of every sync conflict copy the migration kept and did not
+ *    import, with `backup/sync-conflict-copies.json` listing them
+ *    (`backup.ts` `archiveSyncCopies`).
  */
 
 /** The device-local copies of the machine state, under the migration folder. */
@@ -19,3 +23,9 @@ export const MIGRATION_BACKUP_DIR = "backup";
 
 /** The copied backup-class files, under {@link MIGRATION_BACKUP_DIR}. */
 export const MIGRATION_BACKUP_FILES_DIR = "files";
+
+/** The kept sync conflict copies, under {@link MIGRATION_BACKUP_DIR}. */
+export const MIGRATION_SYNC_COPIES_DIR = "sync-conflict-copies";
+
+/** The list of the kept sync conflict copies, under {@link MIGRATION_BACKUP_DIR}. */
+export const MIGRATION_SYNC_COPIES_LIST = "sync-conflict-copies.json";

@@ -587,3 +587,33 @@ export function isAtomicWriteTemp(name: string): boolean {
 }
 
 const ATOMIC_TEMP_RE = /^\..+\.\d+\.\d+\.[0-9a-f]*\.tmp$/;
+
+/** The writer token between a target's name and `.tmp`: a pid, or a freshen claim token. */
+const WRITER_TEMP_TOKEN_RE = /\.(?:\d+|fr-[0-9a-f-]+)$/;
+
+/**
+ * The names of the file a temporary file of one of this product's
+ * writers is renamed onto, or none when `name` is no such temp file. The
+ * one place that knows those names:
+ *
+ *  - an atomic write of this module, `.<target>.<pid>.<ms>.<hex>.tmp`;
+ *  - a writer that stages beside its target, `<target>.tmp` (the
+ *    secret stores, the maintenance journal compaction),
+ *    `<target>.<pid>.tmp` (a lane page's archive copy) and
+ *    `<target>.fr-<uuid>.tmp` (the search freshen claim).
+ *
+ * Each such file is transient and holds no data of its own: the file it
+ * becomes is read once it is there. A caller treats it as its target
+ * would be treated only when something claims that target, so an unknown
+ * `.tmp` file stays unknown.
+ */
+export function writerTempOriginals(name: string): string[] {
+  if (ATOMIC_TEMP_RE.test(name)) {
+    return [name.slice(1).replace(/\.\d+\.\d+\.[0-9a-f]*\.tmp$/, "")];
+  }
+  if (!name.endsWith(".tmp") || name.length <= ".tmp".length) return [];
+  const target = name.slice(0, -".tmp".length);
+  const out = [target];
+  if (WRITER_TEMP_TOKEN_RE.test(target)) out.push(target.replace(WRITER_TEMP_TOKEN_RE, ""));
+  return out.filter((n) => n !== "");
+}

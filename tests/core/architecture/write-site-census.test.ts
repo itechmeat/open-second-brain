@@ -375,7 +375,8 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "the migration backup copies the snapshot archive and every backup-class surface OUT of the " +
       "vault into the device-local migration folder, writes its manifest and the unparseable-item " +
       "archive there, and removes the scratch folder of its test restore; it reads the vault and " +
-      "never writes into it.",
+      "never writes into it. The list of the sync conflict copies it keeps goes to the same " +
+      "folder through the shared atomic writer.",
   },
   "src/core/store-migration/local-state.ts": {
     categories: [C.archiveTransfer, C.machineArtifact],
@@ -1658,8 +1659,12 @@ const DIRECT_WRITE_ROWS = 82;
  * state and its one-time notice with the shared atomic writer.
  * 116 -> 115: those files left the vault for the device-local folder of
  * all stores.
+ * 115 -> 116: the migration backup (`src/core/store-migration/backup.ts`)
+ * writes the list of the sync conflict copies it keeps
+ * (`backup/sync-conflict-copies.json`, device-local migration folder) with
+ * the shared atomic writer (change migration-sync-conflict-copies).
  */
-const SHARED_HELPER_ROWS = 115;
+const SHARED_HELPER_ROWS = 116;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1930,8 +1935,10 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * its one-time notice, machine state and no note.
  * 112 -> 111: those files left the vault for the device-local folder of
  * all stores.
+ * 111 -> 112: the migration backup's list of the sync conflict copies it
+ * keeps, machine state in the device-local migration folder and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 111;
+const UNSTAMPED_SHARED_ROWS = 112;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
