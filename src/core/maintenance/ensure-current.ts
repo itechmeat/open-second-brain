@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
 
 import { defaultConfigPath } from "../config.ts";
-import { o2bCommand } from "./o2b-command.ts";
+import { o2bCommand, spawnSelfDetached } from "./o2b-command.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { healIndex, inspectIndex } from "../search/self-heal.ts";
@@ -51,9 +51,16 @@ import {
   AUTO_MIGRATION_SELF_CLAIM,
   autoMigrationClaimUndecided,
   AUTO_MIGRATION_LOCK_JUDGE,
+  autoMigrationWorkerLogPath,
   claimAutoMigrationLock,
+  claimMutexBudgetMs,
   handAutoMigrationLock,
+  type LostAutoMigrationWorker,
+  recordAutoMigrationSpawnFailure,
+  recordLostAutoMigrationWorker,
   releaseAutoMigrationLock,
+  settleExitedAutoMigrationWorker,
+  underOwnAutoMigrationClaim,
 } from "../store-migration/auto-state.ts";
 import type { GateNone } from "../store-migration/gate-decision.ts";
 import { gatherGate } from "../store-migration/gate-state.ts";
@@ -102,6 +109,12 @@ export const AUTO_MIGRATION_SPAWN = Object.freeze({
   skippedBackoff: "skipped_backoff",
   /** Another worker holds this vault's lock; nothing was started. */
   skippedRunning: "skipped_running",
+  /**
+   * The worker an earlier start spawned exited before it confirmed its
+   * claim (it could not run): this start recorded that as a failed
+   * attempt, which starts its cooldown, and started nothing.
+   */
+  workerLost: "worker_lost",
   /**
    * A live migration of ANOTHER vault holds this machine's gate: no
    * migration of this vault starts while it runs, and nothing of this
@@ -254,24 +267,17 @@ function startSelfHealUpgrade(
   const token = claimSelfHealUpgradeLock(vault, now);
   if (token === null) return SELF_HEAL_UPGRADE_SPAWN.skippedRunning;
   try {
-    const proc = Bun.spawn(
+    // The live environment (`spawnSelfDetached`); the config path
+    // travels the way every brain verb reads it.
+    spawnSelfDetached(
       [...o2bCommand(), "brain", "upgrade", "--vault", vault, SELF_HEAL_FLAG, token],
       {
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-        windowsHide: true,
-        detached: process.platform === "win32",
-        // The live environment, for the reason given in
-        // `startSelfHealReindex`; the config path travels the way every
-        // brain verb reads it.
         env: {
           ...process.env,
           ...(configPath !== undefined ? { OPEN_SECOND_BRAIN_CONFIG: configPath } : {}),
         },
       },
     );
-    proc.unref();
   } catch (e) {
     // Nothing was started, so nothing else will release the claim.
     releaseSelfHealUpgradeLock(vault, token);
@@ -404,7 +410,13 @@ function spawnAutoMigrationWorker(
   now: Date,
 ): AutoMigrationSpawnDecision {
   // Judged without an identity query: a start never waits on a subprocess.
-  const token = claimAutoMigrationLock(vault, now, { judge: AUTO_MIGRATION_LOCK_JUDGE.cheap });
+  let lost: LostAutoMigrationWorker | null = null;
+  const token = claimAutoMigrationLock(vault, now, {
+    judge: AUTO_MIGRATION_LOCK_JUDGE.cheap,
+    onLostWorker: (worker) => {
+      lost = worker;
+    },
+  });
   if (token === null) {
     // A live pid holds the claim, older than a running worker is trusted
     // for: hung, or a later process that reuses the pid. Only an identity
@@ -415,16 +427,65 @@ function spawnAutoMigrationWorker(
     spawnWorker(vault, configPath, AUTO_MIGRATION_SELF_CLAIM);
     return AUTO_MIGRATION_SPAWN.spawned;
   }
+  const lostWorker: LostAutoMigrationWorker | null = lost;
+  if (lostWorker !== null) {
+    // The worker an earlier start handed this claim to never confirmed it:
+    // it could not run. Recorded as a failed attempt under this claim (its
+    // cooldown holds the next starts off), and nothing is started now.
+    try {
+      underOwnAutoMigrationClaim(
+        vault,
+        token,
+        () => recordLostAutoMigrationWorker(vault, lostWorker, now),
+        claimMutexBudgetMs(AUTO_MIGRATION_LOCK_JUDGE.cheap),
+      );
+    } finally {
+      releaseAutoMigrationLock(vault, token);
+    }
+    return AUTO_MIGRATION_SPAWN.workerLost;
+  }
   startOnClaim({
-    start: () => spawnWorker(vault, configPath, token).pid,
+    start: () => {
+      const proc = spawnWorker(vault, configPath, token);
+      watchWorker(vault, token, proc);
+      return proc.pid;
+    },
     // The claim now names the worker, so it stays live after this start's
     // process ends and goes stale the moment the worker is gone. Its start
     // identity is the worker's to stamp: reading it here could cost an
     // external query (Windows) on the start's path.
     handOver: (pid) => void handAutoMigrationLock(vault, token, pid, null),
     release: () => releaseAutoMigrationLock(vault, token),
+    failed: (e) =>
+      underOwnAutoMigrationClaim(
+        vault,
+        token,
+        () => recordAutoMigrationSpawnFailure(vault, message(e), now),
+        claimMutexBudgetMs(AUTO_MIGRATION_LOCK_JUDGE.cheap),
+      ),
   });
   return AUTO_MIGRATION_SPAWN.spawned;
+}
+
+/**
+ * While this process lives, watch the worker it spawned: when it exits
+ * before it confirmed its claim, its failure is recorded at once (with its
+ * exit and its error output) instead of at the next start. The watch never
+ * keeps this process alive and never waits for the claim's mutex; a start
+ * that ends first leaves the record to the next start.
+ */
+function watchWorker(vault: string, token: string, proc: ReturnType<typeof Bun.spawn>): void {
+  const pid = proc.pid;
+  void proc.exited.then(
+    (code) => {
+      const exit =
+        proc.signalCode !== null && proc.signalCode !== undefined
+          ? `signal ${proc.signalCode}`
+          : `exit code ${code}`;
+      settleExitedAutoMigrationWorker(vault, token, pid, exit);
+    },
+    () => {},
+  );
 }
 
 /**
@@ -440,11 +501,18 @@ export function startOnClaim(steps: {
   readonly start: () => number;
   readonly handOver: (pid: number) => void;
   readonly release: () => void;
+  /** Records why no worker could be started, under the claim, before it is released. */
+  readonly failed?: (e: unknown) => void;
 }): void {
   let pid: number;
   try {
     pid = steps.start();
   } catch (e) {
+    try {
+      steps.failed?.(e);
+    } catch {
+      // The record is best effort; the error still reaches the caller.
+    }
     // Nothing was started, so nothing else will release the claim.
     steps.release();
     throw e;
@@ -462,25 +530,19 @@ function spawnWorker(
   configPath: string | undefined,
   token: string,
 ): ReturnType<typeof Bun.spawn> {
-  const proc = Bun.spawn(
+  // The live environment (`spawnSelfDetached`); the config path travels
+  // the way every brain verb reads it. The worker's error output goes to a
+  // small device-local log (truncated at every spawn) that a failure names.
+  return spawnSelfDetached(
     [...o2bCommand(), "brain", "migrate-store", "--vault", vault, AUTO_MIGRATION_FLAG, token],
     {
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
-      windowsHide: true,
-      detached: process.platform === "win32",
-      // The live environment, for the reason given in
-      // `startSelfHealReindex`; the config path travels the way every
-      // brain verb reads it.
       env: {
         ...process.env,
         ...(configPath !== undefined ? { OPEN_SECOND_BRAIN_CONFIG: configPath } : {}),
       },
+      stderrLog: autoMigrationWorkerLogPath(vault),
     },
   );
-  proc.unref();
-  return proc;
 }
 
 /**
@@ -554,40 +616,27 @@ function startSelfHealReindex(
   // Minted BEFORE the spawn: it is what the child is told to write on its
   // own terminal row, so the pair exists whichever process writes first.
   const runId = mintSelfHealRunId();
-  const proc = Bun.spawn(
-    [
-      ...o2bCommand(),
-      "search",
-      "reindex",
-      "--vault",
-      vault,
-      "--config",
-      configPath,
-      SELF_HEAL_FLAG,
-      runId,
-    ],
-    {
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
-      // No console window flashing up on Windows for a background rebuild.
-      windowsHide: true,
-      // On Windows a child that is not detached is ended together with its
-      // parent, so a rebuild started by a short-lived hook process died the
-      // moment the hook exited and never recorded an outcome. POSIX already
-      // lets an `unref`ed child outlive its parent, and its process group is
-      // left as it was.
-      detached: process.platform === "win32",
-      // Bun hands a child spawned without `env` the environment this
-      // process STARTED with, not the live `process.env`. A config the
-      // process selected after start (`--config`, an embedding host, the
-      // test preload) would then be invisible to the rebuild, which would
-      // resolve the default config instead - another vault, and on a first
-      // run a device id minted into a config file nobody asked for.
-      env: { ...process.env },
-    },
-  );
-  proc.unref();
+  // Detached on every platform, with the live environment
+  // (`spawnSelfDetached`): on Windows a child that is not detached is
+  // ended together with its parent, so a rebuild started by a short-lived
+  // hook process died the moment the hook exited and never recorded an
+  // outcome; and Bun hands a child spawned without `env` the environment
+  // this process STARTED with, so a config the process selected after
+  // start (`--config`, an embedding host, the test preload) would be
+  // invisible to the rebuild, which would resolve the default config
+  // instead - another vault, and on a first run a device id minted into a
+  // config file nobody asked for.
+  spawnSelfDetached([
+    ...o2bCommand(),
+    "search",
+    "reindex",
+    "--vault",
+    vault,
+    "--config",
+    configPath,
+    SELF_HEAL_FLAG,
+    runId,
+  ]);
   recordSelfHealSpawn(vault, SELF_HEAL_SPAWN.spawned, runId);
   return SELF_HEAL_SPAWN.spawned;
 }

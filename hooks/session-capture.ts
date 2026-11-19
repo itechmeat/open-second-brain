@@ -25,7 +25,6 @@
  * captures every event inline (the pre-1.58.1 behaviour).
  */
 
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -40,6 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resolveAgentName } from "../src/core/config.ts";
+import { selfCommand, spawnSelfDetached } from "../src/core/maintenance/o2b-command.ts";
 import {
   captureSessionLifecycleEvent,
   lifecycleEventNeedsDedup,
@@ -94,15 +94,10 @@ function handOff(payload: unknown): boolean {
   try {
     spool = join(tmpdir(), `o2b-capture-${process.pid}-${randomBytes(6).toString("hex")}.json`);
     writeFileSync(spool, JSON.stringify(payload), { mode: 0o600 });
-    const child = spawn(process.execPath, ["run", import.meta.path, DEFERRED_FLAG, spool], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-      env: process.env,
-    });
-    child.on("error", () => {});
-    child.unref();
-    return child.pid !== undefined;
+    // This hook's own file, under the runtime that runs it
+    // (`spawnSelfDetached`): detached, streams ignored, the live env.
+    spawnSelfDetached([...selfCommand(import.meta.path), DEFERRED_FLAG, spool]);
+    return true;
   } catch {
     if (spool !== undefined) {
       try {

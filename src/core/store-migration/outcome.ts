@@ -43,6 +43,8 @@ import { removeLegacyTree, type RemovalResult } from "./removal.ts";
 export { MigrationSwitchedError } from "./migrate.ts";
 import { rollbackMigration, type RollbackHooks, type RollbackResult } from "./rollback.ts";
 import { importLateLegacyWrites, type TransitionResult } from "./transition.ts";
+import { cohortStatus, type DeviceEvidenceDate } from "./cohort-status.ts";
+import { legacyDeviceEvidence } from "./device-evidence.ts";
 
 /**
  * What the transition did with a vault configured after this machine
@@ -60,6 +62,18 @@ export interface TransitionSettings {
   readonly permissions_conflict: boolean;
   /** Whether the vault is the one bound to the store after this run. */
   readonly bound: boolean;
+  /**
+   * The cohort as `cohort-status.ts` judges it, the one judgement the
+   * doctor, the status block and the removal report: `legacy_devices`
+   * holds only the PENDING devices (the transition's own list minus the
+   * devices retired by silence), with their last evidence here, beside
+   * the devices that switched and those retired by silence.
+   */
+  readonly pending_evidence: ReadonlyArray<DeviceEvidenceDate>;
+  readonly switched: ReadonlyArray<string>;
+  readonly retired_by_silence: ReadonlyArray<DeviceEvidenceDate>;
+  readonly silence_threshold_days: number;
+  readonly as_of: string | null;
   /**
    * Held store shards whose records this machine could not all see
    * (`<partition>/<rel>`): a record of the vault's items may be in one,
@@ -156,11 +170,24 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
     // is left alone: this command does not open its gate, and only its
     // own command finishes it.
     if (!rollbackMayHoldGate()) clearRollbackRecord(migrationDir(store));
+    // The devices still on the legacy layout, judged as every other surface
+    // judges them: a device retired by silence is not pending.
+    const cohort = cohortStatus(store, {
+      legacy: result.legacy_devices,
+      legacyEvidence: legacyDeviceEvidence(vault),
+      now: new Date(),
+    });
     return {
       mode: "transition",
       ok: complete && !permissionsConflict,
       device: store.device,
       ...result,
+      legacy_devices: cohort.pending.map((d) => d.device),
+      pending_evidence: cohort.pending,
+      switched: cohort.switched,
+      retired_by_silence: cohort.retired_by_silence,
+      silence_threshold_days: cohort.threshold_days,
+      as_of: cohort.as_of,
       settings,
       device_config: deviceConfig,
       permissions_conflict: permissionsConflict,

@@ -91,7 +91,12 @@ function dayOf(iso: string | null): string {
 }
 
 /** The cohort devices that switched and, apart from them, those retired by silence. */
-function cohortLines(result: SilenceReport): string[] {
+export function cohortLines(
+  result: Pick<
+    SilenceReport,
+    "switched" | "retired_by_silence" | "silence_threshold_days" | "as_of"
+  >,
+): string[] {
   const lines: string[] = [];
   if (result.switched.length > 0) lines.push(`switched: ${result.switched.join(", ")}`);
   if (result.retired_by_silence.length > 0) {

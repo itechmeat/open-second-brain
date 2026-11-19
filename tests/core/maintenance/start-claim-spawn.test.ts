@@ -9,7 +9,7 @@
  *     made, and the start claims nothing.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { startOnClaim } from "../../../src/core/maintenance/ensure-current.ts";
@@ -17,8 +17,14 @@ import { acquireDirLock } from "../../../src/core/store/local-lock.ts";
 import {
   AUTO_MIGRATION_LOCK_JUDGE,
   autoMigrationLockPath,
+  autoMigrationWorkerLogPath,
   claimAutoMigrationLock,
   claimMutexBudgetMs,
+  handAutoMigrationLock,
+  readAutoMigrationFailure,
+  recordAutoMigrationSpawnFailure,
+  releaseAutoMigrationLock,
+  settleExitedAutoMigrationWorker,
 } from "../../../src/core/store-migration/auto-state.ts";
 import {
   makeMigrationBench,
@@ -39,7 +45,7 @@ describe("a start's worker on its claim", () => {
     expect(calls).toEqual(["start", "hand 4242"]);
   });
 
-  test("a worker that could not be started releases the claim and reports why", () => {
+  test("a worker that could not be started is recorded, releases the claim and reports why", () => {
     const calls: string[] = [];
     expect(() =>
       startOnClaim({
@@ -49,9 +55,72 @@ describe("a start's worker on its claim", () => {
         },
         handOver: () => calls.push("hand"),
         release: () => calls.push("release"),
+        failed: (e) => calls.push(`failed ${(e as Error).message}`),
       }),
     ).toThrow("spawn failed");
-    expect(calls).toEqual(["start", "release"]);
+    expect(calls).toEqual(["start", "failed spawn failed", "release"]);
+  });
+});
+
+describe("the start that spawned a worker sees it exit", () => {
+  let bench: MigrationBench;
+  beforeEach(() => {
+    bench = makeMigrationBench("osb-start-exit-");
+  });
+  afterEach(() => bench.cleanup());
+
+  /** A start's claim, handed to worker `pid`. */
+  function handed(pid: number): string {
+    const token = claimAutoMigrationLock(bench.vault, new Date(), {
+      judge: AUTO_MIGRATION_LOCK_JUDGE.cheap,
+    });
+    expect(token).not.toBeNull();
+    expect(handAutoMigrationLock(bench.vault, token!, pid, null)).toBe(true);
+    return token!;
+  }
+
+  test("a worker that never confirmed its claim: recorded with its exit, the claim removed", () => {
+    const token = handed(4242);
+    writeFileSync(autoMigrationWorkerLogPath(bench.vault), "boom\n");
+
+    expect(settleExitedAutoMigrationWorker(bench.vault, token, 4242, "exit code 127")).toBe(true);
+
+    const failure = readAutoMigrationFailure(bench.vault);
+    expect(failure!.error).toContain("exited before it started (exit code 127)");
+    expect(failure!.error).toContain("its error output: boom");
+    expect(existsSync(autoMigrationLockPath(bench.vault))).toBe(false);
+  });
+
+  test("a worker that confirmed its claim: nothing is recorded, the claim is its own", () => {
+    const token = handed(4242);
+    expect(handAutoMigrationLock(bench.vault, token, 4242, null, true)).toBe(true);
+
+    expect(settleExitedAutoMigrationWorker(bench.vault, token, 4242, "exit code 0")).toBe(false);
+
+    expect(readAutoMigrationFailure(bench.vault)).toBeNull();
+    expect(existsSync(autoMigrationLockPath(bench.vault))).toBe(true);
+  });
+
+  test("a parent's late hand-over keeps the worker's confirmation", () => {
+    const token = handed(4242);
+    expect(handAutoMigrationLock(bench.vault, token, 4242, null, true)).toBe(true);
+    expect(handAutoMigrationLock(bench.vault, token, 4242, null)).toBe(true);
+
+    expect(settleExitedAutoMigrationWorker(bench.vault, token, 4242, "exit code 0")).toBe(false);
+  });
+
+  test("a spawn failure is recorded with its error under the start's claim", () => {
+    const token = claimAutoMigrationLock(bench.vault, new Date(), {
+      judge: AUTO_MIGRATION_LOCK_JUDGE.cheap,
+    });
+    recordAutoMigrationSpawnFailure(bench.vault, "ENOENT: no such file", new Date());
+    releaseAutoMigrationLock(bench.vault, token!);
+
+    const failure = readAutoMigrationFailure(bench.vault);
+    expect(failure!.error).toBe(
+      "the automatic migration worker could not be started: ENOENT: no such file",
+    );
+    expect(failure!.consecutiveFailures).toBe(1);
   });
 });
 

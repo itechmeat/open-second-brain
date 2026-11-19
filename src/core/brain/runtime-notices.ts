@@ -38,7 +38,9 @@ import { brainConfigUnreadableReport } from "./policy.ts";
 import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 import {
   AUTO_MIGRATION_LOCK_JUDGE,
+  AUTO_MIGRATION_MANUAL_COMMAND,
   readAutoMigrationFailure,
+  readLostAutoMigrationWorker,
   readAutoMigrationNotice,
   readAutoMigrationRunning,
   readAutoMigrationWaiting,
@@ -302,6 +304,22 @@ function storeMigrationNotice(
       stoppedGate: stoppedGateOf(g),
     });
     if (message !== null) return notice("store_migration_failed", "warning", message);
+  }
+  if (failure === null) {
+    // A worker an earlier start spawned that exited before it started:
+    // the next start records it; until then it is named here too.
+    const lost = readLostAutoMigrationWorker(vault, new Date(), {
+      judge: AUTO_MIGRATION_LOCK_JUDGE.cheap,
+    });
+    if (lost !== null) {
+      return notice(
+        "store_migration_failed",
+        "warning",
+        `The automatic store migration did not run: its worker (process ${lost.pid}) exited ` +
+          `before it started; o2b doctor names its error output and log. Run ` +
+          `${AUTO_MIGRATION_MANUAL_COMMAND} to run it yourself.`,
+      );
+    }
   }
   const waiting = readAutoMigrationWaiting(vault);
   if (waiting !== null) {

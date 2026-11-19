@@ -106,7 +106,11 @@ Doctor SHALL report when a legacy `Brain/` machine directory reappears in the va
 - **THEN** doctor reports the directory, names C as retired by silence and says to update that machine and remove the tree again afterwards
 
 ### Requirement: A silent device counts as retired
-A cohort device that has not switched SHALL count as retired by silence when its last evidence of life is older than the shared setting `migration.silent_device_days` (default 30; 0 turns the rule off). Its last evidence SHALL be the newest of its legacy shard name dates, their row times and the clocks of its store records, or else the earliest cohort record naming it; file modification times SHALL NOT be evidence.
+A cohort device that has not switched SHALL count as retired by silence when its last evidence of life is older than the shared setting `migration.silent_device_days` (default 30; 0 turns the rule off). Its last evidence SHALL be the newest of its legacy shard name dates, their row times and the clocks of its store records, or else the earliest cohort record naming it; file modification times SHALL NOT be evidence. For every shard naming scheme the newest row time SHALL date the shard when it is later than the name's period (a day, a month, an ISO week), which SHALL only be a floor; a row time is any top-level ISO 8601 time field of the row (`ts`, `timestamp`, `time`, `at`, any `*_at` or `*At` field) except one that names a time still to come (an expiry, a retry, a schedule).
+
+#### Scenario: A monthly shard whose rows are later than the month
+- **WHEN** a device's only shard is a continuity shard named for the month and its newest row carries `createdAt` four days into that month
+- **THEN** its last evidence is that row time, not the month's first day, wherever the status, the doctor and the dry run show it
 
 #### Scenario: An id with no dated trace
 - **WHEN** the cohort record names device D and no legacy shard or store record of D carries a date
@@ -120,7 +124,11 @@ The age of a device's last evidence SHALL be measured against the newest evidenc
 - **THEN** that device counts as alive now and no other device is retired because of it
 
 ### Requirement: The state of each cohort device is shown and derived
-The retirement by silence SHALL be derived on every read and never recorded: a device that writes again SHALL be pending again at once when what it writes carries a date within the threshold of the reference (a date later than the reference counts as the reference), and a write stamped older than that SHALL leave it retired by silence. Doctor and the store status SHALL list each cohort device as switched, pending with its last evidence date, or retired by silence with the date and the threshold, and once none is pending SHALL say, as advice and not as a warning, that the legacy tree can leave the vault and name the removal command.
+The retirement by silence SHALL be derived on every read and never recorded: a device that writes again SHALL be pending again at once when what it writes carries a date within the threshold of the reference (a date later than the reference counts as the reference), and a write stamped older than that SHALL leave it retired by silence. Doctor and the store status SHALL list each cohort device as switched, pending with its last evidence date, or retired by silence with the date and the threshold, and once none is pending SHALL say, as advice and not as a warning, that the legacy tree can leave the vault and name the removal command. Every surface that names the devices still on the legacy layout (`o2b brain migrate-store` on a switched machine, text and `--json`, the removal report, doctor, the store status) SHALL take them from that one judgement: a device retired by silence SHALL NEVER be named as still on the legacy layout.
+
+#### Scenario: The transition report on a switched machine
+- **WHEN** `o2b brain migrate-store` runs on a switched machine whose cohort holds a pending device and devices retired by silence
+- **THEN** its line of devices still on the legacy layout and its `legacy_devices` name the pending device only, with its last evidence date, and the devices retired by silence are named apart, as the doctor and the status name them
 
 #### Scenario: A stale id stops holding the tree
 - **WHEN** device C last wrote 40 days before the newest evidence of the store and the threshold is 30
@@ -153,7 +161,15 @@ The user SHALL be able to roll a machine back to the legacy layout until the leg
 - **THEN** the topics stay in the store, and the rollback report lists them
 
 ### Requirement: The automatic migration runs in its own process
-The automatic migration SHALL NOT run inside the session start hook or the MCP server process. Detection at a start SHALL be a cheap read when nothing is to do; the migration itself SHALL run in a detached worker process that one per-vault, per-machine lock admits, and a slow or hung worker SHALL NOT delay the start.
+The automatic migration SHALL NOT run inside the session start hook or the MCP server process. Detection at a start SHALL be a cheap read when nothing is to do; the migration itself SHALL run in a detached worker process that one per-vault, per-machine lock admits, and a slow or hung worker SHALL NOT delay the start. The worker SHALL run under the runtime that runs the start, named by its absolute path, never one looked up on PATH, and SHALL be detached on every platform so it outlives the start's process and its terminal. A worker that cannot be started, or that exits before it confirms the claim it was handed, SHALL be recorded as a failed attempt (with the spawn error, or with its exit and the tail of its error output and the device-local log that holds it) under the retry and cooldown rules, and status, doctor and the session start notice SHALL say so with the manual command; such a worker SHALL NEVER leave a silent "pending".
+
+#### Scenario: A start with no Bun on PATH
+- **WHEN** a session starts under an absolute runtime path while PATH holds no Bun (an ssh session, an agent a macOS GUI started)
+- **THEN** the worker starts under that runtime and runs its attempt to its outcome
+
+#### Scenario: A worker that exits before it starts
+- **WHEN** the worker a start spawned exits before it confirms its claim
+- **THEN** the start that spawned it, when it still runs, or else the next start records a failed attempt naming the worker's process, its exit when seen, its error output and the log; that start starts nothing until the cooldown has run out, and status and doctor name the failure, also before any start recorded it
 
 #### Scenario: Two starts at once
 - **WHEN** two agents start at once on one machine while a migration is available

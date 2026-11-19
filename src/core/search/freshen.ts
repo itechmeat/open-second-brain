@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 
 import { appendMetric } from "../brain/metrics.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { o2bCommand } from "../maintenance/o2b-command.ts";
+import { detachedSpawnOptions, o2bCommand, spawnSelfDetached } from "../maintenance/o2b-command.ts";
 import { isWriterLockHeld } from "./store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
@@ -530,34 +530,20 @@ export function freshenCommand(
 }
 
 /**
- * The options the freshen child is spawned with. Detached on every
- * platform: a non-detached child dies with its parent on Windows, and on
- * POSIX it stays in the reader's process group, so a short-lived hook
- * whose group is signalled on exit would take the run down with it.
+ * The options the freshen child is spawned with: those of every
+ * background child of this checkout (`detachedSpawnOptions`), detached on
+ * every platform so a short-lived hook's exit never takes the run down
+ * with it, with a copy of `env` (a config chosen after start must reach
+ * the child).
  */
-export function freshenSpawnOptions(env: NodeJS.ProcessEnv): {
-  readonly stdin: "ignore";
-  readonly stdout: "ignore";
-  readonly stderr: "ignore";
-  readonly windowsHide: true;
-  readonly detached: true;
-  readonly env: Record<string, string | undefined>;
-} {
-  return {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-    windowsHide: true,
-    detached: true,
-    // Bun gives a child spawned without `env` the environment this process
-    // STARTED with; a config chosen after start must reach the child.
-    env: { ...env },
-  };
+export function freshenSpawnOptions(
+  env: NodeJS.ProcessEnv,
+): ReturnType<typeof detachedSpawnOptions> {
+  return detachedSpawnOptions(env);
 }
 
 function spawnDetached(argv: string[]): void {
-  const proc = Bun.spawn(argv, freshenSpawnOptions(process.env));
-  proc.unref();
+  spawnSelfDetached(argv);
 }
 
 export interface MaybeFreshenOptions {

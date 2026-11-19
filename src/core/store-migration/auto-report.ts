@@ -33,7 +33,10 @@ import {
   readAutoMigrationFailure,
   readAutoMigrationRunning,
   describeAutoMigrationRunning,
+  describeLostAutoMigrationWorker,
   readAutoMigrationWaiting,
+  readLostAutoMigrationWorker,
+  reportableText,
   type AutoMigrationWaiting,
   AUTO_MIGRATION_LOCK_JUDGE,
   AUTO_MIGRATION_WAIT_RECHECK_MS,
@@ -139,6 +142,13 @@ export interface ReportFacts {
   readonly storeAbsent: boolean;
   /** The worker claim, when a worker runs. */
   readonly running: AutoMigrationRunning | null;
+  /**
+   * The worker a start spawned and handed its claim to exited before it
+   * confirmed it ({@link describeLostAutoMigrationWorker}), as one
+   * sentence; absent or null when there is none. The next start records it
+   * as a failure.
+   */
+  readonly lostWorker?: string | null;
   readonly failure: AutoMigrationFailure | null;
   readonly waiting: AutoMigrationWaiting | null;
   readonly settingProblem: string | null;
@@ -183,6 +193,7 @@ export function autoMigrationReport(source: AutoMigrationReportSource): AutoMigr
     error: availability.error,
     storeAbsent: availability.storeExists === false,
     running: readAutoMigrationRunning(source.vault, now, EXACT),
+    lostWorker: lostWorkerText(source.vault, now),
     failure: readAutoMigrationFailure(source.vault),
     waiting: readAutoMigrationWaiting(source.vault),
     settingProblem: describeAutoStoreMigrationProblem(autoStoreMigrationSetting(source.configPath)),
@@ -194,6 +205,23 @@ export function autoMigrationReport(source: AutoMigrationReportSource): AutoMigr
       g.state.run?.phase === "rolled-back"
         ? null
         : g.state.rollback,
+  });
+}
+
+/** The lost worker's sentence for `vault`, or null (read judged exactly). */
+function lostWorkerText(vault: string, now: Date): string | null {
+  const lost = readLostAutoMigrationWorker(vault, now, EXACT);
+  return lost === null ? null : describeLostAutoMigrationWorker(vault, lost, null);
+}
+
+/** A worker that exited before it started, before any start recorded it. */
+function lostWorkerReport(text: string): AutoMigrationReport {
+  return report(AUTO_MIGRATION_STATE.failed, {
+    automatic: true,
+    message: `${reportableText(text)}; run \`${MIGRATE_STORE_COMMAND}\` to run it yourself`,
+    nextStart: "records this as a failed attempt and starts nothing until its cooldown has run out",
+    manualCommand: MIGRATE_STORE_COMMAND,
+    error: reportableText(text),
   });
 }
 
@@ -421,6 +449,7 @@ export function reportOf(d: GateDecision, f: ReportFacts): AutoMigrationReport {
       }
       if (f.waiting !== null) return waitingReport(f, f.waiting, "tries again");
       if (f.failure !== null) return failedReport(f, f.failure, true, "tries again");
+      if (f.lostWorker != null) return lostWorkerReport(f.lostWorker);
       return report(AUTO_MIGRATION_STATE.pending, {
         automatic: true,
         message: "a migration into the brain store is available on this machine",
@@ -567,6 +596,19 @@ function noneReport(why: GateNone, f: ReportFacts, manual: string | null): AutoM
           nextStart: off,
           manualCommand: f.failure.manualCommand,
           error: f.failure.error,
+          settingProblem: f.settingProblem,
+        });
+      }
+      // A worker lost before the opt-out: no start records or retries it
+      // any more, so it is named here, with the command that is left.
+      if (f.lostWorker != null) {
+        return report(AUTO_MIGRATION_STATE.failed, {
+          message:
+            `${reportableText(f.lostWorker)}; no start runs the migration again while the ` +
+            `automatic migration is off: run \`${MIGRATE_STORE_COMMAND}\` to run it yourself`,
+          nextStart: off,
+          manualCommand: MIGRATE_STORE_COMMAND,
+          error: reportableText(f.lostWorker),
           settingProblem: f.settingProblem,
         });
       }
