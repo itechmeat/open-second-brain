@@ -82,6 +82,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import {
   DIGEST_ALGORITHM,
   digestVerifies,
@@ -715,6 +716,10 @@ export interface MigrationResult {
  * already-restored rather than as a conflict.
  */
 export function applyStateMigration(plan: MigrationPlan): MigrationResult {
+  // Moving the per-vault state out is a write into it: refused while a store
+  // migration of the vault holds this machine's gate (it is moving the same
+  // state into the store).
+  assertNoMigrationInProgress(plan.source);
   if (plan.refusals.length > 0) {
     throw new StateMigrationError(
       `refusing to migrate: ${plan.refusals.length} check(s) failed - ` +
@@ -1155,6 +1160,7 @@ export interface RollbackResult {
  * entries are still the only record of where those bytes came from.
  */
 export function applyStateRollback(plan: RollbackPlan): RollbackResult {
+  assertNoMigrationInProgress(plan.source);
   const restored: string[] = [];
   const refused: RollbackRefusal[] = [...plan.refusals];
   for (const entry of plan.restore) {

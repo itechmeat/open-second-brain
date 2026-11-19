@@ -7376,13 +7376,120 @@ var init_freeze_marker = __esm(() => {
   MARKER_PATHS = new Map;
 });
 
+// src/core/store-migration/process-identity.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { readFileSync as readFileSync15 } from "node:fs";
+function linuxIdentity(pid) {
+  const stat = readFileSync15(`/proc/${pid}/stat`, "utf8");
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const ticks = fields[STAT_STARTTIME_INDEX];
+  if (ticks === undefined || !/^\d+$/.test(ticks))
+    return null;
+  let boot = "";
+  try {
+    boot = readFileSync15("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {}
+  return `linux:${boot}:${ticks}`;
+}
+function query(command, args, env) {
+  const out = spawnSync2(command, args, {
+    encoding: "utf8",
+    timeout: QUERY_TIMEOUT_MS,
+    windowsHide: true,
+    env: env ?? process.env
+  });
+  return out.status === 0 && typeof out.stdout === "string" ? out.stdout.trim() : "";
+}
+function windowsIdentity(pid) {
+  const out = query("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`
+  ]);
+  return /^\d+$/.test(out) ? `win32:${out}` : null;
+}
+function psIdentity(pid) {
+  const out = query("ps", ["-o", "lstart=", "-p", String(pid)], {
+    ...process.env,
+    LC_ALL: "C",
+    TZ: "UTC"
+  });
+  return out === "" ? null : `ps:${out.replace(/\s+/g, " ")}`;
+}
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return null;
+  if (pid === process.pid && own !== undefined)
+    return own;
+  let identity;
+  try {
+    if (process.platform === "linux")
+      identity = linuxIdentity(pid);
+    else if (process.platform === "win32")
+      identity = windowsIdentity(pid);
+    else
+      identity = psIdentity(pid);
+  } catch {
+    identity = null;
+  }
+  if (pid === process.pid)
+    own = identity;
+  return identity;
+}
+var QUERY_TIMEOUT_MS = 15000, STAT_STARTTIME_INDEX = 19, own;
+var init_process_identity = () => {};
+
+// src/core/store-migration/holder-liveness.ts
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return false;
+  if (pid === process.pid)
+    return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+function holderLiveness(pid, started) {
+  if (!processAlive(pid))
+    return "dead";
+  if (started === undefined || started === null)
+    return "unknown";
+  const now = processStartIdentity(pid);
+  if (now === null)
+    return "unknown";
+  return now === started ? "alive" : "dead";
+}
+function gateHolderLiveness(gate, judge) {
+  if (judge === "cheap")
+    return processAlive(gate.pid) ? "unknown" : "dead";
+  return holderLiveness(gate.pid, gate.started);
+}
+var init_holder_liveness = __esm(() => {
+  init_process_identity();
+});
+
 // src/core/migration-gate.ts
-import { mkdirSync as mkdirSync13, readFileSync as readFileSync15, realpathSync as realpathSync3, unlinkSync as unlinkSync5 } from "node:fs";
-import { dirname as dirname15, join as join21, resolve as resolve12 } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdirSync as mkdirSync13, readFileSync as readFileSync16, realpathSync as realpathSync3, statSync as statSync11, unlinkSync as unlinkSync5 } from "node:fs";
+import { basename as basename8, dirname as dirname15, isAbsolute as isAbsolute3, join as join21, relative as relative6, resolve as resolve12, sep as sep6 } from "node:path";
+function gateRunKind(gate) {
+  if (gate.run_id.startsWith("migrate-"))
+    return GATE_RUN_KIND.migration;
+  if (gate.run_id.startsWith("rollback-"))
+    return GATE_RUN_KIND.rollback;
+  if (gate.run_id.startsWith("remove-legacy-"))
+    return GATE_RUN_KIND.removal;
+  return GATE_RUN_KIND.unknown;
+}
 function migrationGatePath(source = processDirsEnv()) {
   return join21(stateRootDir(source), GATE_FILE);
 }
 function canonicalVault(vault) {
+  resolveCount++;
   let path;
   try {
     path = realpathSync3(vault);
@@ -7394,7 +7501,11 @@ function canonicalVault(vault) {
 function gateNames(gate, vault) {
   return canonicalVault(gate.vault) === canonicalVault(vault);
 }
-function readMigrationGateState(source) {
+function readGate(source) {
+  const state = readGateState(source);
+  return { state: state.state, text: state.text };
+}
+function readGateState(source) {
   const path = migrationGatePath(source);
   let text = null;
   let code = "";
@@ -7402,19 +7513,19 @@ function readMigrationGateState(source) {
     if (attempt > 0)
       sleepSync(READ_RETRY_MS);
     try {
-      text = readFileSync15(path, "utf8");
+      text = readFileSync16(path, "utf8");
     } catch (err) {
       code = String(err.code ?? "EIO");
       if (code === "ENOENT")
-        return { kind: "none" };
+        return { state: { kind: "none" }, text: null };
     }
   }
   if (text === null)
-    return { kind: "unreadable", code };
+    return { state: { kind: "unreadable", code }, text: null };
   try {
     const parsed = JSON.parse(text);
-    if (typeof parsed.vault === "string" && typeof parsed.run_id === "string") {
-      return {
+    if (typeof parsed.vault === "string" && parsed.vault !== "" && typeof parsed.run_id === "string") {
+      const held = {
         kind: "held",
         gate: {
           vault: parsed.vault,
@@ -7424,34 +7535,181 @@ function readMigrationGateState(source) {
           ...typeof parsed.started === "string" ? { started: parsed.started } : {}
         }
       };
+      return { state: held, text };
     }
   } catch {}
-  return { kind: "damaged" };
+  return { state: { kind: "damaged" }, text };
 }
-function readMigrationGate(source) {
-  const state = readMigrationGateState(source);
-  if (state.kind === "none")
+function progressPath(source = processDirsEnv()) {
+  return join21(stateRootDir(source), PROGRESS_FILE);
+}
+function readGateProgress(gate) {
+  try {
+    const parsed = JSON.parse(readFileSync16(progressPath(), "utf8"));
+    return parsed.run_id === gate.run_id && typeof parsed.progress === "string" ? parsed.progress : null;
+  } catch {
     return null;
-  return state.kind === "held" ? state.gate : UNREADABLE_GATE;
+  }
 }
 function assertNoMigrationInProgress(vault) {
-  const gate = readMigrationGate();
-  if (gate === null)
+  const refusal = migrationGateRefusal(vault);
+  if (refusal === null)
     return;
-  if (gate.vault === "" || gateNames(gate, vault))
-    throw new MigrationInProgressError(gate);
+  const recorder = REFUSALS.getStore();
+  if (recorder !== undefined && recorder.refused === null)
+    recorder.refused = refusal;
+  throw refusal;
 }
-var GATE_FILE = "migration-gate.json", MIGRATION_GATE_NEXT_COMMAND = "o2b brain migrate-store --resume", MigrationInProgressError, READ_ATTEMPTS = 3, READ_RETRY_MS = 25, UNREADABLE_GATE;
+function migrationGateRefusal(vault) {
+  const gated = gatedFor(vault);
+  if (gated === null)
+    return null;
+  if ("fault" in gated)
+    return new MigrationInProgressError(UNREADABLE_GATE, gated);
+  return new MigrationInProgressError(gated.gate, {
+    holder: refusalHolder(gated.gate),
+    progress: readGateProgress(gated.gate)
+  });
+}
+function gatedFor(vault) {
+  const { state, text } = readGate();
+  if (state.kind === "none")
+    return null;
+  if (state.kind !== "held") {
+    return {
+      fault: {
+        kind: state.kind,
+        path: migrationGatePath(),
+        ...state.kind === "unreadable" ? { code: state.code } : {}
+      }
+    };
+  }
+  const gate = state.gate;
+  if (!gateNamesCached(text ?? "", gate, vault))
+    return null;
+  if (holderScope !== null && holderScope === canonicalVault(gate.vault)) {
+    if (gate.pid === process.pid)
+      return null;
+  }
+  return { gate };
+}
+function gateNamesCached(text, gate, vault) {
+  const key = `${text}\x00${vault}\x00${fsIdentity(gate.vault)}\x00${fsIdentity(vault)}`;
+  const known = NAMES.get(key);
+  if (known !== undefined)
+    return known;
+  const answer = gateNames(gate, vault);
+  if (NAMES.size >= NAMES_LIMIT)
+    NAMES.clear();
+  NAMES.set(key, answer);
+  return answer;
+}
+function fsIdentity(path) {
+  statCount++;
+  try {
+    const stat = statSync11(path, { bigint: true, throwIfNoEntry: false });
+    return stat === undefined ? "missing" : `${stat.dev}:${stat.ino}`;
+  } catch {
+    return "unreadable";
+  }
+}
+function refusalHolder(gate) {
+  const judge = JUDGE.getStore() ?? "exact";
+  const key = `${judge}:${gate.pid}:${gate.started ?? ""}`;
+  const now = Date.now();
+  const known = HOLDERS.get(key);
+  if (known !== undefined && now - known.at >= 0 && now - known.at < HOLDER_TTL_MS) {
+    return known.holder;
+  }
+  const liveness = gateHolderLiveness(gate, judge);
+  const holder = liveness === "alive" ? GATE_HOLDER.running : liveness === "dead" ? GATE_HOLDER.stopped : GATE_HOLDER.unknown;
+  if (HOLDERS.size >= NAMES_LIMIT)
+    HOLDERS.clear();
+  HOLDERS.set(key, { at: now, holder });
+  return holder;
+}
+var GATE_FILE = "migration-gate.json", PROGRESS_FILE = "migration-gate-progress.json", MIGRATION_GATE_NEXT_COMMAND = "o2b brain migrate-store --resume", ROLLBACK_GATE_NEXT_COMMAND = "o2b brain migrate-store --rollback", REMOVAL_GATE_NEXT_COMMAND = "o2b brain migrate-store --remove-legacy", GATE_RUN_KIND, RUN_NAME, RUN_COMMAND, GATE_RETRY, GATE_HOLDER, FORCE_RELEASE_GATE_COMMAND = "o2b brain migrate-store --force-release-gate", MigrationInProgressError, resolveCount = 0, statCount = 0, READ_ATTEMPTS = 3, READ_RETRY_MS = 25, UNREADABLE_GATE, holderScope = null, NAMES, NAMES_LIMIT = 64, HOLDER_TTL_MS = 5000, HOLDERS, JUDGE, REFUSALS;
 var init_migration_gate = __esm(() => {
   init_fs_atomic();
   init_platform_dirs();
+  init_holder_liveness();
+  GATE_RUN_KIND = Object.freeze({
+    migration: "migration",
+    rollback: "rollback",
+    removal: "removal",
+    unknown: "unknown"
+  });
+  RUN_NAME = Object.freeze({
+    migration: "a brain store migration of this vault",
+    rollback: "the rollback of the brain store migration of this vault",
+    removal: "the removal of this vault's legacy brain tree",
+    unknown: "a brain store migration of this vault"
+  });
+  RUN_COMMAND = Object.freeze({
+    migration: MIGRATION_GATE_NEXT_COMMAND,
+    rollback: ROLLBACK_GATE_NEXT_COMMAND,
+    removal: REMOVAL_GATE_NEXT_COMMAND,
+    unknown: MIGRATION_GATE_NEXT_COMMAND
+  });
+  GATE_RETRY = Object.freeze({
+    later: "later",
+    recover: "recover"
+  });
+  GATE_HOLDER = Object.freeze({
+    running: "running",
+    unknown: "unknown",
+    stopped: "stopped"
+  });
   MigrationInProgressError = class MigrationInProgressError extends Error {
     gate;
     name = "MigrationInProgressError";
-    next_command = MIGRATION_GATE_NEXT_COMMAND;
-    constructor(gate) {
-      super(`a brain store migration of this vault is in progress on this machine (run ${gate.run_id}, ` + `since ${gate.since}); the write was refused and nothing was written. Try again when ` + "`o2b brain migrate-store` has finished, or resume an interrupted one with `--resume`");
+    next_command;
+    kind;
+    holder;
+    retry;
+    progress;
+    fault;
+    constructor(gate, facts = {}) {
+      const kind = gateRunKind(gate);
+      const holder = facts.holder ?? GATE_HOLDER.unknown;
+      const progress = facts.progress ?? null;
+      const fault = facts.fault ?? null;
+      const since = gate.since === "" ? "an unknown time" : gate.since;
+      const command = RUN_COMMAND[kind];
+      const running = `${RUN_NAME[kind]} holds this machine's migration gate (run ${gate.run_id}, since ${since}` + `${progress === null ? "" : `, ${progress}`})`;
+      let what;
+      let remedy;
+      let next = command;
+      let retry = GATE_RETRY.later;
+      if (fault?.kind === "unreadable") {
+        what = `this machine's migration gate ${fault.path} cannot be read (${fault.code ?? "EIO"}), ` + "so a brain store migration of any vault may hold it";
+        remedy = "Writes stay refused until it can be read: fix its permissions, or remove the file " + "if no migration is running";
+        next = null;
+        retry = GATE_RETRY.recover;
+      } else if (fault?.kind === "damaged") {
+        what = `this machine's migration gate ${fault.path} is damaged (it does not read as a gate), ` + "so a brain store migration of any vault may hold it";
+        remedy = `Writes stay refused until it is gone: if no migration is running, run \`${FORCE_RELEASE_GATE_COMMAND}\``;
+        next = FORCE_RELEASE_GATE_COMMAND;
+        retry = GATE_RETRY.recover;
+      } else if (holder === GATE_HOLDER.stopped) {
+        what = `${RUN_NAME[kind]} (run ${gate.run_id}, started ${since}) stopped without ` + `finishing: its process ${gate.pid} is gone and the run still holds this ` + "machine's migration gate";
+        remedy = "Writes stay refused until the run is continued: the next start of Open Second " + `Brain does that for an automatic migration, or run \`${command}\``;
+        retry = GATE_RETRY.recover;
+      } else if (holder === GATE_HOLDER.unknown) {
+        what = `${running}; its process ${gate.pid} is alive, but whether it is the run's own ` + "process cannot be told";
+        remedy = "Try again when it has finished; if no migration is running, " + `\`${FORCE_RELEASE_GATE_COMMAND}\` opens the gate`;
+      } else {
+        what = `${RUN_NAME[kind]} is running on this machine (run ${gate.run_id}, since ${since}` + `${progress === null ? "" : `, ${progress}`})`;
+        remedy = "Try again when it has finished";
+      }
+      super(`${what}; the write was refused and nothing was written. ${remedy}`);
       this.gate = gate;
+      this.kind = kind;
+      this.holder = holder;
+      this.progress = progress;
+      this.fault = fault;
+      this.retry = retry;
+      this.next_command = next;
     }
   };
   UNREADABLE_GATE = Object.freeze({
@@ -7460,10 +7718,14 @@ var init_migration_gate = __esm(() => {
     since: "",
     pid: 0
   });
+  NAMES = new Map;
+  HOLDERS = new Map;
+  JUDGE = new AsyncLocalStorage;
+  REFUSALS = new AsyncLocalStorage;
 });
 
 // src/core/brain/vault-identity.ts
-import { existsSync as existsSync10, readFileSync as readFileSync16, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync10, readFileSync as readFileSync17, statSync as statSync12 } from "node:fs";
 import { join as join22, resolve as resolve13 } from "node:path";
 function vaultIdentityPath(vault) {
   return ensureInsideVault(join22(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
@@ -7473,7 +7735,7 @@ function readVaultIdentity(vault) {
   if (!existsSync10(path))
     return null;
   try {
-    const parsed = JSON.parse(readFileSync16(path, "utf8"));
+    const parsed = JSON.parse(readFileSync17(path, "utf8"));
     if (typeof parsed.vault_id !== "string" || parsed.vault_id.length === 0)
       return null;
     return Object.freeze({
@@ -7493,7 +7755,7 @@ function currentVaultId(root) {
   }
   let stat;
   try {
-    stat = statSync11(path, { throwIfNoEntry: false });
+    stat = statSync12(path, { throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -7531,10 +7793,9 @@ function vaultMarkerAbsentNotice(vault) {
 }
 function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
   const root = resolve13(vault);
-  if (lane === WRITE_LANE.content) {
+  assertNoMigrationInProgress(root);
+  if (lane === WRITE_LANE.content)
     assertVaultNotFrozen(root);
-    assertNoMigrationInProgress(root);
-  }
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {
@@ -7732,13 +7993,13 @@ var init_privacy_markers = __esm(() => {
 });
 
 // src/core/vault.ts
-import { mkdirSync as mkdirSync14, readFileSync as readFileSync17, readdirSync as readdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname16, join as join24, relative as relative6 } from "node:path";
+import { mkdirSync as mkdirSync14, readFileSync as readFileSync18, readdirSync as readdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname16, join as join24, relative as relative7 } from "node:path";
 function parseFrontmatterWithNotices(path, opts = {}) {
   const site = opts.site ?? FRONTMATTER_SITE;
   let text;
   try {
-    text = readFileSync17(path, "utf8");
+    text = readFileSync18(path, "utf8");
   } catch (err) {
     const notices = [];
     emitDegradationNotice(notices, {
@@ -7862,7 +8123,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
       continue;
     if (skipFiles.has(entry.name.toLowerCase()))
       continue;
-    const rel = relative6(root, full);
+    const rel = relative7(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p)))
       continue;
@@ -8156,14 +8417,14 @@ var init_fold_signals = __esm(() => {
 });
 
 // src/core/store/caller-reach.ts
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 var storage;
 var init_caller_reach = __esm(() => {
-  storage = new AsyncLocalStorage;
+  storage = new AsyncLocalStorage2;
 });
 
 // src/core/store/read/store-entities.ts
-import { statSync as statSync12 } from "node:fs";
+import { statSync as statSync13 } from "node:fs";
 function sharedCountersOf(history, privateIds) {
   const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
   for (const record of history) {
@@ -8189,7 +8450,7 @@ function fingerprintOf(store) {
     for (const shard of shards) {
       let stamp = "missing";
       try {
-        const stat = statSync12(shard.path);
+        const stat = statSync13(shard.path);
         stamp = `${stat.size}:${stat.mtimeMs}`;
       } catch {}
       parts.push(`${partition}/${shard.rel}=${stamp}`);
@@ -8470,8 +8731,8 @@ var init_memory_ids = __esm(() => {
 });
 
 // src/core/brain/artifact-ref-resolve.ts
-import { isAbsolute as isAbsolute3, join as join25 } from "node:path";
-import { existsSync as existsSync11, statSync as statSync13 } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join25 } from "node:path";
+import { existsSync as existsSync11, statSync as statSync14 } from "node:fs";
 function artifactRefScope(vault, fromStore) {
   let store = fromStore;
   let dirs;
@@ -8519,7 +8780,7 @@ function isVaultFile(vault, rel) {
   if (!pathIsInside(join25(vault, rel), vault))
     return false;
   try {
-    return statSync13(join25(vault, rel)).isFile();
+    return statSync14(join25(vault, rel)).isFile();
   } catch {
     return false;
   }
@@ -8528,7 +8789,7 @@ function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault)) {
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0)
     return null;
-  const bare = isAbsolute3(spelled) ? vaultRelative(spelled, vault) : spelled;
+  const bare = isAbsolute4(spelled) ? vaultRelative(spelled, vault) : spelled;
   if (bare.length === 0)
     return null;
   if (bare.endsWith(MARKDOWN_EXT))
@@ -8603,7 +8864,7 @@ var init_private_region = __esm(() => {
 });
 
 // src/core/store/reference-privacy.ts
-import { existsSync as existsSync12, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync12, statSync as statSync15 } from "node:fs";
 import { resolve as resolve14 } from "node:path";
 function namesAPage(ref) {
   const trimmed = ref.trim();
@@ -8699,17 +8960,17 @@ var init_origin_channel = __esm(() => {
 });
 
 // src/core/store/operation-scope.ts
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 function activeOperationPrivate() {
   return storage2.getStore()?.() ?? false;
 }
 var storage2;
 var init_operation_scope = __esm(() => {
-  storage2 = new AsyncLocalStorage2;
+  storage2 = new AsyncLocalStorage3;
 });
 
 // src/core/store/dual-write.ts
-import { readFileSync as readFileSync18 } from "node:fs";
+import { readFileSync as readFileSync19 } from "node:fs";
 function isDualWriteEnabled(configPath) {
   try {
     return resolveStoreDualWrite(configPath);
@@ -8719,7 +8980,7 @@ function isDualWriteEnabled(configPath) {
 }
 function readDualWriteStatus(path = dualWriteStatusPath()) {
   try {
-    const parsed = JSON.parse(readFileSync18(path, "utf8"));
+    const parsed = JSON.parse(readFileSync19(path, "utf8"));
     return {
       failures: typeof parsed.failures === "number" ? parsed.failures : 0,
       skipped_no_device: typeof parsed.skipped_no_device === "number" ? parsed.skipped_no_device : 0,
@@ -8925,7 +9186,7 @@ var init_dual_write = __esm(() => {
 });
 
 // src/core/store/store-identity.ts
-import { mkdirSync as mkdirSync15, readFileSync as readFileSync19 } from "node:fs";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync20 } from "node:fs";
 import { dirname as dirname17, join as join26 } from "node:path";
 function storeIdentityPath() {
   return join26(storesStateDir(processDirsEnv()), STORE_IDENTITY_FILE2);
@@ -8939,7 +9200,7 @@ function isBinding(value) {
 function readBindingsStrict(path) {
   let text;
   try {
-    text = readFileSync19(path, "utf8");
+    text = readFileSync20(path, "utf8");
   } catch (err) {
     return err.code === "ENOENT" ? [] : null;
   }
@@ -9029,7 +9290,7 @@ var init_store_identity = __esm(() => {
 });
 
 // src/core/store/store-write.ts
-import { mkdirSync as mkdirSync16, readFileSync as readFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync16, readFileSync as readFileSync21 } from "node:fs";
 import { dirname as dirname18, join as join27 } from "node:path";
 function asStoreWriteError(err) {
   if (err instanceof StoreWriteError)
@@ -9102,7 +9363,7 @@ function storeWriteStatusPath() {
 }
 function readStoreWriteStatus(path = storeWriteStatusPath()) {
   try {
-    const parsed = JSON.parse(readFileSync20(path, "utf8"));
+    const parsed = JSON.parse(readFileSync21(path, "utf8"));
     return {
       failures: typeof parsed.failures === "number" ? parsed.failures : 0,
       last_reason: typeof parsed.last_reason === "string" && Object.hasOwn(REMEDIES, parsed.last_reason) ? parsed.last_reason : null,
@@ -9195,7 +9456,7 @@ var init_store_write = __esm(() => {
 
 // src/core/reliability/audit.ts
 import { closeSync as closeSync9, fsyncSync as fsyncSync5, mkdirSync as mkdirSync17, openSync as openSync7, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename8, join as join28 } from "node:path";
+import { basename as basename9, join as join28 } from "node:path";
 function appendAuditRecord(auditRoot, record, vault, options = {}) {
   const timestamp = new Date(record.timestamp);
   if (!Number.isFinite(timestamp.getTime())) {
@@ -9213,7 +9474,7 @@ function appendAuditRecord(auditRoot, record, vault, options = {}) {
     legacy: () => appendLegacyAuditLine(auditRoot, timestamp, line),
     store: () => {
       const written = JSON.parse(line);
-      const row = { audit_dir: basename8(auditRoot), record: written };
+      const row = { audit_dir: basename9(auditRoot), record: written };
       const agent = isRecordLabel(written.actor) ? written.actor : undefined;
       if (options.attestsShared === true) {
         return ledgerRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, "shared", agent);
@@ -9221,7 +9482,7 @@ function appendAuditRecord(auditRoot, record, vault, options = {}) {
       return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, agent, auditRowNamesPrivatePage(vault, written));
     },
     context,
-    ...options.failOpen === true || basename8(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}
+    ...options.failOpen === true || basename9(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}
   });
   if (routed.mode === "legacy")
     return routed.value;
@@ -9347,7 +9608,7 @@ import {
   closeSync as closeSync10,
   fsyncSync as fsyncSync6,
   openSync as openSync8,
-  readFileSync as readFileSync21,
+  readFileSync as readFileSync22,
   unlinkSync as unlinkSync6,
   writeSync as writeSync6
 } from "node:fs";
@@ -9431,7 +9692,7 @@ function hasEnvelopeShape(parsed) {
 function isEnvelopeFile(keyPath) {
   let bytes;
   try {
-    bytes = readFileSync21(keyPath);
+    bytes = readFileSync22(keyPath);
   } catch {
     return false;
   }
@@ -9447,7 +9708,7 @@ function isEnvelopeBytes(bytes) {
 function readEnvelope(keyPath) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync21(keyPath, "utf8"));
+    parsed = JSON.parse(readFileSync22(keyPath, "utf8"));
   } catch (err) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, `not parseable as an envelope: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -9659,7 +9920,7 @@ import {
   existsSync as existsSync13,
   mkdirSync as mkdirSync18,
   openSync as openSync9,
-  readFileSync as readFileSync22,
+  readFileSync as readFileSync23,
   writeFileSync as writeFileSync5,
   writeSync as writeSync7
 } from "node:fs";
@@ -9692,7 +9953,7 @@ function loadOrCreateKey(keyPath) {
       }
     }
     ensureSyncExclusionMarker(keyDir);
-    const key = readFileSync22(keyPath);
+    const key = readFileSync23(keyPath);
     if (isEnvelopeBytes(key))
       return heldKeyOrRefusal(keyPath);
     if (key.length !== KEY_BYTES) {
@@ -9731,7 +9992,7 @@ var init_crypto = __esm(() => {
 
 // src/core/store-migration/owner-only-copy.ts
 import { chmodSync as chmodSync4, copyFileSync as copyFileSync2, mkdirSync as mkdirSync19 } from "node:fs";
-import { dirname as dirname21, relative as relative7, resolve as resolve16, sep as sep6 } from "node:path";
+import { dirname as dirname21, relative as relative8, resolve as resolve16, sep as sep7 } from "node:path";
 function ensureOwnerOnlyRoot(root) {
   mkdirSync19(root, { recursive: true, mode: DIR_MODE });
   if (process.platform === "win32")
@@ -9740,12 +10001,12 @@ function ensureOwnerOnlyRoot(root) {
     chmodSync4(root, DIR_MODE);
 }
 function foldersFrom(root, dir) {
-  const rel = relative7(resolve16(root), resolve16(dir));
+  const rel = relative8(resolve16(root), resolve16(dir));
   if (rel === "" || rel.startsWith(".."))
     return [resolve16(root)];
   const out = [resolve16(root)];
-  for (const segment of rel.split(sep6))
-    out.push(`${out.at(-1)}${sep6}${segment}`);
+  for (const segment of rel.split(sep7))
+    out.push(`${out.at(-1)}${sep7}${segment}`);
   return out;
 }
 function copyOwnerOnly(source, target, root) {
@@ -9791,10 +10052,10 @@ import {
   chmodSync as chmodSync5,
   existsSync as existsSync14,
   readdirSync as readdirSync6,
-  readFileSync as readFileSync23,
+  readFileSync as readFileSync24,
   renameSync as renameSync2,
   rmSync as rmSync3,
-  statSync as statSync15,
+  statSync as statSync16,
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { join as join30 } from "node:path";
@@ -9806,7 +10067,7 @@ function secretsDir(vault) {
 function adoptVaultSecrets(legacy, dir) {
   if (legacy === dir || existsSync14(dir) || !existsSync14(legacy))
     return;
-  const names = readdirSync6(legacy).filter((name) => statSync15(join30(legacy, name)).isFile());
+  const names = readdirSync6(legacy).filter((name) => statSync16(join30(legacy, name)).isFile());
   if (names.length === 0)
     return;
   const staging = `${dir}.adopt-${process.pid}`;
@@ -10038,14 +10299,14 @@ function readStore(vault) {
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
     try {
-      if ((statSync15(path).mode & 511) !== 384)
+      if ((statSync16(path).mode & 511) !== 384)
         chmodSync5(path, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the secrets store: ` + `${path}: ${err instanceof Error ? err.message : String(err)}
 `);
     }
   }
-  const parsed = JSON.parse(readFileSync23(path, "utf8"));
+  const parsed = JSON.parse(readFileSync24(path, "utf8"));
   if (parsed === null || typeof parsed !== "object" || parsed.version !== SECRETS_SCHEMA_VERSION) {
     throw new Error(`secrets store is corrupt or from a newer version: ${path}`);
   }
@@ -10398,7 +10659,7 @@ import {
   existsSync as existsSync17,
   mkdirSync as mkdirSync20,
   openSync as openSync10,
-  readFileSync as readFileSync24,
+  readFileSync as readFileSync25,
   rmSync as rmSync4,
   writeSync as writeSync8,
   closeSync as closeSync12
@@ -10842,7 +11103,7 @@ function loadJsonManifest(path, name) {
   }
   let data;
   try {
-    data = JSON.parse(readFileSync24(path, "utf8"));
+    data = JSON.parse(readFileSync25(path, "utf8"));
   } catch (exc) {
     return {
       result: {
@@ -10968,7 +11229,7 @@ function checkHermesManifest(path) {
   }
   let text;
   try {
-    text = readFileSync24(path, "utf8");
+    text = readFileSync25(path, "utf8");
   } catch (exc) {
     return {
       name: "hermes_manifest",
@@ -11102,7 +11363,7 @@ function doctor(opts) {
 }
 
 // src/core/identity-reminder.ts
-import { readFileSync as readFileSync25 } from "node:fs";
+import { readFileSync as readFileSync26 } from "node:fs";
 import { dirname as dirname24, resolve as resolve18 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var TEMPLATE_PATH = resolve18(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
@@ -11122,7 +11383,7 @@ function loadReminderTemplate() {
   if (commonTemplateCache !== undefined)
     return commonTemplateCache;
   try {
-    commonTemplateCache = readFileSync25(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync26(TEMPLATE_PATH, "utf8").trimEnd();
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -11140,7 +11401,7 @@ function tryReadTargetTemplate(target) {
     return cached;
   let body;
   try {
-    body = readFileSync25(PER_TARGET_PATHS[target], "utf8").trimEnd();
+    body = readFileSync26(PER_TARGET_PATHS[target], "utf8").trimEnd();
   } catch (err) {
     if (err.code !== "ENOENT")
       throw err;

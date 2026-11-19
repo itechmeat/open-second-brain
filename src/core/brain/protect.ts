@@ -486,6 +486,9 @@ function ensureVaultBootstrapped(vault: string): void {
  * one-place change (open/closed against future targets).
  */
 export function applyProtect(opts: ApplyOptions): ApplyResult {
+  // Before the host file: the protection file and its manifest are written
+  // under the vault, and a refused write must leave neither half behind.
+  assertVaultIdentityForWrite(opts.vault);
   switch (opts.target) {
     case "claudecode":
       return applyClaudeCode(opts.vault, opts.approved);
@@ -560,6 +563,7 @@ function writePreviewedHostFile(compute: ProtectCompute): void {
 }
 
 export function unprotect(opts: UnprotectOptions): UnprotectResult {
+  assertVaultIdentityForWrite(opts.vault);
   switch (opts.target) {
     case "claudecode":
       return unprotectClaudeCode(opts.vault, opts.approved);

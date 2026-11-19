@@ -25,6 +25,8 @@ import {
   migrationGatePath,
   releaseMigrationGate,
 } from "../../../src/core/migration-gate.ts";
+import * as gateModule from "../../../src/core/migration-gate.ts";
+import { treeSnapshot } from "../../helpers/vault-digest.ts";
 import {
   ensureVaultCurrent,
   SELF_HEAL_UPGRADE_SPAWN,
@@ -189,8 +191,12 @@ describe("a migration holding the gate", () => {
     makeManualStale();
     holdMigrationGate(vault, "migrate-run");
     try {
+      // With modification times: the lock's claim and release would leave
+      // the per-vault state folder touched even with no file left behind.
+      const before = treeSnapshot(vault, { mtime: true });
       const run = runSelfHealUpgrade(vault, { now: T0 });
       expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.running);
+      expect(treeSnapshot(vault, { mtime: true })).toEqual(before);
       expect(readSelfHealUpgradeFailure(vault)).toBeNull();
       expect(upgradeRows()).toEqual([]);
     } finally {
@@ -199,8 +205,53 @@ describe("a migration holding the gate", () => {
   });
 });
 
+describe("a gate closed between the upgrade's own check and its lock claim", () => {
+  test("the upgrade answers the quiet gate outcome, not a failed lock", () => {
+    makeManualStale();
+    // The check before the claim saw no gate; the gate is closed by the time
+    // the claim asks.
+    const check = spyOn(gateModule, "migrationGateRefusal").mockReturnValueOnce(null);
+    holdMigrationGate(vault, "migrate-run");
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.running);
+      expect(readSelfHealUpgradeFailure(vault)).toBeNull();
+    } finally {
+      check.mockRestore();
+      releaseMigrationGate(vault, "migrate-run");
+    }
+  });
+
+  test("a start answers skipped_migration_gate, not an upgrade error", async () => {
+    makeManualStale();
+    // The gate is closed at the very moment of the claim: every earlier
+    // check of this start saw it open, and the claim's own check refuses.
+    const real = gateModule.assertNoMigrationInProgress;
+    const atClaim = spyOn(gateModule, "assertNoMigrationInProgress").mockImplementation(
+      (target: string) => {
+        if (new Error().stack?.includes("claimSelfHealUpgradeLock") === true) {
+          throw new gateModule.MigrationInProgressError({
+            vault: target,
+            run_id: "migrate-run",
+            since: "2026-11-19T10:00:00Z",
+            pid: process.pid,
+          });
+        }
+        real(target);
+      },
+    );
+    try {
+      const r = await ensureVaultCurrent(vault, { background: true, configPath });
+      expect(r.brainUpgradeSpawn).toBe(SELF_HEAL_UPGRADE_SPAWN.skippedMigrationGate);
+      expect(r.errors.filter((e) => e.includes("brain-upgrade"))).toEqual([]);
+    } finally {
+      atClaim.mockRestore();
+    }
+  });
+});
+
 describe("a migration whose holder is gone", () => {
-  test("a gate left by a stopped run is a failure with the resume command, not running", () => {
+  test("a gate left by a stopped run writes nothing, and the outcome says why", () => {
     makeManualStale();
     // A run killed with the gate closed: its holder is a process that ended.
     const gone = spawnSync(process.execPath, ["-e", ""]).pid!;
@@ -210,11 +261,15 @@ describe("a migration whose holder is gone", () => {
       JSON.stringify({ vault: resolve(vault), run_id: "migrate-run", since: "", pid: gone }),
     );
     try {
+      const before = treeSnapshot(vault, { mtime: true });
       const run = runSelfHealUpgrade(vault, { now: T0 });
-      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.failed);
-      // The marker is the record: the closed gate refuses the metrics row
-      // like every other write to the vault.
-      expect(readSelfHealUpgradeFailure(vault)?.error).toContain("--resume");
+      // The gate refuses every write into the vault, the failure marker and
+      // the worker lock included: the run that stopped is what to continue.
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.migrationStopped);
+      expect(run.error).toContain("stopped without finishing");
+      expect(run.error).toContain("--resume");
+      expect(treeSnapshot(vault, { mtime: true })).toEqual(before);
+      expect(readSelfHealUpgradeFailure(vault)).toBeNull();
     } finally {
       rmSync(migrationGatePath(), { force: true });
     }

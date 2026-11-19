@@ -13,18 +13,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { freezeVault, unfreezeVault } from "../../src/core/brain/freeze.ts";
 import { resetFreezeMarkerCache } from "../../src/core/brain/freeze-marker.ts";
 import { listLogDates, readLogDay } from "../../src/core/brain/log-jsonl.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
-import { holdMigrationGate, releaseMigrationGate } from "../../src/core/migration-gate.ts";
+import {
+  holdMigrationGate,
+  migrationGatePath,
+  releaseMigrationGate,
+} from "../../src/core/migration-gate.ts";
 import {
   MIGRATION_IN_PROGRESS_REFUSAL,
   VAULT_FROZEN_REFUSAL,
 } from "../../src/mcp/frozen-refusal.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
+import { processStartIdentity } from "../../src/core/store-migration/process-identity.ts";
 
 let tmp: string;
 let vault: string;
@@ -130,7 +135,9 @@ describe("a write tool called while a store migration of the vault runs here", (
     process.env["XDG_STATE_HOME"] = join(tmp, "state");
     process.env["LOCALAPPDATA"] = join(tmp, "state");
     try {
-      holdMigrationGate(vault, "migrate-test");
+      // A live run records its own start identity, which tells it from a
+      // process that reused its pid.
+      holdMigrationGate(vault, "migrate-test", processStartIdentity(process.pid));
       const response = await createNote("notes/gated.md");
       const error = (response as { error?: { message: string; data?: unknown } }).error;
       const data = error!.data as Record<string, unknown>;
@@ -138,13 +145,66 @@ describe("a write tool called while a store migration of the vault runs here", (
       expect(data["run_id"]).toBe("migrate-test");
       expect(data["tool"]).toBe("brain_create_note");
       expect(data["next_command"]).toBe("o2b brain migrate-store --resume");
-      // The way out is named once in the prose, not twice.
-      expect(error!.message.split("--resume")).toHaveLength(2);
+      // The run is alive: the way out is to call again once it finished,
+      // which the prose and the data both say; the resume is for a run
+      // that stopped.
+      expect(data["holder"]).toBe(
+        processStartIdentity(process.pid) === null ? "unknown" : "running",
+      );
+      expect(data["retry"]).toBe("later");
+      expect(data["run_kind"]).toBe("migration");
+      expect(error!.message).toContain(
+        processStartIdentity(process.pid) === null
+          ? "whether it is the run's own process cannot be told"
+          : "store migration of this vault is running",
+      );
+      expect(error!.message).toContain(`since ${String(data["since"])}`);
+      expect(error!.message).not.toContain("--resume");
       expect(existsSync(join(vault, "notes", "gated.md"))).toBe(false);
       releaseMigrationGate(vault, "migrate-test");
       expect((await createNote("notes/open.md")) as { error?: unknown }).not.toHaveProperty(
         "error",
       );
+    } finally {
+      releaseMigrationGate(vault, "migrate-test");
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+describe("a write tool called while a stopped migration still holds the gate", () => {
+  test("names the run that stopped and the command that continues it, once", async () => {
+    const saved = {
+      XDG_STATE_HOME: process.env["XDG_STATE_HOME"],
+      LOCALAPPDATA: process.env["LOCALAPPDATA"],
+    };
+    process.env["XDG_STATE_HOME"] = join(tmp, "state");
+    process.env["LOCALAPPDATA"] = join(tmp, "state");
+    try {
+      // A gate whose holder is gone: a pid no process carries.
+      const path = migrationGatePath();
+      mkdirSync(dirname(path), { recursive: true });
+      const gate = {
+        vault,
+        run_id: "migrate-test",
+        since: "2026-11-19T10:00:00Z",
+        pid: 2147483646,
+      };
+      writeFileSync(path, JSON.stringify(gate));
+      const response = await createNote("notes/gated.md");
+      const error = (response as { error?: { message: string; data?: unknown } }).error;
+      const data = error!.data as Record<string, unknown>;
+      expect(data["code"]).toBe(MIGRATION_IN_PROGRESS_REFUSAL);
+      expect(data["holder"]).toBe("stopped");
+      expect(data["retry"]).toBe("recover");
+      expect(error!.message).toContain("stopped without finishing");
+      expect(error!.message).toContain("the next start of Open Second Brain");
+      // The way out is named once in the prose, not twice.
+      expect(error!.message.split("--resume")).toHaveLength(2);
+      expect(existsSync(join(vault, "notes", "gated.md"))).toBe(false);
     } finally {
       releaseMigrationGate(vault, "migrate-test");
       for (const [key, value] of Object.entries(saved)) {

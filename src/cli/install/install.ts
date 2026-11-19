@@ -77,6 +77,7 @@ import {
   renderVerifyJson,
   renderVerifyTable,
 } from "./render.ts";
+import { assertDestinationOutsideGatedVault } from "../../core/migration-gate.ts";
 
 /**
  * Every code this verb can return, named once so the docblock above, the
@@ -199,6 +200,8 @@ function buildApplyOpts(
   stdout: NodeJS.WriteStream,
   stderr: NodeJS.WriteStream,
 ): ApplyOpts {
+  // A destination the caller names is no way past a migration gate.
+  if (args.out !== null) assertDestinationOutsideGatedVault(args.out);
   return {
     dryRun: args.dryRun,
     force: args.force,

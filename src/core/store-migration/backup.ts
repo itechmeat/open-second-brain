@@ -33,6 +33,7 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { WRITE_LANE } from "../brain/freeze-marker.ts";
+import { asMigrationGateHolder } from "../migration-gate.ts";
 import { sleepSync } from "../fs-atomic.ts";
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { takeSnapshot } from "../brain/snapshot-gate.ts";
@@ -209,8 +210,10 @@ function asBackupError(error: unknown): MigrationBackupError {
 
 /**
  * Snapshot `Brain/` and keep a verified copy of the archive in
- * `migrationDir`. Taken after the legacy writers are frozen, on the audit
- * lane the migration gate lets through, so the archive is of a tree at rest.
+ * `migrationDir`. Taken after the legacy writers are frozen, as the holder
+ * of the migration gate (`asMigrationGateHolder`: the snapshot and its log
+ * line are the run's own writes, every other writer stays refused), on the
+ * audit lane a freeze lets through, so the archive is of a tree at rest.
  * Returns the snapshot run id, or null when the vault holds no `Brain/`.
  */
 export function takeMigrationSnapshot(vault: string, migrationDir: string): string | null {
@@ -222,9 +225,9 @@ export function takeMigrationSnapshot(vault: string, migrationDir: string): stri
   for (let attempt = 0; attempt < SNAPSHOT_ATTEMPTS; attempt++) {
     pauseBeforeRetry(attempt);
     try {
-      const taken = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.storeMigration, {
-        lane: WRITE_LANE.audit,
-      });
+      const taken = asMigrationGateHolder(vault, () =>
+        takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.storeMigration, { lane: WRITE_LANE.audit }),
+      );
       const root = join(migrationDir, BACKUP_DIR);
       const copy = join(root, SNAPSHOT_DIR, basename(taken.path));
       ensureOwnerOnlyRoot(root);

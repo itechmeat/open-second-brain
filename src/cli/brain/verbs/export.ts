@@ -37,6 +37,7 @@ import {
   usageError,
   type BrainVerbFlags,
 } from "../helpers.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 /**
  * `o2b brain export --format <format> [--out <file>] [--force]`.
@@ -431,6 +432,8 @@ export async function cmdBrainExport(argv: string[]): Promise<number> {
   }
 
   const outPath = flags["out"] as string | undefined;
+  // A destination the caller names is no way past a migration gate.
+  if (outPath !== undefined) assertDestinationOutsideGatedVault(outPath);
   // Asked BEFORE the handler runs, not after. This check used to sit at
   // the very end, so `--out` naming an existing file read, hashed and
   // redacted a whole machine's transcripts and then refused over a flag

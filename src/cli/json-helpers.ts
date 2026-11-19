@@ -3,6 +3,8 @@ const SECRET_ASSIGNMENT_RE =
   /((?:api[_-]?key|token|secret|password|crypt[_-]?password)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi;
 
 /** The long flag every verb accepts to request machine-readable output. */
+
+import { MigrationInProgressError } from "../core/migration-gate.ts";
 const JSON_FLAG = "--json";
 const JSON_FLAG_ASSIGNMENT = `${JSON_FLAG}=`;
 
@@ -114,6 +116,12 @@ export async function withJsonFallback(
   let code: number;
   try {
     code = await run();
+  } catch (error) {
+    // A store migration's gate refused a write the verb made: a failure the
+    // envelope reports like any other, not an error that escapes it.
+    if (!(error instanceof MigrationInProgressError)) throw error;
+    stderr += `error: ${error.message}\n`;
+    code = 1;
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;

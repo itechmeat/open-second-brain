@@ -68,6 +68,11 @@ import {
   readLearnedWeights,
   recordRecallFeedback,
 } from "../../../../src/core/search/feedback.ts";
+import {
+  holdMigrationGate,
+  MigrationInProgressError,
+  releaseMigrationGate,
+} from "../../../../src/core/migration-gate.ts";
 import { appendRecord } from "../../../../src/core/store/appender.ts";
 import { openStore } from "../../../../src/core/store/store-open.ts";
 import {
@@ -403,6 +408,18 @@ describe("the ledgers the migration names get their first store writers", () => 
     expect(learnedWeightsFile(env.vault).startsWith(env.vault)).toBe(false);
     expect(existsSync(learnedWeightsFile(env.vault))).toBe(true);
     expect(loadReinforceEvents(env.vault)).toHaveLength(1);
+  });
+
+  test("a gate naming the vault refuses the feedback before its ledger row is appended", () => {
+    env = makeStoreEnv("osb-wp3-feedback-gate-");
+    switchDevice(env.storeRoot);
+    holdMigrationGate(env.vault, "migrate-stale");
+    try {
+      expect(() => recordRecallFeedback(env!.vault, FEEDBACK)).toThrow(MigrationInProgressError);
+      expect(rowsOf("search-feedback")).toHaveLength(0);
+    } finally {
+      releaseMigrationGate(env.vault, "migrate-stale");
+    }
   });
 
   test("learned weights are folded from the feedback rows when the cache is missing or behind", () => {

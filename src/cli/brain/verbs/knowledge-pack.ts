@@ -35,6 +35,7 @@ import {
   redactForEgress,
 } from "../../../core/egress/guard.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 const USAGE =
   "usage: o2b brain knowledge-pack export --name <name> --select <sel>[,<sel>…] --out <dir> [--version <v>] [--force] [--json]\n" +
@@ -83,6 +84,8 @@ function exportPack(argv: string[]): number {
   if (name === undefined || out === undefined) {
     return fail("knowledge-pack export requires --name <name> and --out <dir>");
   }
+  // A destination the caller names is no way past a migration gate.
+  assertDestinationOutsideGatedVault(out);
   const select = (flags["select"] as string[] | undefined) ?? [];
 
   const selected = selectKnowledgePack(vault, select);

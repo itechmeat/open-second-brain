@@ -13,6 +13,7 @@ import {
   redactForEgress,
 } from "../../../core/egress/guard.ts";
 import { brainVerbContext, fail, parse } from "../helpers.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 /**
  * The stderr line counting the kept nodes' structured link and relation
@@ -93,6 +94,7 @@ export async function cmdBrainGraphExport(argv: string[]): Promise<number> {
 
   try {
     if (typeof flags["out"] === "string") {
+      assertDestinationOutsideGatedVault(flags["out"]);
       atomicWriteFileSync(flags["out"], json);
       process.stdout.write(`wrote ${flags["out"]}\n`);
     } else {

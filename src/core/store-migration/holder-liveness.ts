@@ -52,3 +52,21 @@ export function holderLiveness(pid: number, started: string | null | undefined):
   if (now === null) return "unknown";
   return now === started ? "alive" : "dead";
 }
+
+/** How a gate's holder is judged: the pid alone (a start), or its start identity too. */
+export type HolderJudge = "cheap" | "exact";
+
+/**
+ * The one judgement of a gate's holder (the migration gate, by every reader
+ * of it: the runs, the start, the write refusal). `exact` is
+ * {@link holderLiveness}; `cheap` is the signal probe alone, for the paths
+ * that must not run an identity query, where a live pid can only be
+ * `unknown`.
+ */
+export function gateHolderLiveness(
+  gate: { readonly pid: number; readonly started?: string | null },
+  judge: HolderJudge,
+): HolderLiveness {
+  if (judge === "cheap") return processAlive(gate.pid) ? "unknown" : "dead";
+  return holderLiveness(gate.pid, gate.started);
+}

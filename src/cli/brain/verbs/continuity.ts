@@ -52,6 +52,7 @@ import {
 } from "../../../core/brain/continuity/export-atif.ts";
 import { OPEN_SECOND_BRAIN_VERSION } from "../../../core/version.ts";
 import { brainVerbContext, fail, parse, usageError } from "../helpers.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 const CLI_VERSION: string = OPEN_SECOND_BRAIN_VERSION;
 
@@ -85,6 +86,8 @@ function exportContinuity(argv: string[]): number {
   }
   const session = typeof flags["session"] === "string" ? flags["session"].trim() : undefined;
   const outDir = resolve(typeof flags["out"] === "string" ? flags["out"].trim() : ".");
+  // A destination the caller names is no way past a migration gate.
+  assertDestinationOutsideGatedVault(outDir);
 
   const vault = brainVerbContext(flags).vault;
   const loaded = loadNormalizedContinuityRecords(vault, {

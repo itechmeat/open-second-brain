@@ -743,9 +743,13 @@ o2b brain migrate-store
 
 The migration:
 
-1. closes a migration gate on this machine, so agents here are refused
-   with a "migration in progress" message while it runs (other machines
-   keep working);
+1. closes a migration gate on this machine, so every write into this vault
+   made here (agents, the CLI, hooks and background workers; notes and
+   Brain log lines, per-vault state and caches included) is refused while
+   it runs, with a "migration in progress" message that names the run,
+   since when it runs and how far it is (other machines keep working, and
+   so do this machine's other vaults); a hook writes nothing and does not
+   fail the session;
 2. snapshots `Brain/` and backs up every surface nothing can rebuild
    (secrets, keys, attestations, checkpoints) into the device-local state,
    each verified by a test restore;
@@ -765,9 +769,13 @@ The legacy tree stays in the vault. If the run is interrupted,
 `o2b brain migrate-store --resume` continues without importing anything
 twice. If verification finds a gap, the legacy tree is left untouched and
 the report names each missing item. If a run that is gone (a crash, a
-closed terminal) still holds the gate and you will not resume it right
-away, `o2b brain migrate-store --force-release-gate` opens it again; it
-refuses while the run that holds the gate is still running.
+closed terminal) still holds the gate, writes stay refused and the refusal
+says so: the next start resumes an automatic migration, or run
+`o2b brain migrate-store --resume`. The rollback and the removal of the
+legacy tree hold the same gate and refuse the same writes. If you will not
+resume the run right away, `o2b brain migrate-store --force-release-gate`
+opens the gate again; it refuses while the run that holds the gate is
+still running.
 
 From now on this machine writes only to the store. Render the view twice
 (the first render after the claim only catches up), and check doctor:

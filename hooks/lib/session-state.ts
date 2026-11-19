@@ -35,6 +35,10 @@ import {
   readRegularFileNoFollow,
 } from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
+import {
+  assertNoMigrationInProgress,
+  migrationGateRefuses,
+} from "../../src/core/migration-gate.ts";
 import { machineStateRoot } from "../../src/core/state/machine-state.ts";
 
 /** The vault's hook-surface directory. */
@@ -321,6 +325,9 @@ export function updateHookState<T>(
 ): HookStateUpdateOutcome<T> {
   let lock: LockHandle | null = null;
   try {
+    // Per-vault state a store migration of the vault is moving: refused
+    // while it holds the gate, and the refusal is one more `failed`.
+    assertNoMigrationInProgress(vault);
     const root = machineStateRoot(vault);
     if (hookStateDirIsSymlinked(root)) return { status: "failed" };
     const path = stateFileAt(root, sessionId);
@@ -391,7 +398,7 @@ export function pruneHookStateFiles(
   const maxFiles = opts.maxFiles ?? PRUNE_MAX_FILES;
   const nowMs = opts.nowMs ?? Date.now();
   const root = machineStateRoot(vault);
-  if (hookStateDirIsSymlinked(root)) return 0;
+  if (hookStateDirIsSymlinked(root) || migrationGateRefuses(vault)) return 0;
   const dir = join(root, OSB_DIR, HOOK_STATE_DIR);
   let names: string[];
   try {

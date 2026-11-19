@@ -26,6 +26,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { withGateJudge } from "../migration-gate.ts";
 import { join } from "node:path";
 
 import lockfile from "proper-lockfile";
@@ -97,6 +98,11 @@ export function collectRuntimeNotices(
   vault: string,
   opts: RuntimeNoticeOptions = {},
 ): RuntimeNotice[] {
+  // The notices never query a process identity (see `withGateJudge`).
+  return withGateJudge("cheap", () => collectRuntimeNoticesJudged(vault, opts));
+}
+
+function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions): RuntimeNotice[] {
   const env = opts.env ?? process.env;
   const optOut = env["OPEN_SECOND_BRAIN_RUNTIME_NOTICES"]?.trim().toLowerCase();
   if (optOut === "false" || optOut === "0") return [];

@@ -110,6 +110,7 @@ import {
   MIGRATION_STREAM,
   migratedMark,
 } from "./migration-records.ts";
+import { recordMigrationGateProgress } from "../migration-gate.ts";
 import { holdGateFor, releaseGateAfter } from "./quiesce.ts";
 import { readRemovalInProgress } from "./removal.ts";
 import { readRemovalMarker, sameVaultPath } from "./removal-marker.ts";
@@ -461,6 +462,7 @@ export function rollbackMigration(
   const gateRun = `rollback-${checked.migration.run_id}`;
   options.hooks?.beforeGate?.();
   holdGateFor(vault, gateRun);
+  recordMigrationGateProgress(gateRun, "restoring the legacy tree from the migration snapshot");
   let failure: { readonly error: unknown } | null = null;
   try {
     // Read again under the gate: what the rollback decided on may be

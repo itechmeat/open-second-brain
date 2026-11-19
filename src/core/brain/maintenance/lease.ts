@@ -9,10 +9,15 @@
  */
 
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { closeDatabase } from "../../sqlite-close.ts";
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
+import {
+  assertNoMigrationInProgress,
+  MigrationInProgressError,
+  migrationGateRefuses,
+} from "../../migration-gate.ts";
 import { machineStatePath } from "../../state/machine-state.ts";
 
 export const MAINTENANCE_LEASE_NAME = "maintenance";
@@ -40,6 +45,9 @@ function leaseDbPath(vault: string): string {
 }
 
 function openLeaseDb(vault: string): Database {
+  // A lock primitive skips the identity guard, not the migration gate: the
+  // lease database lives in the per-vault state a migration is moving.
+  assertNoMigrationInProgress(vault);
   const path = leaseDbPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
@@ -88,7 +96,16 @@ export function acquireLease(vault: string, opts: AcquireLeaseOptions): boolean 
 /** Release the lease; only the current holder may. */
 export function releaseLease(vault: string, opts: ReleaseLeaseOptions): boolean {
   const name = opts.name ?? MAINTENANCE_LEASE_NAME;
-  const db = openLeaseDb(vault);
+  let db: Database;
+  try {
+    db = openLeaseDb(vault);
+  } catch (error) {
+    // A store migration took the gate while the lane ran: the release is a
+    // write it refuses. A cleanup must not replace the run's result, so the
+    // row is left to expire at its time to live, as an abandoned lease does.
+    if (error instanceof MigrationInProgressError) return false;
+    throw error;
+  }
   try {
     db.run("DELETE FROM leases WHERE name = ? AND holder = ?", [name, opts.holder]);
     const gone = db
@@ -107,6 +124,10 @@ export function currentLease(
 ): LeaseState | null {
   const name = opts.name ?? MAINTENANCE_LEASE_NAME;
   const now = opts.now ?? new Date();
+  // A reader: no lease database yet means no lease, and while a migration
+  // of the vault holds the gate no maintenance run can hold one either
+  // (each is refused), so neither creates the database to say so.
+  if (!existsSync(leaseDbPath(vault)) || migrationGateRefuses(vault)) return null;
   const db = openLeaseDb(vault);
   try {
     const row = db

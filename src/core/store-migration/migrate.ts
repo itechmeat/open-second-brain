@@ -39,7 +39,7 @@ import { dirname } from "node:path";
 import { resolveAgentName } from "../config.ts";
 import { resolveAppendShardId } from "../brain/ledger-shards.ts";
 import { readVaultIdentity, writeVaultIdentity } from "../brain/vault-identity.ts";
-import { readMigrationGate } from "../migration-gate.ts";
+import { readMigrationGate, recordMigrationGateProgress } from "../migration-gate.ts";
 import { appendRecord } from "../store/appender.ts";
 import { bindVaultToStore } from "../vault-adapter/vault-binding.ts";
 import { claimViewWriter, readViewWriter } from "../view/writer.ts";
@@ -708,6 +708,9 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // says it is a migration's, which is how the next run on this vault
     // recognises it (`stoppedUnswitchedRun`).
     options.hooks?.atStep?.(MIGRATION_STEP.gateTaken);
+    // How far the run is, for the writers it refuses (`migration-gate.ts`).
+    const progress = (text: string): void => recordMigrationGateProgress(state.run_id, text);
+    progress("taking the backups");
     save({});
     options.hooks?.atStep?.(MIGRATION_STEP.gateClosed);
     const catalogue = migrationCatalogue(vault);
@@ -717,6 +720,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       save({ backed_up: true });
     }
     options.hooks?.atStep?.(MIGRATION_STEP.backedUp);
+    progress("backed up, importing the legacy tree");
     const local = backupStep(() => moveDeviceLocalState(vault, catalogue, dir));
     // Accepted skills are files agents read: they move to the vault's own
     // skills/ folder, never into the store (design D14, task 2.10).
@@ -747,6 +751,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     let last = convertPass(ctx);
     for (passes = 1; ; passes++) {
       imported += last.imported;
+      progress(`importing: pass ${passes}, ${imported} item(s) imported so far`);
       if (last.imported === 0) break;
       if (passes >= MIGRATION_MAX_PASSES) {
         throw new Error(
@@ -768,6 +773,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       throw new MigrationRefusedError(`${reason}; this machine was not switched`);
     }
     const archive = archiveUnparseable(vault, dir, last.problems);
+    progress(`verifying ${imported} imported item(s)`);
     options.hooks?.beforeVerify?.();
     const gaps = verifyImport(ctx, last.seen);
     const base = {
@@ -808,6 +814,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       save({ phase: "failed", reason: unseen });
       throw new MigrationRefusedError(`${unseen}; this machine was not switched`);
     }
+    progress("switching this machine to the brain store");
     const settings = importBrainSettings(vault, store, agent);
     // Device keys go to this machine's config and the token map beside it,
     // so neither falls back to a default once the vault's files stop

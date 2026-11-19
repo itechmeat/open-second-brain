@@ -20,6 +20,7 @@ import { dirname } from "node:path";
 import { resolveMergedValue } from "../../secret-resolver.ts";
 import { SearchError } from "../types.ts";
 import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { assertNoMigrationInProgress } from "../../migration-gate.ts";
 import { machineStatePath } from "../../state/machine-state.ts";
 
 /** A registered OpenAI-compatible provider profile. */
@@ -94,6 +95,9 @@ function writeProviderRegistry(
   vault: string | null,
   registry: ReadonlyArray<ProviderProfile>,
 ): void {
+  // The provider registry passes no vault guard, so it asks the migration gate itself:
+  // the file is per-vault state a migration of this vault is moving.
+  if (vault !== null) assertNoMigrationInProgress(vault);
   const path = providerRegistryPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   // Sort by name so the on-disk file is deterministic across edits.

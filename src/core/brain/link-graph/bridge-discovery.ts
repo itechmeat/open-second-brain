@@ -40,6 +40,7 @@ import type { SchemaPack } from "../schema-pack.ts";
 import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 import { assertLaneWrite, readLaneText, writeLaneText } from "../../store/lane-pages.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -321,6 +322,9 @@ export function acceptBridge(
   target: string,
   opts: { readonly pack?: SchemaPack } = {},
 ): AcceptBridgeResult {
+  // The link is written into the source note's frontmatter, a vault write
+  // like any other: frozen vault, wrong store and running migration refuse.
+  assertVaultIdentityForWrite(vault);
   const sourceAbs = resolveNotePath(vault, source, { mustExist: true });
   resolveNotePath(vault, target, { mustExist: true });
 

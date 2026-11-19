@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { derivedDirIsSymlinked, readRegularFileNoFollow } from "../derived-store-guard.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { machineStateRoot } from "../state/machine-state.ts";
 
 const INJECT_CACHE_DIR = ".open-second-brain";
@@ -62,6 +63,10 @@ export function readInjectCache(vault: string, key: string): string | null {
  */
 export function writeInjectCache(vault: string, key: string, body: string): void {
   try {
+    // The cache lives in the per-vault state a store migration of the vault
+    // is moving: while it holds the gate the write is refused like any other,
+    // and the refusal is swallowed with the other failures below.
+    assertNoMigrationInProgress(vault);
     const root = cacheRoot(vault);
     if (root === null || derivedDirIsSymlinked(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR)) return;
     atomicWriteText(join(root, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR, `${key}.txt`), body, {
