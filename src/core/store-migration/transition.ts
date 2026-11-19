@@ -30,9 +30,10 @@ import { resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
 import { acquireDirLock } from "../store/local-lock.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { convertPass, dualWritePool, type ConvertHooks } from "./convert.ts";
-import { loadJournal, migrationDir } from "./journal.ts";
+import { loadJournalAndUnmarked, migrationDir } from "./journal.ts";
 import { journalScopeFor } from "./backup.ts";
 import type { JournalScope } from "./journal-scope.ts";
+import { loadIncrementalReads, saveIncrementalReads } from "./incremental-reads.ts";
 import { legacyDevices } from "./migration-records.ts";
 import { legacyFileStamps, recordImportWatermark } from "./transition-watermark.ts";
 
@@ -119,7 +120,13 @@ function importUnderLock(
   options: TransitionImportOptions,
 ): TransitionResult {
   const hooks = options.hooks;
-  const journal = loadJournal(dir, store, scope);
+  // One pass over the store, shard by shard, for the journal and the
+  // dual-written copies: the import never holds the store's records.
+  const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope);
+  // What earlier imports of this vault read (`incremental-reads.ts`): an
+  // import from the removal's archive reads everything.
+  const incremental =
+    options.identityOf === undefined ? loadIncrementalReads(dir, vault) : undefined;
   const ctx = {
     vault,
     store,
@@ -128,8 +135,9 @@ function importUnderLock(
     dir,
     journal,
     scope,
-    pool: dualWritePool(store, journal, scope),
+    pool: dualWritePool(store, journal, scope, unmarked),
     ...(hooks !== undefined ? { hooks } : {}),
+    ...(incremental !== undefined ? { incremental } : {}),
   };
   let imported = 0;
   let passes = 0;
@@ -154,6 +162,8 @@ function importUnderLock(
       break;
     }
   }
+  // Only a converged import says what it read is in the store.
+  if (incremental !== undefined && converged) saveIncrementalReads(dir, vault, incremental);
   const legacy = legacyDevices(store, [...seen]);
   if (options.recordWatermark === true) {
     recordImportWatermark(store, { stamps, devices: legacy, converged, heldBack });

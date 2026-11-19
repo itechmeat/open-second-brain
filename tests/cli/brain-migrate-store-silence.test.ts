@@ -48,7 +48,7 @@ const migrate = (...args: string[]) => cli("brain", "migrate-store", "--vault", 
 /** Migrate dev-a and set the threshold to 10 days: dev-b (2026-11-02) and dev-c (2026-09) are silent. */
 async function migratedWithTenDays(): Promise<void> {
   for (const rel of [
-    "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+    "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
     "Brain/log/stray.txt",
     "Brain/procedures/index.bin",
   ]) {

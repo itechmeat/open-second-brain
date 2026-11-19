@@ -9,10 +9,14 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { appendRecord, PartitionUnavailableError } from "../../../src/core/store/appender.ts";
+import {
+  appendRecord,
+  appendRecords,
+  PartitionUnavailableError,
+} from "../../../src/core/store/appender.ts";
 import { BLOB_REF_KEY, STORE_LINE_CAP_BYTES } from "../../../src/core/store/constants.ts";
 import { compareRecords } from "../../../src/core/store/envelope.ts";
-import { clockFilePath, observeClock } from "../../../src/core/store/clock-store.ts";
+import { clockFilePath, observeClock, readClock } from "../../../src/core/store/clock-store.ts";
 import { parseHlc } from "../../../src/core/store/hlc.ts";
 import { readShard } from "../../../src/core/store/reader.ts";
 import { listShards } from "../../../src/core/store/shard-list.ts";
@@ -329,5 +333,46 @@ describe("a record read before a write", () => {
     readShard(peer.path, { partitionRoot: partitionDir(tmp.root, "shared") });
     const mine = appendRecord(tmp.open("dev-a"), INPUT, { now: () => NOV_2026 });
     expect(parseHlc(mine.record.hlc)!.physical).toBe(NOV_2026);
+  });
+});
+
+const input = (stream: "log" | "events", n: number) =>
+  ({ partition: "shared", stream, kind: "note", agent: "a1", body: { n } }) as const;
+
+describe("batch append", () => {
+  let tmp: TempStore;
+  beforeEach(() => {
+    tmp = makeTempStore("osb-store-batch-");
+  });
+  afterEach(() => tmp.cleanup());
+
+  test("writes every record in order, each shard's lines together, with rising stamps", () => {
+    const store = tmp.open("dev-a");
+    const inputs = [input("log", 1), input("events", 2), input("log", 3), input("log", 4)];
+    const results = appendRecords(store, inputs, { now: () => NOV_2026 });
+    expect(results.map((r) => r.record.body["n"])).toEqual([1, 2, 3, 4]);
+    const stamps = results.map((r) => r.record.hlc);
+    for (let i = 1; i < results.length; i++) {
+      expect(compareRecords(results[i - 1]!.record, results[i]!.record)).toBeLessThan(0);
+    }
+    const log = readShard(results[0]!.path).records.map((r) => r.record.body["n"]);
+    const events = readShard(results[1]!.path).records.map((r) => r.record.body["n"]);
+    expect(log).toEqual([1, 3, 4]);
+    expect(events).toEqual([2]);
+    // The persisted clock is at the last stamp handed out, so the next
+    // single append orders after the whole batch.
+    expect(readClock(store.deviceStateDir, "dev-a")).toEqual(parseHlc(stamps.at(-1)!));
+    const next = appendRecord(store, input("log", 5), { now: () => NOV_2026 });
+    expect(compareRecords(results.at(-1)!.record, next.record)).toBeLessThan(0);
+  });
+
+  test("a batch with a record for a partition this machine lacks writes nothing", () => {
+    tmp.open("dev-a");
+    neverHeld(tmp.root);
+    const store = tmp.open("dev-a");
+    expect(() =>
+      appendRecords(store, [input("log", 1), { ...input("log", 2), partition: "private" }]),
+    ).toThrow(PartitionUnavailableError);
+    expect(existsSync(join(tmp.root, "shared", "log"))).toBe(false);
   });
 });

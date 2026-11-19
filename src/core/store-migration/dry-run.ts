@@ -13,8 +13,14 @@
  *    partition would receive under the phase 1 privacy rules;
  *  - every item that cannot be read as its surface writes it, with its
  *    path and line;
+ *  - what the sync tool's conflict copies and temp files would become
+ *    (`sync-leftovers.ts`): per surface the rows or files imported as
+ *    records, those identical to their original that add nothing, the
+ *    copies kept in the backup and not imported (each named), the copies
+ *    dropped with their original's rule, and the temp files ignored;
  *  - every legacy file or folder no mapping covers. Any such entry fails
- *    the dry run (`ok: false`).
+ *    the dry run (`ok: false`). A conflict copy whose original a mapping
+ *    covers, and a sync temp file, is never one.
  *
  * It never writes: no store, no index, no cache, no lock, no log event.
  */
@@ -36,8 +42,18 @@ import {
   recordDestination,
   type CatalogueEntry,
 } from "./catalogue.ts";
+import { endPrivacyBatchChunk, withPrivacyBatch } from "../store/reference-privacy.ts";
+import { IMPORT_BATCH_ITEMS } from "./import-batch.ts";
 import { unclaimedEntries, type UnmappedEntry } from "./legacy-claims.ts";
-import { emptyTally, scanLocator, type ScanTally } from "./legacy-scan.ts";
+import { emptyTally, scanCopyLines, scanLocator, type ScanTally } from "./legacy-scan.ts";
+import { fileCopyVerdicts, judgeCopyFile, recordsSignature } from "./convert.ts";
+import {
+  findSyncLeftovers,
+  SYNC_COPY_RULE,
+  SyncCopyTally,
+  type SyncCopyReport,
+  type SyncLeftovers,
+} from "./sync-leftovers.ts";
 
 /** The most unparseable items a report lists one by one. */
 export const DRY_RUN_PROBLEM_LIST_CAP = 500;
@@ -108,6 +124,8 @@ export interface MigrationDryRun {
   /** Unparseable items beyond {@link DRY_RUN_PROBLEM_LIST_CAP}. */
   readonly unparseable_not_listed: number;
   readonly unmapped: ReadonlyArray<UnmappedEntry>;
+  /** What the sync tool's conflict copies and temp files would become. */
+  readonly sync_copies: SyncCopyReport;
   readonly totals: {
     readonly items: number;
     readonly unparseable: number;
@@ -138,18 +156,83 @@ function vaultRel(vault: string, path: string): string {
 function scanEntry(
   vault: string,
   entry: CatalogueEntry,
+  families: ReadonlyMap<string, Set<string>>,
+  chunk: () => void,
 ): { tally: ScanTally; partitions: PartitionCounts | null } {
   const tally = emptyTally();
+  // Every item the scan reaches counts toward the chunk, as in the pass.
+  tally.onVisit = chunk;
   const destination = recordDestination(entry);
   const partitions: PartitionCounts | null =
     destination === null ? null : { shared: 0, private: 0, "private-when-held": 0 };
   for (const locator of entry.locators) {
     scanLocator(locator, tally, (item) => {
       if (destination === null || partitions === null) return;
-      partitions[itemPartition(itemRecords(vault, destination, item))] += 1;
+      const records = itemRecords(vault, destination, item);
+      partitions[itemPartition(records)] += 1;
+      families.get(item.path)?.add(recordsSignature(records));
     });
   }
   return { tally, partitions };
+}
+
+/**
+ * What the conflict copies would become, as the migration's pass decides
+ * it (`convert.ts`): a JSONL copy's row is imported unless its original
+ * or an earlier copy holds the same records; a whole-file copy is
+ * identical, kept, or (its original gone) imported.
+ */
+function planSyncCopies(
+  vault: string,
+  leftovers: SyncLeftovers,
+  families: ReadonlyMap<string, Set<string>>,
+  onProblem: (surface: string, problem: ScanTally["problems"][number]) => void,
+): SyncCopyReport {
+  const copies = new SyncCopyTally(leftovers.temps);
+  const fileVerdicts = fileCopyVerdicts(leftovers.copies);
+  for (const copy of leftovers.copies) {
+    copies.copy(copy);
+    if (copy.rule === SYNC_COPY_RULE.dropped) {
+      copies.dropped(copy);
+      continue;
+    }
+    const destination = recordDestination(copy.entry);
+    if (copy.rule === SYNC_COPY_RULE.rows && destination !== null) {
+      const family = families.get(copy.original)!;
+      // A row the migration could not read is reported as it reports it.
+      const tally = emptyTally();
+      // Matched against the original and the earlier copies, as the pass does.
+      const mine: string[] = [];
+      scanCopyLines(copy.locator, copy.path, copy.original, tally, (item) => {
+        const signature = recordsSignature(itemRecords(vault, destination, item));
+        if (family.has(signature)) {
+          copies.identical(copy);
+          return;
+        }
+        mine.push(signature);
+        copies.imported(copy);
+      });
+      for (const signature of mine) family.add(signature);
+      for (const problem of tally.problems) onProblem(copy.entry.id, problem);
+      continue;
+    }
+    const verdict =
+      destination === null
+        ? judgeCopyFile({ ...copy, rule: SYNC_COPY_RULE.document })
+        : (fileVerdicts.get(copy.path) ?? judgeCopyFile(copy));
+    if (verdict.kind === "identical") copies.identical(copy);
+    else if (verdict.kind === "kept") copies.kept(copy, verdict.reason);
+    else if (destination === null) copies.kept(copy, "its original is gone");
+    else {
+      try {
+        itemRecords(vault, destination, verdict.item);
+        copies.imported(copy);
+      } catch (error) {
+        copies.kept(copy, (error as Error).message);
+      }
+    }
+  }
+  return copies.report();
 }
 
 export interface MigrationDryRunOptions {
@@ -162,6 +245,12 @@ export function planMigrationDryRun(
   vault: string,
   options: MigrationDryRunOptions = {},
 ): MigrationDryRun {
+  // One operation over every legacy row: the privacy judges share their
+  // per-vault work across the rows (`withPrivacyBatch`).
+  return withPrivacyBatch(() => planDryRun(vault, options));
+}
+
+function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDryRun {
   const nowMs = options.nowMs ?? Date.now();
   const surfaces: SurfaceReport[] = [];
   const unparseable: UnparseableReport[] = [];
@@ -172,9 +261,21 @@ export function planMigrationDryRun(
   let items = 0;
 
   const catalogue = migrationCatalogue(vault);
+  const leftovers = findSyncLeftovers(vault, catalogue);
+  const families = new Map<string, Set<string>>();
+  for (const copy of leftovers.copies) {
+    if (copy.rule === SYNC_COPY_RULE.rows) families.set(copy.original, new Set());
+  }
+  // A page-reference verdict is never older than one import batch's worth
+  // of rows, as in the migration's pass (`endPrivacyBatchChunk`).
+  let rows = 0;
+  const chunk = (): void => {
+    rows += 1;
+    if (rows % IMPORT_BATCH_ITEMS === 0) endPrivacyBatchChunk();
+  };
   for (const entry of catalogue) {
     allLocators.push(...entry.locators);
-    const { tally, partitions } = scanEntry(vault, entry);
+    const { tally, partitions } = scanEntry(vault, entry, families, chunk);
     for (const [device, seen] of tally.devices) {
       const total = devices.get(device) ?? { files: 0, items: 0, lastSeenMs: 0 };
       total.files += seen.files;
@@ -204,6 +305,16 @@ export function planMigrationDryRun(
       unparseable: tally.problems.length,
     });
   }
+
+  const syncCopies = planSyncCopies(vault, leftovers, families, (surface, problem) => {
+    problems += 1;
+    const row = surfaces.find((s) => s.id === surface);
+    if (row !== undefined)
+      surfaces[surfaces.indexOf(row)] = { ...row, unparseable: row.unparseable + 1 };
+    if (unparseable.length < DRY_RUN_PROBLEM_LIST_CAP) {
+      unparseable.push({ surface, ...problem, path: vaultRel(vault, problem.path) });
+    }
+  });
 
   const unmapped = unclaimedEntries(
     vault,
@@ -235,6 +346,7 @@ export function planMigrationDryRun(
     unparseable,
     unparseable_not_listed: problems - unparseable.length,
     unmapped,
+    sync_copies: syncCopies,
     totals: { items, unparseable: problems, unmapped: unmapped.length },
   };
 }

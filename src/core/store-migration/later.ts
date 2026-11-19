@@ -13,9 +13,11 @@
  * shape this release cannot read is waited on and named, never skipped.
  */
 
+import { statSync } from "node:fs";
+
 import { sleepSync } from "../fs-atomic.ts";
 import { STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
-import { readPartition, type CutEntry } from "../store/state-digest.ts";
+import { forEachPartitionShard, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import { MIGRATION_DONE_KIND, migrationDoneRecords } from "./migration-records.ts";
@@ -67,7 +69,7 @@ function cutsOf(value: unknown): Array<[StorePartition, ReadonlyArray<CutEntry>]
 }
 
 /** What the store still lacks of every `migration-done` cut it holds. */
-export function cutWait(store: StoreHandle): CutWait {
+export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): CutWait {
   const missing: string[] = [];
   const skipped = new Set<StorePartition>();
   const firstMachines = new Set<string>();
@@ -75,15 +77,40 @@ export function cutWait(store: StoreHandle): CutWait {
   const shardsOf = (partition: StorePartition) => {
     let shards = local.get(partition);
     if (shards === undefined) {
-      shards = new Map();
-      for (const shard of readPartition(partitionDir(store.root, partition), {
-        onUnreadable: () => {},
-      })) {
-        shards.set(shard.rel, {
-          count: shard.all.length,
-          ids: new Set(shard.all.map((r) => r.id)),
-        });
-      }
+      const held = new Map<string, { count: number; ids: Set<string> }>();
+      // Shard by shard, keeping only each shard's count and ids; a shard
+      // whose file is unchanged since the last poll is not read again.
+      const known = cache.get(partition) ?? new Map<string, CachedCutShard>();
+      const next = new Map<string, CachedCutShard>();
+      // The stamp is taken before the shard is read: a shard that grows
+      // while it is read carries a newer stamp and is read again.
+      const stamps = new Map<string, string | null>();
+      forEachPartitionShard(
+        partitionDir(store.root, partition),
+        {
+          onUnreadable: () => {},
+          reuse: ({ rel, path }) => {
+            const stamp = fileStampOf(path);
+            stamps.set(rel, stamp);
+            const hit = known.get(rel);
+            if (stamp === null || hit === undefined || hit.stamp !== stamp) return false;
+            next.set(rel, hit);
+            held.set(rel, hit);
+            return true;
+          },
+        },
+        (shard) => {
+          const entry = {
+            stamp: stamps.get(shard.rel) ?? null,
+            count: shard.all.length,
+            ids: new Set(shard.all.map((r) => r.id)),
+          };
+          if (entry.stamp !== null) next.set(shard.rel, entry);
+          held.set(shard.rel, entry);
+        },
+      );
+      cache.set(partition, next);
+      shards = held;
       local.set(partition, shards);
     }
     return shards;
@@ -125,11 +152,33 @@ export function cutWait(store: StoreHandle): CutWait {
  */
 export function waitForCut(store: StoreHandle, budgetMs: number, intervalMs = 1000): CutWait {
   const deadline = Date.now() + budgetMs;
-  let wait = cutWait(store);
+  // Each poll reads only the shards sync changed since the one before.
+  const cache: CutShardCache = new Map();
+  let wait = cutWait(store, cache);
   while (wait.missing.length > 0 && Date.now() < deadline) {
     const pause = Math.min(intervalMs, deadline - Date.now());
     if (pause > 0) sleepSync(pause);
-    wait = cutWait(store);
+    wait = cutWait(store, cache);
   }
   return wait;
+}
+
+/** What a poll of {@link cutWait} knew of one shard, by the file's stamp. */
+interface CachedCutShard {
+  readonly stamp: string | null;
+  readonly count: number;
+  readonly ids: Set<string>;
+}
+
+/** Per partition, per shard: what the last poll read. */
+export type CutShardCache = Map<StorePartition, Map<string, CachedCutShard>>;
+
+/** `size:mtimeMs:ctimeMs:ino` of a file, or null when it cannot be read. */
+function fileStampOf(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    return `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.ino}`;
+  } catch {
+    return null;
+  }
 }

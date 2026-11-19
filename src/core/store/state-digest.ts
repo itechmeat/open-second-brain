@@ -97,6 +97,12 @@ export interface ReadPartitionOptions {
    * as unread; a caller that only needs the cut may skip it.
    */
   readonly onUnreadable?: (shard: UnreadableShard) => void;
+  /**
+   * {@link forEachPartitionShard} only: true for a shard the caller already
+   * holds what it needs of (it compares the file's stamp): the shard is not
+   * read and not handed on. Such a read names no shard as missing.
+   */
+  readonly reuse?: (shard: { readonly rel: string; readonly path: string }) => boolean;
 }
 
 export interface CutEntry {
@@ -155,52 +161,78 @@ export function readPartition(
   options: ReadPartitionOptions = {},
 ): PartitionShard[] {
   const out: PartitionShard[] = [];
+  forEachPartitionShard(partitionRoot, options, (shard) => out.push(shard));
+  return out;
+}
+
+/**
+ * {@link readPartition} one shard at a time, in the same order (sorted by
+ * relative path): `onShard` gets each shard as it is read and the read
+ * keeps none of them, so a caller that needs only some of each shard's
+ * records (their ids and checksums, the marked ones) never holds the
+ * whole partition at once.
+ */
+export function forEachPartitionShard(
+  partitionRoot: string,
+  options: ReadPartitionOptions,
+  onShard: (shard: PartitionShard) => void,
+): void {
   const listed: string[] = [];
   const compactions: Compaction[] = [];
+  const listing: Array<{
+    readonly ref: StreamRef & { stream: StoreStream };
+    readonly shard: ReturnType<typeof listShards>[number];
+  }> = [];
   for (const ref of streamRefs(partitionRoot)) {
-    for (const shard of listShards(partitionRoot, ref)) {
-      listed.push(shard.rel);
-      let read: ReturnType<typeof readShard>;
-      try {
-        read = readShard(shard.path, { partitionRoot });
-      } catch (error) {
-        if (options.onUnreadable === undefined) throw error;
-        options.onUnreadable({ rel: shard.rel, path: shard.path, error });
-        continue;
-      }
-      // A link or special file under a shard name holds no record here; the
-      // caller that asks hears of it rather than seeing an empty shard.
-      const notAFile = read.diagnostics.find((d) => d.kind === "not-a-file");
-      if (notAFile !== undefined && options.onUnreadable !== undefined) {
-        options.onUnreadable({
-          rel: shard.rel,
-          path: shard.path,
-          error: new Error(notAFile.reason),
-        });
-        continue;
-      }
-      const gap = shardReadGap(read);
-      if (gap !== null) {
-        options.onUnreadable?.({
-          rel: shard.rel,
-          path: shard.path,
-          error: new Error(`the shard was read only in part: ${gap}`),
-          incomplete: true,
-        });
-      }
-      compactions.push(...read.compactions);
-      const all = read.records.map((r) => r.record);
-      out.push({
+    for (const shard of listShards(partitionRoot, ref)) listing.push({ ref, shard });
+  }
+  listing.sort((a, b) => compareCodeUnits(a.shard.rel, b.shard.rel));
+  for (const { ref, shard } of listing) {
+    listed.push(shard.rel);
+    if (options.reuse?.(shard) === true) continue;
+    let read: ReturnType<typeof readShard>;
+    try {
+      read = readShard(shard.path, { partitionRoot });
+    } catch (error) {
+      if (options.onUnreadable === undefined) throw error;
+      options.onUnreadable({ rel: shard.rel, path: shard.path, error });
+      continue;
+    }
+    // A link or special file under a shard name holds no record here; the
+    // caller that asks hears of it rather than seeing an empty shard.
+    const notAFile = read.diagnostics.find((d) => d.kind === "not-a-file");
+    if (notAFile !== undefined && options.onUnreadable !== undefined) {
+      options.onUnreadable({
         rel: shard.rel,
-        device: shard.device,
-        stream: ref.stream,
-        all,
-        records: read.records.filter((r) => r.bodyState !== "pending").map((r) => r.record),
-        pending: read.records.filter((r) => r.bodyState === "pending").map((r) => r.record),
-        heldTailBytes: read.pendingTailBytes,
+        path: shard.path,
+        error: new Error(notAFile.reason),
+      });
+      continue;
+    }
+    const gap = shardReadGap(read);
+    if (gap !== null) {
+      options.onUnreadable?.({
+        rel: shard.rel,
+        path: shard.path,
+        error: new Error(`the shard was read only in part: ${gap}`),
+        incomplete: true,
       });
     }
+    compactions.push(...read.compactions);
+    const all = read.records.map((r) => r.record);
+    onShard({
+      rel: shard.rel,
+      device: shard.device,
+      stream: ref.stream,
+      all,
+      records: read.records.filter((r) => r.bodyState !== "pending").map((r) => r.record),
+      pending: read.records.filter((r) => r.bodyState === "pending").map((r) => r.record),
+      heldTailBytes: read.pendingTailBytes,
+    });
   }
+  // Shards the caller reused were not read, so their compactions are not
+  // known: a reusing read names nothing as missing.
+  if (options.reuse !== undefined) return;
   for (const rel of trackSeenShards(
     partitionRoot,
     { prefix: "" },
@@ -213,7 +245,6 @@ export function readPartition(
       error: new Error(SEEN_SHARD_MISSING_REASON),
     });
   }
-  return out.toSorted((a, b) => compareCodeUnits(a.rel, b.rel));
 }
 
 /** The shards a cut covers: every stream but the digests. */

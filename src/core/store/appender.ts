@@ -34,7 +34,8 @@ import { closeSync, fstatSync, fsyncSync, openSync, readSync, writeSync } from "
 import { dirname, join } from "node:path";
 
 import { observedClockFloor } from "./clock-floor.ts";
-import { tickClock, type WallClock } from "./clock-store.ts";
+import { tickClockMany, type WallClock } from "./clock-store.ts";
+import type { Hlc } from "./hlc.ts";
 import {
   BLOB_REF_BYTES_KEY,
   BLOB_REF_KEY,
@@ -69,6 +70,12 @@ export interface AppendInput extends StreamRef {
 export interface AppendOptions {
   /** Wall clock for the send rule (default: `Date.now`). */
   readonly now?: WallClock;
+  /**
+   * Called after each shard's lines of a batch are written and its lock
+   * released: a fault-injection point for the crash tests; writers never
+   * set it.
+   */
+  readonly afterShard?: () => void;
 }
 
 export interface AppendResult {
@@ -161,19 +168,21 @@ export function appendRecord(
   input: AppendInput,
   options: AppendOptions = {},
 ): AppendResult {
-  if (!store.partitions.has(input.partition)) {
-    throw new PartitionUnavailableError(input.partition, store.root);
-  }
+  return appendRecords(store, [input], options)[0]!;
+}
+
+interface PreparedLine {
+  readonly result: AppendResult;
+  readonly bytes: Buffer;
+  readonly partition: StorePartition;
+}
+
+/** Steps 3 of the module docblock for one record stamped `hlc`. */
+function prepareLine(store: StoreHandle, input: AppendInput, hlc: Hlc): PreparedLine {
   const ref: StreamRef =
     input.ledger === undefined
       ? { stream: input.stream }
       : { stream: input.stream, ledger: input.ledger };
-  const hlc = tickClock(
-    store.deviceStateDir,
-    store.device,
-    options.now,
-    observedClockFloor(store.root),
-  );
   const month = shardMonth(hlc.physical);
   // Validates the stream, ledger and device before anything is written.
   const rel = shardRelPath(ref, store.device, month);
@@ -204,10 +213,56 @@ export function appendRecord(
     });
     spilled = true;
   }
-
   const path = shardPath(store.root, input.partition, ref, store.device, month);
-  withLocalLock(shardLockTarget(store.deviceStateDir, input.partition, rel), () =>
-    appendLine(partitionDir(store.root, input.partition), path, bytes),
+  return { result: { record, path, rel, spilled }, bytes, partition: input.partition };
+}
+
+/**
+ * Append several records, in order, as one batch: the clock is ticked
+ * once for all of them (`tickClockMany`), every blob is complete before
+ * any line names it, and each shard the batch touches gets its lines in
+ * one write and one fsync under its lock, in the order of `inputs`. A
+ * batch refused for a partition this machine does not hold writes
+ * nothing. A crash mid-batch leaves each shard with a prefix of its lines
+ * (and at most one torn last line, which readers report), as a crash
+ * between single appends would. Returns the results in input order.
+ */
+export function appendRecords(
+  store: StoreHandle,
+  inputs: ReadonlyArray<AppendInput>,
+  options: AppendOptions = {},
+): AppendResult[] {
+  for (const input of inputs) {
+    if (!store.partitions.has(input.partition)) {
+      throw new PartitionUnavailableError(input.partition, store.root);
+    }
+  }
+  if (inputs.length === 0) return [];
+  const stamps = tickClockMany(
+    store.deviceStateDir,
+    store.device,
+    inputs.length,
+    options.now,
+    observedClockFloor(store.root),
   );
-  return { record, path, rel, spilled };
+  const lines = inputs.map((input, i) => prepareLine(store, input, stamps[i]!));
+  const byShard = new Map<string, PreparedLine[]>();
+  for (const line of lines) {
+    const at = `${line.partition}\u0000${line.result.rel}`;
+    const group = byShard.get(at);
+    if (group === undefined) byShard.set(at, [line]);
+    else group.push(line);
+  }
+  for (const group of byShard.values()) {
+    const first = group[0]!;
+    withLocalLock(shardLockTarget(store.deviceStateDir, first.partition, first.result.rel), () =>
+      appendLine(
+        partitionDir(store.root, first.partition),
+        first.result.path,
+        Buffer.concat(group.map((line) => line.bytes)),
+      ),
+    );
+    options.afterShard?.();
+  }
+  return lines.map((line) => line.result);
 }

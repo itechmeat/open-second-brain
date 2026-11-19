@@ -390,7 +390,7 @@ describe("docs/brain-store.md", () => {
     legacy = makeLegacyVault("osb-doc-brain-store-vault-");
     // A clean legacy install: drop the fixture's entries no mapping covers.
     for (const rel of [
-      "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+      "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
       "Brain/log/stray.txt",
       "Brain/procedures/index.bin",
     ]) {

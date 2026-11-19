@@ -34,12 +34,15 @@ describe("conflictCopies", () => {
       "about-me (Sergey's conflicted copy 2026-11-06).md",
       "about-me (conflict notes).md",
       "about-me-notes.md",
+      // A stamp spelled in capitals is still a copy, as it always was here.
+      "about-me.SYNC-CONFLICT-20261106-120001-ABCDEFG.md",
     ]) {
       writeFileSync(join(dir, name), "x");
     }
     expect(conflictCopies(join(dir, "about-me.md")).map((p) => basename(p))).toEqual([
       "about-me (Sergey's conflicted copy 2026-11-06).md",
       "about-me (conflicted copy 2026-11-06).md",
+      "about-me.SYNC-CONFLICT-20261106-120001-ABCDEFG.md",
       "about-me.sync-conflict-20261106-120000-ABCDEFG.md",
     ]);
   });

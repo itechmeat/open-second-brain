@@ -25,7 +25,11 @@ import {
 import { STORE_DUAL_WRITE_ENV, STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { readDualWriteStatus } from "../../../src/core/store/dual-write.ts";
 import type { StoreRecord } from "../../../src/core/store/envelope.ts";
-import { rowNamesPrivatePage } from "../../../src/core/store/reference-privacy.ts";
+import {
+  logRefsNamePrivatePage,
+  rowNamesPrivatePage,
+  withPrivacyBatch,
+} from "../../../src/core/store/reference-privacy.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
 import { neverHeld } from "../../helpers/held-partitions.ts";
@@ -299,5 +303,33 @@ describe("the row judge", () => {
     let deep: unknown = "plain";
     for (let i = 0; i < 10_000; i++) deep = [deep];
     expect(rowNamesPrivatePage(vault, deep)).toBe(true);
+  });
+});
+
+describe("a batch of many rows (a migration pass)", () => {
+  test("judges every row as it is judged alone, a reference repeated across rows included", () => {
+    seedPreference("open");
+    writePage("Brain/preferences/pref-secret.md", "id: pref-secret\nvisibility: private");
+    const rows: unknown[] = [
+      { pref_id: "pref-open" },
+      { pref_id: "pref-secret" },
+      { pref_id: "pref-gone" },
+      { note: "see [[pref-secret]]" },
+      { note: "plain words" },
+      { pref_id: "pref-open" },
+      { pref_id: "pref-secret" },
+    ];
+    const refs: string[][] = [["pref-open"], ["[[pref-secret]]"], ["pref-gone"], []];
+    const alone = {
+      rows: rows.map((row) => rowNamesPrivatePage(vault, row)),
+      refs: refs.map((r) => logRefsNamePrivatePage(vault, r)),
+    };
+    const batched = withPrivacyBatch(() => ({
+      rows: rows.map((row) => rowNamesPrivatePage(vault, row)),
+      refs: refs.map((r) => logRefsNamePrivatePage(vault, r)),
+    }));
+    expect(alone.rows).toEqual([false, true, true, true, false, false, true]);
+    expect(alone.refs).toEqual([false, true, true, false]);
+    expect(batched).toEqual(alone);
   });
 });

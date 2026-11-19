@@ -31,6 +31,7 @@ import {
   AUTO_MIGRATION_STATE,
 } from "../../../src/core/store-migration/auto-report.ts";
 import { runAutoStoreMigration } from "../../../src/core/store-migration/auto-worker.ts";
+import { runMigration } from "../../../src/core/store-migration/migrate.ts";
 import {
   dropUnparseable,
   makeMigrationBench,
@@ -87,6 +88,36 @@ describe("autoMigrationReport", () => {
     } finally {
       releaseAutoMigrationLock(bench.vault, token!);
     }
+  });
+
+  test("running: how far the import is, from the run's progress file", () => {
+    let seen: { report: ReturnType<typeof report>; doctor: string } | null = null;
+    const result = runMigration(bench.vault, {
+      settleMs: 0,
+      hooks: {
+        beforeVerify: () => {
+          const claimedAt = new Date();
+          const token = claimAutoMigrationLock(bench.vault, claimedAt);
+          try {
+            seen = {
+              report: autoMigrationReport({ vault: bench.vault, now: claimedAt }),
+              doctor: JSON.stringify(runDoctor(bench.vault, { now: claimedAt })),
+            };
+          } finally {
+            releaseAutoMigrationLock(bench.vault, token!);
+          }
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    const { report: r, doctor } = seen!;
+    expect(r.state).toBe(AUTO_MIGRATION_STATE.running);
+    expect(r.progress).not.toBeNull();
+    expect(r.progress!.journaled).toBe(result.imported);
+    expect(r.progress!.planned).toBeGreaterThanOrEqual(r.progress!.journaled);
+    const words = `${r.progress!.journaled} of about ${r.progress!.planned} legacy items imported so far`;
+    expect(r.message).toContain(words);
+    expect(doctor).toContain(words);
   });
 
   test("waiting: for another device's cut", () => {

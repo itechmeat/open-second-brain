@@ -92,6 +92,34 @@ export function tickClock(
   });
 }
 
+/**
+ * {@link tickClock} for `count` new local records at once: the stamps of
+ * consecutive sends, in order, under one lock and with one persisted
+ * write (the last stamp), so a batch append pays one clock write instead
+ * of one per record. The persisted clock is never behind a stamp handed
+ * out, as with one tick per record.
+ */
+export function tickClockMany(
+  deviceStateDir: string,
+  device: string,
+  count: number,
+  now: WallClock = systemWallClock,
+  floor: Hlc | null = null,
+): Hlc[] {
+  const out: Hlc[] = [];
+  if (count <= 0) return out;
+  update(deviceStateDir, device, (local) => {
+    const wall = now();
+    let at = floor === null ? local : receiveHlc(local, floor, wall);
+    for (let i = 0; i < count; i += 1) {
+      at = sendHlc(at, wall);
+      out.push(at);
+    }
+    return at;
+  });
+  return out;
+}
+
 /** Receive rule, persisted: raise the local clock after ingesting `remote`. */
 export function observeClock(
   deviceStateDir: string,

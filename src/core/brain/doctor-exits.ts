@@ -672,6 +672,13 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "that writer and moves the directory out, and nothing here can tell what in it they want kept",
   },
   {
+    code: "sync-conflict-copies-kept",
+    reason:
+      "the kept copies are other versions of a record or a document that only the person can " +
+      "judge; they read them in the backup folder the finding names, copy over what they want " +
+      "and remove the list, and no command can tell which version they meant",
+  },
+  {
     code: "lessons-approvals-unreadable",
     reason:
       "the approvals ledger is damaged; every approval is lifted only by the operator moving or " +

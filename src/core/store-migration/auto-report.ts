@@ -23,6 +23,12 @@ import {
   type GateRefusal,
 } from "./gate-decision.ts";
 import { gatherGate, stoppedGateOf } from "./gate-state.ts";
+import type { OwnMigrationRunRead } from "./auto-probe.ts";
+import {
+  describeMigrationGateProgress,
+  readMigrationGateProgress,
+  type MigrationGateProgress,
+} from "../migration-gate.ts";
 import {
   AUTO_MIGRATION_ROLLBACK_COMMAND,
   type AutoMigrationFailure,
@@ -87,6 +93,8 @@ export interface AutoMigrationReport {
   readonly retryAfter: string | null;
   /** `waiting`: the devices whose cut this machine waits for. */
   readonly firstMachines: ReadonlyArray<string>;
+  /** `running`: how far the run's import is, when the run has recorded it. */
+  readonly progress: { readonly journaled: number; readonly planned: number } | null;
   /**
    * Why the opt-out reads as off without a plain off value (an
    * unrecognised value, an unreadable machine config), or `null`.
@@ -116,6 +124,7 @@ function report(
     error: null,
     retryAfter: null,
     firstMachines: [],
+    progress: null,
     settingProblem: null,
     ...fields,
   });
@@ -169,6 +178,8 @@ export interface ReportFacts {
    * the run state reads rolled back (gate decision rule 10).
    */
   readonly rollbackPending: "unfinished" | "unreadable" | null;
+  /** How far this device's run in progress is (the gate's progress file, `migration-gate.ts`), or null. */
+  readonly progress?: MigrationGateProgress | null;
 }
 
 /** The report for `vault` on this machine. Never throws on a missing file. */
@@ -205,6 +216,7 @@ export function autoMigrationReport(source: AutoMigrationReportSource): AutoMigr
       g.state.run?.phase === "rolled-back"
         ? null
         : g.state.rollback,
+    progress: runProgress(g.context.own),
   });
 }
 
@@ -223,6 +235,14 @@ function lostWorkerReport(text: string): AutoMigrationReport {
     manualCommand: MIGRATE_STORE_COMMAND,
     error: reportableText(text),
   });
+}
+
+/** The progress file of this device's run in progress, or null. */
+function runProgress(own: OwnMigrationRunRead): MigrationGateProgress | null {
+  if (own.kind !== "run" || own.run.state.kind !== "state") return null;
+  const state = own.run.state.state;
+  if (state.phase !== "in-progress") return null;
+  return readMigrationGateProgress(state.run_id);
 }
 
 /** A path as one shell argument: quoted when it holds a space or a shell character. */
@@ -405,6 +425,20 @@ function failedReport(
  * the details (the failure, the wait, the worker's process). Pure.
  */
 export function reportOf(d: GateDecision, f: ReportFacts): AutoMigrationReport {
+  const r = decisionReport(d, f);
+  if (r.state !== AUTO_MIGRATION_STATE.running || f.progress == null) return r;
+  // The run's one progress file: its step, and its counts once known.
+  const { journaled, planned } = f.progress;
+  return Object.freeze({
+    ...r,
+    message: `${r.message}; ${describeMigrationGateProgress(f.progress)}`,
+    ...(journaled !== undefined && planned !== undefined
+      ? { progress: { journaled, planned: Math.max(planned, journaled) } }
+      : {}),
+  });
+}
+
+function decisionReport(d: GateDecision, f: ReportFacts): AutoMigrationReport {
   const manual = f.nextCommands.join(", then ") || null;
   // The claim's answer first: a worker that runs is what happens now,
   // unless there is nothing to migrate or finish at all.
@@ -699,6 +733,7 @@ export function autoMigrationReportJson(r: AutoMigrationReport): Record<string, 
     manual_command: r.manualCommand,
     ...(r.pid !== null ? { pid: r.pid } : {}),
     ...(r.since !== null ? { since: r.since } : {}),
+    ...(r.progress !== null ? { progress: r.progress } : {}),
     ...(r.error !== null ? { error: r.error } : {}),
     ...(r.retryAfter !== null ? { retry_after: r.retryAfter } : {}),
     ...(r.firstMachines.length > 0 ? { first_machines: r.firstMachines } : {}),

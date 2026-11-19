@@ -88,7 +88,7 @@ describe("o2b brain migrate-store --dry-run", () => {
 
   test("exits 0 once every legacy entry has a destination", async () => {
     for (const rel of [
-      "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+      "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
       "Brain/log/stray.txt",
       "Brain/procedures/index.bin",
     ]) {
@@ -165,7 +165,7 @@ describe("o2b brain migrate-store", () => {
 
   test("migrates the vault and records the switch", async () => {
     for (const rel of [
-      "Brain/log/2026-11-01.sync-conflict-20261101-120000-ABC.jsonl",
+      "Brain/log/stray.sync-conflict-20261101-120000-ABC.txt",
       "Brain/log/stray.txt",
       "Brain/procedures/index.bin",
     ]) {

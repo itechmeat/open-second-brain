@@ -433,8 +433,13 @@ export function processedSignalPath(vault: string, date: string, slug: string): 
 
 /** Preference path: `Brain/preferences/pref-<slug>.md`. */
 export function preferencePath(vault: string, slug: string): string {
+  return preferencePathUnder(brainDirs(vault), vault, slug);
+}
+
+/** {@link preferencePath} with the vault's Brain folders already resolved (`brainDirs`). */
+export function preferencePathUnder(dirs: BrainDirs, vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(join(brainDirs(vault).preferences, `pref-${s}.md`), vault);
+  return ensureInsideVault(join(dirs.preferences, `pref-${s}.md`), vault);
 }
 
 /**
@@ -498,8 +503,13 @@ export function preferenceHistoryStem(slug: string): string {
 
 /** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
 export function retiredPath(vault: string, slug: string): string {
+  return retiredPathUnder(brainDirs(vault), vault, slug);
+}
+
+/** {@link retiredPath} with the vault's Brain folders already resolved (`brainDirs`). */
+export function retiredPathUnder(dirs: BrainDirs, vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(join(brainDirs(vault).retired, `ret-${s}.md`), vault);
+  return ensureInsideVault(join(dirs.retired, `ret-${s}.md`), vault);
 }
 
 /** Pending skill-proposal path: `Brain/skill-proposals/pending/prop-<slug>.md`. */

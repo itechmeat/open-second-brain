@@ -48,11 +48,20 @@ import { schemaRecordAttestation, STORE_SCHEMA_PACK_SOURCE } from "../brain/sche
 import { parseBrainYaml } from "../brain/yaml-parse.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import { appendRecord } from "../store/appender.ts";
-import { AUTHORITY_FIELD, LEDGER_ROW_KIND, SETTING_SET_KIND } from "../store/constants.ts";
+import {
+  AUTHORITY_FIELD,
+  LEDGER_ROW_KIND,
+  SETTING_ENTRY_KIND,
+  SETTING_SET_KIND,
+  SETTING_UNSET_KIND,
+  STORE_PARTITIONS,
+} from "../store/constants.ts";
+import type { StoreRecord } from "../store/envelope.ts";
 import { DUAL_WRITE_LEDGERS } from "../store/dual-write-records.ts";
 import { foldSettings } from "../store/fold-settings.ts";
 import type { StoreHandle } from "../store/store-open.ts";
-import { heldRecords } from "./journal.ts";
+import { readStreamRecords } from "../store/read/stream-read.ts";
+import { describeUnseen } from "./journal.ts";
 
 // The classification lives in a leaf module so the settings reader
 // (`brain/policy/settings-source.ts`) can import it without closing an
@@ -115,6 +124,11 @@ function entries(parsed: Record<string, unknown>): Array<[string, string | undef
   return out;
 }
 
+/** The store's settings cannot all be read: nothing was imported. */
+export class BrainSettingsUnreadableError extends Error {
+  override readonly name = "BrainSettingsUnreadableError";
+}
+
 /**
  * Import `_brain.yaml` of `vault` into `store`: shared keys become
  * `setting-set` records unless the store's settings fold already holds the
@@ -135,7 +149,32 @@ export function importBrainSettings(
     device: [] as Array<{ yaml: string; line: string }>,
     unknown: [] as string[],
   };
-  const fold = foldSettings(heldRecords(store));
+  // The settings stream alone, read right here: a setting another machine
+  // set or unset a moment ago is seen before a stale file value is
+  // appended over it.
+  const settings: StoreRecord[] = [];
+  const unreadable: string[] = [];
+  const pending: string[] = [];
+  for (const partition of STORE_PARTITIONS) {
+    if (!store.partitions.has(partition)) continue;
+    const read = readStreamRecords(store.root, partition, { stream: "settings" });
+    for (const rel of read.unreadable) unreadable.push(`${partition}/${rel}`);
+    for (const blob of read.pendingBlobs) pending.push(`${partition} settings blob ${blob}`);
+    for (const record of read.records) {
+      if (
+        record.kind === SETTING_SET_KIND ||
+        record.kind === SETTING_UNSET_KIND ||
+        record.kind === SETTING_ENTRY_KIND
+      ) {
+        settings.push(record);
+      }
+    }
+  }
+  // A setting this machine cannot read must never read as absent: the
+  // stale file value would be appended over it. Nothing is appended.
+  const named = describeUnseen({ unreadable: unreadable.toSorted(), partial: pending.toSorted() });
+  if (named !== null) throw new BrainSettingsUnreadableError(named);
+  const fold = foldSettings(settings);
   const schemaAttestations: string[] = [];
   // `_permissions.yaml` becomes the operator-only `permissions.document`
   // setting (review finding F461): its text exactly as the file holds it,
