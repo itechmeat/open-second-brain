@@ -1398,6 +1398,8 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 79 -> 80: the skill accept journal writes its repair markers as machine-state files, not lane records.
  * 80 -> 81: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
  * 81 -> 82: the search index writer lock is taken, refreshed and released by its own module instead of `proper-lockfile`, to check ownership.
+ * 82 -> 83: `src/core/store-migration/auto-state.ts` claims and releases the automatic store migration worker lock (an exclusive create) and removes its state and notice files once moot.
+ * 83 -> 82: that module keeps its files in the device-local folder of all stores, never in a vault, so it leaves the in-vault census.
  */
 const DIRECT_WRITE_ROWS = 82;
 
@@ -1652,6 +1654,10 @@ const DIRECT_WRITE_ROWS = 82;
  * usage tick appends no store record (task 3.10).
  * 114 -> 115: the lane-id repair writes its device-local "repaired" marker
  * with the shared atomic writer, once per store (task 3.9).
+ * 115 -> 116: the automatic store migration writes its failure or waiting
+ * state and its one-time notice with the shared atomic writer.
+ * 116 -> 115: those files left the vault for the device-local folder of
+ * all stores.
  */
 const SHARED_HELPER_ROWS = 115;
 
@@ -1777,6 +1783,8 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 78 -> 79: the skill accept journal's repair markers are machine-state files.
  * 79 -> 80: machine-state reads a bare vault's own `.open-second-brain/` to seed the device-local state (device-local writes only).
  * 80 -> 81: the search index writer lock's own module (lock directory metadata only, no stamped bytes).
+ * 81 -> 82: the automatic store migration worker lock and state removal (machine state, no note).
+ * 82 -> 81: those files left the vault for the device-local folder of all stores.
  */
 const UNSTAMPED_DIRECT_ROWS = 81;
 
@@ -1918,6 +1926,10 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * state and no note (task 3.10).
  * 110 -> 111: the lane-id repair's device-local marker, machine state and
  * no note (task 3.9).
+ * 111 -> 112: the automatic store migration's failure or waiting state and
+ * its one-time notice, machine state and no note.
+ * 112 -> 111: those files left the vault for the device-local folder of
+ * all stores.
  */
 const UNSTAMPED_SHARED_ROWS = 111;
 

@@ -36,6 +36,20 @@ import { NEXT_COMMAND_KEY, nextCommandField, type NextCommandField } from "./nex
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { brainConfigUnreadableReport } from "./policy.ts";
 import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
+import {
+  AUTO_MIGRATION_LOCK_JUDGE,
+  readAutoMigrationFailure,
+  readAutoMigrationNotice,
+  readAutoMigrationRunning,
+  readAutoMigrationWaiting,
+  printable,
+  reportableText,
+} from "../store-migration/auto-state.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { refusalReason } from "../store-migration/auto-report.ts";
+import type { AutoMigrationFailure } from "../store-migration/auto-state.ts";
+import type { GateDecision } from "../store-migration/gate-decision.ts";
+import { gatherGate, stoppedGateOf } from "../store-migration/gate-state.ts";
 
 export type RuntimeNoticeSeverity = "info" | "warning";
 
@@ -64,6 +78,11 @@ function notice(code: string, severity: RuntimeNoticeSeverity, message: string):
 export interface RuntimeNoticeOptions {
   readonly configPath?: string;
   readonly env?: Record<string, string | undefined>;
+  /**
+   * Include the one-time notices: the store migration's success notice,
+   * which only a session start shows (and then clears, `active-context.ts`).
+   */
+  readonly oneTime?: boolean;
 }
 
 /**
@@ -154,6 +173,17 @@ export function collectRuntimeNotices(
     // best-effort
   }
 
+  // The automatic store migration (change auto-store-migration, design
+  // D6): at most one short line, about a failure or a waiting state, and
+  // the one-time success notice when the caller is a session start. Reads
+  // three small device-local files; clears nothing.
+  try {
+    const line = storeMigrationNotice(vault, opts.oneTime === true, opts.configPath);
+    if (line !== null) notices.push(line);
+  } catch {
+    // best-effort
+  }
+
   // Search index availability + semantic degradation.
   try {
     const config = resolveSearchConfig({ vault, configPath: opts.configPath });
@@ -204,6 +234,163 @@ export function collectRuntimeNotices(
   }
 
   return notices;
+}
+
+/** Longest the quoted failure reason may be, so the line stays short. */
+const MIGRATION_REASON_CHARS = 160;
+
+/**
+ * The reason as a session may see it: the doctor's sanitising (control
+ * characters, home directories) first, then clipped.
+ */
+function clipped(text: string): string {
+  const clean = reportableText(text);
+  return clean.length <= MIGRATION_REASON_CHARS
+    ? clean
+    : `${clean.slice(0, MIGRATION_REASON_CHARS - 3)}...`;
+}
+
+/**
+ * The store migration's one line, or null. The success notice wins (the
+ * attempt that wrote it cleared the other two), then a failure, then the
+ * waiting state. No registered command: the failure line names its own
+ * manual command, which differs per failure.
+ */
+function storeMigrationNotice(
+  vault: string,
+  oneTime: boolean,
+  configPath: string | undefined,
+): RuntimeNotice | null {
+  if (oneTime) {
+    const done = readAutoMigrationNotice(vault);
+    if (done !== null) {
+      const where =
+        done.snapshot !== null
+          ? `the snapshot taken before the move is ${printable(done.snapshot)}`
+          : "its backups are kept in this machine's device-local state";
+      return notice(
+        "store_migration_done",
+        "info",
+        `Open Second Brain moved this machine's brain into the brain store; ${where}. To undo ` +
+          `it, run ${done.rollbackCommand}.`,
+      );
+    }
+  }
+  // A failure or a waiting state of an attempt is moot on a machine that
+  // writes to the store only (it switched, by any path): never shown there.
+  if (isStoreOnly({ vault, ...(configPath !== undefined ? { configPath } : {}) })) return null;
+  const failure = readAutoMigrationFailure(vault);
+  // The record of an attempt in flight is not a failure while its worker runs.
+  const inFlight =
+    failure?.attempt === true &&
+    readAutoMigrationRunning(vault, new Date(), { judge: AUTO_MIGRATION_LOCK_JUDGE.cheap }) !==
+      null;
+  if (failure !== null && !inFlight) {
+    // What the next start does about it is the gate decision's answer, the
+    // one the worker takes (judged cheaply: a session never waits on a
+    // subprocess), worded by `failureNoticeTail`.
+    const g = gatherGate({
+      vault,
+      configPath,
+      asker: "worker",
+      now: new Date(),
+      judge: "cheap",
+    });
+    const message = failureNoticeTail(g.decision, {
+      setting: g.state.setting,
+      failure,
+      stoppedGate: stoppedGateOf(g),
+    });
+    if (message !== null) return notice("store_migration_failed", "warning", message);
+  }
+  const waiting = readAutoMigrationWaiting(vault);
+  if (waiting !== null) {
+    return notice(
+      "store_migration_waiting",
+      "info",
+      waiting.reason !== null
+        ? `The automatic store migration waits: ${clipped(waiting.reason)}.`
+        : `The automatic store migration waits for the first migration of ` +
+            `${printable(waiting.firstMachines.join(", ")) || "another device"} to arrive by sync.`,
+    );
+  }
+  return null;
+}
+
+/**
+ * The failure line of the session notices for the gate decision `d`:
+ * what the next start does about a recorded failure, from the decision's
+ * answer and its reason alone, never inferred from the state (a stopped
+ * gate the next start opens says only that, never which steps the run
+ * took). Null when the decision leaves nothing to say (nothing to
+ * migrate, nothing left to finish). Pure.
+ */
+export function failureNoticeTail(
+  d: GateDecision,
+  c: {
+    readonly setting: boolean;
+    readonly failure: AutoMigrationFailure;
+    readonly stoppedGate: "own-run" | "other" | null;
+  },
+): string | null {
+  const failed = `The automatic store migration failed (${clipped(c.failure.error)})`;
+  const run = `run ${c.failure.manualCommand}`;
+  // The stopped gate is its own sentence: the run that left it may be a
+  // later manual run, not the automatic attempt whose failure is named.
+  const gate = "A migration run of this vault, automatic or manual, stopped with its gate closed:";
+  switch (d.act) {
+    case "open":
+      if (d.why === "rolled-back") {
+        // The operator rolled this machine back, or began to: the gate is
+        // opened, and nothing offered migrates it again.
+        return (
+          `${failed}. A stopped run left this vault's migration gate closed on a machine that ` +
+          "was rolled back, or whose rollback began: the next start opens the gate, and no " +
+          "start migrates it again on its own."
+        );
+      }
+      return `${failed}. ${gate} the next start opens the gate, or ${run}.`;
+    case "migrate":
+      if (c.stoppedGate === "own-run") {
+        return `${failed}. ${gate} the next start finishes that run, or ${run}.`;
+      }
+      if (c.stoppedGate === "other") {
+        return `${failed}. ${gate} the next start goes on with the migration, or ${run}.`;
+      }
+      return `${failed}; the next start tries again, or ${run}.`;
+    case "refuse": {
+      const refusal = refusalReason(d);
+      const or = refusal.stay === null ? "" : `, or ${refusal.stay}`;
+      return `${failed}; the next start refuses while ${refusal.text}: run ${refusal.command}${or}.`;
+    }
+    case "finish":
+      return `${failed}; the next start finishes the switch, or ${run}.`;
+    case "none":
+      switch (d.why) {
+        case "backoff":
+          return `${failed}; it tries again after ${printable(c.failure.retryAfter)}, or ${run}.`;
+        case "disabled":
+        case "skipped":
+          return `${failed}; it is off on this machine, so no start retries it: ${run}.`;
+        case "rolled-back":
+          return `${failed}; this machine was rolled back, and no start migrates it again on its own: ${run}.`;
+        case "run-unreadable":
+          return `${failed}; this machine's migration run state cannot be read, so no start retries it until it can: ${run}.`;
+        case "switch-unproven":
+          return `${failed}; this machine switched, but its migration run state does not say the switch finished, so no start finishes it: ${run}.`;
+        case "waiting":
+          return `${failed}; it waits for a store to arrive by sync, or ${run}.`;
+        case "running":
+        case "other-vault-running":
+          return `${failed}; a migration runs now, and the next start leaves it alone.`;
+        case "not-available":
+        case "nothing-left":
+          return null;
+      }
+      return null;
+    default:
+      return null;
+  }
 }
 
 /**

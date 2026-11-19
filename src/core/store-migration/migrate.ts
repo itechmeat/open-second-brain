@@ -81,6 +81,7 @@ import {
 } from "./convert.ts";
 import { planMigrationDryRun } from "./dry-run.ts";
 import {
+  clearRollbackRecord,
   describeUnseen,
   loadJournal,
   migrationDir,
@@ -103,7 +104,16 @@ import {
   type PartitionCut,
 } from "./migration-records.ts";
 import { legacyFileStamps, recordImportWatermark } from "./transition-watermark.ts";
-import { liftQuiesce, MIGRATION_SETTLE_MS, quiesceLegacyWriters } from "./quiesce.ts";
+import {
+  holdGateFor,
+  MigrationGateBusyError,
+  MIGRATION_SETTLE_MS,
+  migrationGateOn,
+  MIGRATION_RUN_PREFIX,
+  quiesceLegacyWriters,
+  releaseGateAfter,
+  releaseStoppedRunGate,
+} from "./quiesce.ts";
 import { sameVaultPath } from "./removal-marker.ts";
 
 /** The most passes the final delta pass may take before the run gives up. */
@@ -125,6 +135,21 @@ function markedElsewhere(store: StoreHandle, vault: string): string[] {
 /** A migration that cannot start, with the reason and the remedy. */
 export class MigrationRefusedError extends Error {
   override readonly name = "MigrationRefusedError";
+}
+
+/**
+ * An automatic call ({@link MigrationOptions.automatic}) met a device that
+ * switched meanwhile: the transition import of a vault configured after
+ * the switch is the operator's to run, and nothing was done.
+ */
+export class MigrationSwitchedError extends Error {
+  override readonly name = "MigrationSwitchedError";
+  constructor(readonly device: string) {
+    super(
+      `device ${device} switched to the brain store while the automatic migration was ` +
+        "starting; a vault configured after the switch is imported by the manual command",
+    );
+  }
 }
 
 /** A later machine whose store does not hold the first machine's whole cut yet. */
@@ -156,7 +181,39 @@ export interface MigrationHooks extends ConvertHooks {
   readonly afterBackup?: () => void;
   /** After the last delta pass, before verification. */
   readonly beforeVerify?: () => void;
+  /** After the checks made before the gate, before the run takes it. */
+  readonly beforeGate?: () => void;
+  /**
+   * At each named step boundary of the run ({@link MigrationStep}), so a
+   * test can throw or kill its own process exactly there.
+   */
+  readonly atStep?: (step: MigrationStep) => void;
 }
+
+/** The step boundaries {@link MigrationHooks.atStep} names, in run order. */
+export const MIGRATION_STEP = Object.freeze({
+  /**
+   * The gate is closed and the settle wait is over; the run is not on
+   * record yet (its state is saved right after).
+   */
+  gateTaken: "gate-taken",
+  /** The gate is closed and the run is on record. */
+  gateClosed: "gate-closed",
+  /** The snapshot and the backups are taken and verified. */
+  backedUp: "backed-up",
+  /** `migration-done` is recorded (the first machine only). */
+  migrationDone: "migration-done",
+  /** This device's `device-switched` is recorded. */
+  deviceSwitched: "device-switched",
+  /** The sticky switch marker is written. */
+  switchMarker: "switch-marker",
+  /** The vault is bound to the store. */
+  vaultBound: "vault-bound",
+  /** The view writer is claimed (or read). */
+  viewWriter: "view-writer",
+} as const);
+
+export type MigrationStep = (typeof MIGRATION_STEP)[keyof typeof MIGRATION_STEP];
 
 export interface MigrationOptions {
   readonly resume?: boolean;
@@ -171,6 +228,21 @@ export interface MigrationOptions {
   readonly hooks?: MigrationHooks;
   /** How long a later machine waits for the first machine's cut, in ms (default 0). */
   readonly waitMs?: number;
+  /**
+   * Refuse, before the switch, when conversion met an item it cannot
+   * parse, instead of keeping it only in the backup archive. The automatic
+   * migration sets it (nobody watches it, so the person decides, as its dry
+   * run leaves it to them); the command line keeps the archive.
+   */
+  readonly refuseUnparseable?: boolean;
+  /**
+   * The automatic worker's call: on a device that switched meanwhile the
+   * migrator refuses (`MigrationSwitchedError` in `outcome.ts`) instead of running
+   * the transition import, which imports a vault configured after the
+   * switch (its settings at the operator's authority, its binding) and is
+   * the operator's to run.
+   */
+  readonly automatic?: boolean;
 }
 
 export interface MigrationResult {
@@ -233,7 +305,7 @@ function existingAncestor(dir: string): string {
   return current;
 }
 
-function checkDisk(dir: string, bytes: number): void {
+export function checkDisk(dir: string, bytes: number): void {
   let free: number;
   try {
     const stat = statfsSync(existingAncestor(dir));
@@ -292,7 +364,14 @@ function preflight(store: StoreHandle, options: MigrationOptions): MigrationStat
       `device ${store.device} has already switched to the brain store`,
     );
   }
-  const state = readMigrationState(migrationDir(store));
+  const read = readMigrationState(migrationDir(store));
+  if (read.kind === "unreadable") {
+    throw new MigrationRefusedError(
+      `this device's migration run state cannot be read (${read.error}); fix its ` +
+        "permissions or restore it, then run the migration again",
+    );
+  }
+  const state = read.kind === "state" ? read.state : null;
   if (state?.phase === "in-progress" && options.resume !== true) {
     throw new MigrationRefusedError(
       `an interrupted migration (${state.run_id}) is waiting; run \`o2b brain migrate-store --resume\``,
@@ -316,18 +395,22 @@ function finishSwitch(
   store: StoreHandle,
   agent: string,
   first: boolean,
+  hooks?: MigrationHooks,
 ): string | null {
   // The switch is sticky on this machine from here on (`store-only.ts`):
   // an absent or unreadable `settings` shard never takes it back.
   recordSwitchMarker(store.root, store.device);
+  hooks?.atStep?.(MIGRATION_STEP.switchMarker);
   // The switched vault is bound to the store in device-local state, so
   // the note tools' guard knows it once no marker file guards it (D14.13).
   if (vault !== null) bindVaultToStore(vault, { store });
+  hooks?.atStep?.(MIGRATION_STEP.vaultBound);
   // The first machine to migrate renders the human view (design D7),
   // unless a writer was already named.
   const claim = first
     ? claimViewWriter(store, { agent })
     : { claimed: false as const, writer: readViewWriter(store).writer };
+  hooks?.atStep?.(MIGRATION_STEP.viewWriter);
   return claim.claimed ? store.device : claim.writer;
 }
 
@@ -360,10 +443,44 @@ function interruptedVault(
   return { same: original !== null && sameVaultPath(original, vault), original };
 }
 
+/** An interrupted switch as read: its run state and the vault it migrated. */
+interface InterruptedSwitch {
+  readonly state: MigrationState;
+  readonly same: boolean;
+  readonly original: string | null;
+}
+
+/**
+ * This device's interrupted switch, or null when there is none: the device
+ * is switched while its run state is still `in-progress`. A run state that
+ * cannot be read refuses: it could be a run whose switch did not finish,
+ * never read as one that did.
+ */
+function readInterruptedSwitch(vault: string, store: StoreHandle): InterruptedSwitch | null {
+  const dir = migrationDir(store);
+  if (!deviceSwitchedHere(store, store.device)) return null;
+  const read = readMigrationState(dir);
+  if (read.kind === "unreadable") {
+    throw new MigrationRefusedError(
+      `this device's migration run state cannot be read (${read.error}); fix its ` +
+        "permissions or restore it, then run the migration again",
+    );
+  }
+  if (read.kind !== "state" || read.state.phase !== "in-progress") return null;
+  return { state: read.state, ...interruptedVault(dir, vault, read.state.run_id) };
+}
+
 /**
  * Finish a migration killed between its `device-switched` record and its
  * last step: the device is switched while its run is still `in-progress`.
  * Returns whether there was one to finish.
+ *
+ * The finish takes the gate of that run as the run itself held it (a dead
+ * holder's gate of the run is taken over, a live holder refuses it with
+ * {@link MigrationGateBusyError}, and an interrupted rollback's or
+ * removal's gate is never taken over), reads the run state and the vault it
+ * migrated again under it (another finish may have ended the run in
+ * between), and opens only the gate it holds, under the gate lock.
  *
  * Only the vault the run migrated is bound. When another vault is
  * configured now, the switch is finished for the original vault (bound
@@ -373,23 +490,45 @@ function interruptedVault(
  * the switch.
  */
 export function finishInterruptedSwitch(vault: string, store: StoreHandle, agent: string): boolean {
-  const dir = migrationDir(store);
-  const state = readMigrationState(dir);
-  if (state?.phase !== "in-progress" || !deviceSwitchedHere(store, store.device)) return false;
-  const { same, original } = interruptedVault(dir, vault, state.run_id);
-  const toBind = same ? vault : original !== null && existsSync(original) ? original : null;
+  const seen = readInterruptedSwitch(vault, store);
+  if (seen === null) return false;
+  const runId = seen.state.run_id;
+  const gateVault = seen.same ? vault : (seen.original ?? vault);
+  holdGateFor(gateVault, runId, { takeOver: (held) => held.startsWith(MIGRATION_RUN_PREFIX) });
+  let failure: { readonly error: unknown } | null = null;
   try {
+    const now = readInterruptedSwitch(vault, store);
+    if (now === null || now.state.run_id !== runId) return false;
+    // The backup manifest is read again; the gate now names this finish's
+    // own choice, so without a manifest the first read's vault stands.
+    const manifest = readMigrationBackup(migrationDir(store))?.vault ?? null;
+    const { same, original } = manifest !== null ? now : seen;
+    const toBind = same ? vault : original !== null && existsSync(original) ? original : null;
     finishSwitch(toBind, store, agent, ownDoneRecord(store) !== null);
-    writeMigrationState(dir, { ...state, phase: "done", updated_at: new Date().toISOString() });
+    writeMigrationState(migrationDir(store), {
+      ...now.state,
+      phase: "done",
+      updated_at: new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    liftQuiesce(same ? vault : (original ?? vault), state.run_id);
+    releaseGateAfter(gateVault, runId, failure);
   }
-  return true;
 }
 
-/** Run (or resume) the migration of `vault` on this machine. */
-export function runMigration(vault: string, options: MigrationOptions = {}): MigrationResult {
-  const store = openMigrationStore(vault, options.configPath);
+/** What {@link runMigration} checks before it takes the gate. */
+interface BeforeGate {
+  readonly previous: MigrationState | null;
+  readonly plan: ReturnType<typeof planMigrationDryRun>;
+  readonly later: boolean;
+  readonly ownDone: string | null;
+  readonly wait: ReturnType<typeof waitForCut> | null;
+}
+
+function beforeGate(vault: string, store: StoreHandle, options: MigrationOptions): BeforeGate {
   const previous = preflight(store, options);
   const plan = planMigrationDryRun(vault);
   if (!plan.ok) {
@@ -415,17 +554,109 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       throw new MigrationWaitingError({ ...wait, firstMachines: marked, marker: true });
     }
   }
-  const dir = migrationDir(store);
   checkDisk(
     store.deviceStateDir,
     plan.surfaces.reduce((sum, s) => sum + s.bytes, 0),
   );
+  return { previous, plan, later, ownDone, wait };
+}
+
+/**
+ * The run of this machine that stopped before its switch, whose gate on
+ * `vault` a run that ends before taking the gate over must not leave
+ * closed ({@link releaseStoppedRunGate}), or null: the migration run the
+ * gate names, on a machine that has not switched. That is the run still
+ * `in-progress` in its state, or a run killed after it took the gate and
+ * before it put itself on record, which no state names. The release
+ * itself leaves a live holder alone.
+ */
+export function stoppedUnswitchedRun(vault: string, store: StoreHandle): string | null {
+  if (deviceSwitchedHere(store, store.device)) return null;
+  return migrationGateOn(vault);
+}
+
+/**
+ * The checks of {@link beforeGate}, read again once the run holds the gate:
+ * the store as configured, whether this device switched, the run state,
+ * the done records, the vault marker another machine's migration names,
+ * the plan. A device switched meanwhile stops an automatic run with
+ * {@link MigrationSwitchedError} and a manual one with the preflight's
+ * refusal. A run state or a done record that changed means another run
+ * acted in between: the run stops with {@link MigrationGateBusyError}
+ * before its first write, and the next run decides afresh. The cut is not
+ * waited for again: the gate is held, and a store that stopped holding it
+ * is a wait.
+ */
+function underGate(
+  vault: string,
+  before: StoreHandle,
+  options: MigrationOptions,
+  checked: BeforeGate,
+): { readonly store: StoreHandle; readonly checked: BeforeGate } {
+  const store = openMigrationStore(vault, options.configPath);
+  if (store.root !== before.root || store.device !== before.device) {
+    throw new MigrationGateBusyError(
+      "this machine's brain store changed while the migration waited for its gate; nothing " +
+        "was changed. Run the migration again",
+    );
+  }
+  if (options.automatic === true && deviceSwitchedHere(store, store.device)) {
+    throw new MigrationSwitchedError(store.device);
+  }
+  const again = beforeGate(vault, store, { ...options, waitMs: 0 });
+  if (
+    !sameRunState(checked.previous, again.previous) ||
+    again.ownDone !== checked.ownDone ||
+    again.later !== checked.later
+  ) {
+    throw new MigrationGateBusyError(
+      "another run changed this machine's migration while this one waited for its gate; " +
+        "nothing was changed. Run the migration again",
+    );
+  }
+  return { store, checked: again };
+}
+
+/** Whether two reads of the run state name the same run at the same point. */
+function sameRunState(a: MigrationState | null, b: MigrationState | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.run_id === b.run_id && a.phase === b.phase && a.backed_up === b.backed_up;
+}
+
+/** Run (or resume) the migration of `vault` on this machine. */
+export function runMigration(vault: string, options: MigrationOptions = {}): MigrationResult {
+  let store = openMigrationStore(vault, options.configPath);
+  let checked: BeforeGate;
+  try {
+    checked = beforeGate(vault, store, options);
+  } catch (error) {
+    // Refused or waiting before the gate was taken over: a run this
+    // machine stopped with the gate closed does not keep it closed. A
+    // cleanup that fails (the gate lock busy) never replaces the reason
+    // the run stopped: it is added to it, and the caller's error keeps
+    // its kind (a wait stays a wait).
+    const stopped = stoppedUnswitchedRun(vault, store);
+    if (stopped !== null) {
+      try {
+        releaseStoppedRunGate(vault, stopped);
+      } catch (cleanup) {
+        if (error instanceof Error) {
+          error.message +=
+            `; the migration gate run ${stopped} left on this vault could not be opened ` +
+            `(${(cleanup as Error).message})`;
+        }
+      }
+    }
+    throw error;
+  }
+  const previous = checked.previous;
+  let dir = migrationDir(store);
 
   const agent = options.agent ?? safeAgent(options.configPath);
   const now = new Date().toISOString();
   const resuming = options.resume === true && previous?.phase === "in-progress";
   let state: MigrationState = {
-    run_id: resuming ? previous!.run_id : `migrate-${now.replace(/[-:.]/g, "")}`,
+    run_id: resuming ? previous!.run_id : `${MIGRATION_RUN_PREFIX}${now.replace(/[-:.]/g, "")}`,
     phase: "in-progress",
     started_at: resuming ? previous!.started_at : now,
     updated_at: now,
@@ -443,26 +674,49 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       throw error;
     }
   };
-  // The vault carries its identity marker before any journal mark names
-  // it (`journal-scope.ts`): a path is a device's own, and the marker is
-  // what a later machine of the same vault, which receives it by sync,
-  // matches the marks by. This machine is not switched yet, so the marker
-  // is a legacy-layout write (the snapshot below includes it).
-  const vaultId = writeVaultIdentity(vault).vault_id;
-  const cohort = plan.devices.cohort.map((d) => d.device);
-  // A resumed run that already backed up reports the backup it took.
-  let backup: MigrationBackup | null = state.backed_up ? readMigrationBackup(dir) : null;
+  // Only a gate this run took is opened again at its end: a run refused at
+  // the gate (another process resumes the same run and holds it) leaves
+  // it to its holder.
+  let held = false;
+  let failure: { readonly error: unknown } | null = null;
+  options.hooks?.beforeGate?.();
   try {
     quiesceLegacyWriters(vault, state.run_id, options.settleMs ?? MIGRATION_SETTLE_MS);
+    held = true;
+    // Every fact the run decided on before it held the gate is read again:
+    // another run may have switched this device, recorded or rolled back a
+    // run, or brought a done record in the meantime.
+    ({ store, checked } = underGate(vault, store, options, checked));
+    dir = migrationDir(store);
+    const { plan, later, ownDone, wait } = checked;
+    const cohort = plan.devices.cohort.map((d) => d.device);
+    // A resumed run that already backed up reports the backup it took.
+    let backup: MigrationBackup | null = state.backed_up ? readMigrationBackup(dir) : null;
+    // The vault carries its identity marker before any journal mark names
+    // it (`journal-scope.ts`): a path is a device's own, and the marker is
+    // what a later machine of the same vault, which receives it by sync,
+    // matches the marks by. It is read, or written when missing, only once
+    // this run holds the gate: a run that has not taken the gate yet (a
+    // worker whose claim was taken over, a manual run beside it) writes no
+    // marker, so the id this run records is the one on disk. This machine
+    // is not switched yet, so the marker is a legacy-layout write (the
+    // snapshot below includes it).
+    const vaultId = writeVaultIdentity(vault).vault_id;
     // The run is on record once it holds the gate: a run refused by a
-    // gate another run holds leaves no interrupted run behind.
+    // gate another run holds leaves no interrupted run behind. A run
+    // killed in between leaves a gate no state names; the gate's run id
+    // says it is a migration's, which is how the next run on this vault
+    // recognises it (`stoppedUnswitchedRun`).
+    options.hooks?.atStep?.(MIGRATION_STEP.gateTaken);
     save({});
+    options.hooks?.atStep?.(MIGRATION_STEP.gateClosed);
     const catalogue = migrationCatalogue(vault);
     if (!state.backed_up) {
       const snapshot = backupStep(() => takeMigrationSnapshot(vault, dir));
       backup = backupStep(() => takeMigrationBackups(vault, catalogue, dir, snapshot));
       save({ backed_up: true });
     }
+    options.hooks?.atStep?.(MIGRATION_STEP.backedUp);
     const local = backupStep(() => moveDeviceLocalState(vault, catalogue, dir));
     // Accepted skills are files agents read: they move to the vault's own
     // skills/ folder, never into the store (design D14, task 2.10).
@@ -501,6 +755,17 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       }
       stamps = legacyFileStamps(vault);
       last = convertPass(ctx);
+    }
+    if (options.refuseUnparseable === true && last.unparseable.length > 0) {
+      const listed = last.unparseable
+        .slice(0, 10)
+        .map((p) => (p.line !== null ? `${p.path}:${p.line}` : p.path))
+        .join(", ");
+      const reason =
+        `${last.unparseable.length} legacy item(s) cannot be parsed (${listed}); a migration ` +
+        "would keep them only in its backup archive";
+      save({ phase: "failed", reason });
+      throw new MigrationRefusedError(`${reason}; this machine was not switched`);
     }
     const archive = archiveUnparseable(vault, dir, last.problems);
     options.hooks?.beforeVerify?.();
@@ -565,12 +830,18 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
             imported,
           }),
         ));
+    options.hooks?.atStep?.(MIGRATION_STEP.migrationDone);
+    // A rollback that began and did not finish ends here: the operator
+    // chose the store again, and a later rollback starts from this run's
+    // snapshot. Cleared before the switch, so no switched machine keeps it.
+    clearRollbackRecord(dir);
     const switched = settingsRecord(
       store,
       agent,
       DEVICE_SWITCHED_KIND,
       deviceSwitchedBody(vaultId, store.device),
     );
+    options.hooks?.atStep?.(MIGRATION_STEP.deviceSwitched);
     // The automatic import's baseline: the tree as the final pass read it,
     // all of it imported (`transition-watermark.ts`).
     recordImportWatermark(store, {
@@ -579,7 +850,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       converged: true,
       heldBack: 0,
     });
-    const viewWriter = finishSwitch(vault, store, agent, !later);
+    const viewWriter = finishSwitch(vault, store, agent, !later, options.hooks);
     save({ phase: "done" });
     return {
       ok: true,
@@ -591,8 +862,11 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       device_config: deviceConfig,
       device_tokens: deviceTokens,
     };
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    liftQuiesce(vault, state.run_id);
+    if (held) releaseGateAfter(vault, state.run_id, failure);
   }
 }
 

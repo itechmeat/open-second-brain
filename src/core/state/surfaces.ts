@@ -132,6 +132,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   hookAudit: "hook_audit",
   hookSessionState: "hook_session_state",
   selfHealUpgradeMarker: "self_heal_upgrade_marker",
+  selfHealUpgradeLock: "self_heal_upgrade_lock",
   freshenState: "freshen_state",
   watchdogAudit: "watchdog_audit",
   injectFailopenCache: "inject_failopen_cache",
@@ -343,6 +344,7 @@ const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
 const HOOK_STATE_DIR = "hook-state";
 const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
+const SELF_HEAL_UPGRADE_LOCK_FILE = "self-heal-upgrade.lock";
 const FRESHEN_STATE_FILE = "freshen-state.json";
 const INJECT_CACHE_DIR = "inject-cache";
 const AIDER_CONTEXT_FILE = "aider-context.md";
@@ -751,6 +753,20 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "Present only after the automatic Brain upgrade failed on this device: the error, when, " +
       "and when the next automatic attempt is due. Deleting it ends the cooldown early and " +
       "drops the failure from `o2b doctor`; the next start simply tries again.",
+    sources: ["src/core/maintenance/self-heal-upgrade-state.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.selfHealUpgradeLock,
+    label: "automatic upgrade worker lock",
+    tier: STATE_TIER.derived,
+    switched: STATE_SWITCHED.deviceLocal,
+    derive: derivedStore(SELF_HEAL_UPGRADE_LOCK_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Held only while the automatic Brain upgrade worker of this device runs: its claim " +
+      "token. Deleting it while no worker runs is harmless; the next start starts a new one.",
     sources: ["src/core/maintenance/self-heal-upgrade-state.ts"],
   },
   {

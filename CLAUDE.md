@@ -67,3 +67,14 @@ bun run sync-plugin-mirrors
 
 CI gates on `bun run sync-plugin-mirrors:check` (the `validate` and
 `windows` jobs), and the pre-commit hook runs the same check.
+
+## Windows test shards
+
+The Windows CI job splits the suite into ten shards by
+`.github/windows-test-timings.json`. A test file that file does not list
+weighs the median, and shards are contiguous runs of sorted paths, so a
+pull request that adds slow test files (more than a few seconds each on
+Windows) folds its own CI run into the file with
+`.github/scripts/windows-timings.sh <run-id>` and commits the result.
+Prefer several files of one table, sharing a fixture module, over one
+file that runs for minutes.

@@ -66,7 +66,7 @@ import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue } from "./catalogue.ts";
 import { describeUnseen, migrationDir, unseenHeldShards } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
-import { holdGateFor, releaseGateFor } from "./quiesce.ts";
+import { holdGateFor, releaseGateAfter } from "./quiesce.ts";
 import { sameVaultPath, writeRemovalMarker } from "./removal-marker.ts";
 import {
   isDeviceSwitched,
@@ -251,14 +251,16 @@ export interface RemovalOptions {
   readonly now?: Date;
   /** Convert hooks of the final import from the archive (crash and race tests). */
   readonly archiveImportHooks?: ConvertHooks;
+  /** After the checks made before the gate, before the removal takes it (race tests). */
+  readonly beforeGate?: () => void;
 }
 
-/** Remove the legacy tree of `vault` into the device-local archive, when the cohort allows. */
-export function removeLegacyTree(
-  vault: string,
-  store: StoreHandle,
-  options: RemovalOptions,
-): RemovalResult {
+/**
+ * The checks a removal makes before it takes the gate, made again once it
+ * holds it (a rollback may have unswitched this device in between, or a
+ * shard stopped reading): a refusal to answer, null to go on, or a throw.
+ */
+function removalChecks(store: StoreHandle, options: RemovalOptions): RemovalResult | null {
   if (!isDeviceSwitched(store, store.device)) {
     return { removed: false, reason: "not-switched", pending: [] };
   }
@@ -303,14 +305,30 @@ export function removeLegacyTree(
         "missing blobs and run the removal again, or remove the tree anyway with --force",
     );
   }
+  return null;
+}
+
+/** Remove the legacy tree of `vault` into the device-local archive, when the cohort allows. */
+export function removeLegacyTree(
+  vault: string,
+  store: StoreHandle,
+  options: RemovalOptions,
+): RemovalResult {
+  const refused = removalChecks(store, options);
+  if (refused !== null) return refused;
   const runId = `${REMOVAL_RUN_PREFIX}${(options.now ?? new Date()).toISOString()}`;
   // An interrupted migration or rollback's gate keeps its writers stopped
   // until that run resumes; only an earlier removal's gate is taken over.
   // The gate is held before the journal and the tree are read: a second
   // removal on this machine is refused while the first runs, and one that
   // comes after it sees what the first left, never a stale list of roots.
+  options.beforeGate?.();
   holdGateFor(vault, runId, { takeOver: (held) => held.startsWith(REMOVAL_RUN_PREFIX) });
+  let failure: { readonly error: unknown } | null = null;
   try {
+    // What the removal decided on before it held the gate, read again.
+    const changed = removalChecks(store, options);
+    if (changed !== null) return changed;
     const catalogue = migrationCatalogue(vault);
     const roots = legacyRootNames(vault, catalogue).filter((top) => existsSync(join(vault, top)));
     const resumed = readRemovalInProgress(store);
@@ -326,8 +344,11 @@ export function removeLegacyTree(
       return { removed: false, reason: "no-legacy-tree", pending: [] };
     }
     return removeUnderGate(vault, store, options, { catalogue, roots, resumed });
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    releaseGateFor(vault, runId);
+    releaseGateAfter(vault, runId, failure);
   }
 }
 

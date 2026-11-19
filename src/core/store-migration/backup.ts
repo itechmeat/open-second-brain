@@ -284,9 +284,37 @@ export function takeMigrationBackups(
       `${JSON.stringify({ snapshot, files: rows, vault: of }, null, 2)}\n`,
     );
     verifyRestore(root, rows);
+    dropEarlierSnapshotCopies(root, snapshot);
     return { dir: root, snapshot, files: rows, vault: of };
   } catch (error) {
     throw asBackupError(error);
+  }
+}
+
+/**
+ * Remove the copies of earlier runs' snapshots from the backup folder,
+ * once the manifest names `snapshot`: a run that failed after its backups
+ * is not resumed, so each retry takes a backup of its own, and without
+ * this every retry would leave one more full copy of `Brain/` in the
+ * device-local state. The snapshots in the vault's `Brain/.snapshots/`
+ * keep their own retention. Best effort: a copy that cannot be removed now
+ * is removed by the next backup.
+ */
+function dropEarlierSnapshotCopies(root: string, snapshot: string | null): void {
+  const dir = join(root, SNAPSHOT_DIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (snapshot !== null && name.startsWith(snapshot)) continue;
+    try {
+      rmSync(join(dir, name), { recursive: true, force: true });
+    } catch {
+      // the next backup tries again
+    }
   }
 }
 

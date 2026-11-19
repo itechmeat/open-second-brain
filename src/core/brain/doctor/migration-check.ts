@@ -40,7 +40,16 @@ import { readRemovalMarker } from "../../store-migration/removal-marker.ts";
 import { listLogShardFiles } from "../log-jsonl.ts";
 import { readVaultIdentity } from "../vault-identity.ts";
 
-import { migrationAvailability } from "../../store/migration-availability.ts";
+import {
+  MIGRATE_STORE_COMMAND,
+  migrationAvailability,
+} from "../../store/migration-availability.ts";
+import { interruptedSwitch, ownMigrationRunRead } from "../../store-migration/auto-probe.ts";
+import {
+  AUTO_MIGRATION_STATE,
+  autoMigrationReport,
+  type AutoMigrationReport,
+} from "../../store-migration/auto-report.ts";
 import { BRAIN_ROOT_REL } from "../path-constants.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 import { withoutSeenRecording } from "../../store/seen-shards.ts";
@@ -53,6 +62,9 @@ export const LEGACY_DEVICES_PENDING_CODE = "legacy-devices-pending";
 
 /** A legacy directory is back in the vault after the legacy tree was removed. */
 export const LEGACY_TREE_REAPPEARED_CODE = "legacy-tree-reappeared";
+
+/** The last automatic store migration attempt on this machine failed (change auto-store-migration). */
+export const STORE_MIGRATION_FAILED_CODE = "store-migration-failed";
 
 /** Two devices each ran the first migration of this vault (D11: one first machine). */
 export const MIGRATION_DONE_TWICE_CODE = "migration-done-twice";
@@ -210,6 +222,22 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
   });
 }
 
+/**
+ * The doctor's finding for a report: a failure (a refusal, a stopped
+ * gate, a failed attempt) is a warning that counts; nothing to migrate or
+ * a finished switch is no finding; anything else is advice.
+ */
+export function migrationFindingKind(report: AutoMigrationReport): "warning" | "advice" | null {
+  if (report.state === AUTO_MIGRATION_STATE.failed) return "warning";
+  if (
+    report.state === AUTO_MIGRATION_STATE.notNeeded ||
+    report.state === AUTO_MIGRATION_STATE.done
+  ) {
+    return null;
+  }
+  return "advice";
+}
+
 export const migrationCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
@@ -219,24 +247,98 @@ export const migrationCheck: DoctorCheck = {
       transitionFindings(ctx, out);
     });
     const m = migrationAvailability({ vault: ctx.vault, configPath: ctx.configPath });
-    if (!m.available) return;
-    const steps = m.nextCommands.map((command) => `\`${command}\``).join(", then ");
     const unreadable =
       m.error !== null
         ? ` The store could not be read (${m.error}), so a switch may be missed.`
         : "";
+    const brain = join(ctx.vault, BRAIN_ROOT_REL);
+    // The automatic migration's state words the rest (change
+    // auto-store-migration, design D6): the same report the status block
+    // and `o2b brain upgrade --dry-run` carry, the gate decision's answer.
+    // It is read first, whatever is left to migrate: a stopped run's gate
+    // closes the vault with nothing left to move, and a switch an attempt
+    // did not finish is reported as that, bound or not, before anything
+    // below would call it an unimported vault.
+    const auto = autoMigrationReport({
+      vault: ctx.vault,
+      configPath: ctx.configPath,
+      availability: m,
+      now: ctx.now,
+    });
+    if (migrationFindingKind(auto) === "warning") {
+      // A failure is something to act on, so it counts.
+      out.issues.push({
+        severity: "warning",
+        code: STORE_MIGRATION_FAILED_CODE,
+        path: brain,
+        message: `${auto.message}.${unreadable}`,
+      });
+      return;
+    }
+    if (!m.available) return;
+    const steps = m.nextCommands.map((command) => `\`${command}\``).join(", then ");
+    if (m.switched) {
+      if (interruptedSwitch(ownMigrationRunRead(ctx.configPath))) {
+        out.uncertain.push({
+          code: MIGRATION_AVAILABLE_CODE,
+          path: brain,
+          message:
+            `${auto.message[0]!.toUpperCase()}${auto.message.slice(1)}; the next start ` +
+            `${auto.nextStart}, or run \`${auto.manualCommand ?? MIGRATE_STORE_COMMAND}\`.`,
+        });
+        return;
+      }
+      if (m.nextCommands.length === 0) {
+        // The vault binding cannot be read: the repair, not an import.
+        out.uncertain.push({
+          code: MIGRATION_AVAILABLE_CODE,
+          path: brain,
+          message: `${auto.message[0]!.toUpperCase()}${auto.message.slice(1)}.`,
+        });
+        return;
+      }
+      out.uncertain.push({
+        code: MIGRATION_AVAILABLE_CODE,
+        path: brain,
+        message:
+          "this machine writes to the brain store, but this vault's legacy Brain/ tree was " +
+          "never imported (the vault was configured after the switch), so a migration is " +
+          `available. Run ${steps} to import it; nothing moves until you run it.${unreadable}`,
+      });
+      return;
+    }
+    const lead =
+      "this machine still keeps its brain in the legacy Brain/ tree of the vault and has " +
+      "not switched to the brain store, so a migration is available.";
+    let tail: string;
+    if (
+      auto.state === AUTO_MIGRATION_STATE.running ||
+      auto.state === AUTO_MIGRATION_STATE.waiting
+    ) {
+      tail = ` ${auto.message[0]!.toUpperCase()}${auto.message.slice(1)}.`;
+    } else if (auto.state === AUTO_MIGRATION_STATE.rolledBack) {
+      tail =
+        " This machine was rolled back to the legacy layout, and the automatic migration " +
+        `does not redo a rollback. Run ${steps} to see what it would move, then run the ` +
+        "migration itself when you want the brain store again.";
+    } else if (auto.automatic) {
+      tail =
+        ` Open Second Brain migrates it on its own: the next start ${auto.nextStart} ` +
+        "(to stop that, set `auto_store_migration: false` in the machine config). Run " +
+        `${steps} to see what it would move.`;
+    } else {
+      tail =
+        ` Run ${steps} to see what it would move; nothing moves until you run the migration ` +
+        "itself (the automatic migration is off on this machine" +
+        (auto.settingProblem !== null ? `: ${auto.settingProblem}` : "") +
+        ").";
+    }
     // Reported, never counted: an available migration is advice, so it
     // neither fails `--strict` nor moves the trust verdict on its own.
     out.uncertain.push({
       code: MIGRATION_AVAILABLE_CODE,
-      path: join(ctx.vault, BRAIN_ROOT_REL),
-      message: m.switched
-        ? "this machine writes to the brain store, but this vault's legacy Brain/ tree was " +
-          "never imported (the vault was configured after the switch), so a migration is " +
-          `available. Run ${steps} to import it; nothing moves until you run it.${unreadable}`
-        : "this machine still keeps its brain in the legacy Brain/ tree of the vault and has " +
-          `not switched to the brain store, so a migration is available. Run ${steps} to see ` +
-          `what it would move; nothing moves until you run the migration itself.${unreadable}`,
+      path: brain,
+      message: `${lead}${tail}${unreadable}`,
     });
   },
 };

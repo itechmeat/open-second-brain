@@ -78,11 +78,17 @@ export interface MigrationAvailabilitySource {
   readonly configPath?: string | undefined;
 }
 
+/**
+ * Whether `path` is a directory. Only an absent path is not: one that
+ * cannot be looked at (a permission, an I/O error) counts as there, so a
+ * read that fails is never taken for a vault with nothing to migrate.
+ */
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
-  } catch {
-    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
 }
 

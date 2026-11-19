@@ -228,7 +228,10 @@ async function main(): Promise<void> {
     const { context: memoryContext, source } = await loadInjectContextFailOpen({
       vault,
       key: "active",
-      assemble: () => assembleActiveContext(vault, memoryBudget, meter),
+      assemble: () =>
+        assembleActiveContext(vault, memoryBudget, meter, {
+          startsSession: hookEventName === "SessionStart",
+        }),
       audit: (degradedSource) =>
         auditHook(vault, "inject_failopen_degraded", {
           hook: "active-inject",

@@ -13,6 +13,7 @@ import {
   upgradeBlockedByStore,
 } from "../../../src/core/brain/upgrade.ts";
 import { brainConfigPath, brainManualPath } from "../../../src/core/brain/paths.ts";
+import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { ensureVaultCurrent } from "../../../src/core/maintenance/ensure-current.ts";
 import { runSelfHealUpgrade } from "../../../src/core/maintenance/self-heal-upgrade.ts";
 import { storeOnlyMode } from "../../../src/core/store/store-only.ts";
@@ -57,6 +58,27 @@ describe("upgrade on a switched machine", () => {
     const apply = await runCli(["brain", "upgrade", "--apply", "--json", "--vault", env.vault]);
     expect(apply.returncode).toBe(1);
     expect(JSON.parse(apply.stdout)).toMatchObject({ ok: false, store_only: true });
+  });
+
+  test("brain upgrade --dry-run on a switched machine carries the store migration's state", async () => {
+    env = makeStoreEnv("osb-upgrade-switched-report-");
+    // Legacy data the switch did not import: the report has a state to name.
+    writeSignal(env.vault, {
+      topic: "legacy",
+      signal: "positive",
+      agent: "@a",
+      principle: "A legacy signal",
+      created_at: "2026-11-17T09:00:00.000Z",
+      date: "2026-11-17",
+      slug: "legacy-signal",
+    });
+    switchDevice(env);
+    const look = await runCli(["brain", "upgrade", "--dry-run", "--json", "--vault", env.vault]);
+    expect(look.returncode).toBe(0);
+    const answer = JSON.parse(look.stdout) as { store_migration?: { state?: unknown } };
+    expect(answer.store_migration?.state).toBe("pending");
+    const text = await runCli(["brain", "upgrade", "--dry-run", "--vault", env.vault]);
+    expect(text.stderr + text.stdout).toContain("store migration:");
   });
 
   test("a vault with no legacy tree is refused and gets no Brain/ tree", () => {

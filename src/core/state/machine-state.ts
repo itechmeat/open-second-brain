@@ -135,8 +135,12 @@ export function deviceLocalStateRoot(configPath?: string): string {
   );
 }
 
-/** The key that names a fresh vault's folder: a digest of its resolved path. */
-function vaultKey(vault: string): string {
+/**
+ * The key that names a vault's device-local folders (a fresh vault's
+ * state, the automatic store migration's state): a digest of its resolved
+ * path.
+ */
+export function vaultKey(vault: string): string {
   return createHash("sha256").update(resolve(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
 }
 

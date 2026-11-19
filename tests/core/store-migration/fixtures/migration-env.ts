@@ -4,7 +4,7 @@
  * under the fixture's one temp parent. {@link MigrationBench.cleanup}
  * restores the environment and removes the parent.
  */
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { resetFreezeMarkerCache } from "../../../../src/core/brain/freeze-marker.ts";
@@ -14,6 +14,7 @@ import type { StoreRecord } from "../../../../src/core/store/envelope.ts";
 import { readPartition } from "../../../../src/core/store/state-digest.ts";
 import { initStore } from "../../../../src/core/store/store-init.ts";
 import { openStore, type StoreHandle } from "../../../../src/core/store/store-open.ts";
+import { planMigrationDryRun } from "../../../../src/core/store-migration/dry-run.ts";
 import { migratedMark } from "../../../../src/core/store-migration/migration-records.ts";
 import {
   makeLegacyVault,
@@ -50,7 +51,10 @@ export interface MigrationBench {
   cleanup(): void;
 }
 
-export function makeMigrationBench(prefix = "osb-migrate-"): MigrationBench {
+export function makeMigrationBench(
+  prefix = "osb-migrate-",
+  options: { readonly withStore?: boolean } = {},
+): MigrationBench {
   const saved = new Map<string, string | undefined>();
   for (const key of ENV_KEYS) saved.set(key, process.env[key]);
   const fx = makeLegacyVault(prefix);
@@ -72,7 +76,8 @@ export function makeMigrationBench(prefix = "osb-migrate-"): MigrationBench {
   Object.assign(process.env, env);
   resetFreezeMarkerCache();
   resetVaultIdentityPins();
-  initStore({ root: storeRoot });
+  // Without a store, the first machine's automatic migration creates it.
+  if (options.withStore !== false) initStore({ root: storeRoot });
 
   const store = (): StoreHandle => openStore({ root: storeRoot, device: BENCH_DEVICE });
   const records = () =>
@@ -108,4 +113,29 @@ export function makeMigrationBench(prefix = "osb-migrate-"): MigrationBench {
       fx.cleanup();
     },
   };
+}
+
+/**
+ * Drop every line the dry run cannot parse from the fixture's legacy
+ * tree. The fixture carries such a line on purpose (the manual migration
+ * archives it); the automatic migration refuses on it, so the benches that
+ * exercise an automatic run that succeeds start without it.
+ */
+export function dropUnparseable(vault: string): void {
+  const plan = planMigrationDryRun(vault);
+  const byPath = new Map<string, Set<number>>();
+  for (const problem of plan.unparseable) {
+    if (problem.line === null) {
+      rmSync(join(vault, ...problem.path.split("/")), { force: true });
+      continue;
+    }
+    byPath.set(problem.path, (byPath.get(problem.path) ?? new Set()).add(problem.line));
+  }
+  for (const [rel, lines] of byPath) {
+    const path = join(vault, ...rel.split("/"));
+    const kept = readFileSync(path, "utf8")
+      .split("\n")
+      .filter((_, index) => !lines.has(index + 1));
+    writeFileSync(path, kept.join("\n"));
+  }
 }

@@ -90,8 +90,21 @@ function stemShards(_vault: string, primary: string): ReadonlyArray<Locator> {
   return [{ shape: "jsonl", dir: dirname(primary), grammar: jsonlLedgerGrammar(stem) }];
 }
 
-/** A SQLite file with its journal siblings and the rebuild's swap file. */
-const SQLITE_SIBLINGS = ["", "-wal", "-shm", "-journal", ".new"];
+/**
+ * A SQLite file with its journal siblings, and the rebuild's staging file
+ * with its own: a background reindex may hold the staging build open while
+ * the dry run walks the tree.
+ */
+const SQLITE_SIBLINGS = [
+  "",
+  "-wal",
+  "-shm",
+  "-journal",
+  ".new",
+  ".new-wal",
+  ".new-shm",
+  ".new-journal",
+];
 function sqliteFiles(_vault: string, primary: string): ReadonlyArray<Locator> {
   return SQLITE_SIBLINGS.map((suffix) => ({ shape: "tree", path: primary + suffix }));
 }
@@ -209,6 +222,9 @@ export const SURFACE_MAP: Readonly<Record<StateSurfaceId, SurfaceMapping>> = Obj
   [STATE_SURFACE_ID.selfHealUpgradeMarker]: plain(
     deviceLocal,
     MOVED + "this machine's failed-upgrade cooldown",
+  ),
+  [STATE_SURFACE_ID.selfHealUpgradeLock]: rebuildable(
+    plain(drop, "a worker lock, recreated by the start that claims it next"),
   ),
   [STATE_SURFACE_ID.freshenState]: rebuildable(
     plain(deviceLocal, MOVED + "this machine's freshen backoff"),

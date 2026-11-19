@@ -55,6 +55,14 @@ import {
 } from "../../src/core/brain/runtime-notices.ts";
 import { LANE_BUDGETED, LANE_UNBUDGETED, type InjectionMeter } from "./standing-block.ts";
 import {
+  consumeAutoMigrationNotice,
+  readAutoMigrationNotice,
+  recoverClaimedAutoMigrationNotices,
+} from "../../src/core/store-migration/auto-state.ts";
+
+/** The runtime notice code of the store migration's one-time success notice. */
+const STORE_MIGRATION_DONE_NOTICE = "store_migration_done";
+import {
   RECEIPT_ITEM_ACTIVE_BODY,
   RECEIPT_ITEM_LESSONS_BODY,
   RECEIPT_ITEM_SCOPED_RULES,
@@ -260,27 +268,50 @@ export function assembleActiveContext(
   vault: string,
   budget: number,
   meter: InjectionMeter,
+  opts: { readonly startsSession?: boolean } = {},
 ): string {
   // Runtime-state notices ride the same injection surface as active.md so the
   // agent is proactively aware of a degraded/transient condition (semantic
   // search fell back to lexical, index missing/rebuilding, read-only vault)
   // without a diagnostic round-trip. Best-effort and computed with no network;
   // an empty list keeps the injected body byte-identical to before.
-  const noticesBlock = renderRuntimeNotices(collectRuntimeNotices(vault));
-  if (noticesBlock.length > 0) {
-    meter.sources.push({
-      name: SOURCE_RUNTIME_NOTICES,
-      text: noticesBlock,
-      lane: LANE_UNBUDGETED,
-      outsideBoundary: false,
-    });
-  }
+  // A session start also carries the one-time notices (the store
+  // migration's success notice) and clears them once rendered: shown once,
+  // then gone. A subagent's context neither shows nor clears them.
+  const startsSession = opts.startsSession === true;
+  // The notice this start may show, read before the notices are rendered:
+  // the session consumes exactly that one below.
+  // A session that died while it consumed the notice gave nothing back:
+  // what it claimed is put back first, so this start shows it.
+  if (startsSession) recoverClaimedAutoMigrationNotices(vault);
+  const pending = startsSession ? readAutoMigrationNotice(vault) : null;
+  const notices = collectRuntimeNotices(vault, { oneTime: startsSession });
 
   // `Brain/active.md` on an unswitched machine; on a store-only one the
   // digest rendered on demand into the device-local cache (D14 item 7).
   const activePath = activeDigestPathForRead(vault);
   const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, budget, meter) : "";
 
+  // Consumed only once the body is assembled: a read that throws sends the
+  // session the last-good cache, which never held this notice, so the
+  // notice stays for the next start. The session whose consumption
+  // succeeds shows it; another start that rendered it at the same moment
+  // drops it from its text, so it is shown once.
+  let shown = notices;
+  if (startsSession && notices.some((n) => n.code === STORE_MIGRATION_DONE_NOTICE)) {
+    const consumed = pending !== null && consumeAutoMigrationNotice(vault, pending.at);
+    if (!consumed) shown = notices.filter((n) => n.code !== STORE_MIGRATION_DONE_NOTICE);
+  }
+  const noticesBlock = renderRuntimeNotices(shown);
+  if (noticesBlock.length > 0) {
+    // First among the sources, where the notices sit in the text.
+    meter.sources.unshift({
+      name: SOURCE_RUNTIME_NOTICES,
+      text: noticesBlock,
+      lane: LANE_UNBUDGETED,
+      outsideBoundary: false,
+    });
+  }
   return joinBlocks([noticesBlock, activeBody]);
 }
 

@@ -102,6 +102,8 @@ export interface PassResult {
   readonly devices: ReadonlySet<string>;
   /** Items left out because they belong to a partition this machine does not hold. */
   readonly heldBack: number;
+  /** The `problems` that are items this pass could not parse (not the held-back ones). */
+  readonly unparseable: ReadonlyArray<UnparseableItem>;
 }
 
 /** Unmatched dual-written copies: content key to their records, oldest first. */
@@ -232,6 +234,8 @@ export function convertPass(ctx: ConvertContext): PassResult {
   const devices = new Set<string>();
   let imported = 0;
   let heldBack = 0;
+  // The scan records a held-back item as a problem too, under its error.
+  const heldReasons = new Set<string>();
   for (const entry of migrationCatalogue(ctx.vault)) {
     const destination = recordDestination(entry);
     if (destination === null) continue;
@@ -256,6 +260,7 @@ export function convertPass(ctx: ConvertContext): PassResult {
           // fails verification; any other failure stops the run.
           if (error instanceof PartitionUnavailableError) {
             heldBack += 1;
+            heldReasons.add(error.message);
             throw error;
           }
           throw new ScanAbort(error);
@@ -267,7 +272,8 @@ export function convertPass(ctx: ConvertContext): PassResult {
     for (const problem of tally.problems) problems.push({ surface: entry.id, ...problem });
     for (const device of tally.devices.keys()) devices.add(device);
   }
-  return { imported, seen, problems, devices, heldBack };
+  const unparseable = problems.filter((p) => !heldReasons.has(p.reason));
+  return { imported, seen, problems, devices, heldBack, unparseable };
 }
 
 /** One legacy item the store does not hold as journaled. */

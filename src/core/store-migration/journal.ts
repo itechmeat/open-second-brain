@@ -26,7 +26,7 @@
  * can tell an interrupted migration from a fresh one.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -48,7 +48,9 @@ import { migratedMark } from "./migration-records.ts";
 /** The device-local folder of the migration, inside the store's device state. */
 export const MIGRATION_STATE_DIR = "migration";
 const JOURNAL_FILE = "journal.jsonl";
-const STATE_FILE = "state.json";
+/** The run state file in the migration folder. */
+export const MIGRATION_STATE_FILE = "state.json";
+const STATE_FILE = MIGRATION_STATE_FILE;
 
 /**
  * One journaled item version: the records a (key, checksum) became, one
@@ -126,12 +128,83 @@ export function migrationDir(store: Pick<StoreHandle, "deviceStateDir">): string
   return join(store.deviceStateDir, MIGRATION_STATE_DIR);
 }
 
-export function readMigrationState(dir: string): MigrationState | null {
+/**
+ * This device's run state as one read of its file found it: `absent` when
+ * there is no file (no run), `unreadable` when the folder or the file
+ * cannot be read or the file does not parse as a run, or the run. A read
+ * that fails is never `absent`: it could hide a run the operator rolled
+ * back. Every module reads the run state through this function, and acts
+ * on this one answer: no second look at the file decides.
+ */
+export type MigrationStateRead =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly error: string }
+  | { readonly kind: "state"; readonly state: MigrationState };
+
+export function readMigrationState(dir: string): MigrationStateRead {
+  let text: string;
   try {
-    return JSON.parse(readFileSync(join(dir, STATE_FILE), "utf8")) as MigrationState;
-  } catch {
-    return null;
+    text = readFileSync(join(dir, STATE_FILE), "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
+    return { kind: "unreadable", error: err instanceof Error ? err.message : String(err) };
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    return { kind: "unreadable", error: err instanceof Error ? err.message : String(err) };
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { run_id?: unknown }).run_id !== "string" ||
+    typeof (parsed as { phase?: unknown }).phase !== "string"
+  ) {
+    return { kind: "unreadable", error: "the run state is not a run" };
+  }
+  return { kind: "state", state: parsed as MigrationState };
+}
+
+/**
+ * The record a rollback writes once it restored the legacy tree, and
+ * removes as its last step (`rollback.ts`): while it is there, a rollback
+ * of this machine began and did not finish.
+ */
+export const ROLLBACK_STATE_FILE = "rollback.json";
+
+/**
+ * This machine's rollback record as one read of it found it: `absent`
+ * when there is none, `there` when a rollback began and did not finish
+ * (whatever the file holds: a torn record is a rollback that began too),
+ * `unreadable` when the folder or the file cannot be read. A read that
+ * fails is never `absent`: it could hide a rollback the operator began.
+ */
+export type RollbackRecordRead = "absent" | "there" | "unreadable";
+
+export function readRollbackRecord(dir: string): RollbackRecordRead {
+  try {
+    readFileSync(join(dir, ROLLBACK_STATE_FILE));
+    return "there";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
+  }
+}
+
+/** The journal of the records a rollback wrote back (`rollback.ts`). */
+export const ROLLBACK_JOURNAL_FILE = "rollback-journal.jsonl";
+
+/**
+ * Remove a rollback's record and journal: a migration the operator runs
+ * over a rollback that did not finish ends that rollback, and a later
+ * rollback starts from the new migration's snapshot.
+ */
+export function clearRollbackRecord(dir: string): void {
+  rmSync(join(dir, ROLLBACK_STATE_FILE), { force: true });
+  rmSync(join(dir, ROLLBACK_JOURNAL_FILE), { force: true });
 }
 
 export function writeMigrationState(dir: string, state: MigrationState): void {

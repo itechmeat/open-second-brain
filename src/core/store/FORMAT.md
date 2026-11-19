@@ -345,6 +345,8 @@ Kinds of the migration from the legacy layout, written to `settings` in `shared`
 
 Every record the migration imports carries, beside `vault_id`, the field `legacy_device` (the device id in the name of the legacy shard the item came from, or the empty string for a legacy un-sharded file and for a page) and the field `migrated`: `{ "key": "<vault-relative path>[#<line>]", "sum": "<sha256>", "part": <index>, "parts": <count> }`, the legacy item it came from (with the line for an append-only file), the checksum of that item's content, and which of the item's records this is (an item can become more than one record, such as a preference whose human-decided fields and derived fields carry different authorities). Two legacy items with identical content have different keys and stay two records. A legacy item that a dual write had already put in the store is not imported again: the migration matches this device's unmarked records by kind and body (without `vault_id`, `legacy_device` and `migrated`) as a multiset, one copy per item record.
 
+Topic planning reads an imported record's origin from its body rather than its envelope: the time is the log event's `timestamp` or the signal frontmatter's `created_at` (an ISO day, or a time with its zone), else the `YYYY-MM-DD` day in the file name of the `migrated` key, else the record's clock; the device is `legacy_device` when it is not empty, else the envelope device. Nothing is added to the body for this.
+
 Every other kind is defined by the feature that writes it, and a reader that does not know a kind keeps the record and leaves its body alone.
 
 ## Device-local state

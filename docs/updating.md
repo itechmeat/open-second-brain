@@ -1091,6 +1091,25 @@ hands-off:
   `o2b brain status`, `o2b brain upgrade --dry-run`) and the next automatic
   attempt waits a cooldown (one hour, doubling per consecutive failure, at
   most 24 hours) instead of running again on every start;
+- a machine that still keeps its brain in the legacy `Brain/` tree moves it
+  into the brain store: a detached `o2b brain migrate-store --auto` worker
+  runs the managed-file upgrade above first, then the dry run, then the
+  migration, resuming an interrupted one. One worker runs per vault per
+  machine; a failed attempt leaves the machine on the legacy layout, is
+  reported by `o2b doctor` and the session start, and waits the same
+  cooldown before the next try; a run that stopped after it switched the
+  machine is finished by the next start, whatever the setting below says
+  (finishing it is not a new migration), and a machine rolled back by hand
+  stays rolled back. An item the dry run cannot parse,
+  or an entry with no destination, stops it before anything is created,
+  and the doctor names the manual command. With several machines on one
+  vault, update one first and let its migration sync before the others.
+  `o2b update` runs the same step in the foreground
+  (`--skip-store-migration` skips it once), and
+  `auto_store_migration: false` in the machine config turns it off for that
+  machine (any value other than `true`, `1`, `yes` or `on` turns it off
+  too, and the environment variable can only turn it off). How it works, and how to roll back:
+  [`docs/brain-store.md`](brain-store.md#automatic-migration);
 - a stale-schema or missing search index is rebuilt in the **background** (a
   detached reindex), so startup never blocks; and as a safety net the search
   read path self-heals a stale/missing index on first query;

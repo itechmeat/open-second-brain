@@ -204,6 +204,15 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The automatic migration's last attempt failed; the finding names
+        // the same manual run, which the user may start without waiting
+        // for the next automatic attempt.
+        code: "store-migration-failed",
+        issueClass: "automatic brain store migration failed",
+        nextCommand: "o2b brain migrate-store",
+        autoRepairable: false,
+      },
+      {
         code: "config-invalid",
         issueClass: "invalid Brain config",
         nextCommand: "o2b brain doctor",

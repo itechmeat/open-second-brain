@@ -6,7 +6,8 @@
  *    writes machines still on an old release left in the legacy tree, and
  *    names those machines (`transition.ts`). A vault configured after the
  *    switch also brings its operator settings, and is bound to the store
- *    once nothing of it was left behind.
+ *    once nothing of it was left behind. A rollback that began and did not
+ *    clear the switch ends here, as the migration ends one.
  *  - `first` / `later`: the migration (`migrate.ts`); a later machine
  *    first waits for the first machine's cut.
  *  - `waiting`: a later machine whose store does not hold that cut yet.
@@ -16,17 +17,20 @@
  * `--rollback` forms (tasks 2.5 and 2.6).
  */
 
+import { readMigrationGateState } from "../migration-gate.ts";
 import { deviceSwitchedHere } from "../store/store-only.ts";
 import { legacyPermissionsConflict } from "../brain/doctor/permissions-check.ts";
 import { storedPermissionsText } from "../brain/permissions/document-source.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
 import { bindVaultToStore, vaultBindingStatus } from "../vault-adapter/vault-binding.ts";
 import { importBrainSettings, type BrainSettingsImport } from "./brain-settings.ts";
-import { unseenHeldShards } from "./journal.ts";
+import { clearRollbackRecord, migrationDir, unseenHeldShards } from "./journal.ts";
 import { writeDeviceSettings, type DeviceConfigWrite } from "./device-config.ts";
+import { ROLLBACK_RUN_PREFIX } from "./gate-state.ts";
 import type { CutWait } from "./later.ts";
 import {
   finishInterruptedSwitch,
+  MigrationSwitchedError,
   MigrationWaitingError,
   openMigrationStore,
   runMigration,
@@ -35,6 +39,8 @@ import {
   type MigrationResult,
 } from "./migrate.ts";
 import { removeLegacyTree, type RemovalResult } from "./removal.ts";
+
+export { MigrationSwitchedError } from "./migrate.ts";
 import { rollbackMigration, type RollbackHooks, type RollbackResult } from "./rollback.ts";
 import { importLateLegacyWrites, type TransitionResult } from "./transition.ts";
 
@@ -80,6 +86,12 @@ export type MigrateStoreOutcome =
 export function migrateStore(vault: string, options: MigrationOptions = {}): MigrateStoreOutcome {
   const store = openMigrationStore(vault, options.configPath);
   if (deviceSwitchedHere(store, store.device)) {
+    // The transition below is the operator's: the automatic worker that
+    // finds the device switched under it (another vault's migration ran
+    // first) does nothing here. A switched machine's own leftovers are the
+    // worker's switched branch, and new legacy records of machines still on
+    // the legacy layout are the automatic transition import's.
+    if (options.automatic === true) throw new MigrationSwitchedError(store.device);
     const agent = options.agent ?? safeAgent(options.configPath);
     // A run killed after its switch record still has to bind the vault it
     // migrated, claim the view writer and open the gate. Another vault
@@ -135,6 +147,15 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
       bindVaultToStore(vault, { store });
       bound = true;
     }
+    // A rollback that began here and did not clear the switch ends here,
+    // as it does in a migration (`runMigration`): the operator chose the
+    // store again. Without this its record would refuse every automatic
+    // step and name only `--rollback`, which undoes this choice. Only this
+    // operator's command does it; the automatic worker refused above. A
+    // rollback that holds the gate, or may (a gate that cannot be read),
+    // is left alone: this command does not open its gate, and only its
+    // own command finishes it.
+    if (!rollbackMayHoldGate()) clearRollbackRecord(migrationDir(store));
     return {
       mode: "transition",
       ok: complete && !permissionsConflict,
@@ -155,6 +176,13 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
     }
     throw error;
   }
+}
+
+/** Whether a rollback holds this machine's migration gate, or may: a gate that cannot be read. */
+function rollbackMayHoldGate(): boolean {
+  const gate = readMigrationGateState();
+  if (gate.kind === "unreadable") return true;
+  return gate.kind === "held" && gate.gate.run_id.startsWith(ROLLBACK_RUN_PREFIX);
 }
 
 /** `--remove-legacy [--force]`: move the legacy tree out of the vault when the cohort allows. */

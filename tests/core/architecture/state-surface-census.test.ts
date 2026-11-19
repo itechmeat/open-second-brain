@@ -108,6 +108,14 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // the directory itself.
 // 32 -> 33: machine-state joins, excused: it copies a bare vault's own
 // `.open-second-brain/` once into the device-local root (task 2.10 review).
+// 33 -> 34: the automatic store migration's state module
+// (`src/core/store-migration/auto-state.ts`) names its lock, state and
+// notice files under the derived store, answered by the
+// `auto_store_migration_lock`, `auto_store_migration_state` and
+// `store_migration_notice` rows' `sources`.
+// 34 -> 33: that module keeps the three files in the device-local folder
+// of all stores instead, never in a vault, and the three rows leave the
+// registry.
 const SWEPT_POPULATION_SIZE = 33;
 
 /** Declared surfaces today. Pinned for the same reason. */
@@ -136,7 +144,14 @@ const SWEPT_POPULATION_SIZE = 33;
 // 61 -> 64: the procedural usage counters, graph and hints join the
 // catalogue as device-local rows, so a usage tick appends no store record
 // and the migration moves the counters (task 3.10).
-const DECLARED_SURFACE_COUNT = 64;
+// 64 -> 68: the automatic store migration's worker lock, failure or waiting
+// state and one-time notice, and the automatic upgrade's worker lock, join
+// the catalogue, so the migration's dry run claims them (change
+// auto-store-migration).
+// 68 -> 65: the automatic store migration's three files leave the vault
+// for the device-local folder of all stores, so their rows leave the
+// catalogue; the automatic upgrade's worker lock stays.
+const DECLARED_SURFACE_COUNT = 65;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

@@ -249,7 +249,12 @@ jobs:
   # on Windows, and each uploads what it measured as `windows-timings-<shard>`;
   # `.github/scripts/windows-timings.sh` folds a run's uploads back into the
   # committed file. A test file the file does not list yet still runs, it just
-  # weighs a default amount.
+  # weighs the median of the listed files. Shards are contiguous runs of the
+  # sorted paths, so new slow files in one directory all land in one shard at
+  # that weight and can push it past the job limit before main is refreshed:
+  # a pull request that adds slow test files folds a run of its own into the
+  # committed file (`windows-timings.sh <run-id>`; a shard that was cancelled
+  # uploads nothing, so its files' times come from its log).
   windows-tests:
     name: windows (${{ matrix.shard }}/10)
     needs: changes

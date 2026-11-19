@@ -2492,6 +2492,10 @@ var exports_config = {};
 __export(exports_config, {
   ANSWER_QUOTE_CHECK_MODES: () => ANSWER_QUOTE_CHECK_MODES,
   ANSWER_QUOTE_CHECK_PHASES: () => ANSWER_QUOTE_CHECK_PHASES,
+  AUTO_STORE_MIGRATION_ENV: () => AUTO_STORE_MIGRATION_ENV,
+  AUTO_STORE_MIGRATION_KEY: () => AUTO_STORE_MIGRATION_KEY,
+  AUTO_STORE_MIGRATION_OFF_VALUES: () => AUTO_STORE_MIGRATION_OFF_VALUES,
+  AUTO_STORE_MIGRATION_ON_VALUES: () => AUTO_STORE_MIGRATION_ON_VALUES,
   ConfigReadError: () => ConfigReadError,
   DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY: () => DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY,
   DECISION_RECALL_MAX_PER_SESSION_ENV_KEY: () => DECISION_RECALL_MAX_PER_SESSION_ENV_KEY,
@@ -2519,8 +2523,10 @@ __export(exports_config, {
   UNCONFIGURED_AGENT_NAME: () => UNCONFIGURED_AGENT_NAME,
   UnsupportedPlatformError: () => UnsupportedPlatformError,
   VAULT_STORE_REF_PREFIX: () => VAULT_STORE_REF_PREFIX,
+  autoStoreMigrationSetting: () => autoStoreMigrationSetting,
   configuredVaultKey: () => configuredVaultKey,
   defaultConfigPath: () => defaultConfigPath,
+  describeAutoStoreMigrationProblem: () => describeAutoStoreMigrationProblem,
   discoverConfig: () => discoverConfig,
   installNamedSecretResolver: () => installNamedSecretResolver,
   isAnswerQuoteCheckMode: () => isAnswerQuoteCheckMode,
@@ -2535,6 +2541,7 @@ __export(exports_config, {
   resolveAnswerQuoteCheckActive: () => resolveAnswerQuoteCheckActive,
   resolveAnswerQuoteCheckRecall: () => resolveAnswerQuoteCheckRecall,
   resolveAnswerQuoteCheckSubagent: () => resolveAnswerQuoteCheckSubagent,
+  resolveAutoStoreMigration: () => resolveAutoStoreMigration,
   resolveBacklogNudgeEnabled: () => resolveBacklogNudgeEnabled,
   resolveBenchJudgeCmd: () => resolveBenchJudgeCmd,
   resolveContextPackOutcomeEnabled: () => resolveContextPackOutcomeEnabled,
@@ -2962,6 +2969,54 @@ function resolveStoreDualWrite(configPath) {
 function resolveSessionHandoff(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_SESSION_HANDOFF", "session_handoff", configPath);
 }
+function readOptOutValue(raw, emptyIsUnset) {
+  if (raw === undefined)
+    return { kind: "unset", value: "" };
+  let value = raw.replace(/(^|\s)#.*$/, "").trim();
+  if (value.length >= 2 && (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1).trim();
+  }
+  if (value === "" && emptyIsUnset)
+    return { kind: "unset", value };
+  const lower = value.toLowerCase();
+  if (AUTO_STORE_MIGRATION_ON_VALUES.includes(lower))
+    return { kind: "on", value };
+  if (AUTO_STORE_MIGRATION_OFF_VALUES.includes(lower))
+    return { kind: "off", value };
+  return { kind: "unrecognised", value: raw.trim() };
+}
+function autoStoreMigrationSetting(configPath) {
+  const unrecognised = [];
+  const env = readOptOutValue(process.env[AUTO_STORE_MIGRATION_ENV], true);
+  if (env.kind === "unrecognised")
+    unrecognised.push({ source: "environment", value: env.value });
+  let config;
+  try {
+    config = readOptOutValue(discoverConfig(configPath).data[AUTO_STORE_MIGRATION_KEY], false);
+  } catch (err) {
+    return {
+      enabled: false,
+      unrecognised,
+      unreadable: err instanceof Error ? err.message : String(err)
+    };
+  }
+  if (config.kind === "unrecognised")
+    unrecognised.push({ source: "config", value: config.value });
+  const off = (v) => v === "off" || v === "unrecognised";
+  return { enabled: !off(env.kind) && !off(config.kind), unrecognised, unreadable: null };
+}
+function resolveAutoStoreMigration(configPath) {
+  return autoStoreMigrationSetting(configPath).enabled;
+}
+function describeAutoStoreMigrationProblem(setting) {
+  if (setting.unreadable !== null) {
+    return `the machine config cannot be read (${setting.unreadable}), so the automatic store ` + "migration does not run";
+  }
+  if (setting.unrecognised.length === 0)
+    return null;
+  const named = setting.unrecognised.map((u) => u.source === "environment" ? `${AUTO_STORE_MIGRATION_ENV}=${JSON.stringify(u.value)}` : `${AUTO_STORE_MIGRATION_KEY}: ${JSON.stringify(u.value)} in the machine config`).join(" and ");
+  return `unrecognised value ${named}, so the automatic store migration is off; use one of ` + `${AUTO_STORE_MIGRATION_ON_VALUES.join(", ")} to turn it on or ` + `${AUTO_STORE_MIGRATION_OFF_VALUES.join(", ")} to turn it off`;
+}
 function resolveConfigNonNegativeInt(envKey, configKey, configPath) {
   const env = process.env[envKey]?.trim();
   const raw = env || discoverConfig(configPath).data[configKey]?.trim();
@@ -3302,7 +3357,7 @@ function expandTilde(p, platform = process.platform, home = homedir2()) {
     return join5(home, p.slice(2));
   return p;
 }
-var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, WINDOWS_RESERVED_DEVICE_NAME_RE, DEVICE_ID_ENV = "O2B_DEVICE_ID", INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES, SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode", SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE", SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd", SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
+var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, WINDOWS_RESERVED_DEVICE_NAME_RE, DEVICE_ID_ENV = "O2B_DEVICE_ID", INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, AUTO_STORE_MIGRATION_ENV = "OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION", AUTO_STORE_MIGRATION_KEY = "auto_store_migration", AUTO_STORE_MIGRATION_ON_VALUES, AUTO_STORE_MIGRATION_OFF_VALUES, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES, SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode", SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE", SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd", SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_ref();
@@ -3337,6 +3392,18 @@ var init_config = __esm(() => {
   DEVICE_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
   WINDOWS_RESERVED_DEVICE_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
   INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
+  AUTO_STORE_MIGRATION_ON_VALUES = Object.freeze([
+    "true",
+    "1",
+    "yes",
+    "on"
+  ]);
+  AUTO_STORE_MIGRATION_OFF_VALUES = Object.freeze([
+    "false",
+    "0",
+    "no",
+    "off"
+  ]);
   ANSWER_QUOTE_CHECK_MODES = Object.freeze(["off", "shadow", "enforce"]);
   ANSWER_QUOTE_CHECK_PHASES = Object.freeze(["recall", "active", "subagent"]);
   quoteCheckWarnedUnknownKeys = new Set;
@@ -5243,7 +5310,8 @@ var init_types = __esm(() => {
     noteWrite: "note-write",
     lessonsApproved: "lessons-approved",
     lessonsDenied: "lessons-denied",
-    lessonsPromoted: "lessons-promoted"
+    lessonsPromoted: "lessons-promoted",
+    storeMigrationDone: "store-migration-done"
   };
   BRAIN_COMMITMENT_TIER = {
     exploring: "exploring",
