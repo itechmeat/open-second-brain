@@ -53,6 +53,7 @@ import {
 } from "../../../src/core/store-migration/removal-marker.ts";
 import { RollbackRefusedError } from "../../../src/core/store-migration/rollback.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
+import { setSilenceDays } from "./fixtures/silence.ts";
 import { moveNeverHeld } from "../../helpers/held-partitions.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
@@ -101,9 +102,12 @@ describe("removing the legacy tree", () => {
     const a = fleet.machine("dev-a");
     a.use();
     expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // The silence rule off: the cohort has no age limit (it is covered in
+    // removal-silence.test.ts), so the test holds whatever the date.
+    setSilenceDays(a, 0);
     // The fixture's legacy shards name dev-b and dev-c, which never migrated.
     const blocked = removeLegacy(a.vault);
-    expect(blocked).toEqual({
+    expect(blocked).toMatchObject({
       removed: false,
       reason: "cohort-pending",
       pending: ["dev-b", "dev-c"],
@@ -132,17 +136,18 @@ describe("removing the legacy tree", () => {
     expect(pending?.message).toContain("dev-d");
   });
 
-  test("a cohort device offline for more than 30 days keeps the gate closed", () => {
+  test("with the silence rule off, a cohort device offline for months keeps the gate closed", () => {
     fleet = makeFleet(["dev-a"]);
     const a = fleet.machine("dev-a");
     a.use();
     expect(runMigration(a.vault, FAST).ok).toBe(true);
+    setSilenceDays(a, 0);
     // dev-c's shard is 60 days old: off the 30-day roster, still in the cohort.
     const devices = planMigrationDryRun(a.vault).devices;
     expect(devices.cohort.map((d) => d.device)).toContain("dev-c");
     expect(devices.roster).not.toContain("dev-c");
     retire(a, "dev-b");
-    expect(removeLegacy(a.vault)).toEqual({
+    expect(removeLegacy(a.vault)).toMatchObject({
       removed: false,
       reason: "cohort-pending",
       pending: ["dev-c"],
@@ -166,7 +171,7 @@ describe("removing the legacy tree", () => {
     );
     fleet.syncStore("dev-b", "dev-a");
     a.use();
-    expect(removeLegacy(a.vault)).toEqual({
+    expect(removeLegacy(a.vault)).toMatchObject({
       removed: false,
       reason: "cohort-pending",
       pending: ["dev-b"],
@@ -233,6 +238,7 @@ describe("removing the legacy tree", () => {
     const a = fleet.machine("dev-a");
     a.use();
     expect(runMigration(a.vault, FAST).ok).toBe(true);
+    setSilenceDays(a, 0);
     const removed = removeLegacy(a.vault, { force: true });
     if (!removed.removed) throw new Error("not removed");
     expect(removed.forced).toBe(true);

@@ -106,6 +106,7 @@ interface StoreBlock {
     switched: boolean;
     next_commands: string[];
     automatic: { state: string } | null;
+    cohort: Record<string, unknown> | null;
     error?: string;
   };
   error: string | null;
@@ -144,6 +145,7 @@ describe("second_brain_status store block", () => {
       switched: false,
       next_commands: ["o2b store init", "o2b brain migrate-store --dry-run"],
       automatic: expect.objectContaining({ state: "pending" }),
+      cohort: null,
     });
     expect(store.error).toBeNull();
   });
@@ -191,6 +193,7 @@ describe("second_brain_status store block", () => {
       switched: false,
       next_commands: [],
       automatic: expect.objectContaining({ state: "not_needed" }),
+      cohort: null,
     });
   });
 
@@ -214,6 +217,8 @@ describe("second_brain_status store block", () => {
       switched: true,
       next_commands: [],
       automatic: expect.objectContaining({ state: "done" }),
+      // Switched with the tree still there: each cohort device's state.
+      cohort: expect.objectContaining({ threshold_days: 30, can_leave: true }),
     });
   });
 

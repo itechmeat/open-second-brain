@@ -6,7 +6,8 @@
  *
  *  - `migration-cohort` `{ authority, vault_id, devices }`: every device id
  *    found in the legacy tree at preflight, with no age limit. The legacy
- *    tree leaves the vault only once each of them has switched or retired.
+ *    tree leaves the vault only once each of them has switched or retired,
+ *    by a human or by silence (`cohort-status.ts`).
  *  - `migration-done` `{ authority, vault_id, device, cuts, imported }`: the
  *    first machine finished; `cuts` holds, per partition it holds, the
  *    digest cut (`state-digest.ts`) of the store right after the import.
@@ -23,10 +24,13 @@ import { isRecordRelPath } from "../record-path.ts";
 import {
   AUTHORITY_FIELD,
   DEVICE_RETIRE_KIND,
+  SETTING_SILENT_DEVICE_DAYS,
   STORE_PARTITIONS,
   type StorePartition,
 } from "../store/constants.ts";
 import { returnedAfterRetirement } from "../store/device-retirement.ts";
+import { foldSettings, settingValue } from "../store/fold-settings.ts";
+import { parseHlc } from "../store/hlc.ts";
 import { compareRecords, type StoreRecord } from "../store/envelope.ts";
 import { readPartition, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
@@ -280,6 +284,44 @@ export function legacyDevices(store: StoreHandle, seen: ReadonlyArray<string>): 
   const switched = switchedDevices(records);
   for (const device of devices) if (switched.has(device)) devices.delete(device);
   return [...devices].toSorted();
+}
+
+/** Every device a human `migration-cohort` record names. */
+export function cohortDevices(store: Pick<StoreHandle, "root" | "partitions">): string[] {
+  return [...cohortFirstSeen(store).keys()].toSorted();
+}
+
+/**
+ * The clock (physical ms) of the earliest human `migration-cohort` record
+ * naming each device: the stand-in evidence of a device that left no dated
+ * trace (change stale-device-retirement, design D2).
+ */
+export function cohortFirstSeen(
+  store: Pick<StoreHandle, "root" | "partitions">,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of sharedSettings(store)) {
+    if (r.kind !== MIGRATION_COHORT_KIND || !isHuman(r)) continue;
+    const physical = parseHlc(r.hlc)?.physical;
+    const listed = r.body["devices"];
+    if (physical === undefined || !Array.isArray(listed)) continue;
+    for (const d of listed) {
+      if (typeof d !== "string") continue;
+      const seen = out.get(d);
+      if (seen === undefined || physical < seen) out.set(d, physical);
+    }
+  }
+  return out;
+}
+
+/** The shared silence threshold in days (`migration.silent_device_days`; 0 is off). */
+export function silenceThresholdDays(store: Pick<StoreHandle, "root" | "partitions">): number {
+  return settingValue(foldSettings(sharedSettings(store)), SETTING_SILENT_DEVICE_DAYS) as number;
+}
+
+/** The devices `records` show as switched, read from this machine's store. */
+export function switchedDeviceIds(store: Pick<StoreHandle, "root" | "partitions">): Set<string> {
+  return switchedDevices(sharedSettings(store));
 }
 
 /** The `migration-done` records this machine holds, in file order. */

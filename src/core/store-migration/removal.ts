@@ -6,9 +6,14 @@
  * with the device-local originals the migration copied but left in place
  * (the derived store folder beside `Brain/`).
  *
- *  - The gate is the cohort, with no age limit: a device that has been
- *    offline for months keeps the tree in place, because removing it would
- *    leave that device writing into a tree no store imports any more.
+ *  - The gate is the cohort. A device that has been offline for a while
+ *    keeps the tree in place, because removing it would leave that device
+ *    writing into a tree no store imports any more, until its last
+ *    evidence of life is older than the shared `migration.silent_device_days`
+ *    (change stale-device-retirement, `cohort-status.ts`): then it is
+ *    retired by silence, is not pending, and the result and the record
+ *    name it with its last evidence. With the setting at 0 the cohort has
+ *    no age limit.
  *  - `--force` removes the tree anyway and names the devices that will
  *    stop reaching the store.
  *  - A `settings` shard of `shared` that cannot be read refuses the
@@ -76,18 +81,41 @@ import {
 } from "./migration-records.ts";
 import type { ConvertHooks } from "./convert.ts";
 import { retireAdoptedLaneEntries } from "./retire-adopted.ts";
+import { cohortStatus, type CohortStatus, type DeviceEvidenceDate } from "./cohort-status.ts";
+import { legacyDeviceEvidence } from "./device-evidence.ts";
 import { GATED_IMPORT_WAIT_MS, importLateLegacyWrites } from "./transition.ts";
 
 /** Where archives of removed legacy trees go, inside the device-local state. */
 export const LEGACY_ARCHIVE_DIR = "legacy-archive";
 
+/**
+ * What the removal found about the cohort (change stale-device-retirement):
+ * the devices that switched and, apart from them, the devices retired by
+ * silence with their last evidence, the threshold and the reference time.
+ */
+export interface SilenceReport {
+  readonly switched: ReadonlyArray<string>;
+  readonly retired_by_silence: ReadonlyArray<DeviceEvidenceDate>;
+  readonly silence_threshold_days: number;
+  /** The reference the ages were measured against (ISO), or null. */
+  readonly as_of: string | null;
+}
+
 export type RemovalResult =
   | {
       readonly removed: false;
-      readonly reason: "not-switched" | "cohort-pending" | "no-legacy-tree";
+      readonly reason: "not-switched" | "no-legacy-tree";
       /** Devices still on the legacy layout. */
       readonly pending: ReadonlyArray<string>;
     }
+  | ({
+      readonly removed: false;
+      readonly reason: "cohort-pending";
+      /** Devices still on the legacy layout, not retired by silence. */
+      readonly pending: ReadonlyArray<string>;
+      /** The same devices with their last evidence. */
+      readonly pending_evidence: ReadonlyArray<DeviceEvidenceDate>;
+    } & SilenceReport)
   | {
       readonly removed: false;
       readonly reason: "held-back";
@@ -98,7 +126,7 @@ export type RemovalResult =
       /** The store partitions this machine does not hold. */
       readonly missing: ReadonlyArray<StorePartition>;
     }
-  | {
+  | ({
       readonly removed: true;
       readonly archive: string;
       readonly moved: ReadonlyArray<string>;
@@ -108,7 +136,7 @@ export type RemovalResult =
       /** Devices still on the legacy layout that a forced removal leaves behind. */
       readonly stopped: ReadonlyArray<string>;
       readonly imported: number;
-    };
+    } & SilenceReport);
 
 function digestTree(root: string): string {
   const hash = createHash("sha256");
@@ -367,11 +395,25 @@ function removeUnderGate(
   const transition = importLateLegacyWrites(vault, store, options.agent, vaultId, {
     waitMs: GATED_IMPORT_WAIT_MS,
   });
-  const pending = transition.legacy_devices;
+  // Devices retired by silence are not pending (`cohort-status.ts`); the
+  // evidence is read from the tree before it moves.
+  const cohort = cohortStatus(store, {
+    legacy: transition.legacy_devices,
+    legacyEvidence: legacyDeviceEvidence(vault),
+    now: options.now ?? new Date(),
+  });
+  const silence = silenceReport(cohort);
+  const pending = cohort.pending.map((d) => d.device);
   const forced = options.force === true;
   // A resumed removal already moved part of the tree: it finishes.
   if (resumed === null && pending.length > 0 && !forced) {
-    return { removed: false, reason: "cohort-pending", pending };
+    return {
+      removed: false,
+      reason: "cohort-pending",
+      pending,
+      pending_evidence: cohort.pending,
+      ...silence,
+    };
   }
   if (!transition.converged) {
     throw new Error(
@@ -434,9 +476,20 @@ function removeUnderGate(
       device: store.device,
       forced,
       stopped: [...pending],
+      // Why the tree left while these cohort devices had not switched.
+      retired_by_silence: silence.retired_by_silence.map((d) => ({ ...d })),
+      silence_threshold_days: silence.silence_threshold_days,
+      as_of: silence.as_of,
     },
   });
-  writeRemovalMarker(store, { vault: resolve(vault), at, archive, forced, stopped: pending });
+  writeRemovalMarker(store, {
+    vault: resolve(vault),
+    at,
+    archive,
+    forced,
+    stopped: pending,
+    retired_by_silence: silence.retired_by_silence,
+  });
   rmSync(journal, { force: true });
   // No rollback can run from here on: the records of files that are
   // machine state now are retired (`retire-adopted.ts`). Best effort: a
@@ -454,5 +507,15 @@ function removeUnderGate(
     forced,
     stopped: pending,
     imported: transition.imported + final.imported,
+    ...silence,
+  };
+}
+
+function silenceReport(cohort: CohortStatus): SilenceReport {
+  return {
+    switched: cohort.switched,
+    retired_by_silence: cohort.retired_by_silence,
+    silence_threshold_days: cohort.threshold_days,
+    as_of: cohort.as_of,
   };
 }

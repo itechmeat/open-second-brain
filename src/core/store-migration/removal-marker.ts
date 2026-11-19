@@ -20,6 +20,11 @@ export interface LegacyRemovalMarker {
   readonly archive: string;
   readonly forced: boolean;
   readonly stopped: ReadonlyArray<string>;
+  /** Cohort devices retired by silence when the tree left (absent in older markers). */
+  readonly retired_by_silence?: ReadonlyArray<{
+    readonly device: string;
+    readonly last_evidence: string | null;
+  }>;
 }
 
 /** The real path of `path` (links and junctions resolved), or `path` when it cannot be resolved. */

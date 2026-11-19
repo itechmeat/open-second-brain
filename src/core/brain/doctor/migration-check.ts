@@ -19,25 +19,27 @@
  * trust verdict do not count), never to the warnings.
  *
  * The same check reports the transition (task 2.12, design D11a): on a
- * switched machine, the cohort devices still on the legacy layout (advice,
- * in the same channel), and a legacy directory that is back in the vault
- * after the tree was removed (a warning, with the writer its files name).
+ * switched machine, each cohort device as switched, pending with its last
+ * evidence, or retired by silence with the date and the threshold (change
+ * stale-device-retirement, `store-migration/cohort-status.ts`); while one
+ * is pending the advice names it, and once none is the advice says the
+ * legacy tree can leave the vault and names the command (both in the same
+ * channel); and a legacy directory that is back in the vault after the
+ * tree was removed (a warning, with the writer its files name).
  */
 
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
 
-import { readDeviceId } from "../../config.ts";
-import { deviceSwitchedHere } from "../../store/store-only.ts";
-import { inspectStore, type StoreHandle } from "../../store/store-open.ts";
-import { deviceStateDirFor, resolveConfiguredStoreRoot } from "../../store/store-paths.ts";
 import {
-  legacyDevices,
   legacyTreeRemovedRecords,
   standingDoneRecords,
 } from "../../store-migration/migration-records.ts";
 import { readRemovalMarker } from "../../store-migration/removal-marker.ts";
-import { listLogShardFiles } from "../log-jsonl.ts";
+import { cohortStatusHere, migrationStoreHere } from "../../store-migration/cohort-here.ts";
+import type { CohortStatus } from "../../store-migration/cohort-status.ts";
+import { legacyDeviceEvidence } from "../../store-migration/device-evidence.ts";
+import type { StoreHandle } from "../../store/store-open.ts";
 import { readVaultIdentity } from "../vault-identity.ts";
 
 import {
@@ -59,6 +61,12 @@ export const MIGRATION_AVAILABLE_CODE = "migration-available";
 
 /** This device switched, and devices of the cohort still write the legacy tree (D11a). */
 export const LEGACY_DEVICES_PENDING_CODE = "legacy-devices-pending";
+
+/** This device switched and no cohort device is pending: the legacy tree can leave the vault. */
+export const LEGACY_TREE_CAN_LEAVE_CODE = "legacy-tree-can-leave";
+
+/** The command that moves the legacy tree out of the vault. */
+export const REMOVE_LEGACY_COMMAND = "o2b brain migrate-store --remove-legacy";
 
 /** A legacy directory is back in the vault after the legacy tree was removed. */
 export const LEGACY_TREE_REAPPEARED_CODE = "legacy-tree-reappeared";
@@ -109,15 +117,6 @@ function writerIn(dir: string, budget = 200): string | null {
   return walk(dir);
 }
 
-/** Device ids the legacy log shard names carry (read-only). */
-function legacyShardDevices(vault: string): string[] {
-  try {
-    return [...new Set(listLogShardFiles(vault).map((f) => f.shardId))].filter((d) => d !== "");
-  } catch {
-    return [];
-  }
-}
-
 /** The first bytes of a file, without reading the rest of it. */
 function headOf(path: string, bytes: number): string {
   const fd = openSync(path, "r");
@@ -130,25 +129,13 @@ function headOf(path: string, bytes: number): string {
   }
 }
 
-/** This machine's store as the migration readers take it, or null. */
-function storeHere(configPath: string | undefined): StoreHandle | null {
-  try {
-    const inspection = inspectStore(resolveConfiguredStoreRoot(configPath).root);
-    const device = readDeviceId(configPath);
-    if (inspection === null || device === null) return null;
-    return { ...inspection, device, deviceStateDir: deviceStateDirFor(inspection.storeId) };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * More than one device recorded `migration-done` for this vault: each
  * imported the legacy tree as the first machine, because neither saw the
  * other's completion record before it started (the sync window).
  */
 function doubleFirstFinding(ctx: DoctorCheckContext, out: DoctorFindings): void {
-  const store = storeHere(ctx.configPath);
+  const store = migrationStoreHere(ctx.configPath);
   if (store === null) return;
   const vaultId = readVaultIdentity(ctx.vault)?.vault_id ?? null;
   // Only completions still standing (a run a later rollback of its device
@@ -179,7 +166,7 @@ function doubleFirstFinding(ctx: DoctorCheckContext, out: DoctorFindings): void 
 
 /** The two transition findings: devices still on the legacy layout, and a tree that came back. */
 function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void {
-  const store = storeHere(ctx.configPath);
+  const store = migrationStoreHere(ctx.configPath);
   if (store === null) return;
   const brain = join(ctx.vault, BRAIN_ROOT_REL);
   if (!existsSync(brain)) return;
@@ -191,6 +178,16 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
   const removedAnywhere =
     vaultId !== null && legacyTreeRemovedRecords(store).some((r) => r.body["vault_id"] === vaultId);
   if (removedHere || removedAnywhere) {
+    const returning = retiredBySilenceWriting(ctx.vault, store, vaultId);
+    if (returning !== null) {
+      out.issues.push({
+        severity: "warning",
+        code: LEGACY_TREE_REAPPEARED_CODE,
+        path: brain,
+        message: returningMessage(returning),
+      });
+      return;
+    }
     const writer = writerIn(brain);
     out.issues.push({
       severity: "warning",
@@ -205,21 +202,116 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
     });
     return;
   }
-  if (!deviceSwitchedHere(store, store.device)) return;
-  // The devices the legacy log shards name, as the transition pass counts
+  // The devices the legacy shards name, as the transition pass counts
   // them, beside the cohort record: a device that joined after it still
-  // writes the tree.
-  const pending = legacyDevices(store, legacyShardDevices(ctx.vault));
-  if (pending.length === 0) return;
+  // writes the tree. Retired by silence is derived here, never recorded.
+  const cohort = cohortStatusHere(ctx.vault, ctx.configPath, ctx.now);
+  if (cohort === null) return;
+  const states = cohortStates(cohort);
+  if (cohort.pending.length > 0) {
+    const pending = cohort.pending.map((d) => d.device);
+    out.uncertain.push({
+      code: LEGACY_DEVICES_PENDING_CODE,
+      path: brain,
+      message:
+        `this machine switched to the brain store; ${pending.join(", ")} still ` +
+        `${pending.length === 1 ? "writes" : "write"} the legacy Brain/ tree, so it stays in the ` +
+        `vault and their writes are imported as they arrive. Cohort devices: ${states}. Upgrade ` +
+        "and migrate each pending one, or retire the ones that are gone with " +
+        "`o2b store device retire <device-id>`.",
+    });
+    return;
+  }
+  // No cohort at all (no migration recorded one, no device shard names a
+  // device): nothing to say about it.
+  if (cohort.devices.length === 0) return;
   out.uncertain.push({
-    code: LEGACY_DEVICES_PENDING_CODE,
+    code: LEGACY_TREE_CAN_LEAVE_CODE,
     path: brain,
     message:
-      `this machine switched to the brain store; ${pending.join(", ")} still ` +
-      `${pending.length === 1 ? "writes" : "write"} the legacy Brain/ tree, so it stays in the ` +
-      "vault and their writes are imported as they arrive. Upgrade and migrate each of them, " +
-      "or retire the ones that are gone with `o2b store device retire <device-id>`.",
+      "every device of the migration cohort switched to the brain store or is retired " +
+      `(${states}), so the legacy Brain/ tree can leave the vault: run ` +
+      `\`${REMOVE_LEGACY_COMMAND}\`. Nothing is removed until you run it.`,
   });
+}
+
+/** Devices retired by silence when the tree left that write the reappeared tree, with the threshold. */
+interface Returning {
+  readonly devices: ReadonlyArray<string>;
+  readonly thresholdDays: number | null;
+}
+
+/**
+ * The devices the reappeared tree's shards name that a removal of this
+ * vault retired by silence (the `legacy-tree-removed` records, or this
+ * machine's removal marker), or null when none.
+ */
+function retiredBySilenceWriting(
+  vault: string,
+  store: StoreHandle,
+  vaultId: string | null,
+): Returning | null {
+  const retired = new Map<string, number | null>();
+  const note = (list: unknown, days: unknown): void => {
+    if (!Array.isArray(list)) return;
+    for (const entry of list) {
+      const device = (entry as { device?: unknown } | null)?.device;
+      if (typeof device === "string") retired.set(device, typeof days === "number" ? days : null);
+    }
+  };
+  if (vaultId !== null) {
+    for (const r of legacyTreeRemovedRecords(store)) {
+      if (r.body["vault_id"] === vaultId) {
+        note(r.body["retired_by_silence"], r.body["silence_threshold_days"]);
+      }
+    }
+  }
+  note(readRemovalMarker(store, vault)?.retired_by_silence, null);
+  const writing = [...legacyDeviceEvidence(vault).keys()].filter((d) => retired.has(d)).toSorted();
+  if (writing.length === 0) return null;
+  return { devices: writing, thresholdDays: retired.get(writing[0]!) ?? null };
+}
+
+function returningMessage(r: Returning): string {
+  const names = r.devices.join(", ");
+  const one = r.devices.length === 1;
+  const days = r.thresholdDays !== null ? ` for more than ${r.thresholdDays} days` : "";
+  return (
+    "the legacy Brain/ tree was removed from this vault after the migration to the brain " +
+    `store, and a Brain/ directory is back: its files are written by ${names}, which ` +
+    `${one ? "was" : "were"} retired by silence when the tree left (no evidence of life${days}). ` +
+    `${one ? "That machine still runs" : "Those machines still run"} a release that writes the ` +
+    `legacy layout: update Open Second Brain on that machine; its migration then imports its ` +
+    "legacy records into the brain store as a later machine (switched machines import what it " +
+    "writes here meanwhile). Once it has switched, remove the tree again with " +
+    `\`${REMOVE_LEGACY_COMMAND}\`.`
+  );
+}
+
+/** A date of a finding, as a day. */
+function dayOf(iso: string | null): string {
+  return iso === null ? "none" : iso.slice(0, 10);
+}
+
+/** Each cohort device and its state, for a finding. */
+function cohortStates(cohort: CohortStatus): string {
+  return cohort.devices
+    .map((d) => {
+      switch (d.state) {
+        case "switched":
+          return `${d.device} switched`;
+        case "retired":
+          return `${d.device} retired`;
+        case "pending":
+          return `${d.device} pending (last evidence ${dayOf(d.last_evidence)})`;
+        case "silent":
+          return (
+            `${d.device} retired by silence (last evidence ${dayOf(d.last_evidence)}, more than ` +
+            `${cohort.threshold_days} days before ${dayOf(cohort.as_of)})`
+          );
+      }
+    })
+    .join("; ");
 }
 
 /**

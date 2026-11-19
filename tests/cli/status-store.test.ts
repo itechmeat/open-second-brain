@@ -67,6 +67,7 @@ describe("o2b status store block", () => {
       // The suite's preload turns the automatic migration off, so the
       // report offers it and the next start runs nothing.
       automatic: expect.objectContaining({ state: "pending", automatic: false }),
+      cohort: null,
     });
   });
 

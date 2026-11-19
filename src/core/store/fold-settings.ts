@@ -27,6 +27,7 @@
 import {
   SETTING_ENTRY_KIND,
   SETTING_SET_KIND,
+  SETTING_SILENT_DEVICE_DAYS,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
   SETTING_TOPIC_QUIET_DAYS,
@@ -63,6 +64,15 @@ interface SettingRule {
 const positiveInt = (value: unknown): boolean =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 
+/** The longest silence threshold, ten years: a larger value is a typo, not a policy. */
+export const SILENT_DEVICE_DAYS_MAX = 3650;
+
+const silenceDays = (value: unknown): boolean =>
+  typeof value === "number" &&
+  Number.isSafeInteger(value) &&
+  value >= 0 &&
+  value <= SILENT_DEVICE_DAYS_MAX;
+
 /** Language tags such as `en`, `ru` or `pt-BR`. */
 const LANGUAGE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
 
@@ -76,6 +86,11 @@ export const SETTING_RULES: Readonly<Record<SettingKey, SettingRule>> = Object.f
   [SETTING_TOPIC_MIN_RECORDS]: { valid: positiveInt, expected: "a positive integer", fallback: 5 },
   [SETTING_TOPIC_MIN_SESSIONS]: { valid: positiveInt, expected: "a positive integer", fallback: 2 },
   [SETTING_TOPIC_QUIET_DAYS]: { valid: positiveInt, expected: "a positive integer", fallback: 30 },
+  [SETTING_SILENT_DEVICE_DAYS]: {
+    valid: silenceDays,
+    expected: `an integer from 0 (off) to ${SILENT_DEVICE_DAYS_MAX}`,
+    fallback: 30,
+  },
 });
 
 function ruleOf(key: string): SettingRule | undefined {
