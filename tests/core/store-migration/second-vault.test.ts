@@ -35,11 +35,7 @@ import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { openStore } from "../../../src/core/store/store-open.ts";
 import { AUTHORITY_FIELD, SETTING_SET_KIND } from "../../../src/core/store/constants.ts";
 import { holdMigrationGate, readMigrationGate } from "../../../src/core/migration-gate.ts";
-import {
-  migrationDir,
-  readMigrationState,
-  writeMigrationState,
-} from "../../../src/core/store-migration/journal.ts";
+import { migrationDir, writeMigrationState } from "../../../src/core/store-migration/journal.ts";
 import { runMigration } from "../../../src/core/store-migration/migrate.ts";
 import { isDeviceSwitched } from "../../../src/core/store-migration/migration-records.ts";
 import { migrateStore, rollback } from "../../../src/core/store-migration/outcome.ts";
@@ -55,6 +51,7 @@ import {
   UNMAPPED_LEGACY_ENTRIES,
   type LegacyVaultFixture,
 } from "./fixtures/legacy-vault.ts";
+import { runStateOf } from "./fixtures/run-state.ts";
 import { moveNeverHeld } from "../../helpers/held-partitions.ts";
 
 const FAST = { settleMs: 0 } as const;
@@ -263,7 +260,7 @@ describe("a migration of vault A killed after its switch record, then vault B co
   /** What a kill right after `device-switched` leaves: the run in progress, the gate held, A unbound. */
   function interruptA(a: Machine): string {
     const dir = migrationDir(a.store());
-    const state = readMigrationState(dir)!;
+    const state = runStateOf(dir)!;
     writeMigrationState(dir, { ...state, phase: "in-progress" });
     holdMigrationGate(a.vault, state.run_id);
     rmSync(vaultBindingPath(), { force: true });
@@ -284,7 +281,7 @@ describe("a migration of vault A killed after its switch record, then vault B co
 
     const outcome = migrateStore(vaultB, FAST);
     if (outcome.mode !== "transition") throw new Error("expected the transition");
-    expect(readMigrationState(dir)?.phase).toBe("done");
+    expect(runStateOf(dir)?.phase).toBe("done");
     expect(readMigrationGate()).toBeNull();
     const bound = readVaultBindings().map((b) => b.vault);
     expect(bound).toContain(realpathSync(a.vault));

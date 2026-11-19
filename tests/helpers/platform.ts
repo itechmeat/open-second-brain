@@ -46,7 +46,12 @@ export function homeEnv(home: string): Record<string, string> {
   // The preload pins freshen on read off for this process; a child spawned
   // with a minimal environment needs it pinned too, or a search it runs
   // starts real background indexers into a vault the test then deletes.
-  const freshenOff = { OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S: "0" };
+  // The same holds for the automatic store migration: a hook or a server
+  // start on a legacy fixture vault would start a real migration worker.
+  const freshenOff = {
+    OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S: "0",
+    OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION: "false",
+  };
   if (!IS_WINDOWS) return { HOME: home, ...freshenOff };
   return {
     ...freshenOff,

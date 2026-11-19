@@ -30,7 +30,15 @@
  * Reading the gate, judging its holder and writing the new gate happen
  * under a device-local lock beside the gate file, so two runs that ask at
  * the same moment cannot both find it free and both hold it: the second
- * finds the first's gate and is refused.
+ * finds the first's gate and is refused. Every release, removal and
+ * takeover of the gate runs under the same lock; when it cannot be had
+ * within its wait the gate is left as it is and the caller reports busy.
+ *
+ * What a run decided before it held the gate (the device is not switched,
+ * its run state, the vault marker, the done records, the store) another
+ * run may have changed by the time it holds it: each run reads those facts
+ * again once it holds the gate, and stops before its first write when one
+ * changed (`migrate.ts`, `rollback.ts`, `removal.ts`).
  */
 
 import { mkdirSync } from "node:fs";
@@ -46,27 +54,41 @@ import {
   releaseMigrationGate,
 } from "../migration-gate.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS } from "../store/local-lock.ts";
+import { holderLiveness } from "./holder-liveness.ts";
 import { processStartIdentity } from "./process-identity.ts";
 import { sameVaultPath } from "./removal-marker.ts";
 
 /** The default settle period, in milliseconds. */
 export const MIGRATION_SETTLE_MS = 2000;
 
+/**
+ * The prefix of a migration run's id (`migrate-<time>`). A rollback's
+ * gate (`rollback-<run>`) and a removal's carry their own, so a gate can
+ * be told to be a migration's from its run id alone.
+ */
+export const MIGRATION_RUN_PREFIX = "migrate-";
+
+/** Whether the gate's run is a migration run (not a rollback or a removal). */
+export function migrationRunGate(gate: MigrationGate): boolean {
+  return gate.run_id.startsWith(MIGRATION_RUN_PREFIX);
+}
+
+/**
+ * The run id of a migration run's gate on `vault`, whatever its holder,
+ * or null (no gate, a damaged or unreadable one, another vault's, or a
+ * rollback's or a removal's). The callers that may open such a gate on a
+ * machine that has not switched pass it to {@link releaseStoppedRunGate},
+ * which opens it only when its holder is gone.
+ */
+export function migrationGateOn(vault: string): string | null {
+  const state = readMigrationGateState();
+  if (state.kind !== "held" || !sameVaultPath(state.gate.vault, vault)) return null;
+  return migrationRunGate(state.gate) ? state.gate.run_id : null;
+}
+
 /** The gate is held by another run; nothing was changed. */
 export class MigrationGateBusyError extends Error {
   override readonly name = "MigrationGateBusyError";
-}
-
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: the process exists but belongs to someone else.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 /**
@@ -74,20 +96,13 @@ function processAlive(pid: number): boolean {
  * when the gate recorded a start identity that can be read again, it is the
  * same process. A pid reused by another process is not the holder.
  */
-function holderMayRun(gate: MigrationGate): boolean {
-  if (!processAlive(gate.pid)) return false;
-  if (gate.started === undefined) return true;
-  const now = processStartIdentity(gate.pid);
-  return now === null || now === gate.started;
+export function holderMayRun(gate: MigrationGate): boolean {
+  return holderLiveness(gate.pid, gate.started) !== "dead";
 }
 
 /** Whether the process that took `gate` is running: pid alive, same start identity. */
 function holderProvablyRuns(gate: MigrationGate): boolean {
-  return (
-    gate.started !== undefined &&
-    processAlive(gate.pid) &&
-    processStartIdentity(gate.pid) === gate.started
-  );
+  return holderLiveness(gate.pid, gate.started) === "alive";
 }
 
 /** How {@link holdGateFor} treats a same-vault gate whose holder has died. */
@@ -216,9 +231,112 @@ export function forceReleaseGate(): ForcedGateRelease {
   });
 }
 
-/** Open the gate again, when the run `runId` still holds it. */
+/**
+ * Open the gate a stopped run left closed: the gate names `vault` and the
+ * run `runId`, and its holder is gone. This is the state a run that threw
+ * leaves (its own `finally` opens the gate) reached for a run that was
+ * killed instead, and it is what every way of going on with such a run
+ * does when it ends before it takes the gate over itself: a resume the
+ * dry run or a preflight refuses, a refusal of the automatic worker, a
+ * manual run told to resume. The machine is then on the legacy layout and
+ * writable, its run still `in-progress` for a later resume. The same
+ * holds for a run killed after it took the gate and before it put itself
+ * on record: nothing names it, and it changed nothing.
+ *
+ * A live holder, another run or another vault is left alone. Returns
+ * whether the gate is gone, read again under the gate lock after the
+ * removal: a removal the file system refused (a sharing violation on
+ * Windows) answers false, so the caller keeps the cleanup owed.
+ */
+export function releaseStoppedRunGate(vault: string, runId: string): boolean {
+  const state = readMigrationGateState();
+  if (state.kind !== "held") return false;
+  if (!sameVaultPath(state.gate.vault, vault) || state.gate.run_id !== runId) return false;
+  return withGateLock((): boolean => {
+    const now = readMigrationGateState();
+    if (now.kind !== "held") return false;
+    const gate = now.gate;
+    if (!sameVaultPath(gate.vault, vault) || gate.run_id !== runId || holderMayRun(gate)) {
+      return false;
+    }
+    releaseMigrationGate(gate.vault, gate.run_id);
+    return readMigrationGateState().kind === "none";
+  });
+}
+
+/**
+ * Whether the gate a stopped run left on `vault` is still there: it names
+ * `vault` and the run `runId`, and its holder is gone. What a caller asks
+ * when {@link releaseStoppedRunGate} answered false, to tell a gate it
+ * could not open from one that was not its to open.
+ */
+export function stoppedRunGateRemains(vault: string, runId: string): boolean {
+  const state = readMigrationGateState();
+  if (state.kind !== "held") return state.kind === "unreadable";
+  const gate = state.gate;
+  return sameVaultPath(gate.vault, vault) && gate.run_id === runId && !holderMayRun(gate);
+}
+
+/**
+ * Open the gate again, when the run `runId` still holds it: the gate names
+ * `vault` and the run, and its holder is this process or one that cannot
+ * run any more. The check and the removal run under the gate lock, as every
+ * release, removal and takeover of the gate does: a dead holder's gate read
+ * without it could be the one a resumed run wrote a moment later. When the
+ * lock stays busy past its wait the gate is left as it is and this throws
+ * {@link MigrationGateBusyError}; the next run that recovers a stopped
+ * run's gate opens it (`gate-decision.ts`), or the operator's forced
+ * release once this process has ended.
+ */
 export function releaseGateFor(vault: string, runId: string): void {
-  releaseMigrationGate(vault, runId);
+  const started = processStartIdentity(process.pid);
+  const release = (): void => {
+    const state = readMigrationGateState();
+    if (state.kind === "damaged") {
+      releaseMigrationGate("", "");
+      return;
+    }
+    if (state.kind !== "held") return;
+    const gate = state.gate;
+    if (!sameVaultPath(gate.vault, vault) || gate.run_id !== runId) return;
+    // The vault and the run id are not enough: two processes resume the
+    // same run, and the one refused at the gate must not open the other's.
+    const ownProcess =
+      gate.pid === process.pid && (gate.started === undefined || gate.started === started);
+    if (!ownProcess && holderMayRun(gate)) return;
+    releaseMigrationGate(gate.vault, gate.run_id);
+  };
+  try {
+    withGateLock(release);
+  } catch (error) {
+    if (!(error instanceof MigrationGateBusyError)) throw error;
+    throw new MigrationGateBusyError(
+      `the migration gate of run ${runId} stays closed: another process held its lock past ` +
+        "the wait. The next start opens it once this process has ended, or run " +
+        "`o2b brain migrate-store --force-release-gate` then",
+    );
+  }
+}
+
+/**
+ * The release at the end of a run that held the gate ({@link releaseGateFor}):
+ * a release the gate lock refuses never hides why the run stopped. With
+ * `failure` (the run is throwing) the busy release is added to that error's
+ * message and the run's own error goes on; without it (the run ended) the
+ * busy release is the run's answer, so its caller reports busy instead of a
+ * finished run whose gate stayed closed.
+ */
+export function releaseGateAfter(
+  vault: string,
+  runId: string,
+  failure: { readonly error: unknown } | null,
+): void {
+  try {
+    releaseGateFor(vault, runId);
+  } catch (cleanup) {
+    if (failure === null) throw cleanup;
+    if (failure.error instanceof Error) failure.error.message += `; ${(cleanup as Error).message}`;
+  }
 }
 
 /** Close the gate on `vault` for the run `runId`, then wait `settleMs`. */
@@ -227,7 +345,7 @@ export function quiesceLegacyWriters(vault: string, runId: string, settleMs: num
   if (settleMs > 0) sleepSync(settleMs);
 }
 
-/** Open the gate the run `runId` holds. */
+/** Open the gate the run `runId` holds ({@link releaseGateFor}). */
 export function liftQuiesce(vault: string, runId: string): void {
   releaseGateFor(vault, runId);
 }

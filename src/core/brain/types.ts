@@ -617,6 +617,15 @@ export const BRAIN_LOG_EVENT_KIND = {
    * no-op refresh emits nothing.
    */
   lessonsPromoted: "lessons-promoted",
+  /**
+   * `store-migration-done` (change auto-store-migration) - the automatic
+   * store migration of this machine finished. Payload carries the run id,
+   * the store root, the migration snapshot's run id (where the
+   * pre-migration copy lives), the imported count, and the agent. One
+   * line per successful attempt, written by the automatic worker only;
+   * a manual `o2b brain migrate-store` run reports in its own output.
+   */
+  storeMigrationDone: "store-migration-done",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

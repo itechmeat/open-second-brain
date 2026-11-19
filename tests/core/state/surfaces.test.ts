@@ -29,7 +29,10 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { selfHealUpgradeMarkerPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
+import {
+  selfHealUpgradeLockPath,
+  selfHealUpgradeMarkerPath,
+} from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
 import {
   EMPTY_FRESHEN_STATE,
   FRESHEN_STATE_FILE,
@@ -320,6 +323,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],
     ["self_heal_upgrade_marker", (v) => selfHealUpgradeMarkerPath(v)],
+    ["self_heal_upgrade_lock", (v) => selfHealUpgradeLockPath(v)],
     // `freshen.ts` takes the directory its caller hands it, always
     // `dirname(config.dbPath)`, so the row is bound to the index resolver.
     ["freshen_state", (v) => join(dirname(resolveIndexPath(v, null)), FRESHEN_STATE_FILE)],

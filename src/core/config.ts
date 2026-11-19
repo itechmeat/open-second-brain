@@ -1074,6 +1074,151 @@ export function resolveSessionHandoff(configPath?: string): boolean {
 }
 
 /**
+ * Environment form of the automatic store migration's opt-out (change
+ * auto-store-migration, decision D5). It can only turn the migration off:
+ * CI and tests set it where no machine config is at hand.
+ */
+export const AUTO_STORE_MIGRATION_ENV = "OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION";
+
+/** The machine config key of the automatic store migration's opt-out. */
+export const AUTO_STORE_MIGRATION_KEY = "auto_store_migration";
+
+/** The spellings that turn the automatic store migration on (case-insensitive). */
+export const AUTO_STORE_MIGRATION_ON_VALUES: ReadonlyArray<string> = Object.freeze([
+  "true",
+  "1",
+  "yes",
+  "on",
+]);
+
+/** The spellings that turn it off (case-insensitive). */
+export const AUTO_STORE_MIGRATION_OFF_VALUES: ReadonlyArray<string> = Object.freeze([
+  "false",
+  "0",
+  "no",
+  "off",
+]);
+
+/** A value of the opt-out that is neither on nor off; it counts as off. */
+export interface UnrecognisedAutoStoreMigrationValue {
+  readonly source: "environment" | "config";
+  readonly value: string;
+}
+
+/** How the automatic store migration's opt-out resolved on this machine. */
+export interface AutoStoreMigrationSetting {
+  /** Whether a start (and `o2b update`) may run the migration on its own. */
+  readonly enabled: boolean;
+  /** Values that were neither on nor off; each one turned the migration off. */
+  readonly unrecognised: ReadonlyArray<UnrecognisedAutoStoreMigrationValue>;
+  /** Why the machine config could not be read (the migration is then off), or null. */
+  readonly unreadable: string | null;
+}
+
+type OptOutValue = "on" | "off" | "unset" | "unrecognised";
+
+/**
+ * One value of the opt-out: surrounding space and a trailing inline
+ * comment (` # ...`) are ignored, then the spelling is matched without
+ * regard to case.
+ */
+function readOptOutValue(
+  raw: string | undefined,
+  emptyIsUnset: boolean,
+): {
+  kind: OptOutValue;
+  value: string;
+} {
+  if (raw === undefined) return { kind: "unset", value: "" };
+  let value = raw.replace(/(^|\s)#.*$/, "").trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+  if (value === "" && emptyIsUnset) return { kind: "unset", value };
+  const lower = value.toLowerCase();
+  if (AUTO_STORE_MIGRATION_ON_VALUES.includes(lower)) return { kind: "on", value };
+  if (AUTO_STORE_MIGRATION_OFF_VALUES.includes(lower)) return { kind: "off", value };
+  return { kind: "unrecognised", value: raw.trim() };
+}
+
+/**
+ * The automatic store migration's opt-out (change auto-store-migration,
+ * decision D5). Default ON, the opposite of every flag gate above: the
+ * owner decision (2026-11-17) has the product run the migration after an
+ * update, and a machine opts out per machine with
+ * `auto_store_migration: false` in the machine config.
+ *
+ * It is a consent switch, so it fails closed:
+ *
+ *  - on only for `true`, `1`, `yes`, `on`; off for `false`, `0`, `no`,
+ *    `off` (any case, surrounding space and a trailing inline comment
+ *    ignored); any other value is off and is reported as unrecognised;
+ *  - off wins: when the config key or the environment variable says off
+ *    (or holds an unrecognised value), it is off, and the environment can
+ *    never turn the migration on over a config opt-out;
+ *  - a machine config that cannot be read means no automatic migration.
+ *
+ * An absent key and an unset (or blank) environment variable leave the
+ * default. A config key with no value is unrecognised. Never throws.
+ */
+export function autoStoreMigrationSetting(configPath?: string): AutoStoreMigrationSetting {
+  const unrecognised: UnrecognisedAutoStoreMigrationValue[] = [];
+  const env = readOptOutValue(process.env[AUTO_STORE_MIGRATION_ENV], true);
+  if (env.kind === "unrecognised") unrecognised.push({ source: "environment", value: env.value });
+  let config: { kind: OptOutValue; value: string };
+  try {
+    config = readOptOutValue(discoverConfig(configPath).data[AUTO_STORE_MIGRATION_KEY], false);
+  } catch (err) {
+    return {
+      enabled: false,
+      unrecognised,
+      unreadable: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (config.kind === "unrecognised") unrecognised.push({ source: "config", value: config.value });
+  const off = (v: OptOutValue): boolean => v === "off" || v === "unrecognised";
+  return { enabled: !off(env.kind) && !off(config.kind), unrecognised, unreadable: null };
+}
+
+/** Whether the automatic store migration may run; see {@link autoStoreMigrationSetting}. */
+export function resolveAutoStoreMigration(configPath?: string): boolean {
+  return autoStoreMigrationSetting(configPath).enabled;
+}
+
+/**
+ * Why the automatic store migration is off when the reason is not a plain
+ * opt-out (an unrecognised value, an unreadable config), as one operator
+ * sentence; null when the setting reads cleanly.
+ */
+export function describeAutoStoreMigrationProblem(
+  setting: AutoStoreMigrationSetting,
+): string | null {
+  if (setting.unreadable !== null) {
+    return (
+      `the machine config cannot be read (${setting.unreadable}), so the automatic store ` +
+      "migration does not run"
+    );
+  }
+  if (setting.unrecognised.length === 0) return null;
+  const named = setting.unrecognised
+    .map((u) =>
+      u.source === "environment"
+        ? `${AUTO_STORE_MIGRATION_ENV}=${JSON.stringify(u.value)}`
+        : `${AUTO_STORE_MIGRATION_KEY}: ${JSON.stringify(u.value)} in the machine config`,
+    )
+    .join(" and ");
+  return (
+    `unrecognised value ${named}, so the automatic store migration is off; use one of ` +
+    `${AUTO_STORE_MIGRATION_ON_VALUES.join(", ")} to turn it on or ` +
+    `${AUTO_STORE_MIGRATION_OFF_VALUES.join(", ")} to turn it off`
+  );
+}
+
+/**
  * Rated-decision recall config keys (Belief lifecycle suite, B5,
  * t_5712fa39). Both are OPTIONAL and default-OFF: when neither the env
  * nor the config key is set, {@link resolveDecisionRecallMaxPerSession}

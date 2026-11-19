@@ -130,6 +130,16 @@ if (process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] === undefined) {
   process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "0";
 }
 
+// The automatic store migration (default on in the product) starts a
+// detached `o2b brain migrate-store --auto` worker at every start on a
+// vault with legacy data, which most fixtures are. A test suite must never
+// leave background migrations behind, so the default is off here; the tests
+// of the feature turn it on while they run. The name is spelled out for the
+// reason given above (`AUTO_STORE_MIGRATION_ENV` in `src/core/config.ts`).
+if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
+  process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] = "false";
+}
+
 {
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
   // A preload's afterAll runs once, after the last file: the throwaway

@@ -30,3 +30,13 @@ describe("parseUpdateArgs", () => {
     expect(args.json).toBe(true);
   });
 });
+
+describe("parseUpdateArgs --skip-store-migration", () => {
+  test("parses no flag as not skipping the store migration", () => {
+    expect(parseUpdateArgs([]).skipStoreMigration).toBe(false);
+  });
+
+  test("parses --skip-store-migration", () => {
+    expect(parseUpdateArgs(["--skip-store-migration"]).skipStoreMigration).toBe(true);
+  });
+});

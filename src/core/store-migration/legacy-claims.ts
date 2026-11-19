@@ -8,7 +8,10 @@
  * roots of a vault (`Brain/` and `.open-second-brain/`) and reports every
  * file or folder no claim covers, descending only into folders that hold
  * a claim further down. A sync tool's conflict copy is never a claimed
- * file: it is reported as unmapped, to be merged by hand.
+ * file: it is reported as unmapped, to be merged by hand. A `.lock`
+ * sibling of a claimed file is claimed with it: it is the live lock of a
+ * writer, recreated beside the file by its next writer, and holds no
+ * data of its own.
  *
  * Read-only: it lists and stats, and never follows a link.
  */
@@ -35,6 +38,15 @@ function within(child: string, parent: string): boolean {
 
 /** The extensions a record-lane entry file carries, unless any file is one. */
 export const ENTRY_EXTENSIONS: ReadonlyArray<string> = Object.freeze([".md", ".json"]);
+
+/** The suffix of the sibling a lock writer creates beside the file it holds. */
+const LOCK_SUFFIX = ".lock";
+
+/** The path and base name of the file a `.lock` sibling is the lock of. */
+function lockTarget(path: string, name: string): [string, string] | null {
+  if (!name.endsWith(LOCK_SUFFIX)) return null;
+  return [path.slice(0, -LOCK_SUFFIX.length), name.slice(0, -LOCK_SUFFIX.length)];
+}
 
 function entryClaims(
   locator: Extract<Locator, { shape: "entries" }>,
@@ -139,6 +151,15 @@ export function unclaimedEntries(
       if (!isDir && isAtomicWriteTemp(name)) continue;
       if (!isDir && locators.some((locator) => claims(locator, path, name))) continue;
       if (isDir && locators.some((l) => l.shape === "tree" && claims(l, path, name))) continue;
+      // A lock's sibling holds no data of its own, and the file it is the
+      // lock of is recreated by its next writer: a live writer's lock on
+      // a mapped surface (a worker lock, a metrics append) must not turn
+      // the dry run's walk into an unmapped entry. A `.lock` whose target
+      // nothing claims stays reported.
+      const target = lockTarget(path, name);
+      if (target !== null && locators.some((locator) => claims(locator, target[0], target[1]))) {
+        continue;
+      }
       const below = entryRoots.some((root) => within(path, root));
       if (isDir && (anchors.some((a) => within(a, path)) || subdirParents.has(dir) || below)) {
         walk(path);

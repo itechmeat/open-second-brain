@@ -432,24 +432,31 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     carries_memory: true,
     created_by:
       "the first write to a brain store from this machine, the first search index build while a " +
-      "brain store is in use, or the first failed or skipped dual write (dual-write.json)",
+      "brain store is in use, the first failed or skipped dual write (dual-write.json), or the " +
+      "first automatic store migration attempt for a vault (auto-migration/<vault key>/)",
     removed_by:
       "deleting that directory yourself while nothing writes to the store; locks and the clock " +
       "are recreated, the dual-write failure and skip counters the doctor reports start again " +
-      "from zero, and `o2b search index` rebuilds the search index",
+      "from zero, and `o2b search index` rebuilds the search index. A vault's " +
+      "auto-migration/<vault key>/ folder empties itself once its migration succeeded and the " +
+      "session start showed the notice; deleting it by hand drops a failure's cooldown and an " +
+      "unshown notice, nothing else",
     note:
       "Append locks, blob temp files, the persisted hybrid logical clock of this device and, " +
       "while a brain store is in use, the search index (index/<vault key>/ under the store id, " +
       "a copy of every indexed chunk), in one directory per store id, plus dual-write.json, the " +
       "counter of failed or skipped dual writes the doctor reports, and the human view writer's " +
       "state (render intents, page stats, the hourly hook stamp) with the hook audit of fail-open " +
-      "paths. It is never synced and never " +
+      "paths, and, per vault, the automatic store migration's worker lock, the record of its last " +
+      "failed or waiting attempt and its one-time success notice (auto-migration/<vault key>/). " +
+      "It is never synced and never " +
       "lives inside the store, so another machine never sees a lock or a clock of this one.",
     sources: [
       "src/core/store/store-paths.ts",
       "src/core/platform-dirs.ts",
       "src/core/search/brain-store/location.ts",
       "src/core/view/auto-render.ts",
+      "src/core/store-migration/auto-state.ts",
     ],
   },
 ]);

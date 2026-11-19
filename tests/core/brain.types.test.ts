@@ -158,6 +158,9 @@ describe("BRAIN_* const enums", () => {
       // appended to or reverted - the event that makes the bulk of what an
       // agent produces attributable at all
       "note-write",
+      // auto-store-migration: the automatic store migration of this
+      // machine finished (written by the automatic worker only)
+      "store-migration-done",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

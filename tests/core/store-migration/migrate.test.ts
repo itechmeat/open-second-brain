@@ -28,11 +28,7 @@ import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { STORE_DUAL_WRITE_ENV } from "../../../src/core/store/constants.ts";
 import { MigrationBackupError } from "../../../src/core/store-migration/backup.ts";
-import {
-  migrationDir,
-  readMigrationState,
-  writeMigrationState,
-} from "../../../src/core/store-migration/journal.ts";
+import { migrationDir, writeMigrationState } from "../../../src/core/store-migration/journal.ts";
 import { MigrationRefusedError, runMigration } from "../../../src/core/store-migration/migrate.ts";
 import { MigrationGateBusyError } from "../../../src/core/store-migration/quiesce.ts";
 import {
@@ -52,6 +48,7 @@ import {
 } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { readViewWriter } from "../../../src/core/view/writer.ts";
 import { BENCH_DEVICE, makeMigrationBench, type MigrationBench } from "./fixtures/migration-env.ts";
+import { runStateOf } from "./fixtures/run-state.ts";
 import {
   addProviderProfile,
   loadProviderRegistry,
@@ -258,7 +255,7 @@ describe("runMigration", () => {
     expect(digestVaultTree(join(bench.vault, "Brain", "preferences"), { mtime: true })).toBe(
       prefsBefore,
     );
-    expect(readMigrationState(migrationDir(bench.store()))?.phase).toBe("done");
+    expect(runStateOf(migrationDir(bench.store()))?.phase).toBe("done");
     expect(() => runMigration(bench.vault, FAST)).toThrow("already switched");
     // Device-local state: the backup-class secrets live in `local/` after
     // the switch; the vault's search index is not copied (it is rebuilt).
@@ -282,7 +279,7 @@ describe("runMigration", () => {
 
     // What the kill left: an interrupted run that still holds the gate,
     // and part of the vault in the store.
-    const state = readMigrationState(migrationDir(bench.store()));
+    const state = runStateOf(migrationDir(bench.store()));
     expect(state?.phase).toBe("in-progress");
     expect(readMigrationGate()?.run_id).toBe(state!.run_id);
     const partial = bench.byKey().size;
@@ -412,7 +409,7 @@ describe("runMigration", () => {
     expect(kinds()).not.toContain(MIGRATION_DONE_KIND);
     expect(isDeviceSwitched(bench.store(), BENCH_DEVICE)).toBe(false);
     expect(readFileSync(signal, "utf8")).toBe(before);
-    expect(readMigrationState(migrationDir(bench.store()))?.phase).toBe("failed");
+    expect(runStateOf(migrationDir(bench.store()))?.phase).toBe("failed");
   });
 
   test("a backup failure stops the run before anything is imported", () => {
@@ -422,7 +419,7 @@ describe("runMigration", () => {
     expect(() => runMigration(bench.vault, FAST)).toThrow(MigrationBackupError);
     expect(bench.byKey().size).toBe(0);
     expect(kinds()).not.toContain(MIGRATION_COHORT_KIND);
-    expect(readMigrationState(dir)?.phase).toBe("failed");
+    expect(runStateOf(dir)?.phase).toBe("failed");
     expect(existsSync(frozenMarkerPath(bench.vault))).toBe(false);
   });
 
@@ -519,14 +516,14 @@ describe("runMigration", () => {
     // What a kill right after `device-switched` leaves: the run still
     // in progress, the gate held and the vault not bound yet.
     const dir = migrationDir(bench.store());
-    const state = readMigrationState(dir)!;
+    const state = runStateOf(dir)!;
     writeMigrationState(dir, { ...state, phase: "in-progress" });
     holdMigrationGate(bench.vault, state.run_id);
     rmSync(vaultBindingPath(), { force: true });
 
     const outcome = migrateStore(bench.vault, FAST);
     expect(outcome.mode).toBe("transition");
-    expect(readMigrationState(dir)?.phase).toBe("done");
+    expect(runStateOf(dir)?.phase).toBe("done");
     expect(readMigrationGate()).toBeNull();
     expect(readVaultBindings().map((b) => b.device)).toEqual([BENCH_DEVICE]);
   });
@@ -545,7 +542,7 @@ describe("runMigration", () => {
       chmodSync(shard, 0o000);
       try {
         expect(() => runMigration(bench.vault, FAST)).toThrow(MigrationRefusedError);
-        expect(readMigrationState(migrationDir(bench.store()))).toBeNull();
+        expect(runStateOf(migrationDir(bench.store()))).toBeNull();
       } finally {
         chmodSync(shard, 0o644);
       }
@@ -573,7 +570,7 @@ describe("runMigration", () => {
     const shard = peerShard();
     writeFileSync(shard, readFileSync(shard, "utf8").replace("peer one", "peer 0ne"));
     expect(() => runMigration(bench.vault, FAST)).toThrow(/shared\/events\/dev-p\//);
-    expect(readMigrationState(migrationDir(bench.store()))).toBeNull();
+    expect(runStateOf(migrationDir(bench.store()))).toBeNull();
     expect(isDeviceSwitched(bench.store(), BENCH_DEVICE)).toBe(false);
   });
 
@@ -584,7 +581,7 @@ describe("runMigration", () => {
       runMigration(bench.vault, { ...FAST, hooks: { beforeVerify: () => rmSync(shard) } }),
     ).toThrow(/shared\/events\/dev-p\//);
     expect(isDeviceSwitched(bench.store(), BENCH_DEVICE)).toBe(false);
-    expect(readMigrationState(migrationDir(bench.store()))?.phase).toBe("failed");
+    expect(runStateOf(migrationDir(bench.store()))?.phase).toBe("failed");
     expect(readMigrationGate()).toBeNull();
     writeFileSync(shard, bytes);
     expect(runMigration(bench.vault, FAST).ok).toBe(true);
@@ -658,6 +655,6 @@ describe("runMigration", () => {
     expect(() => runMigration(bench.vault, FAST)).toThrow(MigrationGateBusyError);
     expect(readMigrationGate()?.run_id).toBe("migrate-other");
     // Refused before it started: no interrupted run is left to resume.
-    expect(readMigrationState(migrationDir(bench.store()))).toBeNull();
+    expect(runStateOf(migrationDir(bench.store()))).toBeNull();
   });
 });

@@ -104,6 +104,10 @@ Merging two topics and splitting one SHALL be proposed to the user and applied o
 - **WHEN** many related events come from a single session
 - **THEN** no topic is created until the subject recurs in another session
 
+#### Scenario: A migrated history keeps its sessions
+- **WHEN** the store migration imports related events of one agent, written without a session on several days, and dream plans topics
+- **THEN** each event counts in the session of the day and device its legacy item was written on, and the events form a topic by the ordinary thresholds; written on one day, they stay one session and form none
+
 #### Scenario: Two topics look the same
 - **WHEN** the same-topic verdict is positive for topics A and B
 - **THEN** the brief proposes the merge, and both topics stay unchanged until the user confirms

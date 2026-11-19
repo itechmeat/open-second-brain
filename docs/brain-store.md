@@ -378,12 +378,301 @@ It lists the replaced versions of the last 30 days with an id each;
 
 An install from before the brain store keeps its machine data in the
 vault: `Brain/` and `.open-second-brain/`. `o2b brain migrate-store` moves
-it into the store. Nothing moves until you run it; status and doctor only
-say that a migration is available.
+it into the store. After an update, Open Second Brain runs that migration
+on its own (see [Automatic migration](#automatic-migration)); you can also
+run it by hand, step by step, as described below.
 
 Every machine migrates on its own, one after the other. The commands below
 assume the machine config already names the vault (it does on any existing
 install) and that you have set `store_root` as in [Setup](#setup).
+
+### Automatic migration
+
+Every session start (the SessionStart hook) and every start of the MCP
+server checks whether this machine still has a legacy brain to move. When
+it has, and the machine has not opted out, the start hands the work to a
+background worker (`o2b brain migrate-store --auto`) and goes on at once:
+the check is a cheap read, and nothing in the hook or the server waits for
+the worker. One worker runs per vault per machine; a second agent starting
+at the same moment finds it running and starts nothing.
+
+The worker:
+
+1. brings the brain's managed files up to date first, as a normal start
+   would (skipped while an interrupted migration still holds the gate);
+2. runs the dry run, and stops on an entry with no destination or an
+   item it cannot parse, before the migration creates anything (the
+   managed files of step 1 may already be up to date): it names them and
+   `o2b brain migrate-store --dry-run`, and you decide (fix them, or run
+   the migration by hand, which keeps unparseable items in its backup);
+3. checks, still before creating anything, that the machine has a device
+   id, that the store (if there is one) can be read and holds `shared`,
+   that there is room on disk, and that no migration of another vault
+   holds this machine's gate (a stopped one is named with the command that
+   resumes it from that vault, `o2b brain migrate-store --vault <that
+   vault> --resume`); a store that cannot be read right now is a wait, not
+   a failure;
+4. when no store exists yet, looks for a sign that another device already
+   started migrating this vault (its `store-migration` snapshot event in
+   the synced Brain log): it then waits for that device's store to arrive
+   by sync instead of creating a second one; otherwise it creates the
+   store at the configured `store_root` (or the default), as
+   `o2b store init` does; a root inside the vault is refused. The look is
+   bounded: at most 32 other devices (by the date of their newest log
+   shard, newest first), per device only its newest two log shards, and
+   of each only the last 256 KiB, because a migrating device's snapshot event is
+   the last line it writes to the legacy log. A device that went on
+   writing legacy log lines on later days (its migration did not switch
+   it, or you rolled it back) no longer counts. A line the 256 KiB window
+   starts inside is read back to its start, so a snapshot event there is
+   seen. When the log folder or a shard the look reads cannot be read
+   right now (or comes back shorter than it was, because sync replaced
+   it), when a line starts too far before the window to be read whole, or
+   when a shard ends in a line sync is still writing, the worker cannot
+   tell whether another device started, so it waits and looks again at the
+   next start instead of creating a store. When another device has
+   started migrating and its store has not arrived, the answer is
+   remembered: the next starts start no worker and read no log shard
+   until the store arrives or a day has passed. Doctor and the session
+   start say what it waits for. When this machine is meant to share that
+   device's store, set `auto_store_migration: false` here until the store
+   has arrived by sync (or fix its sync), then turn it back on. Give this
+   machine a store of its own (`o2b store init`, then
+   `o2b brain migrate-store`) only at a store root that sync never brings
+   together with the other device's: two stores at one root refuse to
+   open (see below);
+5. runs the same migration as `o2b brain migrate-store`, resuming an
+   interrupted one instead of starting again;
+6. on a later machine whose first machine's migration has not arrived by
+   sync yet, records that it waits and tries again at the next start.
+
+Each attempt records itself before it starts, with the cooldown a failure
+would start. A failed attempt replaces that record with its reason and
+leaves the machine working on the legacy layout exactly as before, with
+the migration gate open. The next automatic attempt waits one hour,
+doubling with each failure in a row up to a day. An attempt that is killed,
+or that cannot even write its failure (a full disk), leaves its first
+record, so the next starts do not each start a worker; a worker killed
+while it held the migration gate (content writes refused) is resumed by
+the next start at once. A worker killed after it took the gate and before
+it saved its run state leaves a gate no run state names; the gate's run id
+says it is a migration's, so the next start goes on at once there too
+(with the automatic migration off it only opens that gate: the run changed
+nothing). Whatever comes next and cannot resume that run
+(its dry run now refuses because an unmapped or unparseable item appeared
+since, a preflight refuses, a manual `o2b brain migrate-store` that is
+told to use `--resume`) opens the gate the killed run left instead of
+leaving it closed, so the machine is writable on the legacy layout again
+and the run waits, `in-progress`, for a later resume. When the gate cannot
+be opened then (its lock busy, a removal Windows refuses), the attempt's
+record keeps the gate owed, and every next start opens it at once,
+whatever the setting and the cooldown say, until the gate is gone; then
+the record is the failure it stands for, with its cooldown. The same holds
+for every migration run's gate of this vault whose run is gone: the next
+start opens it (or resumes the run, when the attempt may go on) whatever
+the setting, the cooldown and what is left to migrate, also when the
+attempt recorded its refusal and was killed before it opened the gate,
+when sync removed the last legacy item meanwhile, and when the run was a
+manual one on a machine with the automatic migration off (the run stays
+`in-progress` for `o2b brain migrate-store --resume`). While this
+machine's run state cannot be read, no automatic attempt migrates (the run
+could be one you rolled back): it opens such a gate and waits until the
+state can be read. When a gate's process is still alive a day after it
+took the gate, a start (which reads no process identity) starts a worker
+that checks the holder's start identity: it recovers the gate only from a
+process that reuses the pid, and leaves it closed while the holder runs or
+cannot be told (`--force-release-gate` is then yours to run). A gate
+an interrupted rollback or legacy tree removal of this vault left is not
+the automatic migration's: it refuses and names that command
+(`o2b brain migrate-store --rollback`, or `--remove-legacy`). A live
+migration of another vault holds no write to this one back, so this
+vault's managed files are still brought up to date meanwhile. Doctor shows
+the failure as a warning with the reason and the command to run by hand,
+and the session start carries one short line about it. A gate a stopped
+migration run left closed is a sentence of its own, apart from the
+failure, since that run may be a later manual one: a migration run of this
+vault, automatic or manual, stopped with its gate closed, and what the
+next start does about it.
+
+When a run stops after it recorded this machine's switch (killed, or a
+later step failed), the next start finishes it: it binds the vault that run
+migrated (a vault configured since is left unbound, its import is the
+manual command's), claims the view writer, opens the gate and writes the
+success records below. A switch that finished and was stopped before it
+opened its gate has that gate opened by the next start; no switch is
+finished across an interrupted rollback or legacy tree removal. Each of those records (the log line, the metrics
+row, the notice) is written once: a pass that stops among them, or finds
+one it cannot write, leaves the rest to the next start, and a notice a
+session already showed is not shown again (two sessions that start at
+once show it once: the one that consumes the notice file shows it). They are written only once the
+switch is proven finished, that is, this machine's run state reads back as
+done: while it cannot be read, or the read right after a start finished
+the switch fails, nothing is announced, the attempt stays pending, and the
+next start that reads it publishes the records once. If another vault's
+migration switches this machine while an automatic attempt is starting,
+the attempt imports nothing of its own vault: that vault's import is the
+manual command's, as for any vault configured after the switch. A run
+opens only the migration gate it took: a second process resuming the same
+run and refused at the gate leaves the running one's gate closed. An item that cannot be parsed
+and appears after the dry run makes the automatic migration refuse before
+the switch, as the dry run would; the manual command keeps such items in
+its backup archive.
+Finishing what an automatic attempt already started (that switch, or a run
+killed while it held the migration gate) is not a new migration and asks
+no consent, so it happens whatever `auto_store_migration` says; the
+setting only decides whether a migration starts. A machine you rolled back
+with `--rollback` is never migrated again on its own, whatever the
+setting: doctor and status say it was rolled back (`rolled_back`), and
+`o2b brain migrate-store` migrates it again when you want the brain store
+back.
+
+After a successful migration the brain log gets one line (it names the
+run, the device and the snapshot, never a local path, because it lands in
+the store's `shared` partition), the `auto_store_migration` metrics surface
+one row, and the next session start shows once that the brain moved, where
+the snapshot taken before the move is, and how to undo it:
+`o2b brain migrate-store --rollback` (see
+[Rolling back a machine](#5-rolling-back-a-machine)). The legacy tree stays
+in the vault: its removal is always the explicit step described in
+[Removing the legacy tree](#6-removing-the-legacy-tree).
+
+The worker lock, the failure or waiting record and the one-time notice
+live in this machine's device-local state
+(`<state dir>/open-second-brain/stores/auto-migration/<vault key>/`),
+never in the vault and never synced; they stay in the same place when the
+machine switches or rolls back. The lock is held for as long as its worker
+runs and is taken over as soon as that process is gone; every spelling of
+the vault's path (a link, another drive-letter case) shares it. A start
+never takes over the claim of a process that is alive: a day after the
+claim it starts a worker that checks the holder's start identity and takes
+the claim over only from a process that reuses the pid (or, when the
+holder's identity cannot be told, from a claim older than an hour), and a
+worker whose
+claim was taken over writes nothing more: every write it makes outside the
+migration gate (its records, the notice, the metrics row, the log line, a
+new store) is made only while it still holds its claim, and the migration
+itself is serialised by the gate: the vault identity marker is read, or
+written when missing, only once a run holds the gate, so the id a
+migration records is the one the vault carries. Before it holds a claim a worker writes
+nothing at all. A session start never waits for another process making or
+judging a claim, and it
+never runs a subprocess to check on a worker or a migration: it goes by the
+recorded process id and the age of the claim, and leaves the exact check
+of the process (PowerShell on Windows, `ps` on macOS) to the worker and to
+`o2b brain migrate-store`. A gate file that cannot be read starts no
+worker either, and a worker lock file that cannot be read (a permission
+or an I/O error) is never taken over: `o2b brain migrate-store` reports
+the automatic migration as running until it can be read. Failure texts are
+kept and shown with control characters replaced and home directories
+reduced to `~`.
+
+`o2b update` ends with the same check and runs the migration in the
+foreground, with progress on stderr, and names the outcome in its output
+(the `store_migration` field of `--json`). A failed migration does not
+make the update fail. `o2b update --skip-store-migration` skips it once.
+`o2b update --dry-run` runs nothing and says what the update would do:
+pending when it would migrate, finish a switch or open a stopped run's
+gate, refused (with the reason and the command that finishes it) when an
+interrupted rollback or legacy tree removal holds the gate, and not needed
+only when there is nothing to do.
+`o2b brain upgrade --dry-run` says whether a migration is pending and what
+the next start will do about it, and the `migration.automatic` field of
+`o2b status --json` and doctor report the state: not needed, pending,
+running, waiting for another device, failed, done, or rolled back. All of
+these, and the session start line, restate the one decision the worker
+takes, so they never disagree with what the next start does.
+
+To keep a machine from migrating on its own, set
+`auto_store_migration: false` in its machine config (consent is per
+machine, so the key never lives in the store or the vault). The setting is
+on only for `true`, `1`, `yes` or `on`, and off for `false`, `0`, `no` or
+`off`, in any case, with surrounding space and a trailing ` # comment`
+ignored. Any other value, a key with no value, or a machine config that
+cannot be read turns the automatic migration off, and doctor and
+`o2b status --json` name the value they did not recognise. The environment
+variable `OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION` (CI, tests) takes the same
+values; off wins, so the variable can turn the migration off for one
+process but can never turn it on over a config that says off. With it off,
+status, doctor, `o2b update` and `o2b brain upgrade --dry-run` still say a
+migration is available, and no migration starts until you run it by hand;
+an automatic attempt that had already started is still finished (see
+above). A
+manual `o2b brain migrate-store` refuses while the automatic worker of
+this vault is running (not when its worker is gone); the dry run is always
+available.
+
+#### When a person has to step in
+
+The automatic migration recovers what a killed or failed attempt leaves
+on its own. These states wait for you, each with where it is reported
+and the command that clears it:
+
+1. An interrupted rollback or legacy tree removal of this vault holds the
+   migration gate. Status, doctor, the session notice and
+   `o2b update --dry-run` name it; run `o2b brain migrate-store --rollback`
+   or `--remove-legacy` to finish it.
+2. Another vault's stopped migration, rollback or legacy tree removal
+   holds this machine's gate. The same surfaces name that vault and the
+   command that finishes its run there
+   (`o2b brain migrate-store --vault <that vault>` with `--resume`,
+   `--rollback` or `--remove-legacy`).
+3. A rollback of this vault began and did not finish: it was killed, or a
+   step failed before or after it cleared this device's switch (a full
+   disk, a Windows sharing violation). Its record stays in the device-local
+   migration folder, and no start migrates the vault again over it,
+   whatever the setting. Status, doctor, `o2b update --dry-run` and, on
+   the legacy layout, the session notice name it; run
+   `o2b brain migrate-store --rollback` to finish it. When that record cannot be read, the same surfaces say
+   so; make it readable, then run the same command. Running
+   `o2b brain migrate-store` instead also ends that rollback, unless the
+   rollback still holds the gate (item 1): where the rollback had cleared
+   the switch, it migrates the vault again, as you ask; where the machine
+   is still switched, it keeps the machine on the store. On a switched
+   machine the surfaces name both commands.
+4. A gate whose holder is still alive a day later and whose start identity
+   cannot be read: status reports a running migration. Once you know the
+   run is gone, run `o2b brain migrate-store --force-release-gate`.
+5. A switched machine whose run state reads none or failed: status reports
+   the switch as pending and names `o2b brain migrate-store`, which ends
+   the attempt's record.
+6. Legacy items with no destination or that cannot be parsed: status and
+   doctor report the refusal with `o2b brain migrate-store --dry-run`; fix
+   the items, or run the migration by hand, which keeps unparseable items
+   in its backup archive.
+7. This machine's migration run state cannot be read: status reports a
+   wait; fix the file's permissions or restore it.
+8. The vault binding cannot be read: status names `o2b init --vault`.
+9. A vault configured after the switch whose deny rules differ from the
+   store's: it stays unbound, and doctor names the file
+   (`permissions-legacy-only`) until you reconcile the two policies.
+
+A rollback that finished every step but could not open its gate (another
+process held the gate lock past its wait) needs no one either: the next
+start opens the gate, whatever the setting, and migrates nothing. Until
+then status and doctor say so and name
+`o2b brain migrate-store --force-release-gate`, which opens it at once; do
+not answer it with `--resume`, which would migrate the vault again.
+
+A gate whose pid was reused by another process within a day of a stopped
+run needs no one: the next start leaves it for up to a day (it reads only
+the pid), then its worker opens it; `o2b brain migrate-store` opens it at
+once.
+
+### Two machines that start before either sees the other
+
+The wait in step 4 needs the other device's Brain log shard to have
+synced. When two machines that share a vault, and have no store yet, both
+start their first automatic migration before either one's log shard has
+reached the other, each creates its own store and migrates into it. When
+sync then brings the two stores together at one root, its partitions
+belong to two different stores and the store refuses to open, naming
+them; doctor and status report that error, and it needs your hand. The
+window runs from the moment the first machine's worker looks at the log
+(before it creates its store, takes the gate and takes the snapshot that
+writes its mark) until the second machine receives that mark by sync, so
+it is wider than one sync delay. To stay out of it, update one machine
+first and let its migration finish and sync before you update the others,
+or set `auto_store_migration: false` on the others until then.
 
 ### 1. Check and dry run on the first machine
 
@@ -430,6 +719,13 @@ The migration:
 4. records `migration-done` and this machine's `device-switched`, and makes
    this machine the view writer if no machine is.
 
+Imported records are written at the migration's moment by this machine,
+but topic planning dates them by their legacy items: the time a log event
+or a signal carries (else the date in its file name) and the device of
+the legacy shard it came from. A history written on several days by one
+agent therefore still counts as several sessions and forms topics (see
+`docs/topics.md`).
+
 The legacy tree stays in the vault. If the run is interrupted,
 `o2b brain migrate-store --resume` continues without importing anything
 twice. If verification finds a gap, the legacy tree is left untouched and
@@ -457,9 +753,14 @@ that have not switched yet.
 
 ### 3. Migrate the later machines
 
-On every other machine, upgrade, set `store_root`, let sync deliver
-`shared/` and `private/`, and run the same commands. Do not run
-`o2b store init` here: the store comes through sync.
+On every other machine, first set `auto_store_migration: false` in its
+machine config, so the upgrade's automatic migration cannot create a
+store of its own before the shared one arrives. Then upgrade, set
+`store_root`, let sync deliver `shared/` and `private/`, run the same
+commands, and remove the setting (or set it back to `true`). Do not run
+`o2b store init` here: the store comes through sync. A machine that
+already holds the synced store at its `store_root` before the upgrade
+needs no setting: its automatic migration takes the later-machine path.
 
 Run the first migration on one machine, and wait for its completion
 record to sync before migrating the others. A machine that already holds
@@ -825,6 +1126,7 @@ that come from the store, the migration and the view:
 | `store-write-fail-open` | Writes from hooks or telemetry did not land (no store yet, no device id, a missing partition); their callers went on. A caller below local reach (a remote MCP client) sees only the failed writes known to go to `shared/`: a failure that may concern `private/` shows no count, time, error text or path there. | Fix the cause the finding names, then delete the counter file `store-write.json` in the `stores` state directory (`~/.local/state/open-second-brain/stores/` on Linux) to reset it. |
 | `store-dual-write-failures`, `store-dual-write-skipped`, `store-dual-write-no-store` | Only on a machine running the phase 1 dual-write trial (`store_dual_write`): store copies of legacy writes failed or were skipped. Below local reach the failures follow the rule of `store-write-fail-open`, and the skipped writes are reported without their count. | Fix the cause, or migrate the machine and turn the trial off. |
 | `migration-available` | This machine still keeps its brain in the vault's `Brain/` tree, or it switched before this vault was configured and the vault's legacy tree was never imported. | Follow [Moving an existing install](#moving-an-existing-install); on a switched machine run `o2b brain migrate-store`, which imports the tree and binds the vault. |
+| `store-migration-failed` | The last automatic migration attempt on this machine failed; the finding gives the reason and when the next automatic attempt is due. | Fix the cause the reason names and wait for the next start, or run `o2b brain migrate-store` yourself. |
 | `legacy-devices-pending` | This machine switched, but the named devices still write the legacy tree. | Migrate each named machine, and retire the ones that are gone with `o2b store device retire <device-id>`. |
 | `legacy-tree-reappeared` | A `Brain/` folder is back in the vault after the legacy tree was removed. | Stop the writer the finding names and move the folder out of the vault. |
 | `migration-done-twice` | Two devices each ran the first migration of this vault, before either completion record had synced, so items both imported are in the store twice. | Nothing is lost and both records stay. Migrate every other machine only after one completion record has synced. |

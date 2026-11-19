@@ -47,6 +47,17 @@ import {
 } from "./self-heal-upgrade-state.ts";
 import { configuredStore } from "../store/read/store-entities.ts";
 import { storeOnlyMode } from "../store/store-only.ts";
+import {
+  AUTO_MIGRATION_SELF_CLAIM,
+  autoMigrationClaimUndecided,
+  AUTO_MIGRATION_LOCK_JUDGE,
+  claimAutoMigrationLock,
+  handAutoMigrationLock,
+  releaseAutoMigrationLock,
+} from "../store-migration/auto-state.ts";
+import type { GateNone } from "../store-migration/gate-decision.ts";
+import { gatherGate } from "../store-migration/gate-state.ts";
+import { runAutoStoreMigration } from "../store-migration/auto-worker.ts";
 
 /**
  * The flag that tells the child to record its own terminal outcome. It
@@ -54,6 +65,12 @@ import { storeOnlyMode } from "../store/store-only.ts";
  * invent one the parent could not have written.
  */
 const SELF_HEAL_FLAG = "--self-heal";
+
+/**
+ * The flag that tells `o2b brain migrate-store` to run as the automatic
+ * migration worker, with the lock claim it was handed.
+ */
+const AUTO_MIGRATION_FLAG = "--auto";
 
 /**
  * What a background run did about the Brain managed-file upgrade. The
@@ -72,6 +89,55 @@ export const SELF_HEAL_UPGRADE_SPAWN = Object.freeze({
 export type SelfHealUpgradeSpawnDecision =
   (typeof SELF_HEAL_UPGRADE_SPAWN)[keyof typeof SELF_HEAL_UPGRADE_SPAWN];
 
+/**
+ * What a start did about a pending store migration (change
+ * auto-store-migration, decision D1). The worker's own outcome is
+ * recorded by the worker; the foreground mode runs the same worker logic
+ * in this process and answers {@link AUTO_MIGRATION_SPAWN.foreground}.
+ */
+export const AUTO_MIGRATION_SPAWN = Object.freeze({
+  /** A detached `o2b brain migrate-store --auto` worker was started. */
+  spawned: "spawned",
+  /** A recorded failure's cooldown has not run out; nothing was started. */
+  skippedBackoff: "skipped_backoff",
+  /** Another worker holds this vault's lock; nothing was started. */
+  skippedRunning: "skipped_running",
+  /**
+   * A live migration of ANOTHER vault holds this machine's gate: no
+   * migration of this vault starts while it runs, and nothing of this
+   * vault's is held back by it (its managed-file upgrade runs).
+   */
+  otherVaultRunning: "other_vault_running",
+  /** The machine opted out; nothing was started. */
+  disabled: "disabled",
+  /** The migration probe found nothing to move. */
+  notAvailable: "not_available",
+  /** The operator rolled this machine back; it is not migrated again on its own. */
+  rolledBack: "rolled_back",
+  /**
+   * This machine's migration run state cannot be read: nothing is
+   * migrated until it can, and no worker runs, so the managed-file
+   * upgrade is this start's.
+   */
+  runUnreadable: "run_unreadable",
+  /**
+   * This machine switched and its migration run state reads absent or
+   * failed: the switch can never be proven finished on its own, so no
+   * worker is started for it (`o2b brain migrate-store` ends the record).
+   */
+  switchUnproven: "switch_unproven",
+  /**
+   * A later machine waits for a store another device created to arrive by
+   * sync (remembered by its last worker); nothing was started.
+   */
+  waiting: "waiting",
+  /** The foreground mode ran the worker logic in this process. */
+  foreground: "foreground",
+} as const);
+
+export type AutoMigrationSpawnDecision =
+  (typeof AUTO_MIGRATION_SPAWN)[keyof typeof AUTO_MIGRATION_SPAWN];
+
 export interface EnsureCurrentResult {
   /**
    * Vault-relative paths of Brain managed files migrated this run. Always
@@ -81,11 +147,20 @@ export interface EnsureCurrentResult {
   /**
    * In `background` mode, what was done about the managed-file upgrade;
    * `null` in the foreground, where {@link brainUpgradeOutcome} answers,
-   * and when the vault was removed before a worker could be started.
+   * when the vault was removed before a worker could be started, and when
+   * the automatic store migration's worker was started or is running: that
+   * worker runs the upgrade itself before it migrates.
    */
   readonly brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null;
   /** In the foreground, how the upgrade attempt ended; `null` in `background` mode. */
   readonly brainUpgradeOutcome: SelfHealUpgradeOutcome | null;
+  /**
+   * What was done about a pending store migration. `null` when the step
+   * did not run at all: an uninitialised vault, or a store-only machine
+   * (switched, or no legacy tree), where the migration is either moot or
+   * the transition import's job.
+   */
+  readonly migrationSpawn: AutoMigrationSpawnDecision | null;
   /** A search reindex was started (background) or completed (foreground). */
   readonly reindexTriggered: boolean;
   /**
@@ -203,6 +278,209 @@ function startSelfHealUpgrade(
     throw e;
   }
   return SELF_HEAL_UPGRADE_SPAWN.spawned;
+}
+
+/**
+ * Start the automatic store migration in a detached worker, unless the
+ * machine opted out, a recorded failure is cooling down, or another
+ * worker has the vault (change auto-store-migration, decision D1).
+ *
+ * The probe is `migrationAvailability()`, the same read the doctor and
+ * the status block pay: one directory walk of the legacy tree, the store
+ * identity files, and this device's own `settings` shards. When nothing
+ * is to do it is the whole cost of the step - no lock is claimed, no
+ * directory is created, and a hung or slow worker can never delay the
+ * start, because nothing here waits for one: the claim is an exclusive
+ * create, the child is detached with its streams ignored, and the claim
+ * is released by the worker when it ends, on the self-heal upgrade
+ * worker's pattern (`self-heal-upgrade.ts`).
+ */
+function startAutoMigration(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+): AutoMigrationSpawnDecision {
+  const plan = planLegacyStart(vault, configPath, now);
+  return plan === AUTO_MIGRATION_START ? spawnAutoMigrationWorker(vault, configPath, now) : plan;
+}
+
+/** What {@link planAutoMigrationStart} answers when a worker is to be started. */
+export const AUTO_MIGRATION_START = "start";
+
+/**
+ * What a start decides about the automatic store migration, without
+ * spawning anything: {@link AUTO_MIGRATION_START} when a worker is to run,
+ * the decision that starts nothing otherwise, or null on a switched
+ * machine with nothing left to finish. `switched` is the start's own
+ * store-only answer (`device-switched`). The decision is `decideGate`'s
+ * (`gate-decision.ts`), the one the worker takes again under its claim;
+ * the start gathers its state cheaply (the pid alone, never an identity
+ * query; the legacy tree walk only when the cheap reads do not decide).
+ * Exported so a test can follow exactly what a start would do and run the
+ * worker in its own process.
+ */
+export function planAutoMigrationStart(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+  switched: boolean,
+): AutoMigrationSpawnDecision | typeof AUTO_MIGRATION_START | null {
+  const { decision } = gatherGate({ vault, configPath, asker: "start", now, switched });
+  if (decision.act === "spawn") return AUTO_MIGRATION_START;
+  if (decision.act !== "none") {
+    // The start's decision is only ever spawn or none (or gather, which
+    // the gatherer resolves): anything else is a defect, met safely.
+    return AUTO_MIGRATION_SPAWN.skippedRunning;
+  }
+  return startDecisionOf(decision.why);
+}
+
+/** What a start reports for the gate decision's "nothing" (null: nothing left, nothing said). */
+export function startDecisionOf(why: GateNone): AutoMigrationSpawnDecision | null {
+  switch (why) {
+    case "nothing-left":
+      return null;
+    case "disabled":
+    case "skipped":
+      return AUTO_MIGRATION_SPAWN.disabled;
+    case "not-available":
+      return AUTO_MIGRATION_SPAWN.notAvailable;
+    case "rolled-back":
+      return AUTO_MIGRATION_SPAWN.rolledBack;
+    case "waiting":
+      return AUTO_MIGRATION_SPAWN.waiting;
+    case "backoff":
+      return AUTO_MIGRATION_SPAWN.skippedBackoff;
+    case "other-vault-running":
+      return AUTO_MIGRATION_SPAWN.otherVaultRunning;
+    case "run-unreadable":
+      return AUTO_MIGRATION_SPAWN.runUnreadable;
+    case "switch-unproven":
+      return AUTO_MIGRATION_SPAWN.switchUnproven;
+    case "running":
+      return AUTO_MIGRATION_SPAWN.skippedRunning;
+  }
+}
+
+/**
+ * Whether a start's migration answer leaves the managed-file upgrade to a
+ * migration worker: one it just started, or one that runs (its gate
+ * refuses the upgrade's writes). Every other answer starts no worker, so
+ * the start runs the upgrade itself.
+ */
+export function migrationOwnsUpgrade(spawn: AutoMigrationSpawnDecision | null): boolean {
+  return spawn === AUTO_MIGRATION_SPAWN.spawned || spawn === AUTO_MIGRATION_SPAWN.skippedRunning;
+}
+
+function planLegacyStart(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+): AutoMigrationSpawnDecision | typeof AUTO_MIGRATION_START {
+  return planAutoMigrationStart(vault, configPath, now, false) ?? AUTO_MIGRATION_SPAWN.notAvailable;
+}
+
+/**
+ * On a switched machine: whether the automatic path has something left to
+ * finish (change auto-store-migration). Its own run stopped after the
+ * `device-switched` record, an automatic attempt switched it without
+ * writing its success records (or left a state record now moot), or a
+ * stopped run's gate is left on this vault. The cost when nothing is left
+ * is the store's identity files, one small JSON file, one `stat` and the
+ * gate file: no lock, no directory, no process.
+ */
+function startSwitchFinish(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+): AutoMigrationSpawnDecision | null {
+  const plan = planAutoMigrationStart(vault, configPath, now, true);
+  return plan === AUTO_MIGRATION_START ? spawnAutoMigrationWorker(vault, configPath, now) : plan;
+}
+
+function spawnAutoMigrationWorker(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+): AutoMigrationSpawnDecision {
+  // Judged without an identity query: a start never waits on a subprocess.
+  const token = claimAutoMigrationLock(vault, now, { judge: AUTO_MIGRATION_LOCK_JUDGE.cheap });
+  if (token === null) {
+    // A live pid holds the claim, older than a running worker is trusted
+    // for: hung, or a later process that reuses the pid. Only an identity
+    // query tells, which a start never runs: a worker that claims with the
+    // exact judge decides (and answers that it is not its turn when the
+    // holder still runs).
+    if (!autoMigrationClaimUndecided(vault, now)) return AUTO_MIGRATION_SPAWN.skippedRunning;
+    spawnWorker(vault, configPath, AUTO_MIGRATION_SELF_CLAIM);
+    return AUTO_MIGRATION_SPAWN.spawned;
+  }
+  startOnClaim({
+    start: () => spawnWorker(vault, configPath, token).pid,
+    // The claim now names the worker, so it stays live after this start's
+    // process ends and goes stale the moment the worker is gone. Its start
+    // identity is the worker's to stamp: reading it here could cost an
+    // external query (Windows) on the start's path.
+    handOver: (pid) => void handAutoMigrationLock(vault, token, pid, null),
+    release: () => releaseAutoMigrationLock(vault, token),
+  });
+  return AUTO_MIGRATION_SPAWN.spawned;
+}
+
+/**
+ * Start a worker on a claim this start made: the claim is released only
+ * when no worker started (`start` threw). Once a worker runs, the claim is
+ * left for it whatever happens next: a hand-over that fails (a write that
+ * fails) leaves the claim under this start's name and the worker's token,
+ * which the worker stamps with its own pid when it begins; releasing it
+ * here could remove the claim the worker already stamped, and a later
+ * start would spawn a second worker beside it.
+ */
+export function startOnClaim(steps: {
+  readonly start: () => number;
+  readonly handOver: (pid: number) => void;
+  readonly release: () => void;
+}): void {
+  let pid: number;
+  try {
+    pid = steps.start();
+  } catch (e) {
+    // Nothing was started, so nothing else will release the claim.
+    steps.release();
+    throw e;
+  }
+  try {
+    steps.handOver(pid);
+  } catch {
+    // The worker started: it holds the claim through its token.
+  }
+}
+
+/** Start the detached worker for `vault` on the claim `token` (or its own). */
+function spawnWorker(
+  vault: string,
+  configPath: string | undefined,
+  token: string,
+): ReturnType<typeof Bun.spawn> {
+  const proc = Bun.spawn(
+    [...o2bCommand(), "brain", "migrate-store", "--vault", vault, AUTO_MIGRATION_FLAG, token],
+    {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+      windowsHide: true,
+      detached: process.platform === "win32",
+      // The live environment, for the reason given in
+      // `startSelfHealReindex`; the config path travels the way every
+      // brain verb reads it.
+      env: {
+        ...process.env,
+        ...(configPath !== undefined ? { OPEN_SECOND_BRAIN_CONFIG: configPath } : {}),
+      },
+    },
+  );
+  proc.unref();
+  return proc;
 }
 
 /**
@@ -329,6 +607,7 @@ export async function ensureVaultCurrent(
   let brainUpgraded: ReadonlyArray<string> = [];
   let brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null = null;
   let brainUpgradeOutcome: SelfHealUpgradeOutcome | null = null;
+  let migrationSpawn: AutoMigrationSpawnDecision | null = null;
   let reindexTriggered = false;
   let indexUpgraded = false;
   let reindexSpawn: SelfHealSpawnDecision | null = null;
@@ -357,6 +636,7 @@ export async function ensureVaultCurrent(
       brainUpgraded: [],
       brainUpgradeSpawn: null,
       brainUpgradeOutcome: null,
+      migrationSpawn: null,
       reindexTriggered: false,
       indexUpgraded: false,
       reindexSpawn: null,
@@ -371,9 +651,29 @@ export async function ensureVaultCurrent(
   //    In the background it runs in a detached worker; a failure is recorded
   //    by the worker and backs off the next automatic attempt.
   if (!switched) {
+    // 1a. The store migration (change auto-store-migration, decision D1)
+    //     is decided first: when this machine has not migrated its brain
+    //     and has not opted out, the migration runs in a detached worker,
+    //     and that worker runs the managed-file upgrade below before it
+    //     migrates. The step is a cheap read when nothing is to do, and it
+    //     never runs inside the hook or the server process; in the
+    //     foreground mode (explicit callers, `o2b update`) the same worker
+    //     logic runs in this process, after the upgrade.
+    if (background) {
+      try {
+        migrationSpawn = startAutoMigration(vault, opts.configPath, new Date());
+      } catch (e) {
+        errors.push(`store-migration: ${message(e)}`);
+      }
+    }
+    // 1b. The managed-file upgrade. A start whose migration worker runs (or
+    //     was just started) leaves it to that worker: a second worker would
+    //     race it into the migration gate, which refuses its writes.
     try {
       if (background) {
-        brainUpgradeSpawn = startSelfHealUpgrade(vault, opts.configPath, new Date());
+        if (!migrationOwnsUpgrade(migrationSpawn)) {
+          brainUpgradeSpawn = startSelfHealUpgrade(vault, opts.configPath, new Date());
+        }
       } else {
         // The same machine config this run judged store-only mode by.
         const upgrade = runSelfHealUpgrade(
@@ -388,6 +688,36 @@ export async function ensureVaultCurrent(
       }
     } catch (e) {
       errors.push(`brain-upgrade: ${message(e)}`);
+    }
+    if (!background) {
+      try {
+        runAutoStoreMigration(
+          vault,
+          opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+        );
+        migrationSpawn = AUTO_MIGRATION_SPAWN.foreground;
+      } catch (e) {
+        errors.push(`store-migration: ${message(e)}`);
+      }
+    }
+  }
+
+  // 1c. A switched machine whose switch, or whose automatic attempt's
+  //     success records, did not finish (change auto-store-migration): the
+  //     same worker finishes them. Nothing else on a switched machine.
+  if (switched && mode.reason === "device-switched") {
+    try {
+      if (background) {
+        migrationSpawn = startSwitchFinish(vault, opts.configPath, new Date());
+      } else {
+        runAutoStoreMigration(
+          vault,
+          opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+        );
+        migrationSpawn = AUTO_MIGRATION_SPAWN.foreground;
+      }
+    } catch (e) {
+      errors.push(`store-migration: ${message(e)}`);
     }
   }
 
@@ -432,6 +762,7 @@ export async function ensureVaultCurrent(
     brainUpgraded,
     brainUpgradeSpawn,
     brainUpgradeOutcome,
+    migrationSpawn,
     reindexTriggered,
     indexUpgraded,
     reindexSpawn,

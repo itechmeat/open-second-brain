@@ -10,8 +10,9 @@
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { listMetrics } from "../../../src/core/brain/metrics.ts";
@@ -19,6 +20,11 @@ import { brainDirs, brainManualPath } from "../../../src/core/brain/paths.ts";
 import * as upgradeModule from "../../../src/core/brain/upgrade.ts";
 import { planUpgrade } from "../../../src/core/brain/upgrade.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import {
+  holdMigrationGate,
+  migrationGatePath,
+  releaseMigrationGate,
+} from "../../../src/core/migration-gate.ts";
 import {
   ensureVaultCurrent,
   SELF_HEAL_UPGRADE_SPAWN,
@@ -177,6 +183,43 @@ function plantMarker(record: Record<string, unknown>): void {
   mkdirSync(dirname(selfHealUpgradeMarkerPath(vault)), { recursive: true });
   writeFileSync(selfHealUpgradeMarkerPath(vault), JSON.stringify(record));
 }
+
+describe("a migration holding the gate", () => {
+  test("refuses the upgrade's writes: the upgrade answers running and records nothing", () => {
+    makeManualStale();
+    holdMigrationGate(vault, "migrate-run");
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.running);
+      expect(readSelfHealUpgradeFailure(vault)).toBeNull();
+      expect(upgradeRows()).toEqual([]);
+    } finally {
+      releaseMigrationGate(vault, "migrate-run");
+    }
+  });
+});
+
+describe("a migration whose holder is gone", () => {
+  test("a gate left by a stopped run is a failure with the resume command, not running", () => {
+    makeManualStale();
+    // A run killed with the gate closed: its holder is a process that ended.
+    const gone = spawnSync(process.execPath, ["-e", ""]).pid!;
+    mkdirSync(dirname(migrationGatePath()), { recursive: true });
+    writeFileSync(
+      migrationGatePath(),
+      JSON.stringify({ vault: resolve(vault), run_id: "migrate-run", since: "", pid: gone }),
+    );
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.failed);
+      // The marker is the record: the closed gate refuses the metrics row
+      // like every other write to the vault.
+      expect(readSelfHealUpgradeFailure(vault)?.error).toContain("--resume");
+    } finally {
+      rmSync(migrationGatePath(), { force: true });
+    }
+  });
+});
 
 describe("a failure marker this build did not write", () => {
   test("cannot hold the automatic upgrade off past the longest cooldown", () => {

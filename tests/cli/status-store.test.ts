@@ -64,6 +64,9 @@ describe("o2b status store block", () => {
       store_exists: false,
       switched: false,
       next_commands: ["o2b store init", "o2b brain migrate-store --dry-run"],
+      // The suite's preload turns the automatic migration off, so the
+      // report offers it and the next start runs nothing.
+      automatic: expect.objectContaining({ state: "pending", automatic: false }),
     });
   });
 

@@ -27,6 +27,8 @@
  * pending writes nothing, so a start on a current vault leaves no trace.
  */
 
+import { MigrationInProgressError } from "../migration-gate.ts";
+import { holderMayRun } from "../store-migration/quiesce.ts";
 import { existsSync } from "node:fs";
 
 import { appendMetric } from "../brain/metrics.ts";
@@ -57,7 +59,10 @@ export const SELF_HEAL_UPGRADE_OUTCOME = Object.freeze({
   planErrors: "plan_errors",
   /** A recorded failure's cooldown has not run out. */
   backoff: "backoff",
-  /** Another worker holds this vault's lock. */
+  /**
+   * Another worker holds this vault's lock, or a migration of this vault
+   * whose holder may still run holds the gate.
+   */
   running: "running",
   /**
    * The vault is not (or no longer) initialised, or the machine writes to
@@ -197,6 +202,18 @@ function attempt(vault: string, now: Date, configPath: string | undefined): Self
     // it has no managed files, and a record would write under `Brain/`.
     if (vaultGone(vault) || e instanceof BrainUpgradeStoreOnlyError) {
       return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+    }
+    // A migration of this vault holds the gate and refused the writes: it
+    // is running, not a failure of the upgrade (the migration either
+    // switches the machine, which then has no managed files, or opens the
+    // gate again for the next start's upgrade). A gate whose holder is
+    // gone is a run that stopped with it closed: nothing opens it on its
+    // own (a manual run's, or any run on a machine that opted out of the
+    // automatic migration), so it is recorded as this upgrade's failure,
+    // naming the resume, and backs the next starts off like any failure.
+    // A gate that cannot be read names no holder: that is a moment to wait.
+    if (e instanceof MigrationInProgressError && (e.gate.vault === "" || holderMayRun(e.gate))) {
+      return run(SELF_HEAL_UPGRADE_OUTCOME.running);
     }
     const error = message(e);
     try {

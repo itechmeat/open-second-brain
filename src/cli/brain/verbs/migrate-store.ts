@@ -13,6 +13,10 @@
  *    the legacy layout (`migrate-store-forms.ts`).
  *  - `--force-release-gate` releases a migration gate a run that is gone
  *    left on this machine, unless its holder is provably still running.
+ *  - `--auto <token>` is the automatic worker `ensureVaultCurrent` starts
+ *    (change auto-store-migration): it runs on the lock claim it was
+ *    handed and records its outcome instead of printing it. A manual run
+ *    refuses while that worker holds the vault.
  *
  * Exit codes: 0 when the plan maps every entry or the migration finished,
  * 1 when the plan lists unmapped entries, the migration refused to start,
@@ -30,6 +34,13 @@ import {
   type MigrationResult,
 } from "../../../core/store-migration/migrate.ts";
 import { migrateStore, type MigrateStoreOutcome } from "../../../core/store-migration/outcome.ts";
+import {
+  clearAutoMigrationState,
+  readAutoMigrationRunning,
+  describeAutoMigrationRunning,
+  AUTO_MIGRATION_LOCK_JUDGE,
+} from "../../../core/store-migration/auto-state.ts";
+import { runAutoStoreMigration } from "../../../core/store-migration/auto-worker.ts";
 import { brainVerbContext, failWith, parse, usageError, writeJson } from "../helpers.ts";
 import { runForceReleaseGate, runRemoveLegacy, runRollback } from "./migrate-store-forms.ts";
 
@@ -48,11 +59,19 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
     force: { type: "boolean" },
     wait: { type: "string" },
     json: { type: "boolean" },
+    // The detached worker `ensureVaultCurrent` starts, with the lock claim
+    // it was handed. Not an operator flag: the worker's outcome is
+    // recorded, never printed (its streams are ignored).
+    auto: { type: "string" },
   });
   const forms = ["dry-run", "resume", "rollback", "remove-legacy", "force-release-gate"].filter(
     (f) => flags[f] === true,
   );
   if (forms.length > 1) return usageError(MIGRATE_STORE_ONE_FORM);
+  const autoToken = flags["auto"] as string | undefined;
+  if (autoToken !== undefined && (forms.length > 0 || flags["wait"] !== undefined)) {
+    return usageError("--auto is the automatic worker's entry point and takes no other form");
+  }
   if (flags["force"] === true && flags["remove-legacy"] !== true) {
     return usageError("--force goes with --remove-legacy");
   }
@@ -71,7 +90,28 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
   if (flags["remove-legacy"] === true) {
     return runRemoveLegacy(vault, config, flags["force"] === true, json);
   }
+  if (autoToken !== undefined) {
+    // The automatic worker: never throws, records its own outcome, and
+    // prints nothing (its streams are ignored). One exit for every way it
+    // can end.
+    runAutoStoreMigration(vault, { lockToken: autoToken, configPath: config });
+    return 0;
+  }
   if (flags["dry-run"] !== true) {
+    // A manual run while the automatic worker holds the vault: say so
+    // and exit, before a second migration starts. The dry run stays
+    // available: it reads and writes nothing anywhere.
+    const running = readAutoMigrationRunning(vault, new Date(), {
+      judge: AUTO_MIGRATION_LOCK_JUDGE.exact,
+    });
+    if (running !== null) {
+      process.stderr.write(
+        `error: the automatic store migration is running on this machine ` +
+          `(${describeAutoMigrationRunning(running)}); wait for it to finish, or read what it ` +
+          "reports with `o2b doctor` or the store block of `o2b status --json`\n",
+      );
+      return 1;
+    }
     const waitMs = waitRaw === undefined ? 0 : Number(waitRaw) * 1000;
     return migrate(vault, config, flags["resume"] === true, waitMs, json);
   }
@@ -104,6 +144,16 @@ function migrate(
       return 1;
     }
     return failWith("migrate the brain into the store", exc);
+  }
+  if (outcome.ok) {
+    // A switch made by hand ends whatever the automatic migration had
+    // recorded (a failure, a waiting state, an attempt that did not
+    // report): none of it applies any more.
+    try {
+      clearAutoMigrationState(vault);
+    } catch {
+      // the next start clears it
+    }
   }
   if (json) writeJson(outcome);
   else process.stdout.write(renderOutcome(outcome));

@@ -105,6 +105,7 @@ interface StoreBlock {
     store_exists: boolean | null;
     switched: boolean;
     next_commands: string[];
+    automatic: { state: string } | null;
     error?: string;
   };
   error: string | null;
@@ -142,6 +143,7 @@ describe("second_brain_status store block", () => {
       store_exists: false,
       switched: false,
       next_commands: ["o2b store init", "o2b brain migrate-store --dry-run"],
+      automatic: expect.objectContaining({ state: "pending" }),
     });
     expect(store.error).toBeNull();
   });
@@ -188,6 +190,7 @@ describe("second_brain_status store block", () => {
       store_exists: false,
       switched: false,
       next_commands: [],
+      automatic: expect.objectContaining({ state: "not_needed" }),
     });
   });
 
@@ -210,6 +213,7 @@ describe("second_brain_status store block", () => {
       store_exists: true,
       switched: true,
       next_commands: [],
+      automatic: expect.objectContaining({ state: "done" }),
     });
   });
 

@@ -12,6 +12,16 @@
  *    agent on one machine on one day count as one session, so a single
  *    busy session never makes a topic on its own (spec "One busy session
  *    does not make a topic").
+ *  - **Origin.** When and where the record was written: its clock and
+ *    device, except for a record the store migration imported, whose
+ *    clock is the migration's and whose device is the migrating machine.
+ *    Such a record is dated by its legacy item instead (a log event's
+ *    `timestamp`, a signal's `created_at`, else the date in the legacy
+ *    file name, else the migration's clock) and placed on the device of
+ *    the legacy shard it came from (`legacy_device`; a page names none,
+ *    so the migrating machine stands in). The origin is the session
+ *    fallback and the candidate's `at`, so a migrated history keeps its
+ *    days, its order and its age. The record itself is not changed.
  *
  * A signal a `signal-removed` record forgot is left out. The text is
  * taken with every `<private>` region removed, tags and placeholder
@@ -28,6 +38,7 @@ import type { StoreRecord } from "../store/envelope.ts";
 import { SIGNAL_REMOVED_KIND } from "../store/fold-signals.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
+import { LEGACY_DEVICE_FIELD, migratedMark } from "../store-migration/migration-records.ts";
 
 /** Log event types whose text a person would read on a topic. */
 const READABLE_EVENTS: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
@@ -42,7 +53,7 @@ export interface TopicCandidate {
   /** The project the record names, or `null`. */
   readonly project: string | null;
   readonly session: string;
-  /** Physical clock of the record, in ms. */
+  /** When the record was written, in ms: its physical clock, or a migrated record's original time. */
   readonly at: number;
   readonly private: boolean;
   /** The envelope `topic` the record was written under, or `null`. */
@@ -59,12 +70,48 @@ function obj(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function fallbackSession(record: StoreRecord, at: number): string {
-  return `${record.device}/${record.agent}/${new Date(at).toISOString().slice(0, 10)}`;
+/** A `YYYY-MM-DD` day in a legacy file name (`2026-09-01.dev-a.jsonl`, `sig-2026-09-01-x.md`). */
+const FILE_DAY_RE = /(?:^|[^0-9])(\d{4}-\d{2}-\d{2})(?![0-9])/;
+
+/**
+ * An ISO 8601 day, or a time with its zone. A time without a zone is left
+ * out: `Date.parse` would read it in the machine's own zone, and every
+ * machine must make the same plan from the same records.
+ */
+const ZONED_TIME_RE =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/** `value` as a time in ms when it is such a date string, else null. */
+function timeOf(value: unknown): number | null {
+  if (typeof value !== "string" || !ZONED_TIME_RE.test(value.trim())) return null;
+  const ms = Date.parse(value.trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** The time a legacy item carries for itself: a log event's `timestamp`, a signal's `created_at`. */
+function legacyItemTime(record: StoreRecord): number | null {
+  if (record.kind === LOG_EVENT_KIND) return timeOf(record.body["timestamp"]);
+  if (record.kind === SIGNAL_KIND) return timeOf(obj(record.body["frontmatter"])["created_at"]);
+  return null;
+}
+
+/** When and where `record` was written (the module comment, "Origin"). */
+function originOf(record: StoreRecord): { readonly at: number; readonly device: string } {
+  const clock = parseHlc(record.hlc)!.physical;
+  const mark = migratedMark(record);
+  if (mark === null) return { at: clock, device: record.device };
+  const name = mark.key.split("#", 1)[0]!.split("/").pop()!;
+  const day = FILE_DAY_RE.exec(name)?.[1];
+  const at = legacyItemTime(record) ?? (day !== undefined ? timeOf(day) : null);
+  return { at: at ?? clock, device: str(record.body[LEGACY_DEVICE_FIELD]) ?? record.device };
+}
+
+function fallbackSession(record: StoreRecord, origin: ReturnType<typeof originOf>): string {
+  return `${origin.device}/${record.agent}/${new Date(origin.at).toISOString().slice(0, 10)}`;
 }
 
 function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | null {
-  const at = parseHlc(record.hlc)!.physical;
+  const origin = originOf(record);
   let text: string | null = null;
   let meta: Record<string, unknown> = {};
   if (record.kind === SIGNAL_KIND) {
@@ -85,8 +132,8 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
     id: record.id,
     text,
     project: scope.project,
-    session: scope.session ?? str(meta["session_ref"]) ?? fallbackSession(record, at),
-    at,
+    session: scope.session ?? str(meta["session_ref"]) ?? fallbackSession(record, origin),
+    at: origin.at,
     private: isPrivate,
     topic: record.topic,
   };

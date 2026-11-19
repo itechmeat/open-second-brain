@@ -19,6 +19,7 @@ import { readStoreIndexSummary } from "../search/brain-store/index-summary.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { isDualWriteEnabled } from "./dual-write.ts";
 import { migrationAvailability } from "./migration-availability.ts";
+import { autoMigrationReport, autoMigrationReportJson } from "../store-migration/auto-report.ts";
 import { describeConfiguredStoreLocation, type StoreLocationReport } from "./store-location.ts";
 
 export interface StoreStatusSource {
@@ -67,6 +68,18 @@ function migrationBlock(source: StoreStatusSource): Record<string, unknown> {
     store_exists: m.storeExists,
     switched: m.switched,
     next_commands: m.nextCommands,
+    // The automatic migration's state and what the next start does about
+    // it (change auto-store-migration), from the same probe.
+    automatic:
+      source.vault === null
+        ? null
+        : autoMigrationReportJson(
+            autoMigrationReport({
+              vault: source.vault,
+              configPath: source.configPath ?? undefined,
+              availability: m,
+            }),
+          ),
     ...(m.error !== null ? { error: m.error } : {}),
   };
 }

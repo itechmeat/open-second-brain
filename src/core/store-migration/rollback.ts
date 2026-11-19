@@ -79,6 +79,7 @@ import {
   readMigrationBackup,
   restoreMigrationBackups,
   snapshotCopyIn,
+  type MigrationBackup,
 } from "./backup.ts";
 import { removeDeviceTokens } from "./device-config.ts";
 import { itemRecords, migrationCatalogue, recordDestination } from "./catalogue.ts";
@@ -89,8 +90,11 @@ import {
   migrationDir,
   readHeldRecords,
   readMigrationState,
+  ROLLBACK_JOURNAL_FILE,
+  ROLLBACK_STATE_FILE,
   unseenHeldShards,
   writeMigrationState,
+  type MigrationState,
   type UnseenShards,
 } from "./journal.ts";
 import {
@@ -106,7 +110,7 @@ import {
   MIGRATION_STREAM,
   migratedMark,
 } from "./migration-records.ts";
-import { holdGateFor, releaseGateFor } from "./quiesce.ts";
+import { holdGateFor, releaseGateAfter } from "./quiesce.ts";
 import { readRemovalInProgress } from "./removal.ts";
 import { readRemovalMarker, sameVaultPath } from "./removal-marker.ts";
 import {
@@ -115,8 +119,8 @@ import {
   type TransitionResult,
 } from "./transition.ts";
 
-const ROLLBACK_STATE = "rollback.json";
-const ROLLBACK_JOURNAL = "rollback-journal.jsonl";
+const ROLLBACK_STATE = ROLLBACK_STATE_FILE;
+const ROLLBACK_JOURNAL = ROLLBACK_JOURNAL_FILE;
 /** Where a rollback copies a legacy tree holding late items it could not import. */
 const ROLLBACK_KEPT_DIR = "rollback-kept";
 
@@ -127,6 +131,14 @@ const ROLLBACK_KEPT_DIR = "rollback-kept";
  */
 export interface RollbackHooks {
   readonly afterReplayed?: (count: number) => void;
+  /** After the checks made before the gate, before the rollback takes it. */
+  readonly beforeGate?: () => void;
+  /**
+   * After the rollback cleared this device's switch, before it unbinds the
+   * vault and records the run rolled back: a step that throws here leaves
+   * an unfinished rollback on the legacy layout.
+   */
+  readonly afterSwitchCleared?: () => void;
 }
 
 export interface RollbackResult {
@@ -359,13 +371,24 @@ function guardLateImport(vault: string, dir: string, late: TransitionResult): st
   return kept;
 }
 
-/** Roll this machine back to the legacy layout; see the module header. */
-export function rollbackMigration(
-  vault: string,
-  store: StoreHandle,
-  options: RollbackOptions,
-): RollbackResult {
-  const dir = migrationDir(store);
+/** What a rollback checked before it took the gate, read again once it holds it. */
+interface RollbackChecked {
+  readonly vaultId: string | null;
+  readonly migration: MigrationState;
+  readonly backup: MigrationBackup & {
+    readonly snapshot: NonNullable<MigrationBackup["snapshot"]>;
+  };
+}
+
+/**
+ * The checks a rollback makes before anything is touched (see
+ * {@link rollbackMigration}); each one throws {@link RollbackRefusedError}.
+ * They run before the gate is taken and again once it is held: another
+ * rollback may have finished in between (the device is no longer
+ * switched, the run is rolled back), a removal may have started, or the
+ * backup may be another run's.
+ */
+function rollbackChecks(vault: string, store: StoreHandle, dir: string): RollbackChecked {
   const vaultId = readVaultIdentity(vault)?.vault_id ?? null;
   // Another device's removal counts too: its record may arrive before
   // sync deletes the tree here, and a tree rebuilt now would sync back to
@@ -384,7 +407,14 @@ export function rollbackMigration(
       "the legacy tree has left the vault; a rollback is only possible until then",
     );
   }
-  const migration = readMigrationState(dir);
+  const migrationRead = readMigrationState(dir);
+  if (migrationRead.kind === "unreadable") {
+    throw new RollbackRefusedError(
+      `this machine's migration run state cannot be read (${migrationRead.error}); nothing ` +
+        "was restored. Fix its permissions or restore it, then roll back again",
+    );
+  }
+  const migration = migrationRead.kind === "state" ? migrationRead.state : null;
   const backup = readMigrationBackup(dir);
   if (migration === null || backup === null || backup.snapshot === null) {
     throw new RollbackRefusedError("this machine holds no migration backup to roll back to");
@@ -417,10 +447,32 @@ export function rollbackMigration(
   // anything is touched: the switch would be cleared over a legacy tree
   // that lacks them, and nothing would write them back later.
   refuseUnseen(unseenHeldShards(store), "nothing was restored");
-  const scope = journalScopeFor(vault, store.device, dir, vaultId);
-  const gateRun = `rollback-${migration.run_id}`;
+  return { vaultId, migration, backup: backup as RollbackChecked["backup"] };
+}
+
+/** Roll this machine back to the legacy layout; see the module header. */
+export function rollbackMigration(
+  vault: string,
+  store: StoreHandle,
+  options: RollbackOptions,
+): RollbackResult {
+  const dir = migrationDir(store);
+  const checked = rollbackChecks(vault, store, dir);
+  const gateRun = `rollback-${checked.migration.run_id}`;
+  options.hooks?.beforeGate?.();
   holdGateFor(vault, gateRun);
+  let failure: { readonly error: unknown } | null = null;
   try {
+    // Read again under the gate: what the rollback decided on may be
+    // another run's by now. A different run state is another run's work.
+    const { vaultId, migration, backup } = rollbackChecks(vault, store, dir);
+    if (migration.run_id !== checked.migration.run_id) {
+      throw new RollbackRefusedError(
+        "another run changed this machine's migration while the rollback waited for its " +
+          "gate; nothing was restored. Run the rollback again",
+      );
+    }
+    const scope = journalScopeFor(vault, store.device, dir, vaultId);
     let state = readState(dir);
     let legacyTreeKept: string | null = null;
     let all: StoreRecord[] | null = null;
@@ -490,6 +542,7 @@ export function rollbackMigration(
       }).record.id;
     }
     clearSwitchMarker(store.root, store.device);
+    options.hooks?.afterSwitchCleared?.();
     unbindVaultFromStore(store.root);
     const tokensAside = removeDeviceTokens(dir, vault);
     writeMigrationState(dir, {
@@ -511,7 +564,10 @@ export function rollbackMigration(
       device_tokens_aside: tokensAside,
       legacy_tree_kept: legacyTreeKept,
     };
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    releaseGateFor(vault, gateRun);
+    releaseGateAfter(vault, gateRun, failure);
   }
 }

@@ -6,8 +6,9 @@
 #
 # Every Windows shard uploads the durations of the files it ran as the
 # artifact `windows-timings-<shard>`. This downloads them from the given run
-# (default: the latest successful CI run on main), folds them into the
-# committed file, and drops entries for test files that no longer exist.
+# (default: the latest successful CI run on main; a pull request's own run
+# works too, for the files it adds), folds them into the committed file, and
+# drops entries for test files that no longer exist.
 # A file missing from the committed timings still runs: Bun gives it a
 # default weight, so a stale file costs balance, never coverage.
 #

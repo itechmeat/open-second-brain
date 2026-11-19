@@ -7,6 +7,12 @@
  *   2  usage error
  *   3  drift detected after update
  *   4  user-modified-block conflict (use `--force` to override)
+ *
+ * After the update, the store migration step (change auto-store-migration)
+ * runs the migration in the foreground when one is available, with
+ * progress on stderr; its outcome never changes the exit code, it is
+ * named in the text and in the `store_migration` field of `--json`.
+ * `--skip-store-migration` skips it once.
  */
 
 import { homedir } from "node:os";
@@ -26,6 +32,11 @@ import "../core/install/adapters/opencode.ts";
 import "../core/install/adapters/pi.ts";
 
 import { runUpdate, type UpdateResult, type UpdateTargetResult } from "../core/install/update.ts";
+import {
+  describeUpdateStoreMigration,
+  updateStoreMigration,
+  type UpdateStoreMigration,
+} from "../core/store-migration/update-step.ts";
 import type { InstallEnv, VerifyResult } from "../core/install/types.ts";
 
 interface ParsedUpdateArgs {
@@ -33,6 +44,7 @@ interface ParsedUpdateArgs {
   readonly dryRun: boolean;
   readonly force: boolean;
   readonly json: boolean;
+  readonly skipStoreMigration: boolean;
 }
 
 export function parseUpdateArgs(argv: string[]): ParsedUpdateArgs {
@@ -41,12 +53,14 @@ export function parseUpdateArgs(argv: string[]): ParsedUpdateArgs {
     "dry-run": { type: "boolean" },
     force: { type: "boolean" },
     json: { type: "boolean" },
+    "skip-store-migration": { type: "boolean" },
   });
   return {
     target: (flags["target"] as string | undefined) ?? null,
     dryRun: Boolean(flags["dry-run"]),
     force: Boolean(flags["force"]),
     json: Boolean(flags["json"]),
+    skipStoreMigration: Boolean(flags["skip-store-migration"]),
   };
 }
 
@@ -81,9 +95,15 @@ function statusIcon(status: UpdateTargetResult["status"]): string {
   }
 }
 
-function renderResult(result: UpdateResult, json: boolean): void {
+function renderResult(
+  result: UpdateResult,
+  storeMigration: UpdateStoreMigration,
+  json: boolean,
+): void {
   if (json) {
-    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ...result, store_migration: storeMigration }, null, 2) + "\n",
+    );
     return;
   }
 
@@ -105,6 +125,7 @@ function renderResult(result: UpdateResult, json: boolean): void {
   process.stdout.write(`\n${applied} applied, ${upToDate} up-to-date, ${skipped} skipped`);
   if (errors > 0) process.stdout.write(`, ${errors} errors`);
   process.stdout.write("\n");
+  process.stdout.write(`${describeUpdateStoreMigration(storeMigration)}\n`);
 }
 
 export async function cmdUpdate(argv: string[]): Promise<number> {
@@ -136,7 +157,14 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
     target: args.target,
   });
 
-  renderResult(result, args.json);
+  const storeMigration = updateStoreMigration(env.vault, {
+    configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"]!,
+    skip: args.skipStoreMigration,
+    dryRun: args.dryRun,
+    progress: (line) => process.stderr.write(`store migration: ${line}\n`),
+  });
+
+  renderResult(result, storeMigration, args.json);
 
   if (!args.dryRun) {
     const targets = args.target ? [defaultRegistry.get(args.target)!] : defaultRegistry.list();

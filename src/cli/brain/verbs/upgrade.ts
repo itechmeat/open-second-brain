@@ -19,6 +19,12 @@ import {
   renderUpgradePlanJson,
 } from "../helpers.ts";
 import { info } from "../../output.ts";
+import {
+  AUTO_MIGRATION_STATE,
+  autoMigrationReport,
+  autoMigrationReportJson,
+  type AutoMigrationReport,
+} from "../../../core/store-migration/auto-report.ts";
 import { runSelfHealUpgrade } from "../../../core/maintenance/self-heal-upgrade.ts";
 import {
   clearSelfHealUpgradeFailure,
@@ -39,18 +45,42 @@ function failureJson(failure: SelfHealUpgradeFailure): Record<string, unknown> {
   };
 }
 
-/** Print the plan, plus the last automatic-upgrade failure when one is recorded. */
-function printPlan(plan: UpgradePlan, failure: SelfHealUpgradeFailure | null, json: boolean): void {
+/**
+ * Print the plan, plus the last automatic-upgrade failure when one is
+ * recorded, plus the store migration's state and what the next start
+ * does about it (change auto-store-migration).
+ */
+function printPlan(
+  plan: UpgradePlan,
+  failure: SelfHealUpgradeFailure | null,
+  migration: AutoMigrationReport,
+  json: boolean,
+): void {
   if (json) {
     okJson({
       ...renderUpgradePlanJson(plan),
       self_heal_failure: failure === null ? null : failureJson(failure),
+      store_migration: autoMigrationReportJson(migration),
     });
     return;
   }
   printUpgradePlanText(plan);
   if (failure !== null) {
     info(`last automatic upgrade: ${describeSelfHealUpgradeFailure(failure)}`);
+  }
+  printMigrationLine(migration);
+}
+
+/** The store migration's one text line, unless nothing is to migrate. */
+function printMigrationLine(migration: AutoMigrationReport): void {
+  if (migration.state !== AUTO_MIGRATION_STATE.notNeeded) {
+    info(
+      `store migration: ${migration.state}; the next start ${migration.nextStart}` +
+        (migration.state === AUTO_MIGRATION_STATE.failed ? ` (${migration.message})` : "") +
+        (migration.manualCommand !== null && !migration.automatic
+          ? ` (\`${migration.manualCommand}\`)`
+          : ""),
+    );
   }
 }
 
@@ -72,7 +102,7 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
     // recorded, never printed (its streams are ignored).
     "self-heal": { type: "string" },
   });
-  const { vault } = brainVerbContext(flags);
+  const { vault, config } = brainVerbContext(flags);
 
   const selfHealToken = flags["self-heal"] as string | undefined;
   if (selfHealToken !== undefined) {
@@ -98,13 +128,24 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
   if (blocked) {
     const message = new BrainUpgradeStoreOnlyError().message;
     const refused = Boolean(flags["apply"]);
+    // A look still carries the store migration's state: a switch an
+    // attempt did not finish is what the next start finishes.
+    const migration = refused ? null : autoMigrationReport({ vault, configPath: config });
     if (flags["json"]) {
       okJson(
         refused
           ? { ok: false, store_only: true, error: message }
-          : { ok: true, store_only: true, note: message },
+          : {
+              ok: true,
+              store_only: true,
+              note: message,
+              store_migration: autoMigrationReportJson(migration!),
+            },
       );
-    } else process.stderr.write(`${message}\n`);
+    } else {
+      process.stderr.write(`${message}\n`);
+      if (migration !== null) printMigrationLine(migration);
+    }
     return refused ? 1 : 0;
   }
 
@@ -116,14 +157,15 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
   }
 
   const failure = readSelfHealUpgradeFailure(vault);
+  const migration = autoMigrationReport({ vault, configPath: config });
 
   if (flags["check"]) {
-    printPlan(plan, failure, Boolean(flags["json"]));
+    printPlan(plan, failure, migration, Boolean(flags["json"]));
     return plan.pending > 0 || plan.errors > 0 ? 2 : 0;
   }
 
   if (!flags["apply"]) {
-    printPlan(plan, failure, Boolean(flags["json"]));
+    printPlan(plan, failure, migration, Boolean(flags["json"]));
     return 0;
   }
 
