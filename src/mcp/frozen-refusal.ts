@@ -104,13 +104,32 @@ export function rethrowVaultFrozen(err: unknown): void {
 /** The refusal token of a write refused by a running store migration. */
 export const MIGRATION_IN_PROGRESS_REFUSAL = "migration_in_progress";
 
-/** The structured payload of that refusal, the shape {@link VaultFrozenData} has. */
+/**
+ * The structured payload of that refusal, the shape {@link VaultFrozenData}
+ * has, plus what an agent acts on: `retry` is `later` while the run holding
+ * the gate may still be running (call again once it has finished) and
+ * `recover` once it stopped with the gate closed (nothing lifts it until
+ * the run is continued: the next start, or `next_command`).
+ */
 export interface MigrationInProgressData {
   readonly code: typeof MIGRATION_IN_PROGRESS_REFUSAL;
   readonly tool: string;
+  /** `migration`, `rollback` or `removal`: which run holds the gate. */
+  readonly run_kind: string;
   readonly run_id: string;
   readonly since: string;
-  readonly next_command: string;
+  /**
+   * `running`, `unknown` (its pid is alive but whether it is the run's own
+   * process cannot be told) or `stopped`.
+   */
+  readonly holder: string;
+  /** `damaged` or `unreadable` when the gate file is no readable gate, else null. */
+  readonly gate_fault: string | null;
+  /** How far the run is, when it reported it; null otherwise. */
+  readonly progress: string | null;
+  readonly retry: string;
+  /** The command that continues or clears it; null when the remedy is not a command. */
+  readonly next_command: string | null;
 }
 
 /**
@@ -120,14 +139,20 @@ export interface MigrationInProgressData {
  * at that moment; the gate itself is the record.
  */
 export function migrationInProgressRefusal(tool: string, err: MigrationInProgressError): MCPError {
-  // The error's own message already names the resume command; it is in
-  // `next_command` for a caller that acts on the data.
+  // The error's own message names the command when one is needed (a run
+  // that stopped with the gate closed); it is in `next_command` for a
+  // caller that acts on the data.
   const message = `${tool}: refused (${MIGRATION_IN_PROGRESS_REFUSAL}). ${err.message}.`;
   const data: MigrationInProgressData = Object.freeze({
     code: MIGRATION_IN_PROGRESS_REFUSAL,
     tool,
+    run_kind: err.kind,
     run_id: err.gate.run_id,
     since: err.gate.since,
+    holder: err.holder,
+    gate_fault: err.fault?.kind ?? null,
+    progress: err.progress,
+    retry: err.retry,
     next_command: err.next_command,
   });
   return new MCPError(INVALID_PARAMS, message, data);

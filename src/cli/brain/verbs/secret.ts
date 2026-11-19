@@ -61,6 +61,7 @@ import { EGRESS_REDACTION_NOTICE, redactForEgress } from "../../../core/egress/g
 import { SECRET_VERB_USAGE, secretOpAccepts } from "../help-text.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 import { readStdinText } from "../../stdin.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 // Assembled from the same per-op flag tables `o2b brain secret --help`
 // renders (help-text.ts), so the two surfaces cannot drift apart.
@@ -347,6 +348,8 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
           process.stderr.write(`brain secret export: --out FILE is required\n${USAGE}\n`);
           return 2;
         }
+        // A destination the caller names is no way past a migration gate.
+        assertDestinationOutsideGatedVault(out);
         const ingested = await ingestPassphrase("export", flags);
         if ("exitCode" in ingested) return ingested.exitCode;
         // Exporting needs the plaintext values, so a wrapped store

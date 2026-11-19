@@ -37,6 +37,7 @@ import {
 import { dirname, join } from "node:path";
 
 import { canonicalJson } from "../integrity/digest.ts";
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { machineStatePath } from "../state/machine-state.ts";
 import type { DualWriteRecord } from "../store/dual-write.ts";
 import { ledgerRowRecord } from "../store/dual-write-records.ts";
@@ -173,10 +174,16 @@ export function recordRecallFeedback(vault: string | null, event: RecallFeedback
   // item 1); an unswitched machine keeps its event file, with no dual write
   // (format version 1 has none for this ledger; the migration imports the
   // files).
+  // First, before either branch: a store-only machine whose gate still names
+  // the vault must not append its ledger row and then be refused.
+  if (vault !== null) assertNoMigrationInProgress(vault);
   let file: string;
   if (isStoreOnly({ vault })) {
     file = storeWrite(() => feedbackRowRecord(vault, event), { vault })[0]?.path ?? "";
   } else {
+    // The legacy feedback file passes no vault guard, so it asks the migration gate itself:
+    // the file is per-vault state a migration of this vault is moving.
+    if (vault !== null) assertNoMigrationInProgress(vault);
     const dir = feedbackDir(vault);
     mkdirSync(dir, { recursive: true });
     const body = JSON.stringify(event, null, 2) + "\n";
@@ -294,6 +301,9 @@ export function computeLearnedWeights(events: ReadonlyArray<RecallFeedbackEvent>
 }
 
 export function writeLearnedWeights(vault: string | null, weights: LearnedWeights): void {
+  // The learned-weights file passes no vault guard, so it asks the migration gate itself:
+  // the file is per-vault state a migration of this vault is moving.
+  if (vault !== null) assertNoMigrationInProgress(vault);
   const path = learnedWeightsFile(vault);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(weights, null, 2) + "\n");
@@ -405,6 +415,7 @@ export function resetLearnedWeights(vault: string | null): void {
     });
     return;
   }
+  if (vault !== null) assertNoMigrationInProgress(vault);
   rmSync(learnedWeightsFile(vault), { force: true });
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { MigrationInProgressError } from "../../src/core/migration-gate.ts";
 import { applyPreviewBudget } from "../../src/mcp/preview-budget.ts";
 import type { StoredArtifact } from "../../src/mcp/artifact-store.ts";
 
@@ -93,5 +94,28 @@ describe("applyPreviewBudget", () => {
     const big = "w".repeat(50_000);
     const out = applyPreviewBudget(big, 2000, store);
     expect(out.text.length).toBeLessThan(big.length / 10);
+  });
+});
+
+describe("an over-budget result while a store migration holds the gate", () => {
+  test("its preview is redacted the way a parked artifact's is", () => {
+    const refusing = {
+      put(): StoredArtifact {
+        throw new MigrationInProgressError({
+          vault: "/v",
+          run_id: "migrate-x",
+          since: "2026-11-19T10:00:00Z",
+          pid: 1,
+        });
+      },
+    };
+    // A credential-shaped value at the head of the payload, built at runtime.
+    const credential = "ghp_" + "Ab1".repeat(12);
+    const big = `token=${credential} ` + "z".repeat(5000);
+    const out = applyPreviewBudget(big, 200, refusing);
+    const env = JSON.parse(out.text) as Record<string, unknown>;
+    expect(env["artifact_id"]).toBeNull();
+    expect(String(env["bytes_preview"])).not.toContain(credential);
+    expect(String(env["bytes_preview"])).toContain("REDACTED");
   });
 });

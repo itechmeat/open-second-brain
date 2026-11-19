@@ -17,6 +17,7 @@
  */
 
 import { resolveGenerationTraceEnabled } from "../../core/config.ts";
+import { assertNoMigrationInProgress } from "../../core/migration-gate.ts";
 import {
   emitGenerationReport,
   isGenerationHandoffKind,
@@ -121,6 +122,10 @@ function recordAction(ctx: ServerContext, args: Record<string, unknown>): Record
     enabled,
   );
 
+  // Telemetry never fails its caller, so a report the migration gate refused
+  // comes back as no record; this call asked for exactly that record, and is
+  // told why it was not kept rather than that recording is off.
+  if (record === null && enabled && ctx.vault !== null) assertNoMigrationInProgress(ctx.vault);
   return record !== null
     ? { vault_path: vaultPathField(ctx), recorded: true, id: record.id }
     : { vault_path: vaultPathField(ctx), recorded: false, reason: "disabled" };

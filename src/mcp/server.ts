@@ -13,7 +13,11 @@ import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-rout
 import { createRouteScope } from "../core/route-scope.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
-import { MigrationInProgressError } from "../core/migration-gate.ts";
+import {
+  MigrationInProgressError,
+  type MigrationRefusalRecorder,
+  recordMigrationRefusals,
+} from "../core/migration-gate.ts";
 import {
   migrationInProgressRefusal,
   UNRESOLVED_AGENT,
@@ -397,23 +401,31 @@ export class MCPServer {
     // cannot see.
     assertNoCallerSuppliedReach(tool, args);
     assertKnownArguments(tool, args);
+    // A refusal of the migration gate is recorded wherever it is met, so a
+    // handler that wraps it in an error of its own still answers with the
+    // structured refusal (`mapFrozen`).
+    const gate: MigrationRefusalRecorder = { refused: null };
     if (!this.routeMetricsEnabled) {
       try {
-        return await tool.handler(this.contextFor(identity, tool.name), args, onProgress);
+        return await recordMigrationRefusals(gate, async () =>
+          tool.handler(this.contextFor(identity, tool.name), args, onProgress),
+        );
       } catch (exc) {
-        throw this.mapFrozen(tool, exc, identity);
+        throw this.mapFrozen(tool, exc, identity, gate.refused);
       }
     }
     const start = performance.now();
     let status: McpRouteStatus = "ok";
     const routeScope = createRouteScope();
     try {
-      return await routeScope.run(async () =>
-        tool.handler(this.contextFor(identity, tool.name), args, onProgress),
+      return await recordMigrationRefusals(gate, async () =>
+        routeScope.run(async () =>
+          tool.handler(this.contextFor(identity, tool.name), args, onProgress),
+        ),
       );
     } catch (exc) {
       status = "error";
-      throw this.mapFrozen(tool, exc, identity);
+      throw this.mapFrozen(tool, exc, identity, gate.refused);
     } finally {
       // The route metric is a vault continuity record: none without a vault.
       if (this.vault !== null) {
@@ -446,9 +458,18 @@ export class MCPServer {
    * cover the ones somebody remembered. Every other exception passes
    * through untouched.
    */
-  private mapFrozen(tool: ToolDefinition, exc: unknown, identity?: RequestIdentity): unknown {
-    // A store migration running on this machine refuses like a freeze.
+  private mapFrozen(
+    tool: ToolDefinition,
+    exc: unknown,
+    identity?: RequestIdentity,
+    gateRefusal: MigrationInProgressError | null = null,
+  ): unknown {
+    // A store migration running on this machine refuses like a freeze,
+    // also when the handler reported the refusal as an error of its own.
     if (exc instanceof MigrationInProgressError) return migrationInProgressRefusal(tool.name, exc);
+    if (gateRefusal !== null && !(exc instanceof VaultFrozenError)) {
+      return migrationInProgressRefusal(tool.name, gateRefusal);
+    }
     if (!(exc instanceof VaultFrozenError) || this.vault === null) return exc;
     // `agentName` is optional on the context - a transport may supply
     // none - so an absent identity is recorded as the named absence
@@ -654,7 +675,15 @@ export class MCPServer {
       const structured = this.forCaller(
         await this.invokeToolHandler(tool, args, onProgress, identity),
       );
-      return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
+      return withProgressRefusal(
+        buildMcpToolResult(
+          tool,
+          structured,
+          this.artifactStore,
+          (text) => this.forCaller(text) as string,
+        ),
+        refusal,
+      );
     } catch (exc) {
       if (exc instanceof MCPError) {
         if (refusal === undefined) throw exc;
@@ -756,10 +785,12 @@ export function buildMcpToolResult(
   tool: ToolDefinition,
   structured: unknown,
   store: ArtifactStore,
+  /** The caller's path redaction, for text this builder adds after it ran. */
+  forCaller: (text: string) => string = (text) => text,
 ): Record<string, unknown> {
   assertOutputContract(tool.name, tool.outputSchema, structured);
   const serialized = JSON.stringify(structured, sortedReplacer, 2);
-  const outcome = applyPreviewBudget(serialized, tool.previewBudget, store);
+  const outcome = applyPreviewBudget(serialized, tool.previewBudget, store, forCaller);
   return {
     content: [{ type: "text", text: outcome.text }],
     structuredContent: structured,

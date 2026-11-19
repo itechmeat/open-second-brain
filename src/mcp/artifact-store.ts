@@ -31,6 +31,7 @@ import { join } from "node:path";
 
 import { artifactPath, artifactRunDir, brainArtifactsDir } from "../core/brain/paths.ts";
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
+import { assertNoMigrationInProgress, migrationGateRefuses } from "../core/migration-gate.ts";
 import { redactRawOutput } from "../core/redactor.ts";
 
 /** Length of the hex artifact id derived from the SHA-256 digest. */
@@ -84,6 +85,10 @@ export class ArtifactStore {
       .digest("hex")
       .slice(0, ARTIFACT_ID_HEX_LEN);
     const path = artifactPath(this.vault, this.runId, artifactId);
+    // Session scratch passes no vault guard, but it lives in the legacy tree
+    // of an unswitched machine: a migration of the vault refuses it, and the
+    // preview budget then answers without an artifact.
+    assertNoMigrationInProgress(this.vault);
     mkdirSync(artifactRunDir(this.vault, this.runId), { recursive: true });
     atomicWriteFileSync(path, text);
     return { artifactId, runId: this.runId, path, fullChars: text.length, text };
@@ -110,6 +115,8 @@ export class ArtifactStore {
   prune(ttlMs: number): number {
     const root = brainArtifactsDir(this.vault);
     if (!existsSync(root)) return 0;
+    // A removal in the tree a migration is moving: left for a later start.
+    if (migrationGateRefuses(this.vault)) return 0;
     const cutoff = Date.now() - ttlMs;
     let removed = 0;
     let entries: string[];

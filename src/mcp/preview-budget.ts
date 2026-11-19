@@ -12,6 +12,8 @@
  * `put`-only view of the artifact store.
  */
 
+import { MigrationInProgressError } from "../core/migration-gate.ts";
+import { redactRawOutput } from "../core/redactor.ts";
 import type { StoredArtifact } from "./artifact-store.ts";
 
 /**
@@ -29,6 +31,46 @@ export interface PreviewEnvelope {
   readonly full_chars: number;
   readonly bytes_preview: string;
   readonly note: string;
+}
+
+/**
+ * The envelope of an over-budget result while a store migration of the
+ * vault holds this machine's gate: the full payload cannot be parked (the
+ * artifact store lives in the tree being moved), so there is no artifact id
+ * and the note says when the full result can be had again.
+ */
+export interface UnparkedPreviewEnvelope {
+  readonly preview_truncated: true;
+  readonly artifact_id: null;
+  readonly full_chars: number;
+  readonly bytes_preview: string;
+  readonly note: string;
+}
+
+function migrationPreview(
+  serialized: string,
+  budget: number,
+  error: MigrationInProgressError,
+  forCaller: (text: string) => string,
+): BudgetOutcome {
+  const envelope: UnparkedPreviewEnvelope = {
+    preview_truncated: true,
+    artifact_id: null,
+    full_chars: serialized.length,
+    // Redacted as the artifact store redacts what it parks, so this preview
+    // shows what the normal over-budget preview would.
+    bytes_preview: redactRawOutput(serialized, {
+      maxInput: Number.POSITIVE_INFINITY,
+      redactInfra: true,
+    }).slice(0, budget),
+    note:
+      "Result truncated to protect context. The full payload could not be stored: " +
+      // The refusal may name a host path (a damaged gate's file): put
+      // through the caller's path redaction, which ran on the result before
+      // this note existed.
+      `${forCaller(error.message)}. Call the tool again then for the full result.`,
+  };
+  return { text: JSON.stringify(envelope, null, 2), truncated: true, artifactId: null };
 }
 
 export interface BudgetOutcome {
@@ -61,6 +103,7 @@ export function applyPreviewBudget(
   serialized: string,
   budget: number | undefined,
   store: ArtifactSink,
+  forCaller: (text: string) => string = (text) => text,
 ): BudgetOutcome {
   // No budget, or an explicitly unbounded one, means never truncate.
   if (budget === undefined || budget === Number.POSITIVE_INFINITY) {
@@ -74,7 +117,16 @@ export function applyPreviewBudget(
     return { text: serialized, truncated: false, artifactId: null };
   }
 
-  const stored = store.put(serialized);
+  let stored: StoredArtifact;
+  try {
+    stored = store.put(serialized);
+  } catch (error) {
+    if (!(error instanceof MigrationInProgressError)) throw error;
+    // No artifact can be parked while a store migration of the vault holds
+    // the gate: the preview is still cut to the budget, and says why the
+    // rest cannot be fetched now.
+    return migrationPreview(serialized, safeBudget, error, forCaller);
+  }
   const envelope: PreviewEnvelope = {
     preview_truncated: true,
     artifact_id: stored.artifactId,

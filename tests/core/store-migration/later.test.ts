@@ -7,7 +7,7 @@
  * machine imports those writes exactly once, naming the machine as still
  * on the legacy layout.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -33,6 +33,10 @@ import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { readViewWriter } from "../../../src/core/view/writer.ts";
 import { makeFleet, type Fleet } from "./fixtures/fleet.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+
+// Tests here run whole migrations; see tests/helpers/cli-timeout.ts.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const FAST = { settleMs: 0 } as const;
 /** The vault identity marker the first migration gives a vault; sync carries it. */

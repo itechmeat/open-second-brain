@@ -24,6 +24,7 @@ import { dirname } from "node:path";
 
 import { SearchError } from "../types.ts";
 import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { assertNoMigrationInProgress } from "../../migration-gate.ts";
 import { machineStatePath } from "../../state/machine-state.ts";
 
 /** A registered OpenAI-compatible rerank provider profile. */
@@ -74,6 +75,9 @@ function writeRerankRegistry(
   vault: string | null,
   registry: ReadonlyArray<RerankProviderProfile>,
 ): void {
+  // The provider registry passes no vault guard, so it asks the migration gate itself:
+  // the file is per-vault state a migration of this vault is moving.
+  if (vault !== null) assertNoMigrationInProgress(vault);
   const path = rerankRegistryPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   // Sort by name so the on-disk file is deterministic across edits.

@@ -2264,13 +2264,30 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `transport-reach` are one argument rather than three. `disclosure` is
   deliberately not reserved - it is the unrelated result-depth mode on the
   recall surfaces.
-- A write attempted while `o2b brain migrate-store` migrates this vault on
-  this machine (the device-local migration gate is held) is refused the
-  same way: `-32602`, the refusal token `migration_in_progress`, and
-  structured `data`: `code`, `tool`, `run_id`, `since` and
-  `next_command: "o2b brain migrate-store --resume"` (for a migration that
-  was interrupted). Other machines are not gated; nothing is appended to
-  the Brain log for this refusal.
+- A write attempted while a store migration of this vault, its rollback or
+  the removal of its legacy tree holds this machine's migration gate is
+  refused the same way, by every tool (a Brain log note included, and also
+  when the tool reported the refusal as an error of its own): `-32602`, the
+  refusal token `migration_in_progress`, and structured `data`: `code`,
+  `tool`, `run_kind` (`migration`, `rollback` or `removal`), `run_id`,
+  `since`, `holder` (`running`; `unknown` when its process is alive but
+  whether it is the run's own process cannot be told, the message then
+  naming `o2b brain migrate-store --force-release-gate`; or `stopped` when
+  the run's process is gone or its pid now belongs to another process),
+  `gate_fault` (`damaged` or `unreadable` when the gate file is no
+  readable gate, the message naming the file and what clears it, else
+  null), `progress` (how far the run is, or null), `retry` (`later`: call
+  again once the run has finished; `recover`: the run stopped and nothing
+  lifts the gate until it is continued by the next start or by
+  `next_command`) and `next_command` (`o2b brain migrate-store --resume`,
+  `--rollback` or `--remove-legacy`, `--force-release-gate` for a damaged
+  gate, null for an unreadable one). A readable gate gates only the vault it
+  names: other vaults and other machines are not gated. A gate file that
+  is damaged or cannot be read names no vault, so it refuses writes to
+  every vault on this machine until it is cleared (`gate_fault` says
+  which, the message names the file and the remedy); nothing is appended to the Brain log for this refusal. A
+  result over its preview budget comes back cut with `artifact_id: null`
+  while the gate is held, since the artifact store lives in the vault.
 - Since v1.55.0 a write attempted while the vault is FROZEN
   (`o2b brain freeze`, marker `Brain/.state/frozen.json`) is refused with
   `-32602`, the refusal token `vault_frozen`, and structured `data`:

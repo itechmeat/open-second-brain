@@ -27,8 +27,7 @@
  * pending writes nothing, so a start on a current vault leaves no trace.
  */
 
-import { MigrationInProgressError } from "../migration-gate.ts";
-import { holderMayRun } from "../store-migration/quiesce.ts";
+import { GATE_HOLDER, MigrationInProgressError, migrationGateRefusal } from "../migration-gate.ts";
 import { existsSync } from "node:fs";
 
 import { appendMetric } from "../brain/metrics.ts";
@@ -64,6 +63,12 @@ export const SELF_HEAL_UPGRADE_OUTCOME = Object.freeze({
    * whose holder may still run holds the gate.
    */
   running: "running",
+  /**
+   * A migration of this vault that stopped without finishing still holds
+   * the gate: nothing was claimed, written or recorded (the run's `error`
+   * is the refusal, naming what continues the migration).
+   */
+  migrationStopped: "migration_stopped",
   /**
    * The vault is not (or no longer) initialised, or the machine writes to
    * the brain store only (no managed files to upgrade); nothing was
@@ -120,6 +125,11 @@ export function runSelfHealUpgrade(
   opts: RunSelfHealUpgradeOptions = {},
 ): SelfHealUpgradeRun {
   const now = opts.now ?? new Date();
+  // Before the claim: the lock and the failure marker are files in the
+  // per-vault state a migration of this vault is moving, so under its gate
+  // the upgrade writes nothing at all and says why.
+  const gated = migrationGateRefusal(vault);
+  if (gated !== null) return gateOutcome(gated);
   let token: string | null;
   if (opts.lockToken !== undefined) {
     // A claim taken over as stale while this worker was starting is no
@@ -132,6 +142,8 @@ export function runSelfHealUpgrade(
     try {
       token = claimSelfHealUpgradeLock(vault, now);
     } catch (e) {
+      // The gate closed after the check above: the same quiet outcome.
+      if (e instanceof MigrationInProgressError) return gateOutcome(e);
       return run(SELF_HEAL_UPGRADE_OUTCOME.failed, [], `worker lock: ${message(e)}`);
     }
   }
@@ -203,18 +215,10 @@ function attempt(vault: string, now: Date, configPath: string | undefined): Self
     if (vaultGone(vault) || e instanceof BrainUpgradeStoreOnlyError) {
       return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     }
-    // A migration of this vault holds the gate and refused the writes: it
-    // is running, not a failure of the upgrade (the migration either
-    // switches the machine, which then has no managed files, or opens the
-    // gate again for the next start's upgrade). A gate whose holder is
-    // gone is a run that stopped with it closed: nothing opens it on its
-    // own (a manual run's, or any run on a machine that opted out of the
-    // automatic migration), so it is recorded as this upgrade's failure,
-    // naming the resume, and backs the next starts off like any failure.
-    // A gate that cannot be read names no holder: that is a moment to wait.
-    if (e instanceof MigrationInProgressError && (e.gate.vault === "" || holderMayRun(e.gate))) {
-      return run(SELF_HEAL_UPGRADE_OUTCOME.running);
-    }
+    // A migration of this vault took the gate while the upgrade ran: its
+    // refusal is the outcome, and nothing is recorded (the failure marker
+    // is a write into the vault the gate refuses too).
+    if (e instanceof MigrationInProgressError) return gateOutcome(e);
     const error = message(e);
     try {
       recordSelfHealUpgradeFailure(vault, error, pending, now);
@@ -230,6 +234,19 @@ function attempt(vault: string, now: Date, configPath: string | undefined): Self
     });
     return run(SELF_HEAL_UPGRADE_OUTCOME.failed, [], error);
   }
+}
+
+/**
+ * The upgrade's answer under a migration gate of its vault: `running` while
+ * the run may still run (or the gate cannot be read), `migration_stopped`
+ * once its holder is gone. Nothing is written in either case.
+ */
+function gateOutcome(refusal: MigrationInProgressError): SelfHealUpgradeRun {
+  const outcome =
+    refusal.fault === null && refusal.holder === GATE_HOLDER.stopped
+      ? SELF_HEAL_UPGRADE_OUTCOME.migrationStopped
+      : SELF_HEAL_UPGRADE_OUTCOME.running;
+  return run(outcome, [], refusal.message);
 }
 
 function recordRow(vault: string, payload: Readonly<Record<string, unknown>>): void {

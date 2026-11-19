@@ -34,6 +34,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
 import { BLOCKED_TIER_ERROR_CODE, type BlockedCapabilityTier } from "./capability-tier.ts";
@@ -226,6 +227,9 @@ export async function tuneRecall(
   }
 
   const datasetHash = createHash("sha256").update(JSON.stringify(dataset)).digest("hex");
+  // The tuning file passes no vault guard, so it asks the migration gate itself:
+  // the file is per-vault state a migration of this vault is moving.
+  if (config.vault !== null) assertNoMigrationInProgress(config.vault);
   const path = tuningPath(config.vault);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(

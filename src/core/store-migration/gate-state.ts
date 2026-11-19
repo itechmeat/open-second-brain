@@ -31,7 +31,7 @@ import {
   type RollbackSeen,
   type RunSeen,
 } from "./gate-decision.ts";
-import { holderLiveness, processAlive } from "./holder-liveness.ts";
+import { gateHolderLiveness, type HolderJudge } from "./holder-liveness.ts";
 import { MIGRATION_RUN_PREFIX } from "./quiesce.ts";
 import { sameVaultPath } from "./removal-marker.ts";
 
@@ -39,7 +39,7 @@ import { sameVaultPath } from "./removal-marker.ts";
 export const ROLLBACK_RUN_PREFIX = "rollback-";
 
 /** How a holder is judged: the pid alone, or its start identity too. */
-export type GateJudge = "cheap" | "exact";
+export type GateJudge = HolderJudge;
 
 /** The judgement an asker uses: a start never queries an identity. */
 export function judgeOf(asker: GateAsker): GateJudge {
@@ -60,12 +60,7 @@ export function gateSeen(
     : gate.run_id.startsWith(ROLLBACK_RUN_PREFIX)
       ? "rollback"
       : "removal";
-  const holder =
-    judge === "cheap"
-      ? processAlive(gate.pid)
-        ? ("unknown" as const)
-        : ("dead" as const)
-      : holderLiveness(gate.pid, gate.started);
+  const holder = gateHolderLiveness(gate, judge);
   const since = Date.parse(gate.since);
   const aged =
     !Number.isFinite(since) || now.getTime() - since > AUTO_MIGRATION_LIVE_PID_CEILING_MS;

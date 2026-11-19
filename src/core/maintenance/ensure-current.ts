@@ -17,6 +17,11 @@
  * migrations and downgrades correctly.
  */
 import { existsSync } from "node:fs";
+import {
+  MigrationInProgressError,
+  migrationGateRefuses,
+  withGateJudge,
+} from "../migration-gate.ts";
 import { Database } from "bun:sqlite";
 
 import { defaultConfigPath } from "../config.ts";
@@ -91,6 +96,11 @@ export const SELF_HEAL_UPGRADE_SPAWN = Object.freeze({
   skippedBackoff: "skipped_backoff",
   /** Another worker holds this vault's lock; nothing was started. */
   skippedRunning: "skipped_running",
+  /**
+   * A migration of this vault holds the gate (running or stopped): nothing
+   * was claimed or started, since the lock lives in the state it moves.
+   */
+  skippedMigrationGate: "skipped_migration_gate",
 } as const);
 
 export type SelfHealUpgradeSpawnDecision =
@@ -261,10 +271,18 @@ function startSelfHealUpgrade(
   // The claim creates the lock's directory; a vault removed since the
   // caller's check is left alone and nothing is started.
   if (!existsSync(brainConfigPath(vault))) return null;
+  if (migrationGateRefuses(vault)) return SELF_HEAL_UPGRADE_SPAWN.skippedMigrationGate;
   if (selfHealUpgradeBackoffActive(readSelfHealUpgradeFailure(vault), now)) {
     return SELF_HEAL_UPGRADE_SPAWN.skippedBackoff;
   }
-  const token = claimSelfHealUpgradeLock(vault, now);
+  let token: string | null;
+  try {
+    token = claimSelfHealUpgradeLock(vault, now);
+  } catch (e) {
+    // The gate closed after the check above: nothing claimed, nothing started.
+    if (e instanceof MigrationInProgressError) return SELF_HEAL_UPGRADE_SPAWN.skippedMigrationGate;
+    throw e;
+  }
   if (token === null) return SELF_HEAL_UPGRADE_SPAWN.skippedRunning;
   try {
     // The live environment (`spawnSelfDetached`); the config path
@@ -644,6 +662,15 @@ function startSelfHealReindex(
 export async function ensureVaultCurrent(
   vault: string,
   opts: EnsureCurrentOptions = {},
+): Promise<EnsureCurrentResult> {
+  // A start never queries a process identity, also not to word the refusal
+  // of a write the gate turns away on its way (a metrics row).
+  return withGateJudge("cheap", () => ensureVaultCurrentJudged(vault, opts));
+}
+
+async function ensureVaultCurrentJudged(
+  vault: string,
+  opts: EnsureCurrentOptions,
 ): Promise<EnsureCurrentResult> {
   const background = opts.background ?? true;
   if (background) {

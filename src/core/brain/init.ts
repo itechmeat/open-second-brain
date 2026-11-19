@@ -37,6 +37,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } fr
 import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
+
 import { defaultConfigPath } from "../config.ts";
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import {
@@ -449,6 +451,10 @@ export function bootstrapBrain(
         "run `o2b init` first to register the vault",
     );
   }
+  // Bootstrap skips the identity guard (it is what stamps the marker), but
+  // not the migration gate: a brain init on a vault being migrated would
+  // write starter files into the tree the migration is moving.
+  if (vault !== null) assertNoMigrationInProgress(vault);
 
   if (vault === null) {
     if (opts.starter === true) {

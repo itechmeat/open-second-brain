@@ -71,6 +71,7 @@ import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue } from "./catalogue.ts";
 import { describeUnseen, migrationDir, unseenHeldShards } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
+import { recordMigrationGateProgress } from "../migration-gate.ts";
 import { holdGateFor, releaseGateAfter } from "./quiesce.ts";
 import { sameVaultPath, writeRemovalMarker } from "./removal-marker.ts";
 import {
@@ -352,6 +353,7 @@ export function removeLegacyTree(
   // comes after it sees what the first left, never a stale list of roots.
   options.beforeGate?.();
   holdGateFor(vault, runId, { takeOver: (held) => held.startsWith(REMOVAL_RUN_PREFIX) });
+  recordMigrationGateProgress(runId, "moving the legacy tree out of the vault into its archive");
   let failure: { readonly error: unknown } | null = null;
   try {
     // What the removal decided on before it held the gate, read again.

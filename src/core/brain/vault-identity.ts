@@ -370,7 +370,9 @@ export function vaultMarkerAbsentNotice(vault: string): DegradationNotice | null
  * answer a question nobody asked.
  *
  * This guard is the freeze's seam because it is the only position every
- * content writer already passes. Hooking the note-write seam instead
+ * content writer already passes. It is the migration gate's seam for the
+ * same reason, on both lanes and ahead of the freeze: the gate holds the
+ * audit lane too. Hooking the note-write seam instead
  * would have left the dream pass, hygiene, page-dedup and the
  * write-session engine writing preferences, signals and state straight
  * through a freeze.
@@ -381,11 +383,16 @@ export function assertVaultIdentityForWrite(
   lane: WriteLane = WRITE_LANE.content,
 ): void {
   const root = resolve(vault);
-  if (lane === WRITE_LANE.content) {
-    assertVaultNotFrozen(root);
-    // A brain store migration running on this machine (design D11 step 2).
-    assertNoMigrationInProgress(root);
-  }
+  // A brain store migration of this vault holding this machine's gate
+  // (design D11 step 2) refuses EVERY write, on both lanes. The audit lane
+  // exists so a freeze does not silence its own record; a migration has no
+  // such need, and a log line, a freeze marker or an attestation written
+  // into the legacy tree while it is being moved is a write the migration
+  // may never carry over (a record after its last pass, or into a surface
+  // it copied once). The run's own snapshot passes through
+  // `asMigrationGateHolder`, nothing else does.
+  assertNoMigrationInProgress(root);
+  if (lane === WRITE_LANE.content) assertVaultNotFrozen(root);
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {

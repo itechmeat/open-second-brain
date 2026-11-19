@@ -2,10 +2,18 @@
  * The device-local migration gate (design D11 step 2). While a brain
  * store migration runs on this machine, the gate file in the device-local
  * state (`<state base>/open-second-brain/migration-gate.json`, never
- * synced) names the vault it migrates, and every content writer on this
- * machine refuses with a migration-in-progress message
+ * synced) names the vault it migrates, and every writer of that vault on
+ * this machine refuses with a migration-in-progress message
  * ({@link assertNoMigrationInProgress}, called from the vault-identity
- * write guard every content writer passes).
+ * write guard every writer passes, on both of its lanes: the audit lane a
+ * freeze lets through is a write into the legacy tree like any other).
+ * The rollback of a migration and the removal of the legacy tree hold the
+ * same gate, so they refuse the same writers.
+ *
+ * The run holding the gate makes writes of its own into the tree it
+ * migrates (its snapshot and the snapshot's log line); it makes them inside
+ * {@link asMigrationGateHolder}, which lets through only the process that
+ * holds the gate, and only for the call it wraps.
  *
  * It replaces the vault freeze marker for the migration because that
  * marker syncs: other machines keep writing during a migration here, and
@@ -18,11 +26,13 @@
  * (a link, a junction, another drive-letter case) is refused too.
  */
 
-import { mkdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
 import { processDirsEnv, stateRootDir, type PlatformDirsEnv } from "./platform-dirs.ts";
+import { gateHolderLiveness, type HolderJudge } from "./store-migration/holder-liveness.ts";
 
 /** What the gate file holds. */
 export interface MigrationGate {
@@ -42,19 +52,168 @@ export interface MigrationGate {
 
 const GATE_FILE = "migration-gate.json";
 
+/** The progress the run holding the gate last reported, beside the gate. */
+const PROGRESS_FILE = "migration-gate-progress.json";
+
 /** The command that continues an interrupted migration, which also lifts the gate. */
 export const MIGRATION_GATE_NEXT_COMMAND = "o2b brain migrate-store --resume";
 
-/** A content write refused because a migration of its vault is running here. */
+/** The command that continues an interrupted rollback of a migration. */
+export const ROLLBACK_GATE_NEXT_COMMAND = "o2b brain migrate-store --rollback";
+
+/** The command that continues an interrupted removal of the legacy tree. */
+export const REMOVAL_GATE_NEXT_COMMAND = "o2b brain migrate-store --remove-legacy";
+
+/** Which run holds the gate, read off its run id. */
+export const GATE_RUN_KIND = Object.freeze({
+  migration: "migration",
+  rollback: "rollback",
+  removal: "removal",
+  unknown: "unknown",
+} as const);
+
+export type GateRunKind = (typeof GATE_RUN_KIND)[keyof typeof GATE_RUN_KIND];
+
+/** The run kind of a gate: `migrate-`, `rollback-` or `remove-legacy-` run ids. */
+export function gateRunKind(gate: MigrationGate): GateRunKind {
+  if (gate.run_id.startsWith("migrate-")) return GATE_RUN_KIND.migration;
+  if (gate.run_id.startsWith("rollback-")) return GATE_RUN_KIND.rollback;
+  if (gate.run_id.startsWith("remove-legacy-")) return GATE_RUN_KIND.removal;
+  return GATE_RUN_KIND.unknown;
+}
+
+const RUN_NAME: Readonly<Record<GateRunKind, string>> = Object.freeze({
+  migration: "a brain store migration of this vault",
+  rollback: "the rollback of the brain store migration of this vault",
+  removal: "the removal of this vault's legacy brain tree",
+  unknown: "a brain store migration of this vault",
+});
+
+const RUN_COMMAND: Readonly<Record<GateRunKind, string>> = Object.freeze({
+  migration: MIGRATION_GATE_NEXT_COMMAND,
+  rollback: ROLLBACK_GATE_NEXT_COMMAND,
+  removal: REMOVAL_GATE_NEXT_COMMAND,
+  unknown: MIGRATION_GATE_NEXT_COMMAND,
+});
+
+/**
+ * What a caller refused by the gate can do about it: `later` while the run
+ * holding it may still be running (it lifts the gate when it ends), and
+ * `recover` once its holder is gone (nothing lifts it until the run is
+ * continued: the next start for an automatic migration, or the command).
+ */
+export const GATE_RETRY = Object.freeze({
+  later: "later",
+  recover: "recover",
+} as const);
+
+export type GateRetry = (typeof GATE_RETRY)[keyof typeof GATE_RETRY];
+
+/**
+ * What is known of the process holding the gate, by the one judgement every
+ * reader of the gate uses (`gateHolderLiveness`, exact): `running` when its
+ * pid is alive and its start identity is the recorded one, `unknown` when the
+ * pid is alive but no identity was recorded or none can be read now (it may
+ * be the run, or a process that reused its pid), `stopped` when the pid is
+ * gone or now belongs to another process.
+ */
+export const GATE_HOLDER = Object.freeze({
+  running: "running",
+  unknown: "unknown",
+  stopped: "stopped",
+} as const);
+
+export type GateHolder = (typeof GATE_HOLDER)[keyof typeof GATE_HOLDER];
+
+/** The operator's remedy for a gate no run will open. */
+export const FORCE_RELEASE_GATE_COMMAND = "o2b brain migrate-store --force-release-gate";
+
+/** A gate file that is there and is no gate: `damaged` (read, not a gate) or `unreadable`. */
+export interface GateFault {
+  readonly kind: "damaged" | "unreadable";
+  readonly path: string;
+  /** The read error's code, for an unreadable gate. */
+  readonly code?: string;
+}
+
+/** A write refused because a migration of its vault holds this machine's gate. */
 export class MigrationInProgressError extends Error {
   override readonly name = "MigrationInProgressError";
-  readonly next_command = MIGRATION_GATE_NEXT_COMMAND;
-  constructor(readonly gate: MigrationGate) {
-    super(
-      `a brain store migration of this vault is in progress on this machine (run ${gate.run_id}, ` +
-        `since ${gate.since}); the write was refused and nothing was written. Try again when ` +
-        "`o2b brain migrate-store` has finished, or resume an interrupted one with `--resume`",
-    );
+  /** What to run, or null when the remedy is not a command (an unreadable gate). */
+  readonly next_command: string | null;
+  readonly kind: GateRunKind;
+  readonly holder: GateHolder;
+  readonly retry: GateRetry;
+  /** The progress the run last reported, or null when none can be read. */
+  readonly progress: string | null;
+  /** Set when the gate file is damaged or cannot be read. */
+  readonly fault: GateFault | null;
+  constructor(
+    readonly gate: MigrationGate,
+    facts: {
+      readonly holder?: GateHolder;
+      readonly progress?: string | null;
+      readonly fault?: GateFault;
+    } = {},
+  ) {
+    const kind = gateRunKind(gate);
+    const holder = facts.holder ?? GATE_HOLDER.unknown;
+    const progress = facts.progress ?? null;
+    const fault = facts.fault ?? null;
+    const since = gate.since === "" ? "an unknown time" : gate.since;
+    const command = RUN_COMMAND[kind];
+    const running =
+      `${RUN_NAME[kind]} holds this machine's migration gate (run ${gate.run_id}, since ${since}` +
+      `${progress === null ? "" : `, ${progress}`})`;
+    let what: string;
+    let remedy: string;
+    let next: string | null = command;
+    let retry: GateRetry = GATE_RETRY.later;
+    if (fault?.kind === "unreadable") {
+      what =
+        `this machine's migration gate ${fault.path} cannot be read (${fault.code ?? "EIO"}), ` +
+        "so a brain store migration of any vault may hold it";
+      remedy =
+        "Writes stay refused until it can be read: fix its permissions, or remove the file " +
+        "if no migration is running";
+      next = null;
+      retry = GATE_RETRY.recover;
+    } else if (fault?.kind === "damaged") {
+      what =
+        `this machine's migration gate ${fault.path} is damaged (it does not read as a gate), ` +
+        "so a brain store migration of any vault may hold it";
+      remedy = `Writes stay refused until it is gone: if no migration is running, run \`${FORCE_RELEASE_GATE_COMMAND}\``;
+      next = FORCE_RELEASE_GATE_COMMAND;
+      retry = GATE_RETRY.recover;
+    } else if (holder === GATE_HOLDER.stopped) {
+      what =
+        `${RUN_NAME[kind]} (run ${gate.run_id}, started ${since}) stopped without ` +
+        `finishing: its process ${gate.pid} is gone and the run still holds this ` +
+        "machine's migration gate";
+      remedy =
+        "Writes stay refused until the run is continued: the next start of Open Second " +
+        `Brain does that for an automatic migration, or run \`${command}\``;
+      retry = GATE_RETRY.recover;
+    } else if (holder === GATE_HOLDER.unknown) {
+      what =
+        `${running}; its process ${gate.pid} is alive, but whether it is the run's own ` +
+        "process cannot be told";
+      remedy =
+        "Try again when it has finished; if no migration is running, " +
+        `\`${FORCE_RELEASE_GATE_COMMAND}\` opens the gate`;
+    } else {
+      what =
+        `${RUN_NAME[kind]} is running on this machine (run ${gate.run_id}, since ${since}` +
+        `${progress === null ? "" : `, ${progress}`})`;
+      remedy = "Try again when it has finished";
+    }
+    super(`${what}; the write was refused and nothing was written. ${remedy}`);
+    this.kind = kind;
+    this.holder = holder;
+    this.progress = progress;
+    this.fault = fault;
+    this.retry = retry;
+    this.next_command = next;
   }
 }
 
@@ -69,6 +228,7 @@ export function migrationGatePath(source: PlatformDirsEnv = processDirsEnv()): s
  * resolved spelling.
  */
 export function canonicalVault(vault: string): string {
+  resolveCount++;
   let path: string;
   try {
     path = realpathSync(vault);
@@ -76,6 +236,20 @@ export function canonicalVault(vault: string): string {
     path = resolve(vault);
   }
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/** How many vault spellings {@link canonicalVault} resolved, process wide (for the cache test). */
+let resolveCount = 0;
+
+export function migrationGateResolveCount(): number {
+  return resolveCount;
+}
+
+/** How many vault spellings were stat'ed for the cached comparison, process wide. */
+let statCount = 0;
+
+export function migrationGateStatCount(): number {
+  return statCount;
 }
 
 /** Whether the gate names `vault`, however either was spelled. */
@@ -102,6 +276,22 @@ const READ_RETRY_MS = 25;
 
 /** Read and classify the gate file (see {@link MigrationGateState}). */
 export function readMigrationGateState(source?: PlatformDirsEnv): MigrationGateState {
+  return readGate(source).state;
+}
+
+/** The gate file's state and, when it was read, its text. */
+function readGate(source?: PlatformDirsEnv): {
+  readonly state: MigrationGateState;
+  readonly text: string | null;
+} {
+  const state = readGateState(source);
+  return { state: state.state, text: state.text };
+}
+
+function readGateState(source?: PlatformDirsEnv): {
+  state: MigrationGateState;
+  text: string | null;
+} {
   const path = migrationGatePath(source);
   let text: string | null = null;
   let code = "";
@@ -112,14 +302,20 @@ export function readMigrationGateState(source?: PlatformDirsEnv): MigrationGateS
     } catch (err) {
       // Released between a check and the read, or never held: not held.
       code = String((err as NodeJS.ErrnoException).code ?? "EIO");
-      if (code === "ENOENT") return { kind: "none" };
+      if (code === "ENOENT") return { state: { kind: "none" }, text: null };
     }
   }
-  if (text === null) return { kind: "unreadable", code };
+  if (text === null) return { state: { kind: "unreadable", code }, text: null };
   try {
     const parsed = JSON.parse(text) as Partial<MigrationGate>;
-    if (typeof parsed.vault === "string" && typeof parsed.run_id === "string") {
-      return {
+    // An empty vault names nothing to compare: it is damaged, and refuses
+    // every vault like any other gate that does not read as one.
+    if (
+      typeof parsed.vault === "string" &&
+      parsed.vault !== "" &&
+      typeof parsed.run_id === "string"
+    ) {
+      const held: MigrationGateState = {
         kind: "held",
         gate: {
           vault: parsed.vault,
@@ -129,11 +325,12 @@ export function readMigrationGateState(source?: PlatformDirsEnv): MigrationGateS
           ...(typeof parsed.started === "string" ? { started: parsed.started } : {}),
         },
       };
+      return { state: held, text };
     }
   } catch {
     // fall through: not a gate
   }
-  return { kind: "damaged" };
+  return { state: { kind: "damaged" }, text };
 }
 
 /** The gate, or null when no migration holds it (an unreadable gate counts as held). */
@@ -217,14 +414,267 @@ export function releaseMigrationGate(vault: string, runId: string): void {
   } catch {
     // already gone
   }
+  try {
+    unlinkSync(progressPath());
+  } catch {
+    // never reported, or already gone
+  }
+}
+
+function progressPath(source: PlatformDirsEnv = processDirsEnv()): string {
+  return join(stateRootDir(source), PROGRESS_FILE);
 }
 
 /**
- * Refuse a content write to `vault` while a migration of it runs on this
- * machine. An unreadable gate refuses every vault (fails closed).
+ * Record how far the run `runId` holding the gate is, in a few words
+ * ("backed up", "importing: pass 2, 1180 items so far"), so a writer it
+ * refuses can say so. Best effort: a progress that cannot be written only
+ * leaves the refusal without it.
+ */
+export function recordMigrationGateProgress(runId: string, progress: string): void {
+  try {
+    const path = progressPath();
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWriteFileSync(path, `${JSON.stringify({ run_id: runId, progress })}\n`);
+  } catch {
+    // the refusal is still made, only without the progress
+  }
+}
+
+/** The progress the gate's run last recorded, or null (none, another run's, unreadable). */
+function readGateProgress(gate: MigrationGate): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(progressPath(), "utf8")) as {
+      run_id?: unknown;
+      progress?: unknown;
+    };
+    return parsed.run_id === gate.run_id && typeof parsed.progress === "string"
+      ? parsed.progress
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The vault whose gate the current call is the holder of
+ * ({@link asMigrationGateHolder}), canonical, or null outside such a call.
+ */
+let holderScope: string | null = null;
+
+/**
+ * Run `fn` as the run holding the gate on `vault`: the writes it makes into
+ * `vault` pass the gate, when this process is the one the gate names. The
+ * run's own writes into the tree it migrates (its snapshot and the
+ * snapshot's log line) are made this way; nothing else is, so a writer this
+ * process calls outside `fn` is refused like any other.
+ */
+export function asMigrationGateHolder<T>(vault: string, fn: () => T): T {
+  const previous = holderScope;
+  holderScope = canonicalVault(vault);
+  try {
+    return fn();
+  } finally {
+    holderScope = previous;
+  }
+}
+
+/**
+ * Refuse a write to a destination the caller named (an export's `--out`, a
+ * config export's `--output`) when it lies inside the vault a held gate
+ * names, compared the way the gate compares vaults (real paths, case folded
+ * on Windows; a destination that does not exist yet is judged by its
+ * nearest existing ancestor). A destination anywhere else is left alone, as
+ * before; so is any destination under a gate that names no vault (damaged
+ * or unreadable): which vault it would be inside cannot be told.
+ */
+export function assertDestinationOutsideGatedVault(destination: string): void {
+  const { state } = readGate();
+  if (state.kind !== "held") return;
+  const vault = canonicalVault(state.gate.vault);
+  const rel = relative(vault, canonicalDestination(destination));
+  // Whole components: "..notes" is a folder inside, ".." and "../x" are not.
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return;
+  assertNoMigrationInProgress(state.gate.vault);
+}
+
+/** `destination` resolved through its nearest existing ancestor, case folded on Windows. */
+function canonicalDestination(destination: string): string {
+  let head = resolve(destination);
+  const tail: string[] = [];
+  for (let i = 0; i < 256; i++) {
+    try {
+      const real = realpathSync(head);
+      const joined = tail.length === 0 ? real : join(real, ...tail.toReversed());
+      return process.platform === "win32" ? joined.toLowerCase() : joined;
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) break;
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+  const fallback = resolve(destination);
+  return process.platform === "win32" ? fallback.toLowerCase() : fallback;
+}
+
+/**
+ * Whether a write to `vault` would be refused by the gate right now
+ * ({@link assertNoMigrationInProgress} without the throw): for a reader
+ * that would otherwise create or refresh a file it does not need, so it
+ * can leave the tree alone instead.
+ */
+export function migrationGateRefuses(vault: string): boolean {
+  // A yes or no only: no message is built, so no holder is judged (a start
+  // that asks this never queries a process identity).
+  return gatedFor(vault) !== null;
+}
+
+/**
+ * Refuse a write to `vault` while a migration of it, its rollback or the
+ * removal of its legacy tree holds this machine's gate, whether that run is
+ * still running or stopped with the gate closed. An unreadable gate refuses
+ * every vault (fails closed). Only the holder's own writes, inside
+ * {@link asMigrationGateHolder}, pass.
  */
 export function assertNoMigrationInProgress(vault: string): void {
-  const gate = readMigrationGate();
-  if (gate === null) return;
-  if (gate.vault === "" || gateNames(gate, vault)) throw new MigrationInProgressError(gate);
+  const refusal = migrationGateRefusal(vault);
+  if (refusal === null) return;
+  const recorder = REFUSALS.getStore();
+  if (recorder !== undefined && recorder.refused === null) recorder.refused = refusal;
+  throw refusal;
+}
+
+/**
+ * The refusal a write to `vault` would meet right now, or null when the gate
+ * lets it through ({@link assertNoMigrationInProgress} without the throw),
+ * for a writer that degrades instead of failing and says why.
+ */
+export function migrationGateRefusal(vault: string): MigrationInProgressError | null {
+  const gated = gatedFor(vault);
+  if (gated === null) return null;
+  if ("fault" in gated) return new MigrationInProgressError(UNREADABLE_GATE, gated);
+  // The refusal path only: what the run's holder and progress are.
+  return new MigrationInProgressError(gated.gate, {
+    holder: refusalHolder(gated.gate),
+    progress: readGateProgress(gated.gate),
+  });
+}
+
+/** Why a write to `vault` is refused (the gate, or a gate file fault), or null. */
+function gatedFor(
+  vault: string,
+): { readonly gate: MigrationGate } | { readonly fault: GateFault } | null {
+  const { state, text } = readGate();
+  if (state.kind === "none") return null;
+  if (state.kind !== "held") {
+    return {
+      fault: {
+        kind: state.kind,
+        path: migrationGatePath(),
+        ...(state.kind === "unreadable" ? { code: state.code } : {}),
+      },
+    };
+  }
+  const gate = state.gate;
+  if (!gateNamesCached(text ?? "", gate, vault)) return null;
+  if (holderScope !== null && holderScope === canonicalVault(gate.vault)) {
+    if (gate.pid === process.pid) return null;
+  }
+  return { gate };
+}
+
+/**
+ * Whether the gate names `vault`, cached per gate text and vault spelling: a
+ * pass of thousands of writes beside another vault's gate resolves the two
+ * spellings once. The gate's bytes are the key, so a gate that changes (held
+ * for another vault, taken over, released and held again) is a new key and
+ * never answers from an older one.
+ */
+const NAMES = new Map<string, boolean>();
+const NAMES_LIMIT = 64;
+
+function gateNamesCached(text: string, gate: MigrationGate, vault: string): boolean {
+  // What each spelling points at now (device and inode, one stat each): a
+  // link retargeted between two writes is a new key, never the old answer.
+  const key = `${text}\u0000${vault}\u0000${fsIdentity(gate.vault)}\u0000${fsIdentity(vault)}`;
+  const known = NAMES.get(key);
+  if (known !== undefined) return known;
+  const answer = gateNames(gate, vault);
+  if (NAMES.size >= NAMES_LIMIT) NAMES.clear();
+  NAMES.set(key, answer);
+  return answer;
+}
+
+/** The file system identity a path resolves to, or "missing". */
+function fsIdentity(path: string): string {
+  statCount++;
+  try {
+    const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return stat === undefined ? "missing" : `${stat.dev}:${stat.ino}`;
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
+ * The holder as the refusal reports it: the exact judgement (start identity
+ * included) every reader of the gate uses, kept for a few seconds per pid
+ * and identity, so a hook or a pass refused many times queries the identity
+ * once.
+ */
+const HOLDER_TTL_MS = 5000;
+const HOLDERS = new Map<string, { readonly at: number; readonly holder: GateHolder }>();
+
+/**
+ * How the refusals inside a call judge the holder: `exact` by default; a
+ * path that must never run a process-identity query (a session or server
+ * start, the runtime notices) runs inside {@link withGateJudge}("cheap"),
+ * where a live pid reads as `unknown` - the same judgement those paths
+ * already make of the gate themselves.
+ */
+const JUDGE = new AsyncLocalStorage<HolderJudge>();
+
+export function withGateJudge<T>(judge: HolderJudge, fn: () => T): T {
+  return JUDGE.run(judge, fn);
+}
+
+function refusalHolder(gate: MigrationGate): GateHolder {
+  const judge = JUDGE.getStore() ?? "exact";
+  const key = `${judge}:${gate.pid}:${gate.started ?? ""}`;
+  const now = Date.now();
+  const known = HOLDERS.get(key);
+  if (known !== undefined && now - known.at >= 0 && now - known.at < HOLDER_TTL_MS) {
+    return known.holder;
+  }
+  const liveness = gateHolderLiveness(gate, judge);
+  const holder =
+    liveness === "alive"
+      ? GATE_HOLDER.running
+      : liveness === "dead"
+        ? GATE_HOLDER.stopped
+        : GATE_HOLDER.unknown;
+  if (HOLDERS.size >= NAMES_LIMIT) HOLDERS.clear();
+  HOLDERS.set(key, { at: now, holder });
+  return holder;
+}
+
+/**
+ * The first refusal of the gate met inside {@link recordMigrationRefusals},
+ * however the code between the refusal and the caller reported it.
+ */
+export interface MigrationRefusalRecorder {
+  refused: MigrationInProgressError | null;
+}
+
+const REFUSALS = new AsyncLocalStorage<MigrationRefusalRecorder>();
+
+/**
+ * Run `fn` recording the first refusal of the gate it meets, for a caller
+ * that answers with a structured refusal (the MCP dispatch): a handler that
+ * catches the error and throws its own (an internal error carrying the
+ * message) still failed because of the gate, and the recorder says so.
+ */
+export function recordMigrationRefusals<T>(recorder: MigrationRefusalRecorder, fn: () => T): T {
+  return REFUSALS.run(recorder, fn);
 }

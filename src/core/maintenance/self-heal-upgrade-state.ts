@@ -40,6 +40,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSyn
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 import type { CheckResult } from "../types.ts";
 import { machineStatePath } from "../state/machine-state.ts";
@@ -164,6 +165,8 @@ export function recordSelfHealUpgradeFailure(
   pending: ReadonlyArray<string>,
   now: Date,
 ): SelfHealUpgradeFailure {
+  // A file in the per-vault state: a migration of the vault refuses it.
+  assertNoMigrationInProgress(vault);
   const previous = readSelfHealUpgradeFailure(vault);
   const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
   const retryAfter = new Date(now.getTime() + selfHealUpgradeCooldownMs(consecutiveFailures));
@@ -274,6 +277,9 @@ export function selfHealUpgradeLockPath(vault: string): string {
  * releases it when it ends.
  */
 export function claimSelfHealUpgradeLock(vault: string, now: Date): string | null {
+  // The lock is a file in the per-vault state a migration of the vault is
+  // moving: under its gate nothing is claimed (the refusal is thrown).
+  assertNoMigrationInProgress(vault);
   const path = selfHealUpgradeLockPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   const token = randomBytes(16).toString("hex");

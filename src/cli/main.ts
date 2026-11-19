@@ -12,6 +12,7 @@ import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { recordFreshInstallSwitch } from "../core/store/fresh-switch.ts";
+import { assertVaultIdentityForWrite } from "../core/brain/vault-identity.ts";
 
 import {
   ConfigReadError,
@@ -117,6 +118,10 @@ import {
 import { HARNESS_IDS, isHarnessId, type HarnessId } from "../core/brain/scoped-rules.ts";
 import { buildStoreStatusBlock } from "../core/store/store-status.ts";
 import { storeStatusLine } from "./store-path.ts";
+import {
+  assertDestinationOutsideGatedVault,
+  MigrationInProgressError,
+} from "../core/migration-gate.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -800,6 +805,8 @@ async function cmdExportConfig(argv: string[]): Promise<number> {
     return 1;
   }
   const output = String(flags["output"]);
+  // A destination the caller names is no way past a migration gate.
+  assertDestinationOutsideGatedVault(output);
   try {
     mkdirSync(resolve(output, ".."), { recursive: true });
     writeFileSync(output, JSON.stringify(verdict.payload, sortedReplacer, 2) + "\n", "utf8");
@@ -941,6 +948,9 @@ async function cmdIndex(argv: string[]): Promise<number> {
   }
   const indexPath = resolve(vault, BRAIN_INDEX_REL);
   try {
+    // `Brain/_INDEX.md` is a vault write: the guard refuses it on a frozen
+    // vault, a wrong store and a vault a migration is moving.
+    assertVaultIdentityForWrite(vault);
     writeFrontmatter(indexPath, { title: "Index", type: "index" }, lines.join("\n"));
   } catch (exc) {
     process.stderr.write(`error: failed to write index: ${(exc as Error).message ?? exc}\n`);
@@ -1585,6 +1595,9 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
       process.stderr.write(exc.message + "\n");
       return 1;
     }
+    if (exc instanceof MigrationInProgressError) {
+      return reportMigrationRefusal(exc, command, rest);
+    }
     if (exc instanceof ConfigReadError) {
       return reportConfigReadError(exc, command, rest);
     }
@@ -1605,6 +1618,40 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
     }
     throw exc;
   }
+}
+
+/**
+ * A write a store migration's gate refused, wherever in a verb it was met
+ * (a caller-named destination inside the gated vault, any guarded write):
+ * exit 1 and one error line, as a machine that cannot answer now, and for a
+ * --json caller a parseable object naming the refusal. A command the
+ * {@link withJsonFallback} envelope wraps reports it in that envelope and
+ * never gets here.
+ */
+function reportMigrationRefusal(
+  exc: MigrationInProgressError,
+  command: string,
+  rest: string[],
+): number {
+  process.stderr.write(`error: ${exc.message}\n`);
+  // A refusal that reached this point escaped no envelope (the wrapper
+  // catches it), so a --json caller gets this one object whatever the verb.
+  if (wantsJsonFlag(rest)) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: false,
+          code: "migration_in_progress",
+          error: exc.message,
+          retry: exc.retry,
+          next_command: exc.next_command,
+        },
+        sortedReplacer,
+        2,
+      ) + "\n",
+    );
+  }
+  return 1;
 }
 
 /**

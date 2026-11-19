@@ -54,7 +54,7 @@ import {
   releaseMigrationGate,
 } from "../migration-gate.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS } from "../store/local-lock.ts";
-import { holderLiveness } from "./holder-liveness.ts";
+import { gateHolderLiveness } from "./holder-liveness.ts";
 import { processStartIdentity } from "./process-identity.ts";
 import { sameVaultPath } from "./removal-marker.ts";
 
@@ -97,12 +97,12 @@ export class MigrationGateBusyError extends Error {
  * same process. A pid reused by another process is not the holder.
  */
 export function holderMayRun(gate: MigrationGate): boolean {
-  return holderLiveness(gate.pid, gate.started) !== "dead";
+  return gateHolderLiveness(gate, "exact") !== "dead";
 }
 
 /** Whether the process that took `gate` is running: pid alive, same start identity. */
 function holderProvablyRuns(gate: MigrationGate): boolean {
-  return holderLiveness(gate.pid, gate.started) === "alive";
+  return gateHolderLiveness(gate, "exact") === "alive";
 }
 
 /** How {@link holdGateFor} treats a same-vault gate whose holder has died. */

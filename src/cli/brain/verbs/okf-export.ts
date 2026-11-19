@@ -23,6 +23,7 @@ import {
   redactForEgress,
 } from "../../../core/egress/guard.ts";
 import { brainVerbContext, fail, parse } from "../helpers.ts";
+import { assertDestinationOutsideGatedVault } from "../../../core/migration-gate.ts";
 
 /**
  * The stderr line counting the change-log entries the default content-
@@ -110,6 +111,8 @@ export async function cmdBrainOkfExport(argv: string[]): Promise<number> {
   if (out === undefined) {
     return fail("--out <dir> is required for okf-export");
   }
+  // A destination the caller names is no way past a migration gate.
+  assertDestinationOutsideGatedVault(out);
   const classPolicy = { contentClass: { include: flags["include-prompt-derived"] === true } };
 
   try {
