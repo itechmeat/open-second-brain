@@ -90,6 +90,16 @@ import { storesStateDir } from "../store/store-paths.ts";
 import { holderLiveness, processAlive } from "./holder-liveness.ts";
 import { processStartIdentity } from "./process-identity.ts";
 
+/**
+ * Suffix of the device-local file beside a vault's state folder that the
+ * worker's error output goes to (truncated at every spawn). Beside the
+ * folder, not in it, so the folder still goes when its last record does.
+ */
+export const AUTO_MIGRATION_WORKER_LOG_SUFFIX = ".worker.log";
+
+/** At most this much of the worker's error output goes into a failure reason. */
+const WORKER_LOG_TAIL_CHARS = 600;
+
 /** Folder (in the folder of all stores) of the per-vault automatic migration state. */
 export const AUTO_MIGRATION_STATE_DIR = "auto-migration";
 
@@ -147,6 +157,11 @@ export type AutoMigrationLockJudge =
   (typeof AUTO_MIGRATION_LOCK_JUDGE)[keyof typeof AUTO_MIGRATION_LOCK_JUDGE];
 
 export interface AutoMigrationLockOptions {
+  /**
+   * Told the worker a replaced claim was handed to when that worker never
+   * confirmed it ({@link LostAutoMigrationWorker}): the claimer records it.
+   */
+  readonly onLostWorker?: (worker: LostAutoMigrationWorker) => void;
   /** How the holder of an existing claim is judged; `cheap` by default. */
   readonly judge?: AutoMigrationLockJudge;
 }
@@ -190,6 +205,31 @@ export function autoMigrationStateDir(vault: string): string {
     AUTO_MIGRATION_STATE_DIR,
     vaultKey(canonicalVault(vault)),
   );
+}
+
+/** The worker's error output log for `vault` ({@link AUTO_MIGRATION_WORKER_LOG_SUFFIX}). */
+export function autoMigrationWorkerLogPath(vault: string): string {
+  return `${autoMigrationStateDir(vault)}${AUTO_MIGRATION_WORKER_LOG_SUFFIX}`;
+}
+
+/**
+ * The last part of the worker's error output, reduced for the surfaces it
+ * reaches, or null when there is none (or it cannot be read).
+ */
+export function readAutoMigrationWorkerLogTail(vault: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(autoMigrationWorkerLogPath(vault), "utf8");
+  } catch {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  const tail =
+    trimmed.length <= WORKER_LOG_TAIL_CHARS
+      ? trimmed
+      : `...${trimmed.slice(trimmed.length - WORKER_LOG_TAIL_CHARS + 3)}`;
+  return printable(tail).replace(/\s+/g, " ");
 }
 
 export function autoMigrationLockPath(vault: string): string {
@@ -251,12 +291,21 @@ export interface AutoMigrationRunning {
   readonly since: string | null;
 }
 
+/**
+ * Whether a claim was handed to a spawned worker: `awaited` once the start
+ * that spawned it handed the claim to its pid, `confirmed` once the worker
+ * stamped the claim itself, null for a claim no start handed over (a
+ * start's own, a self-claiming worker's, the manual verb's).
+ */
+export type ClaimWorker = "awaited" | "confirmed" | null;
+
 interface LockRecord {
   token: string;
   pid: number;
   /** The holder's start identity (`process-identity.ts`), or null when not known. */
   started: string | null;
   since: string;
+  worker: ClaimWorker;
 }
 
 function parseLockRecord(text: string): LockRecord | null {
@@ -270,6 +319,7 @@ function parseLockRecord(text: string): LockRecord | null {
       pid: typeof r["pid"] === "number" ? r["pid"] : 0,
       started: typeof r["started"] === "string" ? r["started"] : null,
       since: typeof r["since"] === "string" ? r["since"] : new Date(0).toISOString(),
+      worker: r["worker"] === "awaited" || r["worker"] === "confirmed" ? r["worker"] : null,
     };
   } catch {
     return null;
@@ -299,6 +349,7 @@ export type ClaimFile =
       readonly pid: number;
       readonly started: string | null;
       readonly since: string;
+      readonly worker: ClaimWorker;
     };
 
 /**
@@ -316,13 +367,20 @@ export type ClaimAsker =
   | { readonly who: "start" }
   /** A worker, or the manual verb's own claim, claiming with the exact judgement. */
   | { readonly who: "claim" }
-  /** A parent handing its claim to the worker's pid, or the worker stamping itself. */
+  /**
+   * A parent handing its claim to the worker's pid, or the worker stamping
+   * itself (`confirms`: the worker's own stamp, which confirms that it
+   * started).
+   */
   | {
       readonly who: "hand-over";
       readonly token: string;
       readonly pid: number;
       readonly started: string | null;
+      readonly confirms: boolean;
     }
+  /** The start that spawned worker `pid` on its claim `token` saw that process exit. */
+  | { readonly who: "exited"; readonly token: string; readonly pid: number }
   /** The holder of `token` releasing it. */
   | { readonly who: "release"; readonly token: string }
   /**
@@ -341,10 +399,35 @@ export interface ClaimState {
   readonly asker: ClaimAsker;
 }
 
+/**
+ * A worker a start spawned and handed its claim to, gone without ever
+ * confirming the claim: it could not run, or died before its first state
+ * record.
+ */
+export interface LostAutoMigrationWorker {
+  readonly pid: number;
+  /** ISO-8601 instant the start claimed the lock for it. */
+  readonly since: string;
+}
+
 /** What one claim decision answers. */
 export type ClaimDecision =
-  /** Make a new claim: remove the one there first (`replace`), then an exclusive create. */
-  | { readonly act: "claim"; readonly replace: boolean }
+  /**
+   * Make a new claim: remove the one there first (`replace`), then an
+   * exclusive create. `lost` names the worker the replaced claim was
+   * handed to when that worker never confirmed it: the claimer records it.
+   */
+  | {
+      readonly act: "claim";
+      readonly replace: boolean;
+      readonly lost: LostAutoMigrationWorker | null;
+    }
+  /**
+   * The claim was handed to a worker that is gone and never confirmed it:
+   * a reader reports it; the start that spawned it (`exited`) records it
+   * and removes the claim.
+   */
+  | { readonly act: "worker-lost"; readonly pid: number; readonly since: string }
   /** The claim holds; nothing is changed. */
   | { readonly act: "held" }
   /**
@@ -354,8 +437,12 @@ export type ClaimDecision =
   | { readonly act: "undecided" }
   /** The mutex is busy: nothing is changed and nothing is claimed. */
   | { readonly act: "busy" }
-  /** Hand-over: write the claim in the name of the given process. */
-  | { readonly act: "stamp" }
+  /**
+   * Hand-over: write the claim in the name of the given process, with the
+   * start identity `started` (the asker's, or the one the claim already
+   * records for that pid when the asker brings none).
+   */
+  | { readonly act: "stamp"; readonly started: string | null }
   /** Hand-over: the claim is the asker's and already names it with an identity: kept. */
   | { readonly act: "kept" }
   /** Hand-over: the claim is no longer the asker's; nothing is changed. */
@@ -382,11 +469,31 @@ export function decideClaim(state: ClaimState): ClaimDecision {
       return { act: "lost" };
     }
     // The worker may have stamped itself before its parent hands over:
-    // its own identity is never replaced by an unknown one.
-    if (file.pid === asker.pid && file.started !== null && asker.started === null) {
+    // its own identity is never replaced by an unknown one, and its
+    // confirmation never by the parent's "awaited".
+    const samePid = file.pid === asker.pid;
+    if (asker.confirms) {
+      const already =
+        samePid &&
+        file.worker === "confirmed" &&
+        (asker.started === null || asker.started === file.started);
+      if (already) return { act: "kept" };
+    } else if (
+      samePid &&
+      ((file.started !== null && asker.started === null) || file.worker === "confirmed")
+    ) {
       return { act: "kept" };
     }
-    return { act: "stamp" };
+    return { act: "stamp", started: asker.started ?? (samePid ? file.started : null) };
+  }
+  if (asker.who === "exited") {
+    if (state.mutex === "busy") return { act: "leave" };
+    return file.kind === "valid" &&
+      file.token === asker.token &&
+      file.pid === asker.pid &&
+      file.worker === "awaited"
+      ? { act: "worker-lost", pid: file.pid, since: file.since }
+      : { act: "leave" };
   }
   if (asker.who === "release") {
     if (state.mutex === "busy") return { act: "leave" };
@@ -401,9 +508,16 @@ export function decideClaim(state: ClaimState): ClaimDecision {
         ? AUTO_MIGRATION_LOCK_JUDGE.cheap
         : AUTO_MIGRATION_LOCK_JUDGE.exact;
   const stale = claimStale(file, holder, judge);
+  // A claim handed to a worker that never confirmed it, and whose process
+  // is gone: that worker never ran its attempt.
+  const lost: LostAutoMigrationWorker | null =
+    stale === true && file.kind === "valid" && file.worker === "awaited" && holder === "dead"
+      ? { pid: file.pid, since: file.since }
+      : null;
   if (asker.who === "read") {
     // What the claimer of the same judgement leaves, a worker may hold: a
     // claim being written or one that cannot be read names no process.
+    if (lost !== null) return { act: "worker-lost", ...lost };
     if (stale === true) return { act: "idle" };
     return file.kind === "valid"
       ? { act: "running", pid: file.pid, since: file.since }
@@ -412,7 +526,7 @@ export function decideClaim(state: ClaimState): ClaimDecision {
   if (state.mutex === "busy") return { act: "busy" };
   if (stale === "undecided") return { act: "undecided" };
   if (!stale) return { act: "held" };
-  return { act: "claim", replace: file.kind !== "absent" };
+  return { act: "claim", replace: file.kind !== "absent", lost };
 }
 
 /**
@@ -500,7 +614,11 @@ function claimStateAt(
         : AUTO_MIGRATION_LOCK_JUDGE.exact;
   // The holder is judged only where the decision reads it: a valid claim
   // a start, a claimer or a reader looks at.
-  const judged = file.kind === "valid" && asker.who !== "hand-over" && asker.who !== "release";
+  const judged =
+    file.kind === "valid" &&
+    asker.who !== "hand-over" &&
+    asker.who !== "release" &&
+    asker.who !== "exited";
   return { file, holder: judged ? claimHolderSeen(file, judge) : "unknown", mutex, asker };
 }
 
@@ -546,12 +664,14 @@ export function claimAutoMigrationLock(
     judge === AUTO_MIGRATION_LOCK_JUDGE.exact ? processStartIdentity(process.pid) : null;
   const asker: ClaimAsker =
     judge === AUTO_MIGRATION_LOCK_JUDGE.cheap ? { who: "start" } : { who: "claim" };
+  let lost: LostAutoMigrationWorker | null = null;
   const claim = (): string | null =>
     underMutex(
       path,
       (): string | null => {
         const decision = decideClaim(claimStateAt(path, now, asker, "free"));
         if (decision.act !== "claim") return null;
+        lost = decision.lost;
         if (decision.replace) {
           try {
             unlinkSync(path);
@@ -560,21 +680,30 @@ export function claimAutoMigrationLock(
           }
         }
         const token = randomBytes(16).toString("hex");
-        const record: LockRecord = { token, pid: process.pid, started, since: now.toISOString() };
+        const record: LockRecord = {
+          token,
+          pid: process.pid,
+          started,
+          since: now.toISOString(),
+          worker: null,
+        };
         writeFileSync(path, JSON.stringify(record), { flag: "wx" });
         return token;
       },
       null,
       claimMutexBudgetMs(judge),
     );
+  let token: string | null;
   try {
-    return claim();
+    token = claim();
   } catch (err) {
     // The folder was pruned between its creation and the claim: once more.
     if (!isMissing(err)) throw err;
     mkdirSync(dirname(path), { recursive: true });
-    return claim();
+    token = claim();
   }
+  if (token !== null && lost !== null) opts.onLostWorker?.(lost);
+  return token;
 }
 
 /**
@@ -612,7 +741,12 @@ export class AutoMigrationClaimLostError extends Error {
  * can never write after the takeover. Throws
  * {@link AutoMigrationClaimLostError} (and writes nothing) otherwise.
  */
-export function underOwnAutoMigrationClaim<T>(vault: string, token: string, write: () => T): T {
+export function underOwnAutoMigrationClaim<T>(
+  vault: string,
+  token: string,
+  write: () => T,
+  budgetMs: number = LOCK_MUTEX_BUDGET_MS,
+): T {
   const path = autoMigrationLockPath(vault);
   let refused: "lost" | "unreadable" | "busy" = "busy";
   let done = false;
@@ -630,6 +764,7 @@ export function underOwnAutoMigrationClaim<T>(vault: string, token: string, writ
       return true;
     },
     false,
+    budgetMs,
   );
   if (!done) throw new AutoMigrationClaimLostError(refused);
   return result as T;
@@ -643,15 +778,18 @@ export function ownsAutoMigrationLock(vault: string, token: string): boolean {
 /**
  * Put the claim `token` in the name of process `pid` (start identity
  * `started`, or null when not known): the parent hands its claim to the
- * worker it spawned, and the worker stamps its own identity on it.
- * Returns whether the claim was still `token`'s; a claim taken over
- * meanwhile is left alone ({@link decideClaim}).
+ * worker it spawned (the claim then awaits the worker's confirmation),
+ * and the worker stamps its own identity on it (`confirms`), which
+ * confirms that it started. Returns whether the claim was still
+ * `token`'s; a claim taken over meanwhile is left alone
+ * ({@link decideClaim}).
  */
 export function handAutoMigrationLock(
   vault: string,
   token: string,
   pid: number,
   started: string | null,
+  confirms = false,
 ): boolean {
   const path = autoMigrationLockPath(vault);
   return underMutex(
@@ -660,18 +798,97 @@ export function handAutoMigrationLock(
       const state = claimStateAt(
         path,
         new Date(),
-        { who: "hand-over", token, pid, started },
+        { who: "hand-over", token, pid, started, confirms },
         "free",
       );
       const decision = decideClaim(state);
       if (decision.act === "lost") return false;
       if (decision.act === "stamp" && state.file.kind === "valid") {
         const { token: t, since } = state.file;
-        atomicWriteFileSync(path, JSON.stringify({ token: t, pid, started, since }));
+        const record: LockRecord = {
+          token: t,
+          pid,
+          started: decision.started,
+          since,
+          worker: confirms ? "confirmed" : "awaited",
+        };
+        atomicWriteFileSync(path, JSON.stringify(record));
       }
       return true;
     },
     false,
+  );
+}
+
+/**
+ * The start that spawned worker `pid` on its claim `token` saw it exit:
+ * when the worker never confirmed the claim ({@link decideClaim}'s
+ * `worker-lost`), its failure is recorded ({@link recordLostAutoMigrationWorker})
+ * and the claim removed, so the next starts back off and every surface
+ * names it. Never waits for the mutex; never throws. Returns whether it
+ * recorded the worker as lost.
+ */
+export function settleExitedAutoMigrationWorker(
+  vault: string,
+  token: string,
+  pid: number,
+  exit: string,
+  now: Date = new Date(),
+): boolean {
+  const path = autoMigrationLockPath(vault);
+  try {
+    return underMutex(
+      path,
+      (): boolean => {
+        const decision = decideClaim(
+          claimStateAt(path, now, { who: "exited", token, pid }, "free"),
+        );
+        if (decision.act !== "worker-lost") return false;
+        recordLostAutoMigrationWorker(vault, decision, now, exit);
+        try {
+          unlinkSync(path);
+        } catch {
+          // already gone
+        }
+        return true;
+      },
+      false,
+      0,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The lost worker a reader sees on the claim, or null ({@link decideClaim}'s `worker-lost`). */
+export function readLostAutoMigrationWorker(
+  vault: string,
+  now: Date = new Date(),
+  opts: AutoMigrationLockOptions = {},
+): LostAutoMigrationWorker | null {
+  const path = autoMigrationLockPath(vault);
+  const decision = decideClaim(
+    claimStateAt(path, now, { who: "read", judge: judgeOf(opts) }, "free"),
+  );
+  return decision.act === "worker-lost" ? { pid: decision.pid, since: decision.since } : null;
+}
+
+/**
+ * The reason a lost worker is recorded with: what became of it, its exit
+ * when the start saw it, the tail of its error output, and the log that
+ * holds the whole of it.
+ */
+export function describeLostAutoMigrationWorker(
+  vault: string,
+  worker: LostAutoMigrationWorker,
+  exit: string | null,
+): string {
+  const tail = readAutoMigrationWorkerLogTail(vault);
+  return (
+    `the automatic migration worker (process ${worker.pid}, started at ${worker.since}) ` +
+    `exited before it started${exit !== null ? ` (${exit})` : ""}` +
+    (tail !== null ? `; its error output: ${tail}` : "; it wrote no error output") +
+    ` (log: ${autoMigrationWorkerLogPath(vault)})`
   );
 }
 
@@ -955,8 +1172,11 @@ function writeFailure(
     attempt: boolean;
     consecutiveFailures: number;
     gateOwed?: string;
+    written?: AutoMigrationSuccessWritten;
   },
 ): AutoMigrationFailure {
+  const written = opts.written ?? NOTHING_WRITTEN;
+  const anyWritten = written.row || written.log || written.notice;
   const retryAfter = new Date(
     opts.now.getTime() + selfHealUpgradeCooldownMs(opts.consecutiveFailures),
   );
@@ -970,6 +1190,7 @@ function writeFailure(
     manual_command: opts.manualCommand,
     ...(opts.attempt ? { attempt: true } : {}),
     ...(opts.gateOwed !== undefined ? { gate_owed: opts.gateOwed } : {}),
+    ...(anyWritten ? { written } : {}),
   };
   const path = autoMigrationStatePath(vault);
   writeStateFile(path, JSON.stringify(record, null, 2) + "\n");
@@ -981,9 +1202,56 @@ function writeFailure(
     retryAfter: record.retry_after,
     manualCommand: opts.manualCommand,
     attempt: opts.attempt,
-    written: NOTHING_WRITTEN,
+    written,
     gateOwed: opts.gateOwed ?? null,
   };
+}
+
+/**
+ * Record a failure a START saw (a worker that could not be started, or
+ * that exited before it confirmed its claim), under the claim it holds,
+ * with the same count and cooldown as any failure. A record an earlier
+ * attempt left keeps what it says beyond its reason (that it is an
+ * attempt's, the gate it owes, the success outputs it wrote), so what
+ * the next start finishes is unchanged.
+ */
+function recordStartSeenFailure(vault: string, reason: string, now: Date): AutoMigrationFailure {
+  const previous = readAutoMigrationFailure(vault);
+  return writeFailure(vault, reason, {
+    manualCommand: AUTO_MIGRATION_MANUAL_COMMAND,
+    now,
+    attempt: previous?.attempt === true,
+    consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1,
+    ...(previous?.gateOwed != null ? { gateOwed: previous.gateOwed } : {}),
+    written: previous?.written ?? NOTHING_WRITTEN,
+  });
+}
+
+/**
+ * Record that the worker a start spawned exited before it confirmed its
+ * claim ({@link describeLostAutoMigrationWorker}). The caller holds the
+ * claim (or its mutex).
+ */
+export function recordLostAutoMigrationWorker(
+  vault: string,
+  worker: LostAutoMigrationWorker,
+  now: Date,
+  exit: string | null = null,
+): AutoMigrationFailure {
+  return recordStartSeenFailure(vault, describeLostAutoMigrationWorker(vault, worker, exit), now);
+}
+
+/** Record that a start could not start the worker at all. The caller holds the claim. */
+export function recordAutoMigrationSpawnFailure(
+  vault: string,
+  error: string,
+  now: Date,
+): AutoMigrationFailure {
+  return recordStartSeenFailure(
+    vault,
+    `the automatic migration worker could not be started: ${error}`,
+    now,
+  );
 }
 
 /**

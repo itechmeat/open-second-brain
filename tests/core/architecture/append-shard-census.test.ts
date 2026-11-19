@@ -71,6 +71,9 @@ const MIN_REASON_LENGTH = 80;
  * single shared file is still correct.
  */
 const APPEND_ALLOW_LIST: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/maintenance/o2b-command.ts":
+    "a background child's error output log is opened for appending in this machine's " +
+    "device-local state, never in a vault or a store, so only that one child writes to it",
   "src/core/store-migration/exporters.ts":
     "a rollback appends each log event to this device's own day shard only, never to a shard " +
     "another device writes",

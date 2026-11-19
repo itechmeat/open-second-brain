@@ -39,10 +39,17 @@ import {
   readAutoMigrationRunning,
   describeAutoMigrationRunning,
   AUTO_MIGRATION_LOCK_JUDGE,
+  autoMigrationWorkerLogPath,
 } from "../../../core/store-migration/auto-state.ts";
+import { boundStderrToLog } from "../../../core/store-migration/worker-log.ts";
 import { runAutoStoreMigration } from "../../../core/store-migration/auto-worker.ts";
 import { brainVerbContext, failWith, parse, usageError, writeJson } from "../helpers.ts";
-import { runForceReleaseGate, runRemoveLegacy, runRollback } from "./migrate-store-forms.ts";
+import {
+  cohortLines,
+  runForceReleaseGate,
+  runRemoveLegacy,
+  runRollback,
+} from "./migrate-store-forms.ts";
 
 /** The usage error of two forms given together. */
 export const MIGRATE_STORE_ONE_FORM =
@@ -93,7 +100,9 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
   if (autoToken !== undefined) {
     // The automatic worker: never throws, records its own outcome, and
     // prints nothing (its streams are ignored). One exit for every way it
-    // can end.
+    // can end. Its stderr is the device-local worker log: kept to its tail
+    // within this run.
+    boundStderrToLog(process.stderr, autoMigrationWorkerLogPath(vault));
     runAutoStoreMigration(vault, { lockToken: autoToken, configPath: config });
     return 0;
   }
@@ -190,7 +199,12 @@ export function renderOutcome(outcome: MigrateStoreOutcome): string {
   const lines = [
     `Device ${outcome.device} already switched to the brain store; imported late legacy writes.`,
     `imported: ${outcome.imported} item(s) in ${outcome.passes} pass(es)`,
-    `devices still on the legacy layout: ${outcome.legacy_devices.join(", ") || "none"}`,
+    `devices still on the legacy layout: ${
+      outcome.pending_evidence
+        .map((d) => `${d.device} (last evidence ${d.last_evidence?.slice(0, 10) ?? "none"})`)
+        .join(", ") || "none"
+    }`,
+    ...cohortLines(outcome),
   ];
   if (outcome.settings !== null) {
     lines.push(

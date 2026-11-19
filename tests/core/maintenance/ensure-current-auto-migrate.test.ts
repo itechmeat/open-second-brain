@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
@@ -30,7 +30,13 @@ import {
   AUTO_MIGRATION_SPAWN,
 } from "../../../src/core/maintenance/ensure-current.ts";
 import {
+  collectRuntimeNotices,
+  renderRuntimeNotices,
+} from "../../../src/core/brain/runtime-notices.ts";
+import { autoMigrationReport } from "../../../src/core/store-migration/auto-report.ts";
+import {
   autoMigrationLockPath,
+  autoMigrationWorkerLogPath,
   autoMigrationStatePath,
   claimAutoMigrationLock,
   readAutoMigrationFailure,
@@ -352,6 +358,134 @@ describe("two starts at once", () => {
       AUTO_MIGRATION_SPAWN.skippedRunning,
       AUTO_MIGRATION_SPAWN.spawned,
     ]);
+  });
+});
+
+/**
+ * The `PATH` of this process without every directory that holds a Bun
+ * binary: what a start launched from an ssh session or a macOS GUI agent
+ * sees, where the runtime that runs it was named by its absolute path.
+ */
+function pathWithoutBun(): string {
+  const bunNames = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun"] : ["bun"];
+  return (process.env["PATH"] ?? "")
+    .split(delimiter)
+    .filter((dir) => dir !== "" && !bunNames.some((name) => existsSync(join(dir, name))))
+    .join(delimiter);
+}
+
+describe("a start whose PATH has no Bun", () => {
+  test("starts a worker that reaches its outcome", async () => {
+    const barrier = join(root, "barrier");
+    writeFileSync(barrier, "");
+    const start = Bun.spawn([process.execPath, "run", START_CHILD, vault, configPath, barrier], {
+      env: {
+        ...process.env,
+        PATH: pathWithoutBun(),
+        // The launcher adopts `~/.bun/bin` when Bun is not on PATH; a
+        // home without one is the machine this test stands for.
+        HOME: root,
+      },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+      timeout: 50_000,
+    });
+    await start.exited;
+    const decision = (await new Response(start.stdout as ReadableStream).text()).trim();
+    expect(decision).toBe(AUTO_MIGRATION_SPAWN.spawned);
+
+    // The worker's end releases the claim; a worker that never ran leaves
+    // the claim behind under a pid that is gone.
+    const deadline = Date.now() + 50_000;
+    while (Date.now() < deadline && existsSync(lockPath)) {
+      // eslint-disable-next-line no-await-in-loop
+      await Bun.sleep(100);
+    }
+    expect(existsSync(lockPath)).toBe(false);
+    expect(listMetrics(vault, { surface: AUTO_MIGRATION_SURFACE }).length).toBeGreaterThan(0);
+  });
+});
+
+/** The pid of a process that has ended: spawned, reaped, gone. */
+async function deadPid(): Promise<number> {
+  const child = Bun.spawn([process.execPath, "-e", ""], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await child.exited;
+  return child.pid;
+}
+
+/** A claim a start handed to worker `pid`, which never confirmed it. */
+function handedClaim(pid: number, since: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(
+    lockPath,
+    JSON.stringify({ token: "a".repeat(32), pid, started: null, since, worker: "awaited" }),
+  );
+}
+
+describe("a worker that exited before it started", () => {
+  test("the next start records why and starts nothing until the cooldown", async () => {
+    const pid = await deadPid();
+    handedClaim(pid, "2026-11-19T08:00:00.000Z");
+    writeFileSync(autoMigrationWorkerLogPath(vault), "error: 'bun' is not on PATH.\n");
+
+    const r = await ensureVaultCurrent(vault, { background: true, configPath });
+
+    expect(r.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.workerLost);
+    const failure = readAutoMigrationFailure(vault);
+    expect(failure).not.toBeNull();
+    expect(failure!.error).toContain(`process ${pid}`);
+    expect(failure!.error).toContain("exited before it started");
+    expect(failure!.error).toContain("'bun' is not on PATH");
+    expect(failure!.error).toContain(".worker.log");
+    expect(failure!.consecutiveFailures).toBe(1);
+    expect(existsSync(lockPath)).toBe(false);
+
+    const again = await ensureVaultCurrent(vault, { background: true, configPath });
+    expect(again.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.skippedBackoff);
+    const report = autoMigrationReport({ vault, configPath });
+    expect(report.state).toBe("failed");
+    expect(report.message).toContain("exited before it started");
+    expect(report.manualCommand).toBe("o2b brain migrate-store");
+  });
+
+  test("status names it before any start recorded it", async () => {
+    handedClaim(await deadPid(), "2026-11-19T08:00:00.000Z");
+
+    const report = autoMigrationReport({ vault, configPath });
+
+    expect(report.state).toBe("failed");
+    expect(report.message).toContain("exited before it started");
+    expect(report.manualCommand).toBe("o2b brain migrate-store");
+    const notices = renderRuntimeNotices(collectRuntimeNotices(vault, { configPath }));
+    expect(notices).toContain("exited before it started");
+    expect(notices).toContain("o2b brain migrate-store");
+    rmSync(lockPath, { force: true });
+  });
+
+  test("with the automatic migration off, status still names it, and that no start retries it", async () => {
+    handedClaim(await deadPid(), "2026-11-19T08:00:00.000Z");
+    process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] = "false";
+
+    const report = autoMigrationReport({ vault, configPath });
+
+    expect(report.state).toBe("failed");
+    expect(report.message).toContain("exited before it started");
+    expect(report.nextStart).toContain("the automatic migration is off");
+    expect(report.nextStart).not.toContain("cooldown");
+    expect(report.manualCommand).toBe("o2b brain migrate-store");
+    rmSync(lockPath, { force: true });
+  });
+
+  test("a start that spawns a worker names a log for its error output", async () => {
+    const r = await ensureVaultCurrent(vault, { background: true, configPath });
+
+    expect(r.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.spawned);
+    expect(existsSync(autoMigrationWorkerLogPath(vault))).toBe(true);
   });
 });
 

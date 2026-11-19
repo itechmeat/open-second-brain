@@ -5,11 +5,13 @@
  *  - **Legacy shards.** Every per-device JSONL ledger the migration
  *    catalogue maps is named `<base>.<device>.<ext>`. A base that is a day
  *    (`2026-11-01`) dates the shard at that day, 00:00 UTC; a month
- *    (`2026-11`) at its first day; a week or a fixed stem carries no date.
- *    The rows' own time fields ({@link ROW_TIME_FIELDS}, ISO 8601 strings)
- *    are read from the end of each shard, where an append-only ledger
- *    keeps its newest rows: the last {@link TAIL_BYTES}, widened until it
- *    holds the whole newest row.
+ *    (`2026-11`) at its first day; an ISO week (`2026-W45`) at its
+ *    Monday; a fixed stem carries no date. That date is only a floor: the
+ *    rows' own time fields ({@link isRowTimeField}, ISO 8601 strings) are
+ *    read from the end of each shard, where an append-only ledger keeps
+ *    its newest rows: the last {@link TAIL_BYTES}, widened until it holds
+ *    the whole newest row, and the newest of them dates the device when it
+ *    is later than the name's period.
  *  - **Store records.** The physical part of the clock of every record a
  *    device wrote, in every partition this machine holds.
  *  - **Cohort records.** The clock of the earliest `migration-cohort`
@@ -34,6 +36,7 @@ import type { Locator } from "./destinations.ts";
 export const ROW_TIME_FIELDS = Object.freeze([
   "ts",
   "timestamp",
+  "time",
   "at",
   "created_at",
   "recorded_at",
@@ -41,11 +44,66 @@ export const ROW_TIME_FIELDS = Object.freeze([
   "written_at",
 ] as const);
 
+/**
+ * The words of a field name that make it a time still to come (a
+ * schedule, a reminder, an expiry, a sunset, a not-before): such a field
+ * says nothing of when the row was written. Read from the product's
+ * writers: `snoozed_at` (a trigger snoozed then), `run_at` (a metrics
+ * run) and `planned_at` (a revert plan made then) are past-facing.
+ */
+const FUTURE_TIME_WORDS: ReadonlySet<string> = new Set([
+  "expire",
+  "expires",
+  "expiry",
+  "until",
+  "retry",
+  "next",
+  "due",
+  "lands",
+  "deadline",
+  "schedule",
+  "scheduled",
+  "remind",
+  "reminder",
+  "fire",
+  "fires",
+  "before",
+  "starts",
+  "sunset",
+  "wake",
+  "wakes",
+]);
+
+/** The lower-case words of a snake or camel case name. */
+function nameWords(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split("_")
+    .filter((w) => w !== "");
+}
+
+/**
+ * Whether a top-level row field carries the time the row was written:
+ * one of {@link ROW_TIME_FIELDS}, or any `*_at` / `*At` field (every
+ * ledger writer's convention, snake or camel case: the continuity ledger's
+ * `createdAt`, the decision ledger's `recordedAt`), except one a word of
+ * which names a time still to come ({@link FUTURE_TIME_WORDS}). A field
+ * wrongly counted can only date a device later, the safe side: a device is
+ * retired later, never earlier.
+ */
+export function isRowTimeField(name: string): boolean {
+  if ((ROW_TIME_FIELDS as readonly string[]).includes(name)) return true;
+  if (!/^[a-z][a-zA-Z0-9]*(?:_at|At)$|^[a-z][a-z0-9_]*_at$/.test(name)) return false;
+  return !nameWords(name).some((w) => FUTURE_TIME_WORDS.has(w));
+}
+
 /** How much of the end of each legacy shard is read for row times. */
 export const TAIL_BYTES = 64 * 1024;
 
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
+const WEEK_RE = /^(\d{4})-W(\d{2})$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T/;
 
 /** The date a shard's base name carries, in ms, or null. */
@@ -59,6 +117,16 @@ export function baseDateMs(base: string): number | null {
   if (month !== null) {
     const ms = Date.UTC(Number(month[1]), Number(month[2]) - 1, 1);
     return Number.isFinite(ms) ? ms : null;
+  }
+  const week = WEEK_RE.exec(base);
+  if (week !== null) {
+    // ISO 8601: week 1 holds January 4th; weeks start on Monday.
+    const year = Number(week[1]);
+    const n = Number(week[2]);
+    if (n < 1 || n > 53) return null;
+    const jan4 = Date.UTC(year, 0, 4);
+    const mondayOfWeek1 = jan4 - ((new Date(jan4).getUTCDay() + 6) % 7) * 86_400_000;
+    return mondayOfWeek1 + (n - 1) * 7 * 86_400_000;
   }
   return null;
 }
@@ -75,8 +143,8 @@ export function newestRowTimeMs(text: string): number | null {
       continue;
     }
     if (row === null || typeof row !== "object" || Array.isArray(row)) continue;
-    for (const field of ROW_TIME_FIELDS) {
-      const value = (row as Record<string, unknown>)[field];
+    for (const [field, value] of Object.entries(row as Record<string, unknown>)) {
+      if (!isRowTimeField(field)) continue;
       if (typeof value !== "string" || !ISO_RE.test(value)) continue;
       const ms = Date.parse(value);
       if (Number.isFinite(ms) && (newest === null || ms > newest)) newest = ms;

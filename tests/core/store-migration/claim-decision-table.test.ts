@@ -12,11 +12,18 @@
  *    identity, young or past a day; alive with another identity (a reused
  *    pid), young or past a day; alive and unknown (no identity recorded),
  *    young or past the hour;
+ *  - whether a start handed the claim to a spawned worker: not handed
+ *    (a start's own claim, a self-claiming worker's, the manual verb's),
+ *    handed and awaiting the worker's confirmation, or confirmed by the
+ *    worker's own stamp;
  *  - who asks: a start claiming (cheap), a worker claiming exactly (a
  *    self-claim worker, a second worker), a hand-over (the asker's own
  *    claim or not; to the pid the claim names or another; with an
- *    identity or none), a release (own or not), a reader judging exactly
- *    (the manual verb, the doctor) or cheaply (the session notices);
+ *    identity or none; the parent's, or the worker's own confirming
+ *    stamp), a release (own or not), the start that spawned a worker
+ *    seeing it exit (own claim or not; that worker's pid or another), a
+ *    reader judging exactly (the manual verb, the doctor) or cheaply (the
+ *    session notices);
  *  - the mutex: free, busy.
  *
  * Impossible combinations, left out: a hand-over or a release of the
@@ -43,6 +50,16 @@
  *  7. The reader and the claimer of the same judgement agree: a reader
  *     says a worker runs exactly when that claimer would leave the claim.
  *  8. A claim whose file cannot be read is never removed.
+ *  9. A worker is lost exactly when its claim was handed to it, it never
+ *     confirmed it, and its process is gone: a start, a claimer and a
+ *     reader see that (the holder seen dead), and so does the start that
+ *     spawned it when it saw that pid exit on its own claim. The claimer
+ *     that replaces such a claim is told, the reader reports it, the
+ *     spawner records it and removes the claim; a claim never handed, a
+ *     confirmed one, or one whose holder may run is never lost.
+ * 10. A parent's hand-over never turns a confirmed claim of the same pid
+ *     back into an awaited one, and a worker's own stamp always leaves its
+ *     claim confirmed.
  *
  * Not in this table: what a worker taken over after its last ownership
  * check writes before it holds the migration gate. Those writes are
@@ -91,7 +108,10 @@ interface FileCase {
   readonly holder: Holder | null;
 }
 
-function validFile(holder: Holder, future: boolean, token: string): ClaimFile {
+const WORKERS = [null, "awaited", "confirmed"] as const;
+type Worker = (typeof WORKERS)[number];
+
+function validFile(holder: Holder, future: boolean, token: string, worker: Worker): ClaimFile {
   const age = future ? -OLD : holder.endsWith("-old") ? OLD : YOUNG;
   return {
     kind: "valid",
@@ -100,6 +120,7 @@ function validFile(holder: Holder, future: boolean, token: string): ClaimFile {
     pid: PID,
     started: holder.startsWith("unknown") ? null : "S",
     since: "2026-11-17T10:00:00.000Z",
+    worker,
   };
 }
 
@@ -110,9 +131,20 @@ function fileCases(token: string): FileCase[] {
     { name: "torn-young", file: { kind: "torn", ageMs: 2000 }, holder: null },
     { name: "torn-old", file: { kind: "torn", ageMs: YOUNG }, holder: null },
   ];
-  for (const holder of HOLDERS) {
-    out.push({ name: `valid/${holder}`, file: validFile(holder, false, token), holder });
-    out.push({ name: `future/${holder}`, file: validFile(holder, true, token), holder });
+  for (const worker of WORKERS) {
+    for (const holder of HOLDERS) {
+      const w = worker ?? "not-handed";
+      out.push({
+        name: `valid/${holder}/${w}`,
+        file: validFile(holder, false, token, worker),
+        holder,
+      });
+      out.push({
+        name: `future/${holder}/${w}`,
+        file: validFile(holder, true, token, worker),
+        holder,
+      });
+    }
   }
   return out;
 }
@@ -144,17 +176,25 @@ function askerCases(): AskerCase[] {
   for (const own of [true, false]) {
     for (const samePid of [true, false]) {
       for (const started of ["S2", null]) {
-        out.push({
-          name: `hand-over/${own ? "own" : "other"}/${samePid ? "same-pid" : "other-pid"}/${started ?? "no-identity"}`,
-          asker: {
-            who: "hand-over",
-            token: own ? OWN_MARK : "x",
-            pid: samePid ? PID : 7,
-            started,
-          },
-          own,
-        });
+        for (const confirms of [false, true]) {
+          out.push({
+            name: `hand-over/${own ? "own" : "other"}/${samePid ? "same-pid" : "other-pid"}/${started ?? "no-identity"}/${confirms ? "worker" : "parent"}`,
+            asker: {
+              who: "hand-over",
+              token: own ? OWN_MARK : "x",
+              pid: samePid ? PID : 7,
+              started,
+              confirms,
+            },
+            own,
+          });
+        }
       }
+      out.push({
+        name: `exited/${own ? "own" : "other"}/${samePid ? "same-pid" : "other-pid"}`,
+        asker: { who: "exited", token: own ? OWN_MARK : "x", pid: samePid ? PID : 7 },
+        own,
+      });
     }
     out.push({
       name: `release/${own ? "own" : "other"}`,
@@ -280,7 +320,37 @@ function violations(row: Row): string[] {
       fc.file.pid === ac.asker.pid &&
       fc.file.started !== null &&
       ac.asker.started === null;
-    if (keepsIdentity && d.act === "stamp") out.push("5: a recorded identity lost to none");
+    if (keepsIdentity && d.act === "stamp" && d.started === null) {
+      out.push("5: a recorded identity lost to none");
+    }
+  }
+  // 9: lost exactly when handed, never confirmed, and gone.
+  const handedAndGone =
+    fc.file.kind === "valid" &&
+    fc.file.worker === "awaited" &&
+    (ac.asker.who === "exited"
+      ? ac.own === true && fc.file.pid === ac.asker.pid
+      : fc.holder !== null && seen(fc.holder, judge) === "dead");
+  const judging = ac.asker.who === "start" || ac.asker.who === "claim" || ac.asker.who === "read";
+  const toldLost = d.act === "worker-lost" || (d.act === "claim" && d.lost !== null);
+  if (toldLost && !handedAndGone) out.push("9: a worker reported lost that is not");
+  if (mutex === "free" && (judging || ac.asker.who === "exited") && handedAndGone && !toldLost) {
+    out.push("9: a lost worker went unreported");
+  }
+  if (d.act === "claim" && d.lost !== null && !d.replace) out.push("9: a lost claim not replaced");
+  if (ac.asker.who === "hand-over" && fc.file.kind === "valid") {
+    const samePid = fc.file.pid === ac.asker.pid;
+    if (d.act === "stamp" && !ac.asker.confirms && samePid && fc.file.worker === "confirmed") {
+      out.push("10: a parent's hand-over undid the worker's confirmation");
+    }
+    if (
+      ac.asker.confirms &&
+      ac.own === true &&
+      mutex === "free" &&
+      !(d.act === "stamp" || (d.act === "kept" && fc.file.worker === "confirmed"))
+    ) {
+      out.push("10: a worker's own stamp left its claim unconfirmed");
+    }
   }
   if (ac.asker.who === "read" && mutex === "free") {
     const claimer: ClaimAsker = judge === "cheap" ? { who: "start" } : { who: "claim" };
@@ -294,9 +364,11 @@ describe("the worker claim, over its whole state space", () => {
   const all = rows();
 
   test("covers every row", () => {
-    // 4 judging askers x 18 files, 4 own hand-overs + own release x 14
-    // valid files, 4 other hand-overs + other release x 18 files; x 2 mutex.
-    expect(all.length).toBe((4 * 18 + 5 * 14 + 5 * 18) * 2);
+    // 46 files: 4 without a record, 42 valid (14 holders and dates x 3
+    // hand-over states). 4 judging askers x 46 files; 8 own hand-overs, the
+    // own release and 2 own exits x 42 valid files; as many askers that do
+    // not own the claim x 46 files; x 2 mutex.
+    expect(all.length).toBe((4 * 46 + 11 * 42 + 11 * 46) * 2);
   });
 
   test("keeps every invariant in every row", () => {

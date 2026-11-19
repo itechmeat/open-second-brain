@@ -489,11 +489,15 @@ function withLock(
     // The worker stamps its own pid and start identity on the claim it was
     // handed, so the claim reads as live for exactly as long as this
     // process runs. A claim taken over meanwhile is no longer ours.
+    // The stamp is also the worker's confirmation that it started: a claim
+    // handed to a worker that never confirms it, and is gone, is recorded
+    // as a failure by the start that spawned it, or by the next start.
     token = handAutoMigrationLock(
       a.vault,
       a.opts.lockToken,
       process.pid,
       processStartIdentity(process.pid),
+      true,
     )
       ? a.opts.lockToken
       : null;

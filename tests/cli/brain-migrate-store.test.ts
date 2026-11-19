@@ -193,7 +193,14 @@ describe("o2b brain migrate-store", () => {
     expect(again.stdout).toContain(
       "already switched to the brain store; imported late legacy writes",
     );
-    expect(again.stdout).toContain("devices still on the legacy layout: dev-b, dev-c");
+    // The cohort's one judgement (`cohort-status.ts`): dev-c's last trace
+    // (2026-09) is past the default 30 days, so it is retired by silence,
+    // not still on the legacy layout; dev-b (2026-11-02) is pending while
+    // inside the threshold.
+    expect(again.stdout).toMatch(
+      /devices still on the legacy layout: (dev-b \(last evidence 2026-11-02\)|none)\n/,
+    );
+    expect(again.stdout).toMatch(/retired by silence \(.*\): .*dev-c \(last evidence 2026-09-01\)/);
     // The silence rule off, so the fixture's dated devices stay pending
     // whatever the date (the rule has its own test).
     const off = await runCli(

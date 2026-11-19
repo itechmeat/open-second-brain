@@ -396,6 +396,33 @@ the check is a cheap read, and nothing in the hook or the server waits for
 the worker. One worker runs per vault per machine; a second agent starting
 at the same moment finds it running and starts nothing.
 
+The worker runs under the same Bun that runs the session start or the
+server, named by its absolute path, so a start whose `PATH` holds no Bun
+(an ssh session, an agent started from the macOS desktop) still starts it;
+only a process that does not run under Bun (the OpenClaw bundle under Node)
+falls back to the `scripts/o2b` launcher, which looks Bun up on `PATH`
+and in `~/.bun/bin`. The worker is detached on every platform: it leads a
+session of its own on Linux and macOS and is not ended with its parent on
+Windows, so it outlives the hook process and the terminal that started it.
+Its error output goes to a small device-local log beside its state
+(`<state dir>/open-second-brain/stores/auto-migration/<vault key>.worker.log`,
+replaced at every start of a worker, and cut to its newest 16 KiB of
+whole lines whenever it passes 64 KiB within one run). When this checkout
+lost its dependency tree while the start was running (a marketplace
+replacement that removed `node_modules`), the worker starts through a
+small bootstrap entry that first runs `bun install --frozen-lockfile` in
+the checkout with the same Bun, as the launcher would; the rule is the
+launcher's own (the probe file its precheck reads, and
+`O2B_SKIP_DEP_BOOTSTRAP`). A worker that cannot be started, or
+that exits before it confirms the claim the start handed it, is recorded
+as a failed attempt with the reason (the error of the start, or the
+worker's exit, the end of its error output and the log's path), by the
+start that spawned it when that process still runs, or else by the next
+start, which then starts nothing until the cooldown below has run out.
+Status, doctor and the session start notice name it, with
+`o2b brain migrate-store` to run it by hand, already before a start
+recorded it.
+
 The worker:
 
 1. brings the brain's managed files up to date first, as a normal start
@@ -809,7 +836,11 @@ A switched machine never writes into the legacy tree. Doctor on every
 switched machine names the devices still on the legacy layout
 (`legacy-devices-pending`) until each has migrated or been retired, by you
 or by silence. The `migration` block of `o2b status --json` carries the
-same list as `cohort`.
+same list as `cohort`, and the report of `o2b brain migrate-store` on a
+switched machine names the same devices (`legacy_devices` in `--json`,
+each with its last evidence in `pending_evidence`), the devices that
+switched and, apart from them, those retired by silence: a device retired
+by silence is never named as still on the legacy layout.
 
 ### 5. Rolling back a machine
 
@@ -866,8 +897,17 @@ evidence of life is older than the shared setting
 `migration.silent_device_days` (30 days by default; `0` turns the rule off,
 and then the cohort has no age limit). Its last evidence is the newest of:
 the dates in the names of its legacy per-device files (`2026-11-01.dev-c.jsonl`
-counts as that day, a month file as the month's first day), the times its
-rows carry, and the clocks of the records it wrote to the store. Row times
+counts as that day, a month file as the month's first day, a week file as
+its Monday), the times its rows carry, and the clocks of the records it
+wrote to the store. A file name's date is only a floor: the newest row time
+of the file dates the device when it is later, whatever the file's naming
+scheme. A row time is any top-level time field of the row (`ts`,
+`timestamp`, `time`, `at`, or any field ending in `_at` or `At`, such
+as the continuity ledger's `createdAt`), except a field that names a time
+still to come (an expiry, a retry, a schedule, a reminder, a fire or
+start time, a sunset, a wake, a not-before). A field that records when
+something was done counts, such as a trigger's `snoozed_at` or a metrics
+row's `run_at`. Row times
 are read from the end of each shard: its last 64 KiB, or more when its
 newest row is longer, so that row always counts. File modification
 times never count: the sync tool rewrites them. An id with no

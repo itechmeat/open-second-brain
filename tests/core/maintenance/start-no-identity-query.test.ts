@@ -122,6 +122,9 @@ function watchStart(): { workers: () => number } {
   spawn = spyOn(Bun, "spawn").mockImplementation((() => ({
     pid: 2 ** 22 + 1,
     unref: () => {},
+    // A worker that runs: its exit is never seen while the test runs.
+    exited: new Promise<number>(() => {}),
+    signalCode: null,
   })) as unknown as typeof Bun.spawn);
   return {
     workers: () =>
