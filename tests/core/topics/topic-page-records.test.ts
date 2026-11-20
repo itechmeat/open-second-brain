@@ -391,3 +391,55 @@ test.skipIf(CHMOD_CANNOT_DENY)(
     }
   },
 );
+
+test("assign refuses a signal while a shard that may hold its removal cannot be read", async () => {
+  const { a, topic: grouped, signal } = await topicWithSignals();
+  const topic = String(runTopicAction({ action: "create", title: "By hand" })["topic"]);
+  const capture = (tag: string): string =>
+    a.records().find((r) => r.kind === "signal" && r.body["id"] === signal(tag))!.id;
+  const shard = removalFromAnotherDevice(a, signal("other"));
+  // Read once, so the removal shard is seen; then it is gone.
+  expect(signalEntry(bothReaches(grouped).local, "other")).toBeUndefined();
+  rmSync(shard);
+  expect(() => runTopicAction({ action: "assign", topic, record: capture("other") })).toThrow(
+    /could not be read, so whether it was removed or rejected cannot be told/,
+  );
+  // The held listing withholds every signal on such a read, so a live one is refused too.
+  expect(() => runTopicAction({ action: "assign", topic, record: capture("kept") })).toThrow(
+    /could not be read/,
+  );
+  expect(runTopicAction({ action: "show", topic, held: true })["records"]).toEqual([]);
+});
+
+test("assign refuses a signal capture whose id is not a non-empty string, and a record with no text the listing can show", async () => {
+  const { a } = await topicWithSignals();
+  const topic = String(runTopicAction({ action: "create", title: "By hand" })["topic"]);
+  const append = (stream: "events" | "log", kind: string, body: Record<string, unknown>): string =>
+    appendRecord(a.store(), { partition: "shared", stream, kind, agent: "t", body }).record.id;
+  const numericId = append("events", "signal", {
+    id: 42,
+    frontmatter: { principle: `${SUBJECT} numeric` },
+  });
+  const emptyId = append("events", "signal", {
+    id: "",
+    frontmatter: { principle: `${SUBJECT} empty` },
+  });
+  const noText = append("events", "signal", { id: "sig-no-text", frontmatter: {} });
+  const privateNote = append("log", "log-event", {
+    event_type: "note",
+    body: { text: "<private>only mine</private>" },
+  });
+  for (const id of [numericId, emptyId]) {
+    expect(() => runTopicAction({ action: "assign", topic, record: id })).toThrow(
+      /id is not a non-empty string/,
+    );
+  }
+  for (const id of [noText, privateNote]) {
+    expect(() => runTopicAction({ action: "assign", topic, record: id })).toThrow(
+      /no text a topic can show/,
+    );
+  }
+  const listed = runTopicAction({ action: "show", topic, held: true });
+  expect(listed["records"]).toEqual([]);
+  expect(listed["records_missing"]).toBeUndefined();
+});

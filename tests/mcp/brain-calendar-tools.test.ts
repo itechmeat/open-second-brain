@@ -1,11 +1,12 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 let tmp: string;
 let ctx: ServerContext;
@@ -102,3 +103,41 @@ test("brain_agenda rejects malformed events", () => {
   expect(() => ag.handler(ctx, { events: "nope" })).toThrow();
   expect(() => ag.handler(ctx, { events: [{ start: "x" }] })).toThrow();
 });
+
+// Windows reserves the device names with any extension, so `nul.md` cannot be made there.
+test.skipIf(IS_WINDOWS)(
+  "brain_obligation shows, completes and removes a page stored under a bare device name",
+  async () => {
+    const ob = tool("brain_obligation");
+    const add = (await ob.handler(ctx, {
+      operation: "add",
+      title: "NUL",
+      cadence: "weekly",
+      anchor: "2026-06-22",
+    })) as { obligation: { slug: string } };
+    // An older release wrote this title as nul.md; no migration renames it.
+    const dir = join(tmp, "Brain", "obligations");
+    renameSync(join(dir, `${add.obligation.slug}.md`), join(dir, "nul.md"));
+
+    const list = (await ob.handler(ctx, { operation: "list" })) as {
+      obligations: Array<{ slug: string }>;
+    };
+    expect(list.obligations.map((o) => o.slug)).toEqual(["nul"]);
+    const show = (await ob.handler(ctx, { operation: "show", slug: "nul" })) as {
+      present: boolean;
+    };
+    expect(show.present).toBe(true);
+    const done = (await ob.handler(ctx, {
+      operation: "done",
+      slug: "nul",
+      date: "2026-06-22",
+    })) as {
+      obligation: { last_done: string };
+    };
+    expect(done.obligation.last_done).toBe("2026-06-22");
+    const removed = (await ob.handler(ctx, { operation: "remove", slug: "nul" })) as {
+      archive_path: string;
+    };
+    expect(removed.archive_path).toContain("nul.md");
+  },
+);

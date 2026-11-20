@@ -6825,11 +6825,13 @@ function readStreamRecords(root, partition, ref, options = {}) {
       records,
       unreadable: [streamPrefix(ref)],
       skippedPending: false,
-      pendingBlobs: []
+      pendingBlobs: [],
+      pendingKinds: new Map
     };
   }
   const compactions = [];
   let skippedPending = false;
+  const pendingKinds = new Map;
   const seenBlobs = new Set;
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device)
@@ -6860,6 +6862,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
         continue;
       }
       skippedPending = true;
+      pendingKinds.set(entry.record.kind, (pendingKinds.get(entry.record.kind) ?? 0) + 1);
       const sha = blobRefSha(entry.record.body);
       if (!seenBlobs.has(sha)) {
         seenBlobs.add(sha);
@@ -6882,7 +6885,8 @@ function readStreamRecords(root, partition, ref, options = {}) {
     records,
     unreadable: [...unreadable, ...gone],
     skippedPending,
-    pendingBlobs
+    pendingBlobs,
+    pendingKinds
   };
 }
 var PREFIX_CHUNK_BYTES;
@@ -8536,6 +8540,7 @@ function splitInlineArray(inner) {
 }
 var FRONTMATTER_RE, BYTE_ORDER_MARK = 65279, FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*", FRONTMATTER_KEY_RE, KEY_VALUE_RE, DASH_ITEM_RE, MEDIA_EXTENSIONS, DEFAULT_SKIP_DIRS, DEFAULT_SKIP_FILES, FRONTMATTER_SITE = "vault.parseFrontmatter", NOTICE_LINE_MAX = 120, NOTICE_LINE_ELLIPSIS = "…", LIST_VAULT_PAGES_SITE = "vault.listVaultPages", COLLATOR, UNMEASURABLE_PAGE_VISIBILITY, DOUBLE_QUOTED_ESCAPES;
 var init_vault = __esm(() => {
+  init_scoped_rule_key();
   init_wikilink();
   init_fs_atomic();
   init_fs_utils();
@@ -8848,6 +8853,7 @@ function build(store, checkpoint) {
   const pinned = new Map;
   let skippedPending = false;
   const pendingBlobs = [];
+  let pendingSignalLifecycle = 0;
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS, {
       tails: tailsOf(store, partition),
@@ -8858,6 +8864,7 @@ function build(store, checkpoint) {
       skippedPending = true;
     for (const sha of read.pendingBlobs)
       pendingBlobs.push(`${partition}/${sha}`);
+    pendingSignalLifecycle += (read.pendingKinds.get(SIGNAL_STATE_KIND) ?? 0) + (read.pendingKinds.get(SIGNAL_REMOVED_KIND) ?? 0);
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records)
       all.push({ record, partition });
@@ -8900,7 +8907,8 @@ function build(store, checkpoint) {
     pinned,
     unreadable,
     skippedPending,
-    pendingBlobs
+    pendingBlobs,
+    pendingSignalLifecycle
   };
 }
 function readEntitiesOf(store, options = {}) {

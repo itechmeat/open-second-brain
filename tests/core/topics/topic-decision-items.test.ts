@@ -37,6 +37,9 @@ setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 const SUBJECT = "Release notes list every migration step";
 const CHOSEN = "Release notes list every migration step in commit order";
 const CHOICE = "Release notes list every migration step grouped by module";
+/** A decision item names the decision's title with the option chosen. */
+const CHOSEN_ITEM = `Release notes order: ${CHOSEN}`;
+const CHOICE_ITEM = `Release notes grouping: ${CHOICE}`;
 const OUTCOME = "Readers found the grouped steps easier";
 
 let fleet: Fleet | null = null;
@@ -174,10 +177,13 @@ test("a dream pass puts held decisions on the page and in show, a resolved one a
   const page = String(shown["page"]);
   // The decision recorded, and the open decision resolved (its minted
   // decision and the resolution are one item).
-  expect(decisionLines(page)).toEqual([`- ${CHOICE} (resolved open decision)`, `- ${CHOSEN}`]);
+  expect(decisionLines(page)).toEqual([
+    `- ${CHOICE_ITEM} (resolved open decision)`,
+    `- ${CHOSEN_ITEM}`,
+  ]);
   expect(decisionLines(diskPage(topic))).toEqual(decisionLines(page));
   const items = decisionItems(shown);
-  expect(items.map((i) => i["text"]).toSorted()).toEqual([CHOICE, CHOSEN].toSorted());
+  expect(items.map((i) => i["text"]).toSorted()).toEqual([CHOICE_ITEM, CHOSEN_ITEM].toSorted());
   expect(items.every((i) => i["authority"] === "agent")).toBe(true);
 
   // brain_topic show through the MCP handler carries the same items.
@@ -196,8 +202,8 @@ test("a dream pass puts held decisions on the page and in show, a resolved one a
   await callTool(one, "brain_decision", { action: "outcome", slug, outcome: OUTCOME });
   dream(a.vault);
   expect(decisionLines(diskPage(topic))).toEqual([
-    `- ${CHOICE} (resolved open decision)`,
-    `- ${CHOSEN} (outcome: ${OUTCOME})`,
+    `- ${CHOICE_ITEM} (resolved open decision)`,
+    `- ${CHOSEN_ITEM} (outcome: ${OUTCOME})`,
   ]);
   expect(topicRecords(a).length).toBe(before);
 });
@@ -218,7 +224,7 @@ test("undo of the assignment takes the item away, undo of the topic the whole pa
   )!;
   runTopicAction({ action: "undo", record: assign.id });
   dream(a.vault);
-  expect(decisionLines(diskPage(topic))).toEqual([`- ${CHOICE} (resolved open decision)`]);
+  expect(decisionLines(diskPage(topic))).toEqual([`- ${CHOICE_ITEM} (resolved open decision)`]);
   expect(decisionItems(runTopicAction({ action: "show", topic }))).toHaveLength(1);
 
   const create = topicRecords(a).find((r) => r.kind === "topic-create" && r.topic === topic)!;
@@ -249,7 +255,7 @@ test("a topic item for the same decision replaces the derived one, and a human i
     decisionItems(shown)
       .map((i) => i["text"])
       .toSorted(),
-  ).toEqual([CHOICE, "Steps in commit order"].toSorted());
+  ).toEqual([CHOICE_ITEM, "Steps in commit order"].toSorted());
 
   // Twenty-five decisions of the user fill the page budget: the derived
   // item moves to the archive, none of the user's leaves the page.
@@ -265,7 +271,7 @@ test("a topic item for the same decision replaces the derived one, and a human i
   expect(lines.every((l) => l.startsWith("- User decision"))).toBe(true);
   dream(a.vault);
   const archive = readFileSync(archiveOf(topic), "utf8");
-  expect(archive).toContain(`- ${CHOICE} (resolved open decision)`);
+  expect(archive).toContain(`- ${CHOICE_ITEM} (resolved open decision)`);
   expect(archive).toContain("- Steps in commit order");
 });
 
@@ -331,8 +337,8 @@ test("two devices: the other device's show carries the items, and neither writes
   process.env[VIEW_TARGET_ENV] = join(fleet!.parent, "view-dev-b");
   const onB = runTopicAction({ action: "show", topic });
   expect(decisionLines(String(onB["page"]))).toEqual([
-    `- ${CHOICE} (resolved open decision)`,
-    `- ${CHOSEN}`,
+    `- ${CHOICE_ITEM} (resolved open decision)`,
+    `- ${CHOSEN_ITEM}`,
   ]);
   // Not the writer: planning and the render write nothing.
   const viewB = process.env[VIEW_TARGET_ENV]!;
@@ -349,8 +355,8 @@ test("two devices: the other device's show carries the items, and neither writes
   expect(pass().status).toBe("rendered");
   expect(topicRecords(b).length).toBe(written);
   expect(decisionLines(diskPage(topic))).toEqual([
-    `- ${CHOICE} (resolved open decision)`,
-    `- ${CHOSEN}`,
+    `- ${CHOICE_ITEM} (resolved open decision)`,
+    `- ${CHOSEN_ITEM}`,
   ]);
 });
 
@@ -359,10 +365,10 @@ test("the user's edit of a derived line on the page becomes the item, with no se
   const topic = createdTopic(a.vault);
   const path = pagePathOf(topic);
   const edited = "Release notes list the steps in commit order, newest last";
-  writeFileSync(path, readFileSync(path, "utf8").replace(`- ${CHOSEN}\n`, `- ${edited}\n`));
+  writeFileSync(path, readFileSync(path, "utf8").replace(`- ${CHOSEN_ITEM}\n`, `- ${edited}\n`));
   dream(a.vault);
   expect(decisionLines(diskPage(topic))).toEqual([
-    `- ${CHOICE} (resolved open decision)`,
+    `- ${CHOICE_ITEM} (resolved open decision)`,
     `- ${edited}`,
   ]);
   const items = decisionItems(runTopicAction({ action: "show", topic }));

@@ -14,8 +14,10 @@
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
+import type { Subprocess } from "bun";
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 import {
   journalModeForBacking,
@@ -223,6 +225,76 @@ describe("a journal-mode switch another connection blocks", () => {
         await opened.release();
       }
       holder.close(true);
+      v.cleanup();
+    }
+  });
+});
+
+/** A child process that holds an exclusive lock on `path` for `ms`, resolved once it holds it. */
+async function lockFor(path: string, ms: number): Promise<Subprocess<"ignore", "pipe", "inherit">> {
+  const holder = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      `import { Database } from "bun:sqlite";
+const db = new Database(${JSON.stringify(path)});
+db.exec("BEGIN EXCLUSIVE");
+db.exec("CREATE TABLE held (x)");
+process.stdout.write("held\\n");
+await Bun.sleep(${ms});
+db.exec("ROLLBACK");
+db.close();`,
+    ],
+    { stdout: "pipe" },
+  );
+  await holder.stdout.getReader().read();
+  return holder;
+}
+
+describe("an index file another process locks for a moment", () => {
+  // Found as a rare CI failure of the staging-file test: the rebuild's
+  // write open of its staging file met a search connection's brief lock
+  // and died with SQLITE_BUSY at `PRAGMA synchronous`, because the busy
+  // timeout was set after the pragmas that can meet a lock. An open waits
+  // such a lock out instead.
+
+  test("the write open waits for it and opens the index in WAL", async () => {
+    const v = createTempVault("store-busy-moment");
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    let opened: Awaited<ReturnType<typeof openWriteDatabase>> | null = null;
+    mkdirSync(dirname(v.dbPath), { recursive: true });
+    try {
+      const holder = await lockFor(v.dbPath, 300);
+      opened = await openWriteDatabase(config, false);
+      const mode = opened.db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
+      expect(mode?.journal_mode).toBe("wal");
+      expect(await holder.exited).toBe(0);
+    } finally {
+      if (opened) {
+        opened.db.close(true);
+        await opened.release();
+      }
+      v.cleanup();
+    }
+  });
+
+  test("the read open waits for it too", async () => {
+    const v = createTempVault("store-busy-moment-read");
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    const seeded = await openWriteDatabase(config, false);
+    seeded.db.exec("PRAGMA journal_mode = delete");
+    seeded.db.close(true);
+    await seeded.release();
+    try {
+      const holder = await lockFor(v.dbPath, 300);
+      const opened = openReadDatabase(config, false);
+      try {
+        expect(opened.db.query<{ n: number }, []>("SELECT 1 AS n").get()?.n).toBe(1);
+      } finally {
+        opened.db.close(true);
+      }
+      expect(await holder.exited).toBe(0);
+    } finally {
       v.cleanup();
     }
   });

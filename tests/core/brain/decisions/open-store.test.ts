@@ -10,7 +10,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -194,6 +202,19 @@ describe("openDecision", () => {
     expect(second.slug).not.toBe(first.slug);
     expect(second.id.startsWith("open-")).toBe(true);
     expect(listOpenDecisions(vault).records).toHaveLength(2);
+  });
+
+  test("a title with no Latin character keeps its words in the filename and the minted decision", () => {
+    const rec = openDecision(vault, baseInput({ title: "Ритм выпусков" }));
+    expect(rec.id).toBe("open-ритм-выпусков");
+    expect(existsSync(join(decisionsDir(vault), "open-ритм-выпусков.md"))).toBe(true);
+    const res = resolveOpenDecision(vault, rec.id, {
+      choice: "undici",
+      actor: "tester",
+      now: T1,
+    });
+    expect(res.decision).toBe("decision-ритм-выпусков");
+    expect(showDecision(vault, "ритм-выпусков")?.chosen).toBe("undici");
   });
 
   test("an empty question, empty title or zero options refuses with a typed error", () => {
@@ -567,6 +588,103 @@ describe("resolveOpenDecision", () => {
     expect(stamped.decision).toBe("[[decision-which-http-client-for-the-ingest-lane]]");
     // The crashed attempt minted the one page; the retry minted no second.
     expect(listDecisions(vault)).toHaveLength(1);
+  });
+
+  test("a crashed resolve whose page an older release minted under the Latin-only slug converges", () => {
+    const rec = openDecision(vault, baseInput({ title: "Проект which HTTP client" }));
+    const first = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    // The page as an older release named it: the title's non-Latin words
+    // dropped. Then the crash: the record rewound to its open shape.
+    const dir = decisionsDir(vault);
+    renameSync(join(dir, `${first.decision}.md`), join(dir, "decision-which-http-client.md"));
+    writeFileSync(
+      rec.path,
+      readFileSync(rec.path, "utf8")
+        .replace("status: resolved", "status: open")
+        .replace(/^resolved_at: .*\n/mu, "")
+        .replace(/^choice: .*\n/mu, "")
+        .replace(/^decision: .*\n/mu, ""),
+      "utf8",
+    );
+
+    const again = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T2,
+    });
+    expect(again.decision).toBe("decision-which-http-client");
+    expect(listDecisions(vault)).toHaveLength(1);
+  });
+
+  test("a resolve whose title another decision holds under the old Latin-only slug mints a page of its own", () => {
+    // An older release recorded a decision of this title by hand, under its Latin words.
+    const title = "Проект which HTTP client";
+    const other = recordDecision(vault, {
+      title,
+      chosen: "undici",
+      assumption: "a",
+      reviewDate: "2026-12-01",
+      agent: "tester",
+      now: T0,
+    });
+    const dir = decisionsDir(vault);
+    renameSync(
+      join(dir, `decision-${other.record.slug}.md`),
+      join(dir, "decision-which-http-client.md"),
+    );
+    const rec = openDecision(vault, baseInput({ title }));
+    const res = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    expect(res.decision).not.toBe("decision-which-http-client");
+    expect(listDecisions(vault)).toHaveLength(2);
+    expect(showDecision(vault, "which-http-client")?.chosen).toBe("undici");
+  });
+
+  test("a crashed resolve whose page an older release minted under the old slug of a derived title converges", () => {
+    const title = "Проект which HTTP client";
+    // The bare title is taken by an unrelated decision, so the resolve mints under a derived title.
+    recordDecision(vault, {
+      title,
+      chosen: "undici",
+      assumption: "a",
+      reviewDate: "2026-12-01",
+      agent: "tester",
+      now: T0,
+    });
+    const rec = openDecision(vault, baseInput({ title }));
+    const first = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    const minted = showDecision(vault, first.decision.slice("decision-".length))!;
+    // The page as an older release named it, then the crash rewinds the record.
+    const dir = decisionsDir(vault);
+    const oldSlug = slugify(minted.title);
+    renameSync(join(dir, `${first.decision}.md`), join(dir, `decision-${oldSlug}.md`));
+    writeFileSync(
+      rec.path,
+      readFileSync(rec.path, "utf8")
+        .replace("status: resolved", "status: open")
+        .replace(/^resolved_at: .*\n/mu, "")
+        .replace(/^choice: .*\n/mu, "")
+        .replace(/^decision: .*\n/mu, ""),
+      "utf8",
+    );
+    const again = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T2,
+    });
+    expect(again.decision).toBe(`decision-${oldSlug}`);
+    expect(listDecisions(vault)).toHaveLength(2);
   });
 
   test("a throwing decision-resolved log mirror does not fail the resolve nor skip the receipt", () => {

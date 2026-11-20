@@ -4,6 +4,11 @@
  * decisions), each with its text, its project, its session and whether
  * it is private.
  *
+ *  - **Text.** A note's text, a signal's principle, and for a decision
+ *    event (`decision-record`, `decision-resolved`) the decision's title
+ *    with the option chosen, so a decision groups and routes by its
+ *    subject like any note of the project, and its item says what was
+ *    decided.
  *  - **Project.** The `project` the record names (a signal's frontmatter,
  *    a log event's body), read by the rule that wrote it
  *    (`brain/record-origin.ts` `recordProjectOf`, the scoped-rules key):
@@ -48,9 +53,44 @@ const HISTORY_VERDICT_KIND = "history-verdict";
 /** Log event types whose text a person would read on a topic. */
 const READABLE_EVENTS: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
   note: ["text"],
-  "decision-record": ["chosen", "decision"],
+  "decision-record": ["chosen"],
   "decision-resolved": ["choice"],
 });
+
+/** The decision log events: their text is the decision's title with its choice. */
+const DECISION_EVENTS: ReadonlySet<string> = new Set(["decision-record", "decision-resolved"]);
+
+/** `[[decision-<slug>]]`, the page a decision event names. */
+const DECISION_LINK_RE = /^\[\[decision-(.+)\]\]$/u;
+
+/**
+ * The title a decision event names: its `title` (written since decision
+ * events carry one), else the words of the slug of the page it links
+ * (`[[decision-release-page-format]]` reads "release page format"), so an
+ * older event still says what was decided. A slug that is the fallback
+ * hash of a title with no letter says nothing and is left out.
+ */
+function decisionTitleOf(meta: Record<string, unknown>): string | null {
+  const title = str(meta["title"]);
+  if (title !== null) return title;
+  const slug = DECISION_LINK_RE.exec(str(meta["decision"]) ?? "")?.[1];
+  if (slug === undefined || /^unnamed-[0-9a-f]+$/u.test(slug)) return null;
+  return str(slug.replaceAll("-", " "));
+}
+
+/**
+ * The text of a decision event: "<title>: <choice>". The choice alone
+ * ("one markdown page") neither tells the reader of a topic what was
+ * decided nor shares the subject words that group and route the event
+ * with the notes and signals of its subject; the title does both. A title
+ * that ends in its own punctuation (a question) is not given a colon.
+ */
+function decisionEventText(meta: Record<string, unknown>, choiceField: string): string | null {
+  const choice = str(meta[choiceField]);
+  const title = decisionTitleOf(meta);
+  if (title === null || choice === null) return choice ?? title;
+  return /[?:!.]$/u.test(title) ? `${title} ${choice}` : `${title}: ${choice}`;
+}
 
 export interface TopicCandidate {
   readonly id: string;
@@ -128,7 +168,9 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
     if (!Object.hasOwn(READABLE_EVENTS, type)) return null;
     const fields = READABLE_EVENTS[type]!;
     meta = obj(record.body["body"]);
-    text = fields.map((f) => str(meta[f])).find((t) => t !== null) ?? null;
+    text = DECISION_EVENTS.has(type)
+      ? decisionEventText(meta, fields[0]!)
+      : (fields.map((f) => str(meta[f])).find((t) => t !== null) ?? null);
   }
   if (text !== null) text = withoutPrivateRegions(text);
   if (text === null || text === "") return null;
@@ -171,6 +213,21 @@ export function isTopicPlanningInput(record: StoreRecord, stream: StoreStream): 
   return Object.hasOwn(READABLE_EVENTS, String(record.body["event_type"]));
 }
 
+/**
+ * Whether a topic can hold `record`: a signal, or a log event of a kind a
+ * person reads on a topic (a note, a decision record or resolution). Any
+ * other record (a lane entry, a topic or settings record, another log
+ * event) is never a candidate, so a topic that held it would list it as
+ * not found.
+ */
+export function isHoldableRecord(record: StoreRecord): boolean {
+  if (record.kind === SIGNAL_KIND) return true;
+  return (
+    record.kind === LOG_EVENT_KIND &&
+    Object.hasOwn(READABLE_EVENTS, String(record.body["event_type"]))
+  );
+}
+
 /** The candidates among `records`; `privateIds` names those of the `private` partition. */
 export function topicCandidates(
   records: ReadonlyArray<StoreRecord>,
@@ -202,13 +259,17 @@ const STOPWORDS: ReadonlySet<string> = new Set(
   ).split(" "),
 );
 
-/** The distinct words of `text` that can tell subjects apart, in any script. */
+/**
+ * The distinct words of `text` that can tell subjects apart, in any
+ * script: a word keeps its combining marks (vowel signs, diacritics), so a
+ * word of a script written with them is one word, not its fragments.
+ */
 export function subjectTokens(text: string): Set<string> {
   return new Set(
     text
       .normalize("NFC")
       .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
+      .split(/[^\p{L}\p{M}\p{N}]+/u)
       .filter((w) => [...w].length >= 4 && !STOPWORDS.has(w)),
   );
 }

@@ -68,6 +68,14 @@ export interface StreamRead {
    * record, instead of rescanning the shards.
    */
   readonly pendingBlobs: ReadonlyArray<string>;
+  /**
+   * How many kept records were left out because their body is a pending
+   * blob, by envelope kind (the kind is read from the line, not the
+   * body). A caller that must know whether a record of some kind is
+   * missing from `records` reads it from the same scan, so no later
+   * arrival of a blob can fall between the two answers.
+   */
+  readonly pendingKinds: ReadonlyMap<string, number>;
 }
 
 export interface StreamReadOptions {
@@ -390,10 +398,12 @@ export function readStreamRecords(
       unreadable: [streamPrefix(ref)],
       skippedPending: false,
       pendingBlobs: [],
+      pendingKinds: new Map(),
     };
   }
   const compactions: Compaction[] = [];
   let skippedPending = false;
+  const pendingKinds = new Map<string, number>();
   const seenBlobs = new Set<string>();
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device) continue;
@@ -432,6 +442,7 @@ export function readStreamRecords(
       // The body is still the blob reference (reader.ts): the sha names
       // the blob the caller stats for availability.
       skippedPending = true;
+      pendingKinds.set(entry.record.kind, (pendingKinds.get(entry.record.kind) ?? 0) + 1);
       const sha = blobRefSha(entry.record.body);
       if (!seenBlobs.has(sha)) {
         seenBlobs.add(sha);
@@ -459,5 +470,6 @@ export function readStreamRecords(
     unreadable: [...unreadable, ...gone],
     skippedPending,
     pendingBlobs,
+    pendingKinds,
   };
 }

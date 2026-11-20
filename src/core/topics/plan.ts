@@ -211,14 +211,74 @@ function qualifies(group: Group, settings: PlanSettings): boolean {
   );
 }
 
-/** The group's most frequent words, a tie going to the word its first record says first. */
+/** A run of letters, marks and digits joined by hyphens, as the records write it. */
+const WRITTEN_WORD_RE = /[\p{L}\p{M}\p{N}]+(?:[-\u2010\u2011][\p{L}\p{M}\p{N}]+)*/gu;
+const HYPHEN_RE = /[-\u2010\u2011]/u;
+
+/**
+ * How the group's records write each subject word: alone, or inside a
+ * hyphenated compound ("тема-три", "release-checklist"), counted over
+ * every occurrence, a compound once for each distinct part it holds. Subject words split at hyphens, and a part shorter
+ * than a subject word ("три") is not one, so a title built from subject
+ * words alone cut a project name in half.
+ */
+function writtenForms(group: Group): {
+  readonly alone: Map<string, number>;
+  readonly compounds: Map<string, Map<string, number>>;
+} {
+  const alone = new Map<string, number>();
+  const compounds = new Map<string, Map<string, number>>();
+  for (const member of group.members) {
+    const text = member.text.normalize("NFC").toLowerCase();
+    for (const [written] of text.matchAll(WRITTEN_WORD_RE)) {
+      if (!HYPHEN_RE.test(written)) {
+        alone.set(written, (alone.get(written) ?? 0) + 1);
+        continue;
+      }
+      // Once per distinct part: "peer-to-peer" writes "peer" in one place.
+      for (const part of new Set(written.split(HYPHEN_RE))) {
+        const forms = compounds.get(part) ?? new Map<string, number>();
+        forms.set(written, (forms.get(written) ?? 0) + 1);
+        compounds.set(part, forms);
+      }
+    }
+  }
+  return { alone, compounds };
+}
+
+/**
+ * The group's most frequent subject words, a tie going to the word its
+ * first record says first, each as the records write it: a word they
+ * write inside one compound more often than alone is titled by that
+ * compound ("Тема-три release checklist", not "Тема release checklist"),
+ * named once even when two of its parts are subject words. A compound
+ * that would repeat a word the title already has is not used; the word
+ * stands alone then.
+ */
 function draftTitle(group: Group): string {
   const first = [...subjectTokens(group.members[0]!.text)];
   const rank = (w: string): number => (first.includes(w) ? first.indexOf(w) : first.length);
-  const words = [...group.words]
+  const ranked = [...group.words]
     .toSorted(([a, na], [b, nb]) => nb - na || rank(a) - rank(b) || compareCodeUnits(a, b))
-    .slice(0, TITLE_WORDS)
     .map(([w]) => w);
+  const { alone, compounds } = writtenForms(group);
+  const words: string[] = [];
+  const named = new Set<string>();
+  for (const word of ranked) {
+    if (words.length === TITLE_WORDS) break;
+    if (named.has(word)) continue;
+    const [compound, count] = [...(compounds.get(word) ?? new Map<string, number>())].toSorted(
+      ([a, na], [b, nb]) => nb - na || compareCodeUnits(a, b),
+    )[0] ?? ["", 0];
+    const parts = compound === "" ? [] : compound.split(HYPHEN_RE);
+    if (count > (alone.get(word) ?? 0) && !parts.some((p) => named.has(p))) {
+      words.push(compound);
+      for (const part of parts) named.add(part);
+    } else {
+      words.push(word);
+      named.add(word);
+    }
+  }
   // A word of a script written without spaces can be a whole sentence:
   // the title is cut to the longest a record may carry, in the unit the
   // record check counts (UTF-16 code units), after the capital letter

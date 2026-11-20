@@ -14,7 +14,6 @@
 
 import { writerSessionKey } from "../../core/agent-context/session-identity.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
-import { StoreWriteError } from "../../core/store/store-write.ts";
 import {
   runTopicAction,
   TOPIC_ACTIONS,
@@ -23,7 +22,7 @@ import {
   type TopicActionInput,
 } from "../../core/topics/actions.ts";
 import { TOPIC_STATUSES } from "../../core/topics/constants.ts";
-import { TopicWriteError } from "../../core/topics/write.ts";
+import { topicRefusalCode, TopicWriteError } from "../../core/topics/write.ts";
 import { coerceStr, unknownOperationError } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -140,14 +139,11 @@ function toolBrainTopic(
   } catch (err) {
     if (err instanceof TopicActionError || err instanceof TopicWriteError) {
       throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`, {
-        code: err instanceof TopicWriteError ? `topic_${err.reason}` : "topic_invalid",
+        code: topicRefusalCode(err instanceof TopicWriteError ? err.reason : "invalid"),
       });
     }
-    if (err instanceof StoreWriteError) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`, {
-        code: `store_${err.reason}`,
-      });
-    }
+    // A store write failure is classified by the server (`store_write_failed`
+    // with its reason and remedy), as for every other writer.
     throw err;
   }
 }

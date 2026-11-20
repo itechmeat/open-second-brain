@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -328,4 +329,103 @@ describe("writeIdeaNote — declared page_types vocabulary (t_151a564c)", () => 
     expect(raw).toContain(`kind: ${CAPTURED_IDEA_KIND}`);
     expect(raw).toContain("a standalone atomic idea");
   });
+});
+
+test("two ideas that differ only in their non-Latin words land in two notes, not one", () => {
+  writeCaptureNote(vault, { body: "Тема-три release checklist", provenance: prov(1) });
+  writeCaptureNote(vault, { body: "Проект release checklist", provenance: prov(2) });
+  const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(report.items.map((i) => i.reason)).toEqual([
+    "atomic idea (create note)",
+    "atomic idea (create note)",
+  ]);
+  expect(readdirSync(join(vault, CAPTURED_NOTES_DIR_REL)).toSorted()).toEqual([
+    "проект-release-checklist.md",
+    "тема-три-release-checklist.md",
+  ]);
+});
+
+test("an idea whose words are a Windows device name never lands in a note named for the device", () => {
+  writeCaptureNote(vault, { body: "COM¹", provenance: prov(1) });
+  writeCaptureNote(vault, { body: "nul", provenance: prov(2) });
+  const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(report.items.map((i) => i.reason)).toEqual([
+    "atomic idea (create note)",
+    "atomic idea (create note)",
+  ]);
+  const names = readdirSync(join(vault, CAPTURED_NOTES_DIR_REL)).toSorted();
+  expect(names).toHaveLength(2);
+  for (const name of names) {
+    expect(name).toMatch(/^(?:com¹|nul)-[0-9a-f]{8}\.md$/u);
+  }
+});
+
+test("an idea stored under its old Latin-only slug takes the same idea again, a different one gets its own note", () => {
+  writeCaptureNote(vault, { body: "Проект release checklist", provenance: prov(1) });
+  drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  const dir = join(vault, CAPTURED_NOTES_DIR_REL);
+  // An older release named this note by its Latin words only.
+  renameSync(join(dir, "проект-release-checklist.md"), join(dir, "release-checklist.md"));
+
+  writeCaptureNote(vault, { body: "Проект release checklist", provenance: prov(2) });
+  writeCaptureNote(vault, { body: "Тема release checklist", provenance: prov(3) });
+  const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(report.items.map((i) => i.reason)).toEqual([
+    "atomic idea (merge into existing note)",
+    "atomic idea (create note)",
+  ]);
+  expect(readdirSync(dir).toSorted()).toEqual([
+    "release-checklist.md",
+    "тема-release-checklist.md",
+  ]);
+});
+
+test("a replayed multiline idea resolves to the old Latin-only note that holds it and is not appended twice", () => {
+  const body = "Проект release\n\nchecklist";
+  writeCaptureNote(vault, { body, provenance: prov(1) });
+  drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  const dir = join(vault, CAPTURED_NOTES_DIR_REL);
+  const [created] = readdirSync(dir);
+  // An older release named this note by its Latin words only.
+  renameSync(join(dir, created!), join(dir, "release-checklist.md"));
+
+  writeCaptureNote(vault, { body, provenance: prov(2) });
+  const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(report.items.map((i) => i.reason)).toEqual(["atomic idea (merge into existing note)"]);
+  expect(readdirSync(dir)).toEqual(["release-checklist.md"]);
+  const text = readFileSync(join(dir, "release-checklist.md"), "utf8");
+  expect(text.split("Проект release").length - 1).toBe(1);
+});
+
+test("a multiline idea replayed into its own note is not appended twice", () => {
+  const body = "Проект release\n\nchecklist";
+  writeCaptureNote(vault, { body, provenance: prov(1) });
+  drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  writeCaptureNote(vault, { body, provenance: prov(2) });
+  drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  const dir = join(vault, CAPTURED_NOTES_DIR_REL);
+  const names = readdirSync(dir);
+  expect(names).toHaveLength(1);
+  const text = readFileSync(join(dir, names[0]!), "utf8");
+  expect(text.split("Проект release").length - 1).toBe(1);
+});
+
+test("an obligation marker whose title an older release stored under the Latin-only slug is not opened twice", () => {
+  writeCaptureNote(vault, {
+    body: `${CAPTURE_OBLIGATION_MARKER} Проверка release checklist`,
+    provenance: prov(1),
+  });
+  drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  const [first] = listObligations(vault, { now: NOW });
+  const dir = join(vault, "Brain", "obligations");
+  renameSync(join(dir, `${first!.slug}.md`), join(dir, "release-checklist.md"));
+
+  writeCaptureNote(vault, {
+    body: `${CAPTURE_OBLIGATION_MARKER} Проверка release checklist`,
+    provenance: prov(2),
+  });
+  const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(report.items[0]!.classification).toBe("unroutable");
+  expect(report.items[0]!.reason).toContain("obligation already exists: release-checklist");
+  expect(listObligations(vault, { now: NOW })).toHaveLength(1);
 });

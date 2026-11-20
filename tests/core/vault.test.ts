@@ -26,6 +26,7 @@ import {
   parseFrontmatterTextWithNotices,
   parseFrontmatterWithNotices,
   slugify,
+  titleSlug,
   writeFrontmatter,
   writeFrontmatterAtomic,
 } from "../../src/core/vault.ts";
@@ -390,6 +391,83 @@ describe("slugify", () => {
 
   test("truncates long input to 64 chars", () => {
     expect(slugify("a".repeat(200)).length).toBe(64);
+  });
+});
+
+describe("titleSlug", () => {
+  test("an ASCII title gets exactly the slug slugify gives it", () => {
+    for (const title of [
+      "Hello, World!",
+      "Adopt Bun as the primary runtime",
+      "  --Mixed_Case 42 / v2.1--  ",
+      "a".repeat(200),
+      `${"word ".repeat(20)}tail`,
+      "@",
+      "",
+    ]) {
+      expect(titleSlug(title)).toBe(slugify(title));
+    }
+  });
+
+  test("letters and digits of any script stay", () => {
+    expect(titleSlug("Тема-три release checklist")).toBe("тема-три-release-checklist");
+    expect(titleSlug("Café crème brûlée")).toBe("café-crème-brûlée");
+    expect(titleSlug("नमस्ते दुनिया")).toBe("नमस्ते-दुनिया");
+    expect(titleSlug("会议 记录 ٣")).toBe("会议-记录-٣");
+  });
+
+  test("composed and decomposed forms give one NFC slug", () => {
+    const composed = titleSlug("Йод é");
+    expect(titleSlug("\u0418\u0306од e\u0301")).toBe(composed);
+    expect(composed).toBe(composed.normalize("NFC"));
+  });
+
+  test("a title with no letter or digit falls back to the stable unnamed-<hash>", () => {
+    expect(titleSlug("★ ☆")).toMatch(/^unnamed-[0-9a-f]{8}$/);
+    expect(titleSlug("★ ☆")).toBe(titleSlug("★ ☆"));
+    expect(titleSlug("★ ☆")).not.toBe(titleSlug("🙂"));
+  });
+
+  test("a key with only combining marks left (variation selectors) falls back to the hash", () => {
+    // U+FE0F is a nonspacing mark: once the symbol before it is dropped,
+    // the two titles would share the key "️".
+    const heart = titleSlug("❤️");
+    const sun = titleSlug("☀️");
+    expect(heart).toMatch(/^unnamed-[0-9a-f]{8}$/);
+    expect(sun).toMatch(/^unnamed-[0-9a-f]{8}$/);
+    expect(heart).not.toBe(sun);
+    // A mark beside a letter or digit stays.
+    expect(titleSlug("é ️")).toBe("é-️".normalize("NFC"));
+  });
+
+  test("a key that is a Windows device name is never a whole basename", () => {
+    // Windows reserves these in every folder and with any extension,
+    // the superscript-digit COM and LPT ports included.
+    const reserved = ["CON", "prn", "Aux", "NUL", "COM1", "com0", "LPT9", "COM¹", "lpt²", "COM³"];
+    const device = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/u;
+    const slugs = reserved.map((title) => titleSlug(title));
+    for (const slug of slugs) {
+      expect(device.test(slug)).toBe(false);
+      // Still readable, still stable, and a lookup by the slug resolves to it.
+      expect(titleSlug(slug)).toBe(slug);
+    }
+    expect(titleSlug("COM¹")).toMatch(/^com¹-[0-9a-f]{8}$/u);
+    expect(titleSlug("con")).toBe(titleSlug("CON"));
+    expect(new Set(slugs).size).toBe(reserved.length);
+    // A longer name that only starts with one is an ordinary key.
+    expect(titleSlug("Console log")).toBe("console-log");
+    expect(titleSlug("COM10")).toBe("com10");
+  });
+
+  test("it caps at 64 code units without splitting a surrogate pair and is idempotent", () => {
+    const long = titleSlug("я".repeat(200));
+    expect(long).toBe("я".repeat(64));
+    const astral = titleSlug(`${"a".repeat(63)}𝐀𝐀`);
+    expect(astral).toBe("a".repeat(63));
+    for (const title of ["Тема-три release", "Café", "★", "x".repeat(90)]) {
+      const once = titleSlug(title);
+      expect(titleSlug(once)).toBe(once);
+    }
   });
 });
 

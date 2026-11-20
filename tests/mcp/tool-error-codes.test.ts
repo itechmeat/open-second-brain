@@ -186,6 +186,10 @@ const TYPE_ONLY_MEMBERS = [
   "ExpirationValueError",
   "ExpirationTargetNotFoundError",
   "InvalidExpirationTargetError",
+  // brain_topic: a refused action, and a refused topic write by its reason
+  "topic_invalid",
+  "topic_unknown-topic",
+  "topic_unreadable",
 ] as const;
 
 /** A core-style error class that, like several real ones, never sets `this.name`. */
