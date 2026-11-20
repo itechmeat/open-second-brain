@@ -515,8 +515,14 @@ flowchart LR
   notice names the sections that were reduced to headlines and the
   sections that were dropped, how many characters survived out of how
   many, and points the agent at `brain_context` for the full set.
-  When `Brain/lessons.md` exists, its (separately budgeted) body is
-  appended so the unified lessons corpus loads on the same surface.
+  When `Brain/lessons.md` exists, its body is appended so the unified
+  lessons corpus loads on the same surface; it takes what the active
+  body leaves of the room the two share. Everything the hook emits in
+  one run - the standing and scoped rules, the topic heads, the pinned
+  context, the runtime notices and both bodies - stays under 9,000
+  characters, because Claude Code replaces a hook's context past 10,000
+  characters with a file path and a short preview (see "Host context
+  limit" in [`cli-reference.md`](cli-reference.md)).
   Two more blocks ride the same digest between the scoped rules and
   the memory body, both charged against the same budget: the heads of
   the session's project topics (title, status, id, description and

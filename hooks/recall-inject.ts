@@ -62,10 +62,9 @@ import { emitTokenImpact, TOKEN_COUNT_METHOD } from "../src/core/brain/token-imp
 import { decisionTokenImpactSource } from "../src/core/decision-model/contract.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { emitGatedTelemetry } from "../src/core/brain/continuity/emit.ts";
-import { existsSync } from "node:fs";
 
-import { brainConfigPath, hookAuditDir } from "../src/core/brain/paths.ts";
-import { loadBrainConfig } from "../src/core/brain/policy/load.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
+import { brainConfigExists, loadBrainConfig } from "../src/core/brain/policy/load.ts";
 import type { RecallSliceSpec } from "../src/core/brain/types.ts";
 import {
   decideRecallInject,
@@ -96,6 +95,7 @@ import { isHookStateCorrupt } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 /**
  * Record one decision on both surfaces: the hook audit trail, and the
@@ -286,7 +286,9 @@ function slicesFor(vault: string): {
   readonly invalid: boolean;
 } {
   try {
-    if (!existsSync(brainConfigPath(vault))) return { slices: [], invalid: false };
+    // On a vault switched to the store the settings are store records,
+    // never absent; only an unswitched vault without `_brain.yaml` has none.
+    if (!brainConfigExists(vault)) return { slices: [], invalid: false };
     return { slices: loadBrainConfig(vault).recall_inject?.slices ?? [], invalid: false };
   } catch {
     return { slices: [], invalid: true };
@@ -417,7 +419,7 @@ async function main(): Promise<void> {
     const out = {
       hookSpecificOutput: {
         hookEventName,
-        additionalContext: decision.brief,
+        additionalContext: fitHostContext(decision.brief),
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");

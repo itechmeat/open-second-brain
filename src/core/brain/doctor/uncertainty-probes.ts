@@ -10,7 +10,7 @@
  * one of them makes a clean report mean less than it says.
  */
 
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import {
   readSelfHealUpgradeLock,
   selfHealUpgradeLockAdvice,
@@ -21,6 +21,7 @@ import { existsSync } from "node:fs";
 import type { DegradationNotice } from "../../integrity/degradation.ts";
 import { listVaultPages } from "../../vault.ts";
 import { verifyLineageLedger } from "../lineage/verify.ts";
+import { syncConflictOriginalName } from "../ledger-shards.ts";
 import { brainDirs } from "../paths.ts";
 import { scanStaleLocks } from "../sync-lockfile.ts";
 import { vaultMarkerAbsentNotice } from "../vault-identity.ts";
@@ -171,6 +172,22 @@ export const staleLockProbe: DoctorCheck = {
           code: STALE_LOCK_CODE,
           path: lockPath,
           message: selfHealUpgradeLockAdvice(readSelfHealUpgradeLock(vault, new Date())),
+        });
+        continue;
+      }
+      // A sync tool's conflict copy of that claim is no lock: the upgrade
+      // claims and reads its lock by its exact name, never a copy.
+      if (
+        dirname(resolve(lockPath)) === dirname(resolve(upgradeLock)) &&
+        syncConflictOriginalName(basename(lockPath)) === basename(upgradeLock)
+      ) {
+        pushUncertain(uncertain, {
+          code: STALE_LOCK_CODE,
+          path: lockPath,
+          message:
+            `a sync-conflict copy of the automatic Brain upgrade's lock (${basename(upgradeLock)}). ` +
+            "No process holds a copy and nothing reads it, so it guards nothing and blocks " +
+            "nothing: delete the copy. The lock itself, when present, is reported on its own line",
         });
         continue;
       }

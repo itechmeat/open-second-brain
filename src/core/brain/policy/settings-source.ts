@@ -88,6 +88,27 @@ function place(
   (target[block] as Record<string, unknown>)[field] = value;
 }
 
+/**
+ * The machine config the device settings come from could not be read.
+ * The message keeps the read error's text for a local reader; `code` is
+ * its errno code alone (or `unreadable`), for a refusal that may cross
+ * to a remote caller and must not name the config's host path.
+ */
+export class MachineConfigUnreadableError extends BrainConfigError {
+  readonly code: string;
+
+  constructor(cause: unknown) {
+    super(
+      `machine config could not be read: ${(cause as Error)?.message ?? String(cause)}`,
+      null,
+      STORE_SETTINGS_SOURCE,
+    );
+    this.name = "MachineConfigUnreadableError";
+    const code = (cause as NodeJS.ErrnoException | null)?.code;
+    this.code = typeof code === "string" && code.length > 0 ? code : "unreadable";
+  }
+}
+
 /** The folded shared `brain.*` settings, as `_brain.yaml` keys. */
 function sharedBrainSettings(store: StoreInspection | null): Record<string, unknown> {
   if (store === null || !store.partitions.has("shared")) return {};
@@ -323,11 +344,7 @@ function mergedRawSettings(
   try {
     device = deviceBrainSettings(configPathOption);
   } catch (err) {
-    throw new BrainConfigError(
-      `machine config could not be read: ${(err as Error).message ?? String(err)}`,
-      null,
-      STORE_SETTINGS_SOURCE,
-    );
+    throw new MachineConfigUnreadableError(err);
   }
   const merged: Record<string, unknown> = { schema_version: 1 };
   for (const source of [sharedBrainSettings(store), device]) {

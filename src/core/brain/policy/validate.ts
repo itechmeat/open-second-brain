@@ -48,6 +48,7 @@ import {
 } from "./blocks/continuity-hygiene.ts";
 import { parseContextBlock, parseCrossTopicBlock } from "./blocks/context.ts";
 import { parseFeedbackBlock } from "./blocks/feedback.ts";
+import { parseQuoteCheckBlock } from "./blocks/quote-check.ts";
 import { parseDecisionModelBlock } from "./blocks/decision-model.ts";
 import { parseStorageBlock } from "./blocks/storage.ts";
 
@@ -127,6 +128,7 @@ export function validateBrainConfigDetailed(
   const anticipatory = parseAnticipatoryBlock(ctx);
   const recall = parseRecallBlock(ctx);
   const feedback = parseFeedbackBlock(ctx);
+  const quoteCheck = parseQuoteCheckBlock(ctx);
   const decisionModel = parseDecisionModelBlock(ctx);
   const storage = parseStorageBlock(ctx);
   const crossTopic = parseCrossTopicBlock(ctx);
@@ -163,6 +165,7 @@ export function validateBrainConfigDetailed(
     ...(recall !== undefined ? { recall } : {}),
     ...(recallInject !== undefined ? { recall_inject: recallInject } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
+    ...(quoteCheck !== undefined ? { quote_check: quoteCheck } : {}),
     ...(decisionModel !== undefined ? { decision_model: decisionModel } : {}),
     ...(storage !== undefined ? { storage } : {}),
     ...(crossTopic !== undefined ? { cross_topic: crossTopic } : {}),

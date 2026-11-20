@@ -58,6 +58,7 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 /** Runtime identity on the audit record. */
 const HOOK_ACTOR = "counterparty-brief";
@@ -166,7 +167,9 @@ async function main(): Promise<void> {
     }
 
     process.stdout.write(
-      JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: rendered } }) + "\n",
+      JSON.stringify({
+        hookSpecificOutput: { hookEventName, additionalContext: fitHostContext(rendered) },
+      }) + "\n",
     );
     // Recorded after the write: a failed record costs one repeat, never a
     // lost brief, and leaves evidence on the audit line either way.

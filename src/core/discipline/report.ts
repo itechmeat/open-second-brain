@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 
 import { loadBrainConfig } from "../brain/policy.ts";
-import { brainConfigPath } from "../brain/paths.ts";
+import { brainConfigExists } from "../brain/policy/load.ts";
 import { countBrainEvents, type BrainEventCounts } from "./log-counts.ts";
 import { gitActivity } from "./activity-git.ts";
 import { mtimeActivity } from "./activity-mtime.ts";
@@ -41,7 +41,8 @@ export function runDisciplineReport(opts: RunDisciplineReportOpts): DisciplineRe
   // Downgrade to the `disabled` shape — same as an explicit `enabled:
   // false` — so the Hermes cron stays silent instead of posting empty
   // messages on every tick.
-  if (!existsSync(brainConfigPath(opts.vault))) {
+  // A switched vault keeps its settings in the store: never absent there.
+  if (!brainConfigExists(opts.vault)) {
     return {
       status: "disabled",
       text: "",

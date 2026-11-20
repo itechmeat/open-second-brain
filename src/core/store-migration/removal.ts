@@ -66,6 +66,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
 import { appendRecord } from "../store/appender.ts";
+import { compareRecords } from "../store/envelope.ts";
 import { AUTHORITY_FIELD, STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue } from "./catalogue.ts";
@@ -75,11 +76,13 @@ import { describeUnseen, migrationDir, unseenHeldShards } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
 import { recordMigrationGateProgress } from "../migration-gate.ts";
 import { holdGateFor, releaseGateAfter } from "./quiesce.ts";
+import { readMigrationBackup } from "./backup.ts";
 import { sameVaultPath, writeRemovalMarker } from "./removal-marker.ts";
 import {
   isDeviceSwitched,
   unseenSettingsShards,
   LEGACY_TREE_REMOVED_KIND,
+  legacyTreeRemovedRecords,
   MIGRATION_STREAM,
 } from "./migration-records.ts";
 import type { ConvertHooks } from "./convert.ts";
@@ -276,6 +279,13 @@ export interface RemovalInProgress {
   readonly vault: string;
   readonly at: string;
   readonly archive: string;
+  /**
+   * The tree had already left the vault when the removal began: it moves
+   * only this machine's leftover files. Kept so a retry records the same
+   * cleanup, never a removal that moved the tree (absent in a journal of
+   * an older release, read as false).
+   */
+  readonly tree_already_left?: boolean;
 }
 
 /** The removal of a legacy tree this machine began and did not finish, or null. */
@@ -289,7 +299,12 @@ export function readRemovalInProgress(store: StoreHandle): RemovalInProgress | n
       typeof parsed.at === "string" &&
       typeof parsed.archive === "string"
     ) {
-      return { vault: parsed.vault, at: parsed.at, archive: parsed.archive };
+      return {
+        vault: parsed.vault,
+        at: parsed.at,
+        archive: parsed.archive,
+        tree_already_left: parsed.tree_already_left === true,
+      };
     }
   } catch {
     // none
@@ -416,7 +431,9 @@ function removeUnderGate(
   },
 ): RemovalResult {
   const { catalogue, roots, resumed } = plan;
-  const vaultId = readVaultIdentity(vault)?.vault_id ?? null;
+  // The tree's marker, or, once the tree left with it, the id this
+  // machine's migration backup recorded of this same vault.
+  const vaultId = readVaultIdentity(vault)?.vault_id ?? backedUpVaultId(store, vault);
   const transition = importLateLegacyWrites(vault, store, options.agent, vaultId, {
     waitMs: GATED_IMPORT_WAIT_MS,
   });
@@ -427,14 +444,22 @@ function removeUnderGate(
     legacyEvidence: legacyDeviceEvidence(vault),
     now: options.now ?? new Date(),
   });
-  const silence = silenceReport(cohort);
   const pending = cohort.pending.map((d) => d.device);
   const forced = options.force === true;
   // The tree already left the vault (another machine removed it and sync
   // brought the deletion here): what is left are this machine's own files
   // the sync never carried (the index, caches). No cohort device writes
   // into them, so the cohort keeps nothing in place.
-  const treeLeft = resumed === null && !roots.includes(BRAIN_ROOT_REL);
+  // A resumed removal is what it was when it began, as its journal says.
+  const treeLeft =
+    resumed === null ? !roots.includes(BRAIN_ROOT_REL) : resumed.tree_already_left === true;
+  // With the tree gone this machine reads no legacy evidence, so it cannot
+  // judge silence itself: the devices retired by silence are the ones the
+  // removal that took the tree out recorded, as in both branches the
+  // operator reads the same cohort.
+  const silence = treeLeft
+    ? silenceOfEarlierRemoval(store, vaultId, silenceReport(cohort))
+    : silenceReport(cohort);
   // The cohort devices a forced removal leaves without a tree: none when it had left already.
   const stopped = treeLeft ? [] : pending;
   // A resumed removal already moved part of the tree: it finishes.
@@ -467,7 +492,12 @@ function removeUnderGate(
   mkdirSync(archive, { recursive: true });
   if (resumed === null) {
     mkdirSync(migrationDir(store), { recursive: true });
-    const entry: RemovalInProgress = { vault: resolve(vault), at, archive };
+    const entry: RemovalInProgress = {
+      vault: resolve(vault),
+      at,
+      archive,
+      tree_already_left: treeLeft,
+    };
     atomicWriteFileSync(journal, `${JSON.stringify(entry)}\n`);
   }
   for (const top of roots) moveTree(join(vault, top), join(archive, top));
@@ -512,6 +542,9 @@ function removeUnderGate(
       retired_by_silence: silence.retired_by_silence.map((d) => ({ ...d })),
       silence_threshold_days: silence.silence_threshold_days,
       as_of: silence.as_of,
+      // A cleanup of this machine's leftovers moved no tree: its silence
+      // verdict is the one it read, never the one later cleanups take.
+      tree_already_left: treeLeft,
     },
   });
   writeRemovalMarker(store, {
@@ -543,6 +576,60 @@ function removeUnderGate(
     tree_already_left: treeLeft,
     imported: transition.imported + final.imported,
     ...silence,
+  };
+}
+
+/**
+ * The id of `vault` as this machine's migration backup recorded it, when
+ * the backup was taken of this same vault (its real path), or null. Never
+ * another vault's: one store serves every vault on a machine, so this
+ * device's own `device-switched` record can name a vault other than the
+ * one being cleaned up.
+ */
+function backedUpVaultId(store: StoreHandle, vault: string): string | null {
+  const backed = readMigrationBackup(migrationDir(store))?.vault ?? null;
+  if (backed === null || backed.vault_id === null) return null;
+  return sameVaultPath(backed.path, vault) ? backed.vault_id : null;
+}
+
+/**
+ * The silence verdict of the removal that moved this vault's tree out
+ * (the latest `legacy-tree-removed` record of the vault that is not a
+ * cleanup of leftovers, by record order), over `own`: its devices
+ * retired by silence, their threshold and its date, those devices
+ * dropped from the hand-retired list. `own` as it is when no such record
+ * of this vault names one.
+ */
+function silenceOfEarlierRemoval(
+  store: StoreHandle,
+  vaultId: string | null,
+  own: SilenceReport,
+): SilenceReport {
+  if (vaultId === null) return own;
+  const earlier = legacyTreeRemovedRecords(store)
+    .filter((r) => r.body["vault_id"] === vaultId && r.body["tree_already_left"] !== true)
+    .toSorted(compareRecords)
+    .at(-1);
+  const listed = earlier?.body["retired_by_silence"];
+  if (!Array.isArray(listed) || listed.length === 0) return own;
+  const silent: DeviceEvidenceDate[] = [];
+  for (const entry of listed) {
+    const device = (entry as { device?: unknown } | null)?.device;
+    const last = (entry as { last_evidence?: unknown } | null)?.last_evidence;
+    if (typeof device !== "string") continue;
+    silent.push({ device, last_evidence: typeof last === "string" ? last : null });
+  }
+  if (silent.length === 0) return own;
+  const names = new Set(silent.map((d) => d.device));
+  const days = earlier!.body["silence_threshold_days"];
+  const asOf = earlier!.body["as_of"];
+  return {
+    ...own,
+    switched: own.switched.filter((d) => !names.has(d)),
+    retired: own.retired.filter((d) => !names.has(d)),
+    retired_by_silence: silent,
+    silence_threshold_days: typeof days === "number" ? days : own.silence_threshold_days,
+    as_of: typeof asOf === "string" ? asOf : own.as_of,
   };
 }
 

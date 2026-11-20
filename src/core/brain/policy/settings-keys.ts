@@ -58,6 +58,7 @@ export const BRAIN_YAML_KEYS: Readonly<Record<string, BrainKeyRule>> = Object.fr
   feedback: SHARED("the default feedback scope labels shared signals"),
   recall: SHARED("recall degradation policy is one policy for the brain"),
   recall_inject: SHARED("which slices reach an agent is one policy for the brain"),
+  quote_check: SHARED("how the answer-time quote check treats a reply is one policy for the brain"),
   context: SHARED("the context window budget is one budget for the brain"),
   integrity: SHARED("integrity policy guards shared records"),
   // Endpoints, providers, model names and key env names are machine

@@ -34,6 +34,7 @@ import {
   takeStopAdvisories,
   type StopAdvisoryProducer,
 } from "./lib/stop-advisory-handover.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 async function main(): Promise<void> {
   let payload;
@@ -57,7 +58,10 @@ async function main(): Promise<void> {
   if (advisories.length === 0) return;
   process.stdout.write(
     `${JSON.stringify({
-      hookSpecificOutput: { hookEventName: "Stop", additionalContext: advisories.join("\n\n") },
+      hookSpecificOutput: {
+        hookEventName: "Stop",
+        additionalContext: fitHostContext(advisories.join("\n\n")),
+      },
     })}\n`,
   );
 }

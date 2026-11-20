@@ -10,6 +10,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { brainConfigPath } from "../paths.ts";
 import { BRAIN_CONFIG_SUPPORTED_VERSIONS } from "../policy/defaults.ts";
 import { BrainConfigError } from "../policy/errors.ts";
+import { brainSettingsFromStore } from "../policy/load.ts";
+import {
+  MachineConfigUnreadableError,
+  readRawBrainSettingsFromStore,
+  STORE_SETTINGS_SOURCE,
+} from "../policy/settings-source.ts";
 import { KeyIndexCollector, type BlockParseContext } from "../policy/key-index.ts";
 import {
   BRAIN_STORAGE_DEFAULTS,
@@ -55,6 +61,27 @@ export class StorageGateConfigError extends Error {
  * storage block they cannot see through, ignore every other block.
  */
 export function loadGateStorageConfig(vault: string): ResolvedBrainStorageConfig {
+  // A vault switched to the store keeps its settings as store records:
+  // the cap is read there, from the merged settings with only the
+  // `storage:` block validated, as below; settings it cannot read at all
+  // refuse by name as an unreadable file does.
+  if (brainSettingsFromStore(vault)) {
+    let merged: Record<string, unknown>;
+    try {
+      merged = readRawBrainSettingsFromStore();
+    } catch (err) {
+      // Only the errno code of a machine config that cannot be read, as
+      // for `_brain.yaml` below: the read error's text names its path.
+      if (err instanceof MachineConfigUnreadableError) {
+        throw new StorageGateConfigError(
+          `${STORE_SETTINGS_SOURCE}: machine config could not be read (${err.code})`,
+        );
+      }
+      if (err instanceof BrainConfigError) throw new StorageGateConfigError(err.message);
+      throw err;
+    }
+    return storageOnly(merged, STORE_SETTINGS_SOURCE);
+  }
   const path = brainConfigPath(vault);
   if (!existsSync(path)) return BRAIN_STORAGE_DEFAULTS;
   let text: string;
@@ -79,11 +106,21 @@ export function loadGateStorageConfig(vault: string): ResolvedBrainStorageConfig
       `_brain.yaml: unsupported schema_version: ${JSON.stringify(version ?? null)}`,
     );
   }
+  return storageOnly(parsed, "_brain.yaml");
+}
+
+/**
+ * The storage policy of `settings`, with only its `storage:` block parsed
+ * and validated. `source` is a relative label, never the host path: the
+ * field errors it raises become the refusal's prose.
+ */
+function storageOnly(
+  settings: Record<string, unknown>,
+  source: string,
+): ResolvedBrainStorageConfig {
   const ctx: BlockParseContext = {
-    obj: parsed,
-    // A relative label, never the host path: the field errors this context
-    // raises become the refusal's prose.
-    source: "_brain.yaml",
+    obj: settings,
+    source,
     warnings: [],
     keys: new KeyIndexCollector(),
   };

@@ -5,6 +5,7 @@ import { appendAuditRecord, type AuditRecord } from "../reliability/audit.ts";
 import { buildProbeReport, type ProbeCheck, type ProbeReport } from "../reliability/probe.ts";
 import { WATCHDOG_AUDIT_DIR, WATCHDOG_FALLBACK_AUDIT_DIR } from "./audit-dirs.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
+import { brainSettingsFromStore } from "./policy/load.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import {
   BRAIN_CONFIG_FILE,
@@ -80,58 +81,70 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
   // run - probe included - appends its audit record into `dirs.log`.
   const dirs = brainDirsForWrite(vault);
 
-  const configPath = brainConfigPath(vault);
-  const configKind = pathKind(configPath);
-  if (configKind === "file") {
+  // A vault switched to the store has no `Brain/` tree to check: its
+  // settings are store records and its memory folders are store folds.
+  // Probing (or "remediating") the tree there would report a false
+  // critical and recreate a legacy folder the store-only detection reads.
+  if (brainSettingsFromStore(vault)) {
     checks.push({
       name: "brain-config",
       status: "ok",
-      message: `${BRAIN_CONFIG_FILE} exists`,
+      message: "the brain settings and memory live in the brain store",
     });
   } else {
-    checks.push({
-      name: "brain-config",
-      status: "critical",
-      message:
-        configKind === "missing"
-          ? `${BRAIN_CONFIG_FILE} is missing`
-          : `${BRAIN_CONFIG_FILE} is not a file`,
-      remediation: "run o2b brain init",
-    });
-    remediationPlan.push({
-      action: "run-command",
-      command: "o2b brain init",
-      safe: false,
-    });
-  }
+    const configPath = brainConfigPath(vault);
+    const configKind = pathKind(configPath);
+    if (configKind === "file") {
+      checks.push({
+        name: "brain-config",
+        status: "ok",
+        message: `${BRAIN_CONFIG_FILE} exists`,
+      });
+    } else {
+      checks.push({
+        name: "brain-config",
+        status: "critical",
+        message:
+          configKind === "missing"
+            ? `${BRAIN_CONFIG_FILE} is missing`
+            : `${BRAIN_CONFIG_FILE} is not a file`,
+        remediation: "run o2b brain init",
+      });
+      remediationPlan.push({
+        action: "run-command",
+        command: "o2b brain init",
+        safe: false,
+      });
+    }
 
-  for (const dir of REQUIRED_DIRS) {
-    const abs = dirs[dir.pathKey];
-    const kind = pathKind(abs);
-    if (kind === "directory") {
+    for (const dir of REQUIRED_DIRS) {
+      const abs = dirs[dir.pathKey];
+      const kind = pathKind(abs);
+      if (kind === "directory") {
+        checks.push({
+          name: `dir:${dir.rel}`,
+          status: "ok",
+          message: `${dir.rel} exists`,
+        });
+        continue;
+      }
       checks.push({
         name: `dir:${dir.rel}`,
-        status: "ok",
-        message: `${dir.rel} exists`,
+        status: "warning",
+        message: kind === "missing" ? `${dir.rel} is missing` : `${dir.rel} is not a directory`,
+        remediation: kind === "missing" ? `create ${dir.rel}` : `replace with directory ${dir.rel}`,
       });
-      continue;
-    }
-    checks.push({
-      name: `dir:${dir.rel}`,
-      status: "warning",
-      message: kind === "missing" ? `${dir.rel} is missing` : `${dir.rel} is not a directory`,
-      remediation: kind === "missing" ? `create ${dir.rel}` : `replace with directory ${dir.rel}`,
-    });
-    const remediation: WatchdogRemediation = {
-      action: "create-dir",
-      target: dir.rel,
-      safe: true,
-    };
-    remediationPlan.push(remediation);
-    if (opts.remediate && !opts.dryRun) {
-      if (kind !== "missing") rmSync(abs, { recursive: true, force: true });
-      mkdirSync(abs, { recursive: true });
-      applied.push({ ...remediation, applied: true });
+      const remediation: WatchdogRemediation = {
+        action: "create-dir",
+        target: dir.rel,
+        safe: true,
+      };
+      remediationPlan.push(remediation);
+      if (opts.remediate && !opts.dryRun) {
+        if (kind !== "missing") rmSync(abs, { recursive: true, force: true });
+        mkdirSync(abs, { recursive: true });
+        applied.push({ ...remediation, applied: true });
+      }
     }
   }
 

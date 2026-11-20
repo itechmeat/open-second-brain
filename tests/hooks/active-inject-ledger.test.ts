@@ -5,9 +5,10 @@
  * clears the recall set, so recall-inject neither repeats the digest nor
  * carries dedupe state across a compaction.
  *
- * The ledger is written only when a consumer exists (`recall_inject_enabled`
- * or `reground_parts_enabled`) and the host sent a real session id; a default
- * install gets no new disk write. Every write is fail-soft.
+ * The ledger is written only when a consumer exists (`recall_inject_enabled`,
+ * `reground_parts_enabled`, or the answer-time quote check with its `active`
+ * phase not `off`, which is on by default) and the host sent a real session
+ * id. Every write is fail-soft.
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -48,6 +49,7 @@ const HOOK = resolve(
 
 const SESSION = "ledger-session-0001";
 const RECALL_ON = { OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" };
+const QUOTE_CHECK_OFF = { OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED: "false" };
 
 let vault: string;
 let configHome: string;
@@ -252,16 +254,37 @@ describe("active-inject injection ledger", () => {
     expect(emitted.has("Brain/preferences/pref-cut.md")).toBe(false);
   });
 
-  test("with both flags off nothing is written and stdout is unchanged", async () => {
+  test("with no consumer nothing is written and stdout is unchanged", async () => {
     writeActive(ACTIVE_BODY);
     const payload = { hook_event_name: "SessionStart", source: "startup", session_id: SESSION };
-    const off = await runHook(payload);
+    const off = await runHook(payload, QUOTE_CHECK_OFF);
     expect(off.exit).toBe(0);
     expect(existsSync(hookStateDir())).toBe(false);
 
     const on = await runHook(payload, RECALL_ON);
     expect(on.exit).toBe(0);
     expect(on.stdout).toBe(off.stdout);
+  });
+
+  test("the quote check's active phase alone is a consumer: a default install records the epoch", async () => {
+    writeActive(ACTIVE_BODY);
+    const r = await runHook(startup());
+    expect(r.exit).toBe(0);
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/active.md")).toBe(true);
+    expect(emitted.has("Brain/preferences/pref-foo.md")).toBe(true);
+  });
+
+  test("the quote check's active phase set to off is no consumer", async () => {
+    writeActive(ACTIVE_BODY);
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nquote_check:\n  active: off\n",
+      "utf8",
+    );
+    const r = await runHook(startup());
+    expect(r.exit).toBe(0);
+    expect(existsSync(hookStateDir())).toBe(false);
   });
 
   test("without a session id nothing is written", async () => {
@@ -309,7 +332,7 @@ describe("active-inject injection ledger", () => {
   test("a ledger write failure leaves stdout unchanged and exits 0", async () => {
     writeActive(ACTIVE_BODY);
     const payload = { hook_event_name: "SessionStart", source: "startup", session_id: SESSION };
-    const healthy = await runHook(payload);
+    const healthy = await runHook(payload, QUOTE_CHECK_OFF);
     expect(healthy.exit).toBe(0);
 
     // A regular file where the state directory belongs makes every write fail.

@@ -71,6 +71,7 @@ import { asHookPayload, type HookPayloadBase, readHookInput } from "./lib/stdin.
 import { stopAdvisoryHandsOver, writeStopAdvisoryHandover } from "./lib/stop-advisory-handover.ts";
 import { readTranscript } from "./lib/transcript.ts";
 import { resolveHookVault } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 async function main(): Promise<void> {
   let payload;
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
     // lose-not-duplicate order made real, not just ordered.
     writeSync(
       1,
-      `${JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: digest.line } })}\n`,
+      `${JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: fitHostContext(digest.line) } })}\n`,
     );
   }
   // Lose-not-duplicate: the ledger records the state only after the line

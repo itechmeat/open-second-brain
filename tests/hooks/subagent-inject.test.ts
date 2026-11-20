@@ -719,4 +719,40 @@ describe("subagent delivered-evidence paths", () => {
     const entries = readSubagentDeliveredPaths(vault, SESSION);
     expect(entries).toEqual([{ path: "Brain/standing-rules.md", truncated: true }]);
   });
+
+  test("a payload the host ceiling cuts records only what it still carries", async () => {
+    // Standing rules longer than the whole ceiling, read whole under a
+    // raised cap: the last guard cuts inside them, so the scoped rules and
+    // the memory bodies after them never reach the sub-agent.
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  standing_rules_max_chars: 20000\n",
+      "utf8",
+    );
+    writeRules(
+      Array.from({ length: 300 }, (_, i) => `- Standing rule ${i}: never skip the review.`).join(
+        "\n",
+      ),
+    );
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    const project = linkedProject("o2b-subagent-cut");
+    const projectKey = scopedRuleKey(basename(project))!;
+    mkdirSync(join(vault, "Brain", "standing-rules", "project"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "standing-rules", "project", `${projectKey}.md`),
+      "Write the changelog before every release.",
+      "utf8",
+    );
+    const r = await runHook({ ...subagentStartPayload({ agentId: AGENT }), cwd: project });
+    expect(r.exit).toBe(0);
+    const out = deliveredContext(r.stdout).additionalContext;
+    expect(out).toContain("Standing rule 0");
+    expect(out).not.toContain("Write the changelog before every release.");
+    expect(out).not.toContain("pref-foo");
+    expect(out).toContain("Injection truncated to budget");
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual([
+      { path: "Brain/standing-rules.md", truncated: true },
+    ]);
+  });
 });

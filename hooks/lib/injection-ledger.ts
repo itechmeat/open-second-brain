@@ -317,6 +317,10 @@ export function recordBriefDelivered(
  */
 const PREF_BULLET_RE = /^- `pref-([A-Za-z0-9][A-Za-z0-9_-]*)`(?=[ \t\r]|$)/gm;
 
+/** The ledger keys of the two session-start digests (provenance keys, never shown to an agent). */
+export const LEDGER_PATH_ACTIVE_DIGEST = "Brain/active.md";
+export const LEDGER_PATH_LESSONS_DIGEST = "Brain/lessons.md";
+
 /**
  * Vault paths a digest emission covers: `Brain/active.md` and
  * `Brain/lessons.md` when their bodies were emitted, then one
@@ -330,8 +334,8 @@ export function digestNotePaths(input: {
   readonly lessonsBodyEmitted: boolean;
 }): ReadonlyArray<string> {
   const paths = new Set<string>();
-  if (input.activeBodyEmitted) paths.add("Brain/active.md");
-  if (input.lessonsBodyEmitted) paths.add("Brain/lessons.md");
+  if (input.activeBodyEmitted) paths.add(LEDGER_PATH_ACTIVE_DIGEST);
+  if (input.lessonsBodyEmitted) paths.add(LEDGER_PATH_LESSONS_DIGEST);
   for (const match of input.emittedText.matchAll(PREF_BULLET_RE)) {
     paths.add(`Brain/preferences/pref-${match[1]}.md`);
   }
