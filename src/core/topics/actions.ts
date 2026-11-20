@@ -41,6 +41,7 @@ import {
 import type { TopicFold, TopicState } from "./fold.ts";
 import { reviewTopics } from "./plan.ts";
 import { readTopics, type TopicRead } from "./read.ts";
+import { canonicalTopicScope } from "./records.ts";
 import { createTopicEvent, writeTopicEvents, type TopicEvent } from "./write.ts";
 import { privateWithheld } from "../store/caller-reach.ts";
 import { SESSION_FIELD } from "../agent-context/session-identity.ts";
@@ -376,8 +377,11 @@ function quietDays(configPath?: string): number {
 }
 
 function listJson(fold: TopicFold, scope: string | undefined): Record<string, unknown>[] {
+  // The fold keys every scope (`canonicalTopicScope`); the filter is keyed
+  // the same way, so `project:Café` lists the topics of `café`.
+  const wanted = scope === undefined ? undefined : canonicalTopicScope(scope.trim());
   return [...fold.topics.values()]
-    .filter((t) => t.mergedInto === null && (scope === undefined || t.scope === scope))
+    .filter((t) => t.mergedInto === null && (wanted === undefined || t.scope === wanted))
     .toSorted((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1))
     .map(topicHead);
 }

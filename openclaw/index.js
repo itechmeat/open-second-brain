@@ -5492,8 +5492,12 @@ var init_constants2 = __esm(() => {
   });
 });
 
+// src/core/brain/scoped-rule-key.ts
+var init_scoped_rule_key = () => {};
+
 // src/core/topics/records.ts
 var init_records = __esm(() => {
+  init_scoped_rule_key();
   init_fold();
   init_ulid();
   init_constants2();

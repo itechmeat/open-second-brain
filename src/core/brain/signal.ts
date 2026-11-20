@@ -27,6 +27,7 @@
  * identical files — a property exercised by the roundtrip test.
  */
 
+import { originFields, type RecordOrigin } from "./record-origin.ts";
 import { dualWrite } from "../store/dual-write.ts";
 import {
   isPrivateFrontmatter,
@@ -208,6 +209,13 @@ export interface WriteSignalInput {
    * deleted or moved on expiry.
    */
   readonly expiration_date?: string;
+  /**
+   * The project and session the signal was captured in (`record-origin.ts`),
+   * resolved by the caller from launch or host facts, never from a tool
+   * argument. Stamped into frontmatter as `project` and `session` so topic
+   * planning can group the signal; absent writes the page as before.
+   */
+  readonly origin?: RecordOrigin;
   /**
    * Vault portability suite (v0.22.0). Opt-in: when true and `raw` is
    * present, the body is stored through the deterministic codec and a
@@ -732,6 +740,9 @@ function renderSignalDocument(
   if (sanitised.scope && sanitised.scope.trim()) {
     metadata["scope"] = sanitised.scope.trim();
   }
+  for (const [key, value] of Object.entries(originFields(sanitised.origin))) {
+    metadata[key] = value;
+  }
   if (sanitised.source && sanitised.source.length > 0) {
     metadata["source"] = [...sanitised.source];
   }
@@ -810,6 +821,14 @@ function renderSignalDocument(
  * it is provenance, not content, and including it would make the same
  * signal retried from a different channel collide as an
  * {@link IdempotencyPayloadMismatchError} instead of deduping.
+ *
+ * The `project` of its origin is in: it is stored in the frontmatter and
+ * decides which project's topics the signal joins, so a retry from another
+ * project is a different write and raises the mismatch rather than
+ * returning the other project's record. An absent project adds nothing to
+ * the hash, so a signal written before records carried a project dedupes a
+ * retry from a directory that names none. The origin's `session` is left
+ * out: `session_ref` already names the session where it decides anything.
  */
 function signalPayloadFields(input: WriteSignalInput): Record<string, unknown> {
   return {
@@ -823,6 +842,7 @@ function signalPayloadFields(input: WriteSignalInput): Record<string, unknown> {
     source_type: input.source_type,
     schema_type: input.schema_type?.trim(),
     session_ref: input.session_ref?.trim(),
+    project: input.origin?.project,
   };
 }
 

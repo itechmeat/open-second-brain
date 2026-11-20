@@ -12,6 +12,7 @@
  * tombstone.
  */
 
+import { scopedRuleKey } from "../brain/scoped-rule-key.ts";
 import { isAuthority } from "../store/fold.ts";
 import { isUlid } from "../store/ulid.ts";
 import {
@@ -58,6 +59,20 @@ export function isTopicItemKind(kind: string): kind is TopicItemKind {
 
 export function isItemId(value: unknown): value is string {
   return typeof value === "string" && ITEM_ID_RE.test(value);
+}
+
+/**
+ * A topic scope as every reader compares it: `personal` as it is, and the
+ * project of `project:<project>` keyed by the rule a record's project is
+ * stamped with (`scopedRuleKey`, `brain/record-origin.ts`), so a topic
+ * made by hand as `project:Café` is the topic of the records of `café`,
+ * and a filter spelled as the directory finds it. A project that keys to
+ * nothing is left as written.
+ */
+export function canonicalTopicScope(scope: string): string {
+  if (!scope.startsWith(TOPIC_PROJECT_SCOPE_PREFIX)) return scope;
+  const key = scopedRuleKey(scope.slice(TOPIC_PROJECT_SCOPE_PREFIX.length));
+  return key === null ? scope : `${TOPIC_PROJECT_SCOPE_PREFIX}${key}`;
 }
 
 /** A topic scope: `personal`, or `project:<project>` (one line, at most 200 characters). */

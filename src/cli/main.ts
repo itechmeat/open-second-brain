@@ -194,6 +194,8 @@ async function cmdStatus(argv: string[]): Promise<number> {
       process.stdout.write(`semantic: off (${semantic.hint})\n`);
     }
     process.stdout.write(`${storeStatusLine(store)}\n`);
+    const topics = store["topics"] as { advice?: unknown } | null | undefined;
+    if (typeof topics?.advice === "string") process.stdout.write(`topics: ${topics.advice}\n`);
   }
   // no-dead-ends, task 7: the terminal-state census found this one. With
   // no configuration file there is nothing else this verb can report and

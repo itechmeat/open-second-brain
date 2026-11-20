@@ -195,6 +195,15 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The last topic planning pass made no topic: the records no topic
+        // holds name no project. Linking the directory an agent works in
+        // gives its new records one.
+        code: "topics-records-without-project",
+        issueClass: "no topic is made because the records name no project",
+        nextCommand: "o2b brain project link",
+        autoRepairable: false,
+      },
+      {
         // The dry run is the first step whether or not the store exists:
         // it reads the legacy tree alone. The finding names `o2b store
         // init` before it when no store exists yet.

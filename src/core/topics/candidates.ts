@@ -5,8 +5,9 @@
  * it is private.
  *
  *  - **Project.** The `project` the record names (a signal's frontmatter,
- *    a log event's body), normalised as every scope key is
- *    (`scope-key.ts`); `null` when it names none.
+ *    a log event's body), read by the rule that wrote it
+ *    (`brain/record-origin.ts` `recordProjectOf`, the scoped-rules key):
+ *    a name in any script keeps its own key; `null` when it names none.
  *  - **Session.** The `session` the record names, else its `session_ref`,
  *    else the device, agent and UTC day that wrote it: records of one
  *    agent on one machine on one day count as one session, so a single
@@ -33,6 +34,7 @@
 
 import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../redactor.ts";
 import { scopeFromFrontmatter } from "../scope-key.ts";
+import { recordProjectOf } from "../brain/record-origin.ts";
 import { LOG_EVENT_KIND, SIGNAL_KIND, type StoreStream } from "../store/constants.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import { SIGNAL_REMOVED_KIND } from "../store/fold-signals.ts";
@@ -134,7 +136,7 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
   return {
     id: record.id,
     text,
-    project: scope.project,
+    project: recordProjectOf(meta["project"]),
     session: scope.session ?? str(meta["session_ref"]) ?? fallbackSession(record, origin),
     at: origin.at,
     private: isPrivate,

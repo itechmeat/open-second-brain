@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { recordOriginOf } from "./record-origin.ts";
 import { basename, join } from "node:path";
 
 import { delegatedAgentName } from "../agent-identity.ts";
@@ -809,6 +810,12 @@ function emitSignal(
   signal: SignalPayload,
 ): void {
   const index = dedup();
+  // The dedup index is vault-wide and its hash leaves the project out, on
+  // purpose: an identical observation (topic, sign, principle, scope)
+  // captured again in another linked project is not new information for
+  // the preference it feeds, and a second signal would count it twice and
+  // inflate that preference's confidence. The first project to capture it
+  // keeps it; another project's topic planning does not see the repeat.
   if (index.has(signal.dedupHash)) {
     counters.signals_deduped++;
     return;
@@ -829,6 +836,9 @@ function emitSignal(
     dedup_hash: signal.dedupHash,
     session_ref: sessionRef,
     ...(signal.raw ? { raw: signal.raw } : {}),
+    // The host's facts: the session's working directory and its id
+    // (`record-origin.ts`); a payload without them stamps neither.
+    origin: recordOriginOf(payload.cwd, vault, payload.sessionId),
   });
   index.set(signal.dedupHash, { id: result.id, path: result.path });
   counters.signals_created++;

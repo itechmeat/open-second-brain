@@ -48,6 +48,7 @@ import { claimSeen, releaseIfRequested } from "../view/writer.ts";
 import { resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import { TOPIC_ASSIGN_KIND, TOPIC_CREATE_KIND, TOPIC_STREAM } from "./constants.ts";
+import { recordTopicPlanOutcome } from "./plan-outcome.ts";
 import { isTopicPlanningInput, topicCandidates } from "./candidates.ts";
 import { topicBodyRejection } from "./records.ts";
 import { foldTopics } from "./fold.ts";
@@ -107,6 +108,18 @@ export type TopicPlanningReport =
        */
       readonly unheld: number;
       readonly unheldWithoutProject: number;
+      /**
+       * The same counts as a machine that holds only `shared` would read
+       * them: the shared topics created, the shared records no topic holds
+       * and how many of those name no project. A caller below local reach
+       * is given these (`plan-outcome.ts`), never a count that includes a
+       * private record.
+       */
+      readonly shared: {
+        readonly created: number;
+        readonly unheld: number;
+        readonly unheldWithoutProject: number;
+      };
       readonly created: ReadonlyArray<CreatedTopic>;
       readonly routed: ReadonlyArray<RoutedRecord>;
       readonly merges: ReadonlyArray<MergeProposal>;
@@ -388,6 +401,7 @@ function planUnderLock(
     }
   };
   const created: Array<Mutable<CreatedTopic>> = [];
+  let createdShared = 0;
   const routed: RoutedRecord[] = [];
   try {
     writePlan();
@@ -404,10 +418,25 @@ function planUnderLock(
   const unheld = candidates.filter(
     (c) => !fold.assignments.has(c.id) && (c.topic === null || fold.canonical(c.topic) === null),
   );
+  // The counts a machine that holds only `shared` would compute: its fold
+  // has no private topic record, so a shared record a private record
+  // assigns (or whose topic is private) is unheld there.
+  const sharedFold = foldTopics(partitionRecords(read, "shared"));
+  const unheldShared = candidates.filter(
+    (c) =>
+      !c.private &&
+      !sharedFold.assignments.has(c.id) &&
+      (c.topic === null || sharedFold.canonical(c.topic) === null),
+  );
   return {
     status: "planned",
     unheld: unheld.length,
     unheldWithoutProject: unheld.filter((c) => c.project === null).length,
+    shared: {
+      created: createdShared,
+      unheld: unheldShared.length,
+      unheldWithoutProject: unheldShared.filter((c) => c.project === null).length,
+    },
     created,
     routed,
     merges: plan.merges,
@@ -451,6 +480,7 @@ function planUnderLock(
         ...(plannedTopic.verdict !== undefined ? { verdict: plannedTopic.verdict } : {}),
       };
       created.push(entry);
+      if (!plannedTopic.private) createdShared += 1;
       appendMany(
         plannedTopic.members.map((member) => ({
           isPrivate: plannedTopic.private,
@@ -527,13 +557,27 @@ export function runAutoTopicPlanning(
     if (device === null) return null;
     if (options.mayPlan !== undefined && !options.mayPlan()) return null;
     const store = openStore({ root, device });
-    return runTopicPlanning(store, {
+    const report = runTopicPlanning(store, {
       agent: resolveAgentName(options.configPath),
       ...(options.topicVerdicts !== undefined ? { topicVerdicts: options.topicVerdicts } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
       ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
       ...(options.mayPlan !== undefined ? { mayPlan: options.mayPlan } : {}),
     });
+    if (report.status === "planned") {
+      recordTopicPlanOutcome(store.deviceStateDir, {
+        at: new Date(options.now?.() ?? Date.now()).toISOString(),
+        created: report.created.length,
+        unassigned: report.unheld,
+        withoutProject: report.unheldWithoutProject,
+        shared: {
+          created: report.shared.created,
+          unassigned: report.shared.unheld,
+          withoutProject: report.shared.unheldWithoutProject,
+        },
+      });
+    }
+    return report;
   } catch (err) {
     return {
       status: "error",

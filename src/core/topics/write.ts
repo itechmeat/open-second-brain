@@ -48,7 +48,7 @@ import {
   type TopicRecordKind,
 } from "./constants.ts";
 import { readTopics, type TopicRead } from "./read.ts";
-import { isTopicItemKind, topicBodyRejection } from "./records.ts";
+import { canonicalTopicScope, isTopicItemKind, topicBodyRejection } from "./records.ts";
 
 /** One topic record to write. */
 export interface TopicEvent {
@@ -100,7 +100,7 @@ export function createTopicEvent(input: {
     authority: input.authority,
     body: {
       title: input.title.trim(),
-      scope: input.scope,
+      scope: canonicalTopicScope(input.scope),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.goal !== undefined ? { goal: input.goal } : {}),
     },

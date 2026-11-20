@@ -6,6 +6,7 @@
  * registry, which preserves the public FEEDBACK_TOOLS surface.
  */
 
+import { contextRecordOrigin } from "./shared.ts";
 import { resolve } from "node:path";
 import { resolveAgentName } from "../../core/config.ts";
 import {
@@ -202,6 +203,7 @@ export async function toolBrainNote(
       text: rawText,
       ...(agent ? { agent } : {}),
       ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+      origin: contextRecordOrigin(ctx),
     });
   } catch (err) {
     // `appendBrainNote` throws one validation error ("text is required");

@@ -32,6 +32,7 @@
  * caller-supplied (or defaulted) `createdAt`.
  */
 
+import type { RecordOrigin } from "./record-origin.ts";
 import { relative } from "node:path";
 
 import { appendBrainNote } from "./note.ts";
@@ -85,6 +86,13 @@ export interface SessionCheckpointInput {
    * supplied by tests for deterministic fixtures.
    */
   readonly createdAt?: string;
+  /**
+   * The project and session the checkpoint was written in
+   * (`record-origin.ts`), from the caller's launch facts and this
+   * checkpoint's session id: stamped on its signals, its diary note and its
+   * summary's project.
+   */
+  readonly origin?: RecordOrigin;
 }
 
 /** One item that needs review — never silently dropped. */
@@ -161,6 +169,11 @@ function checkpointPayloadFields(input: SessionCheckpointInput): Record<string, 
     // mismatch error rather than silently deduping.
     host: input.host,
     source_turn_ids: input.sourceTurnIds ? [...input.sourceTurnIds] : undefined,
+    // The project is stored too (on the signals, the diary note and the
+    // summary), so it follows the same rule; an absent one adds nothing,
+    // and a checkpoint saved before records carried a project dedupes a
+    // retry from a directory that names none.
+    project: input.origin?.project,
   };
 }
 
@@ -247,6 +260,7 @@ export function saveSessionCheckpoint(
           ...(sig.raw ? { raw: sig.raw } : {}),
           ...(sig.source && sig.source.length > 0 ? { source: [...sig.source] } : {}),
           idempotency_key: signalKey(sessionId, index),
+          ...(input.origin !== undefined ? { origin: input.origin } : {}),
         },
         writeOptions,
       );
@@ -282,6 +296,7 @@ export function saveSessionCheckpoint(
         ...(input.nextSteps !== undefined ? { nextSteps: input.nextSteps } : {}),
         ...(input.sourceTurnIds !== undefined ? { sourceTurnIds: input.sourceTurnIds } : {}),
         ...(input.host !== undefined ? { host: input.host } : {}),
+        ...(input.origin?.project !== undefined ? { project: input.origin.project } : {}),
         createdAt,
       });
       summary = Object.freeze({ id: digest.id });
@@ -298,7 +313,12 @@ export function saveSessionCheckpoint(
   let diaryWritten = false;
   if (input.diary?.trim()) {
     try {
-      appendBrainNote({ vault, text: input.diary, agent: input.agent });
+      appendBrainNote({
+        vault,
+        text: input.diary,
+        agent: input.agent,
+        ...(input.origin !== undefined ? { origin: input.origin } : {}),
+      });
       diaryWritten = true;
     } catch (err) {
       partial.push(

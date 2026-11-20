@@ -77,7 +77,12 @@ import {
   type TopicLogClass,
   type TopicStatus,
 } from "./constants.ts";
-import { isTopicItemKind, isTopicRecordKind, topicBodyRejection } from "./records.ts";
+import {
+  canonicalTopicScope,
+  isTopicItemKind,
+  isTopicRecordKind,
+  topicBodyRejection,
+} from "./records.ts";
 import { voidedRecords } from "./undo-fold.ts";
 
 /** Who wrote a record, for attribution on the page. */
@@ -624,7 +629,9 @@ function assemble(
       goalProposals: goalProposals(s, id),
       status: status.status,
       resolved: status.resolved,
-      scope: create.body["scope"] as string,
+      // Read as every reader compares it, so a hand-made topic written
+      // before the scope was keyed on write matches its records' project.
+      scope: canonicalTopicScope(create.body["scope"] as string),
       createdAt: physical(create),
       updatedAt: home === id ? activity.get(id)! : (s.updated.get(id) ?? physical(create)),
       mergedInto: home === id ? null : home,
