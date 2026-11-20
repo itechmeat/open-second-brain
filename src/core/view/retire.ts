@@ -27,7 +27,8 @@
  * `page-path.ts` before any file operation; any other path is ignored.
  */
 
-import { statSync } from "node:fs";
+import { type BigIntStats, statSync } from "node:fs";
+import { identityOfStats, sameIdentity } from "../fs-identity.ts";
 import { basename, dirname } from "node:path";
 
 import { compareCodeUnits } from "../store/compare.ts";
@@ -246,13 +247,36 @@ function foreignPages(ctx: RetireContext, target: string): string[] {
 
 /** Whether `a` and `b` are one file on disk (a case-insensitive file system, or a link). */
 function sameFile(a: string, b: string): boolean {
+  return sameFileStats(bigStatOrNull(a), bigStatOrNull(b));
+}
+
+function bigStatOrNull(path: string): BigIntStats | null {
   try {
-    const sa = statSync(a);
-    const sb = statSync(b);
-    return sa.dev === sb.dev && sa.ino === sb.ino;
+    return statSync(path, { bigint: true, throwIfNoEntry: false }) ?? null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Whether two `bigint` stats are one file, failing toward "the same" when
+ * the filesystem reports no inode. The answer spares a retiring page that
+ * may be the live page's own file under another spelling (a case-only
+ * difference on a case-insensitive volume): a wrong "same" leaves a stale
+ * page in the view, a wrong "different" retires the live page and ingests
+ * its text under the retired name. With an inode on both sides the exact
+ * identity decides (`fs-identity.ts`). Without one (a network share, a
+ * FAT-family volume) one file always shows the same device, size and
+ * change times under both names, so those equal means "same": the live
+ * page is never retired, and two different files are taken for one only
+ * when all four agree, which only spares a page. Exported for tests.
+ */
+export function sameFileStats(a: BigIntStats | null, b: BigIntStats | null): boolean {
+  if (a === null || b === null) return false;
+  const left = identityOfStats(a);
+  const right = identityOfStats(b);
+  if (left !== null && right !== null) return sameIdentity(left, right);
+  return a.dev === b.dev && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
 
 /** Pages a render record names in a retiring folder that the store no longer renders. */

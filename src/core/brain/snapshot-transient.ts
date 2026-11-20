@@ -27,9 +27,10 @@
  *
  * Everything else, an unknown `.lock` or `.tmp` included, is archived.
  */
-import { closeSync, constants, openSync, readdirSync, readSync, type Stats } from "node:fs";
+import { closeSync, readdirSync, readSync, type Stats } from "node:fs";
 
 import { isAtomicWriteTemp, lockSiblingOriginal } from "../fs-atomic.ts";
+import { openRegularFileForRead } from "../store/safe-fs.ts";
 import { LOCK_STAMP_BODY_RE } from "./sync-lockfile.ts";
 
 export type ProductTransientKind =
@@ -53,11 +54,16 @@ function isGone(err: unknown): boolean {
 
 /**
  * At most `STAMP_MAX_BYTES + 1` bytes of the file at `abs`, never more
- * whatever it grew to since its `lstat`, and never through a symbolic link
- * where the platform can refuse one (`O_NOFOLLOW`).
+ * whatever it grew to since its `lstat`, or null when it is no regular
+ * file now. Opened through the store readers' guarded opener
+ * (`openRegularFileForRead`): never through a symbolic link, and never
+ * blocking on a FIFO swapped in after the `lstat` (a non-blocking open,
+ * then an `fstat` that refuses a non-regular descriptor), which would
+ * otherwise hold the snapshot before tar and its timeout for good.
  */
-function readHead(abs: string | Buffer): Buffer {
-  const fd = openSync(abs, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+function readHead(abs: string | Buffer): Buffer | null {
+  const fd = openRegularFileForRead(abs);
+  if (fd === null) return null;
   try {
     const buf = Buffer.alloc(STAMP_MAX_BYTES + 1);
     const n = readSync(fd, buf, 0, buf.length, 0);
@@ -96,12 +102,14 @@ export function productTransientKind(
   if (stat.size > STAMP_MAX_BYTES) return null;
   // Read even when the lstat said empty: a writer may have put bytes in it
   // since, and an append-shard lock is one only while it is really empty.
-  let head: Buffer;
+  let head: Buffer | null;
   try {
     head = readHead(abs);
   } catch (err) {
     return isGone(err) ? "vanished" : null;
   }
+  // No regular file any more (a FIFO, a link, a directory swapped in): content.
+  if (head === null) return null;
   if (head.length === 0) return original.endsWith(".jsonl") ? "shard-lock" : null;
   if (head.length > STAMP_MAX_BYTES) return null;
   return LOCK_STAMP_BODY_RE.test(head.toString("utf8")) ? "lock-stamped" : null;

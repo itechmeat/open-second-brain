@@ -23,6 +23,7 @@
  * knows where that point is.
  */
 
+import { sameDevIno } from "../fs-identity.ts";
 import { legacyVaultOf } from "./no-vault.ts";
 import type { Authority } from "../store/constants.ts";
 import { existsSync, lstatSync, mkdirSync } from "node:fs";
@@ -549,7 +550,8 @@ interface EventsMark {
     readonly path: string;
     readonly partitionRoot: string;
     /** null: the shard did not exist then (read whole now). */
-    readonly stamp: { readonly ino: number; readonly dev: number; readonly size: number } | null;
+    /** Device and inode as `bigint` (`fs-identity.ts`), and the size the mark saw. */
+    readonly stamp: { readonly ino: bigint; readonly dev: bigint; readonly size: bigint } | null;
   }>;
   readonly store: StoreInspection;
 }
@@ -560,7 +562,7 @@ function markEvents(store: StoreInspection): EventsMark {
     const partitionRoot = partitionDir(store.root, partition);
     for (const shard of listShards(partitionRoot, { stream: "events" })) {
       try {
-        const st = lstatSync(shard.path);
+        const st = lstatSync(shard.path, { bigint: true });
         shards.push({
           path: shard.path,
           partitionRoot,
@@ -597,14 +599,14 @@ function preferenceTouchedSince(mark: EventsMark, id: string): boolean | null {
     if (shard.stamp === null) return null;
     let read: ReturnType<typeof readShard>;
     try {
-      const st = lstatSync(shard.path);
-      if (st.ino !== shard.stamp.ino || st.dev !== shard.stamp.dev || st.size < shard.stamp.size) {
+      const st = lstatSync(shard.path, { bigint: true });
+      if (!sameDevIno(st, shard.stamp) || st.size < shard.stamp.size) {
         return null;
       }
       if (st.size === shard.stamp.size) continue;
       read = readShard(shard.path, {
         partitionRoot: shard.partitionRoot,
-        offset: shard.stamp.size,
+        offset: Number(shard.stamp.size),
       });
     } catch {
       return null;

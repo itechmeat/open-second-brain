@@ -189,9 +189,9 @@ const UNREADABLE_MARKER: FreezeMarker = Object.freeze({
  * parsed.
  */
 interface MarkerStamp {
-  readonly ino: number;
-  readonly size: number;
-  readonly mtimeMs: number;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
   readonly marker: FreezeMarker;
 }
 const MARKER_STAMPS = new Map<string, MarkerStamp>();
@@ -277,7 +277,9 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
   // failure (EACCES, ELOOP) must not propagate out of a write guard.
   let stat;
   try {
-    stat = statSync(path, { throwIfNoEntry: false });
+    // bigint: the inode compared below is exact on Windows too (NTFS ids
+    // exceed 2^53; `fs-identity.ts`).
+    stat = statSync(path, { bigint: true, throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -290,7 +292,7 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
     cached !== undefined &&
     cached.ino === stat.ino &&
     cached.size === stat.size &&
-    cached.mtimeMs === stat.mtimeMs
+    cached.mtimeNs === stat.mtimeNs
   ) {
     return cached.marker;
   }
@@ -298,7 +300,7 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
   MARKER_STAMPS.set(root, {
     ino: stat.ino,
     size: stat.size,
-    mtimeMs: stat.mtimeMs,
+    mtimeNs: stat.mtimeNs,
     marker,
   });
   return marker;

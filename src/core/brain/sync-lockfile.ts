@@ -62,6 +62,7 @@
  */
 
 import { LOCK_SIBLING_SUFFIX } from "../fs-atomic.ts";
+import { identityOfStats, sameDevIno } from "../fs-identity.ts";
 import {
   type BigIntStats,
   closeSync,
@@ -143,8 +144,7 @@ function ensureExitHook(): void {
 /** Identity of the file behind an open descriptor; `null` when it has none. */
 function identityOf(fd: number): LockIdentity {
   try {
-    const st = fstatSync(fd, { bigint: true });
-    return st.ino === 0n ? null : { dev: st.dev, ino: st.ino };
+    return identityOfStats(fstatSync(fd, { bigint: true }));
   } catch {
     return null;
   }
@@ -184,7 +184,7 @@ function ownsLockName(lockPath: string, identity: LockIdentity, token: string): 
   try {
     const st = lstatSync(lockPath, { bigint: true });
     if (identity === null) return true;
-    return st.dev === identity.dev && st.ino === identity.ino;
+    return sameDevIno(st, identity);
   } catch {
     return false;
   }
@@ -342,7 +342,7 @@ export function acquireLockSync(target: string): LockHandle {
 
 /** Whether two stats describe the same file in the same state. */
 function sameLockFile(a: BigIntStats, b: BigIntStats): boolean {
-  return a.dev === b.dev && a.ino === b.ino && a.mtimeNs === b.mtimeNs;
+  return sameDevIno(a, b) && a.mtimeNs === b.mtimeNs;
 }
 
 /**

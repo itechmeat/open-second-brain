@@ -25,6 +25,7 @@
  * dual write counts it as a failure and keeps the legacy write.
  */
 
+import { sameDevIno } from "../fs-identity.ts";
 import {
   closeSync,
   constants,
@@ -32,6 +33,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  type BigIntStats,
   type Stats,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -142,7 +144,10 @@ export function isRealDirBelowPartition(partitionRoot: string, dir: string): boo
  * another partition's records, or files outside the store, under this
  * partition's name.
  */
-export function openRegularFileForRead(path: string, partitionRoot?: string): number | null {
+export function openRegularFileForRead(
+  path: string | Buffer,
+  partitionRoot?: string,
+): number | null {
   if (!lstatSync(path).isFile()) return null;
   let fd: number;
   try {
@@ -153,31 +158,46 @@ export function openRegularFileForRead(path: string, partitionRoot?: string): nu
   }
   let keep = false;
   try {
-    const opened = fstatSync(fd);
+    const opened = fstatSync(fd, { bigint: true });
     // Without O_NOFOLLOW (Windows) the open follows whatever is at the
     // name: a link swapped in after the lstat shows here.
     keep =
       opened.isFile() &&
       (NO_FOLLOW !== 0 || nameIsOpenedFile(path, opened)) &&
-      (partitionRoot === undefined || isRealDirBelowPartition(partitionRoot, dirname(path)));
+      (partitionRoot === undefined ||
+        isRealDirBelowPartition(partitionRoot, dirname(path.toString())));
   } finally {
     if (!keep) closeSync(fd);
   }
   return keep ? fd : null;
 }
 
+/**
+ * The name's `bigint` lstat, or null when it is gone. These checks run
+ * where the open cannot refuse a link (Windows, no `O_NOFOLLOW`), whose
+ * NTFS file ids exceed what a number holds exactly (`fs-identity.ts`).
+ */
+function lstatBigOrNull(path: string | Buffer): BigIntStats | null {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return null;
+    throw err;
+  }
+}
+
 /** Whether the name `path` still refers to the file `opened` describes, and is no link. */
-function nameIsOpenedFile(path: string, opened: Stats): boolean {
-  const now = lstatOrNull(path);
-  return now !== null && !now.isSymbolicLink() && now.ino === opened.ino && now.dev === opened.dev;
+function nameIsOpenedFile(path: string | Buffer, opened: BigIntStats): boolean {
+  const now = lstatBigOrNull(path);
+  return now !== null && !now.isSymbolicLink() && sameDevIno(now, opened);
 }
 
 /** The name `path` still refers to the file `opened` describes, and is no link. */
-function assertNameIsOpenedFile(path: string, opened: Stats): void {
-  const now = lstatOrNull(path);
+function assertNameIsOpenedFile(path: string, opened: BigIntStats): void {
+  const now = lstatBigOrNull(path);
   if (now === null) throw new StoreUnsafePathError(path, "was removed while it was opened");
   if (now.isSymbolicLink()) throw new StoreUnsafePathError(path, "is a symbolic link");
-  if (now.ino !== opened.ino || now.dev !== opened.dev) {
+  if (!sameDevIno(now, opened)) {
     throw new StoreUnsafePathError(path, "was replaced while it was opened");
   }
 }
@@ -203,9 +223,9 @@ export function openShardForAppend(path: string): number {
     throw err;
   }
   try {
-    const stat = fstatSync(fd);
+    const stat = fstatSync(fd, { bigint: true });
     if (!stat.isFile()) throw new StoreUnsafePathError(path, "is not a regular file");
-    if (stat.nlink > 1) throw new StoreUnsafePathError(path, `has ${stat.nlink} hard links`);
+    if (stat.nlink > 1n) throw new StoreUnsafePathError(path, `has ${stat.nlink} hard links`);
     // Without O_NOFOLLOW (Windows) the open itself follows whatever is at
     // the name: a link swapped in after the first lstat shows here.
     if (NO_FOLLOW === 0) assertNameIsOpenedFile(path, stat);

@@ -142,6 +142,7 @@
  *     user notes outside the envelope every other note write obeys.
  */
 
+import { identityOfStats, sameIdentity } from "../../fs-identity.ts";
 import {
   constants,
   copyFileSync,
@@ -730,7 +731,7 @@ export function namesSameEntry(a: string, b: string): boolean {
   const left = bigintStatOrNull(a);
   const right = bigintStatOrNull(b);
   if (left === null || right === null) return false;
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameIdentity(identityOfStats(left), identityOfStats(right));
 }
 
 /**
