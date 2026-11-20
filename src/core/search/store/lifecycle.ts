@@ -130,6 +130,12 @@ function isBusyError(e: unknown): boolean {
  * not a broken index: every other error still throws.
  */
 function applyPragmas(db: Database, journalMode: JournalMode): JournalModeSwitch {
+  // The busy timeout first: every statement after it waits for a lock
+  // instead of failing at once. A connection that opens a WAL file while
+  // another one holds it (a search reading a rebuild's staging file while
+  // the rebuild reopens it) can meet SQLITE_BUSY_RECOVERY on its first
+  // statement, and the rebuild used to die of that.
+  db.exec("PRAGMA busy_timeout = 5000");
   let switched: JournalModeSwitch = "set";
   try {
     db.exec(`PRAGMA journal_mode = ${journalMode}`);
@@ -139,11 +145,11 @@ function applyPragmas(db: Database, journalMode: JournalMode): JournalModeSwitch
   }
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
-  // Wait briefly for a concurrent writer (e.g. an indexer holding the WAL
-  // write lock) instead of failing immediately with SQLITE_BUSY. Matters
-  // for the opportunistic query-cache writes a read-mode connection makes
-  // during search (v0.20.0); search itself also degrades gracefully.
-  db.exec("PRAGMA busy_timeout = 5000");
+  // The busy timeout above also lets a concurrent writer (e.g. an indexer
+  // holding the WAL write lock) be waited for instead of failing at once
+  // with SQLITE_BUSY. Matters for the opportunistic query-cache writes a
+  // read-mode connection makes during search (v0.20.0); search itself also
+  // degrades gracefully.
   return switched;
 }
 

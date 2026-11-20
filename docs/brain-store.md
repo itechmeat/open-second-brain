@@ -856,6 +856,23 @@ resume the run right away, `o2b brain migrate-store --force-release-gate`
 opens the gate again; it refuses while the run that holds the gate is
 still running.
 
+The search index of a switched machine lives in its device-local state
+and is built anew in the background: by the first session start or MCP
+server start after the switch, or by the first search when nothing has
+started it yet (a search never builds the index of a store in its own
+process; a small vault is often built within the few seconds that first
+search waits, a larger one answers from what is indexed so far). The
+build reads the brain store first and then the vault's notes; until it
+ends, a search answers from what it has indexed so far and says so. The
+legacy `Brain/` tree is not indexed once the machine has switched: it is
+an archive that `--remove-legacy` moves out, and its signals,
+preferences and log are indexed as store records, so each answers once.
+A record whose entity no reader shows any more (a forgotten signal, a
+removed preference or lane entry, an entity marked `_status:
+tombstoned` before or after the migration) is never indexed, and a
+search refuses one an index still holds. A signal waiting for write
+approval is kept out the same way until it is approved.
+
 From now on this machine writes only to the store. Render the view twice
 (the first render after the claim only catches up), and check doctor:
 

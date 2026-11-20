@@ -34,7 +34,11 @@ import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibilit
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
-import { IndexBuildingError } from "../core/search/build-progress.ts";
+import {
+  IndexBuildingError,
+  IndexBuildStartFailedError,
+  IndexBuildStartingError,
+} from "../core/search/build-progress.ts";
 import {
   defaultConfigPath,
   resolveRecallAdequacyThresholds,
@@ -821,7 +825,13 @@ export function searchErrorToMcp(e: SearchError): MCPError {
   }
   // A missing index that a running rebuild is building: its own message
   // says how far it is, and the command below would only queue behind it.
-  if (e instanceof IndexBuildingError) return new MCPError(INTERNAL_ERROR, e.message, data);
+  if (
+    e instanceof IndexBuildingError ||
+    e instanceof IndexBuildStartingError ||
+    e instanceof IndexBuildStartFailedError
+  ) {
+    return new MCPError(INTERNAL_ERROR, e.message, data);
+  }
   if (e.code === "INDEX_MISSING") {
     return new MCPError(
       INTERNAL_ERROR,

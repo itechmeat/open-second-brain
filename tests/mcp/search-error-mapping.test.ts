@@ -15,7 +15,10 @@ import {
   SEARCH_ERROR_CODES,
   SearchError,
 } from "../../src/core/search/types.ts";
-import { IndexBuildingError } from "../../src/core/search/build-progress.ts";
+import {
+  IndexBuildingError,
+  IndexBuildStartFailedError,
+} from "../../src/core/search/build-progress.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -38,6 +41,7 @@ test("an index being built says so, not to run the command that would queue behi
     startedAt: new Date().toISOString(),
     phase: "notes",
     storeStartedAt: null,
+    storeDoneAt: null,
     storeBytesDone: 0,
     storeBytesTotal: 0,
     storeRecords: 0,
@@ -96,4 +100,13 @@ test("the session-grep time bounds carry the SearchError code too", async () => 
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test("a background build that could not be started says so and names the command", () => {
+  const err = new IndexBuildStartFailedError("/state/index/brain.sqlite", "spawn ENOENT");
+  const mcp = searchErrorToMcp(err);
+  expect(mcp.message).toBe(err.message);
+  expect(mcp.message).toContain("could not be started (spawn ENOENT)");
+  expect(mcp.message).toContain("o2b search reindex");
+  expect(mcp.data).toEqual({ code: "INDEX_MISSING" });
 });

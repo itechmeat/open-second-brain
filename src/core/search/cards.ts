@@ -4,6 +4,7 @@
  * into its fuller note (layer 2) and paginated raw chunks (layer 3).
  */
 
+import { storeRecordJudge } from "./brain-store/entity-filter.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
 import { isPathOwnerVisible, isPathReadableAtReach } from "./result-filters.ts";
@@ -162,6 +163,12 @@ export async function expandHit(
       throw notFound(input.chunkId);
     }
     if (!reachReadable(config, store, hit.path, reach)) {
+      throw notFound(input.chunkId);
+    }
+    // A card handed out before its store record was forgotten, marked or
+    // staged expands to nothing once the store rule hides it, also while
+    // the index still holds it (`brain-store/entity-filter.ts`).
+    if (!storeRecordJudge(store)(hit.path)) {
       throw notFound(input.chunkId);
     }
     // Document chunks in `chunkIndex` order: the fuller note (layer 2) is

@@ -251,13 +251,14 @@ test("an index the first build is still building names the build and how far it 
   try {
     const recorder = new IndexBuildRecorder(dbPath);
     recorder.ready();
+    recorder.storeBegins();
     recorder.store(500, 1000, 1234);
     const notices = collectRuntimeNotices(vault, { configPath, env: {} });
     expect(notices.map((n) => n.code)).toEqual(["search_index_building"]);
     const [building] = notices;
     expect(building!.message).toBe(
       "Search index is being built (started less than a minute ago; " +
-        "50% of the brain store read, 1,234 records indexed); " +
+        "50% of the brain store read, 1,234 records indexed, the vault's notes come next); " +
         "until it finishes, recall answers from what it has indexed so far.",
     );
     // It clears itself: no command to run.

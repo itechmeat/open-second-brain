@@ -23,6 +23,7 @@ import {
   readIndexBuild,
   sweepStagingClaims,
   waitForStagingReaders,
+  type IndexBuildProgress,
 } from "../../../src/core/search/build-progress.ts";
 import { acquireWriterLease } from "../../../src/core/search/store/writer-lock.ts";
 
@@ -92,44 +93,94 @@ test("an unreadable progress file is no build", async () => {
   }
 });
 
-test("the description names the phase, the share read and the time left", () => {
+test("the description names the phase and the share read, the store first", () => {
   const startedAt = "2026-11-20T08:00:00.000Z";
   const at = (min: number): number => Date.parse(startedAt) + min * 60_000;
-  expect(
-    describeIndexBuild(
-      {
-        pid: process.pid,
-        token: "t0",
-        startedAt,
-        phase: "notes",
-        storeStartedAt: null,
-        storeBytesDone: 0,
-        storeBytesTotal: 0,
-        storeRecords: 0,
-      },
-      at(0.2),
-    ),
-  ).toBe(
-    "the search index is being built (started less than a minute ago; indexing the vault's notes, the brain store comes next)",
+  const progress = (over: Partial<IndexBuildProgress>): IndexBuildProgress => ({
+    pid: process.pid,
+    token: "t0",
+    startedAt,
+    phase: "store",
+    storeStartedAt: "2026-11-20T08:00:01.000Z",
+    storeDoneAt: null,
+    storeBytesDone: 0,
+    storeBytesTotal: 0,
+    storeRecords: 0,
+    ...over,
+  });
+  expect(describeIndexBuild(progress({}), at(0.2))).toBe(
+    "the search index is being built (started less than a minute ago; reading the brain store, the vault's notes come next)",
   );
   expect(
     describeIndexBuild(
+      progress({ storeBytesDone: 250, storeBytesTotal: 1000, storeRecords: 94_000 }),
+      at(2),
+    ),
+  ).toBe(
+    "the search index is being built (started about 2 minutes ago; " +
+      "25% of the brain store read, 94,000 records indexed, the vault's notes come next)",
+  );
+  expect(
+    describeIndexBuild(
+      progress({
+        phase: "notes",
+        storeDoneAt: "2026-11-20T08:04:00.000Z",
+        storeBytesDone: 1000,
+        storeBytesTotal: 1000,
+        storeRecords: 370_000,
+      }),
+      at(5),
+    ),
+  ).toBe(
+    "the search index is being built (started about 5 minutes ago; " +
+      "the brain store is indexed (370,000 records), indexing the vault's notes)",
+  );
+  // A build with no brain store indexes the notes only.
+  expect(describeIndexBuild(progress({ phase: "notes", storeStartedAt: null }), at(0.2))).toBe(
+    "the search index is being built (started less than a minute ago; indexing the vault's notes)",
+  );
+});
+
+test("the description never promises a time to go", () => {
+  const startedAt = "2026-11-20T08:00:00.000Z";
+  // A store read at a steady pace for a minute, at every share: the bytes
+  // read do not predict the time left, so no share yields an estimate.
+  for (const done of [1, 100, 440, 900, 999]) {
+    const text = describeIndexBuild(
       {
         pid: process.pid,
         token: "t0",
         startedAt,
         phase: "store",
-        storeStartedAt: "2026-11-20T08:01:00.000Z",
-        storeBytesDone: 250,
+        storeStartedAt: startedAt,
+        storeDoneAt: null,
+        storeBytesDone: done,
         storeBytesTotal: 1000,
-        storeRecords: 94_000,
+        storeRecords: done * 300,
       },
-      at(2),
-    ),
-  ).toBe(
-    "the search index is being built (started about 2 minutes ago; " +
-      "25% of the brain store read, 94,000 records indexed; about 3 minutes to go)",
-  );
+      Date.parse(startedAt) + 60_000,
+    );
+    expect(text).not.toContain("to go");
+    expect(text).not.toContain("less than a minute to");
+  }
+});
+
+test("a recorder publishes the store phase first, then the notes", async () => {
+  const lease = await acquireWriterLease(dbPath);
+  try {
+    const recorder = new IndexBuildRecorder(dbPath);
+    recorder.ready();
+    recorder.storeBegins();
+    expect(readIndexBuild(dbPath)?.phase).toBe("store");
+    recorder.store(10, 100, 5);
+    recorder.storeEnds();
+    const after = readIndexBuild(dbPath);
+    expect(after?.phase).toBe("notes");
+    expect(after?.storeDoneAt).not.toBeNull();
+    recorder.end();
+  } finally {
+    lease.release();
+  }
 });
 
 test("a barrier that cannot be published reports it, so the build does not swap", async () => {

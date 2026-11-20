@@ -246,7 +246,8 @@ export function replaceDocumentChunks(
       chunks[0] !== undefined && chunks[0].content.startsWith("---")
         ? Math.min(1, chunks.length - 1)
         : 0;
-    const insert = db.prepare<
+    // Cached on the connection (`query`), not prepared per document.
+    const insert = db.query<
       { id: number },
       [
         number,

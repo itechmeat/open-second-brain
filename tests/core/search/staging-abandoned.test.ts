@@ -162,6 +162,8 @@ test("an abandoned staging file whose signature does not match is never served",
       // eslint-disable-next-line no-await-in-loop
       await Bun.sleep(1);
     }
+    // A rebuild that ended before its pause says why (its stderr).
+    expect(existsSync(signal) ? "" : await new Response(child.stderr).text()).toBe("");
     expect(existsSync(signal)).toBe(true);
     const during = await search(config, {
       query: "okapi",

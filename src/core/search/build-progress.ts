@@ -35,9 +35,6 @@ export const STAGING_INDEX_SUFFIX = ".new";
 /** Least time between two writes of the progress file. */
 const WRITE_INTERVAL_MS = 1000;
 
-/** Least time into the brain store phase before an end time is estimated. */
-const ESTIMATE_AFTER_MS = 5000;
-
 /** The staging file of the index at `dbPath`. */
 export function stagingIndexPath(dbPath: string): string {
   return dbPath + STAGING_INDEX_SUFFIX;
@@ -63,14 +60,19 @@ export interface IndexBuildProgress {
   /**
    * `preparing`: the rebuild has not yet accepted or recreated its
    * staging file (one an interrupted build left may be abandoned or hold
-   * records forgotten since), so no reader may open it; `notes`:
-   * indexing the vault's notes; `store`: ingesting the brain store;
-   * `finishing`: the staging file is being swapped in, and no new reader
+   * records forgotten since), so no reader may open it; `store`:
+   * ingesting the brain store, which comes first; `notes`: indexing the
+   * vault's notes, after the store; `finishing`: the staging file is being swapped in, and no new reader
    * may open it.
    */
   readonly phase: BuildPhase;
   /** ISO instant the brain store phase began, or null before it. */
   readonly storeStartedAt: string | null;
+  /**
+   * ISO instant the brain store phase ended (the notes come after it), or
+   * null before that or when the build reads no store.
+   */
+  readonly storeDoneAt: string | null;
   /** Bytes of brain store shards read so far, and in all. */
   readonly storeBytesDone: number;
   readonly storeBytesTotal: number;
@@ -117,6 +119,7 @@ function parseProgress(raw: string): IndexBuildProgress | null {
         ? (v["phase"] as BuildPhase)
         : "preparing",
     storeStartedAt: typeof v["storeStartedAt"] === "string" ? v["storeStartedAt"] : null,
+    storeDoneAt: typeof v["storeDoneAt"] === "string" ? v["storeDoneAt"] : null,
     storeBytesDone: count(v["storeBytesDone"]),
     storeBytesTotal: count(v["storeBytesTotal"]),
     storeRecords: count(v["storeRecords"]),
@@ -154,6 +157,9 @@ export function readIndexBuild(dbPath: string): IndexBuildProgress | null {
 export class IndexBuildRecorder {
   private readonly startedAt: string;
   private storeStartedAt: string | null = null;
+  private storeDoneAt: string | null = null;
+  /** Whether {@link store} has been called once. */
+  private storeProgressed = false;
   private bytesDone = 0;
   private bytesTotal = 0;
   private records = 0;
@@ -232,6 +238,25 @@ export class IndexBuildRecorder {
   }
 
   /**
+   * The brain store phase begins (before its first record: folding what
+   * the store forgot takes a while on a large store). Published at once.
+   */
+  storeBegins(): void {
+    if (this.storeStartedAt !== null) return;
+    const now = this.now();
+    this.storeStartedAt = new Date(now).toISOString();
+    this.write(now);
+  }
+
+  /** The brain store phase ended; the vault's notes come next. Published at once. */
+  storeEnds(): void {
+    const now = this.now();
+    this.storeStartedAt ??= new Date(now).toISOString();
+    this.storeDoneAt = new Date(now).toISOString();
+    this.write(now);
+  }
+
+  /**
    * The brain store phase moved: `bytesDone` of `bytesTotal` read,
    * `records` indexed. Called once per record; it writes at most once a
    * second.
@@ -241,10 +266,14 @@ export class IndexBuildRecorder {
     this.bytesTotal = bytesTotal;
     this.records = records;
     const now = this.now();
+    const first = !this.storeProgressed;
+    this.storeProgressed = true;
     if (this.storeStartedAt === null) {
       this.storeStartedAt = new Date(now).toISOString();
       this.write(now);
-    } else if (now - this.lastWriteMs >= WRITE_INTERVAL_MS) {
+    } else if (first || now - this.lastWriteMs >= WRITE_INTERVAL_MS) {
+      // The first record read is published at once: the share read
+      // replaces "reading the brain store".
       this.write(now);
     }
   }
@@ -303,10 +332,11 @@ export class IndexBuildRecorder {
         ? "finishing"
         : !this.prepared
           ? "preparing"
-          : this.storeStartedAt === null
-            ? "notes"
-            : "store",
+          : this.storeStartedAt !== null && this.storeDoneAt === null
+            ? "store"
+            : "notes",
       storeStartedAt: this.storeStartedAt,
+      storeDoneAt: this.storeDoneAt,
       storeBytesDone: this.bytesDone,
       storeBytesTotal: this.bytesTotal,
       storeRecords: this.records,
@@ -457,30 +487,65 @@ function minutes(ms: number): string {
 
 /**
  * How far the build is, as the inside of a parenthesis: "started about 2
- * minutes ago; 40% of the brain store read, 151,000 records indexed;
- * about 3 minutes to go".
+ * minutes ago; 40% of the brain store read, 151,000 records indexed, the
+ * vault's notes come next".
+ *
+ * No time to go is given. The bytes read do not predict it (a shard of
+ * signals and preferences costs several times what a shard of log lines
+ * of the same size does), and the notes after the store are not counted
+ * before they are walked, so an estimate promised the end minutes too
+ * early; no estimate is better than a wrong one.
  */
 export function indexBuildDetails(p: IndexBuildProgress, nowMs: number = Date.now()): string {
   const started = `started ${minutes(Math.max(0, nowMs - Date.parse(p.startedAt)))} ago`;
   if (p.phase === "finishing") return `${started}; built, being swapped in`;
   if (p.phase === "preparing") return `${started}; preparing its staging index`;
-  if (p.phase !== "store" || p.storeBytesTotal <= 0) {
-    return `${started}; indexing the vault's notes, the brain store comes next`;
-  }
-  const fraction = Math.min(1, p.storeBytesDone / p.storeBytesTotal);
-  const percent = Math.floor(fraction * 100);
   const records = p.storeRecords.toLocaleString("en-US");
-  const parts = [started, `${percent}% of the brain store read, ${records} records indexed`];
-  const storeMs = p.storeStartedAt === null ? 0 : nowMs - Date.parse(p.storeStartedAt);
-  if (fraction > 0 && fraction < 1 && storeMs >= ESTIMATE_AFTER_MS) {
-    parts.push(`${minutes((storeMs * (1 - fraction)) / fraction)} to go`);
+  if (p.phase === "notes") {
+    return p.storeDoneAt !== null
+      ? `${started}; the brain store is indexed (${records} records), indexing the vault's notes`
+      : `${started}; indexing the vault's notes`;
   }
-  return parts.join("; ");
+  if (p.storeBytesTotal <= 0)
+    return `${started}; reading the brain store, the vault's notes come next`;
+  const percent = Math.floor(Math.min(1, p.storeBytesDone / p.storeBytesTotal) * 100);
+  return `${started}; ${percent}% of the brain store read, ${records} records indexed, the vault's notes come next`;
 }
 
 /** One clause naming the build and how far it is, in lower case. */
 export function describeIndexBuild(p: IndexBuildProgress, nowMs: number = Date.now()): string {
   return `the search index is being built (${indexBuildDetails(p, nowMs)})`;
+}
+
+/**
+ * The refusal a search gets when it started the background build of a
+ * missing index itself and that build has not yet indexed anything it
+ * could answer from. INDEX_MISSING by code, like {@link IndexBuildingError}.
+ */
+export class IndexBuildStartingError extends SearchError {
+  constructor(dbPath: string) {
+    super(
+      "INDEX_MISSING",
+      `the search index is being built in the background at ${dbPath} (just started); it answers as soon as the build has indexed its first files: try again in a moment`,
+    );
+    this.name = "IndexBuildStartingError";
+  }
+}
+
+/**
+ * The refusal a search gets when the background build it tried to start
+ * for a missing index could not be started at all (the spawn failed).
+ * INDEX_MISSING by code; the message names the failure and the command
+ * that builds the index by hand.
+ */
+export class IndexBuildStartFailedError extends SearchError {
+  constructor(dbPath: string, reason: string) {
+    super(
+      "INDEX_MISSING",
+      `the search index at ${dbPath} does not exist yet and its background build could not be started (${reason}); build it with: o2b search reindex`,
+    );
+    this.name = "IndexBuildStartFailedError";
+  }
 }
 
 /**

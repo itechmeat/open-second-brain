@@ -20,6 +20,7 @@
  * injected) with a WHICH-to-read planner. Pure-stdlib, no new dependency.
  */
 
+import { storeRecordJudge } from "./brain-store/entity-filter.ts";
 import { Store } from "./store.ts";
 import { getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -110,9 +111,16 @@ export function planReadShortlist(
   // merely BOOSTS a matched seed, it never seeds an unrelated note. This
   // keeps the pre-pass query-driven (no match -> no seeds -> empty plan)
   // and index-light (title is a `documents`-column read, no body scan).
+  // A store record the store rule hides (forgotten, marked tombstoned,
+  // staged) is no seed and no entry, also while the index still holds it
+  // (`brain-store/entity-filter.ts`).
+  const shown = storeRecordJudge(store);
   for (const [id, meta] of titles) {
     const titleFrac = termMatchFraction(meta.title, terms);
     if (titleFrac <= 0) continue;
+    // After the title match, so a query that matches no title asks the
+    // store nothing.
+    if (!shown(meta.path)) continue;
     const degree = snapshot.degree.get(id) ?? 0;
     const degreeNorm = (degree / maxDegree) * degreeWeight;
     const reasons = ["title"];
@@ -180,6 +188,7 @@ export function planReadShortlist(
   const seedIdSet = new Set(seeds.map(([id]) => id));
   const ranked = [...best.entries()]
     .map(([id, v]) => ({ id, ...v }))
+    .filter((r) => shown(titles.get(r.id)?.path ?? ""))
     .toSorted((a, b) =>
       a.score !== b.score
         ? b.score - a.score

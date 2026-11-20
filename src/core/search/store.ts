@@ -34,6 +34,7 @@ import {
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import type { EventAnchor } from "./event-anchor.ts";
+import type { IndexedStore } from "./brain-store/location.ts";
 import { readSchemaVersion, type DocumentAttribute } from "./schema.ts";
 import { withoutAttributeNarrowing, type PropertyPushdown } from "./property-pushdown.ts";
 import { pathIsInside } from "../path-safety.ts";
@@ -1145,6 +1146,11 @@ export class Store {
    */
   brainRecordsConnection(): Database {
     return this.db;
+  }
+
+  /** The brain store this index reads, or null when it reads none. */
+  indexedBrainStore(): IndexedStore | null {
+    return this.config.brainStore ?? null;
   }
 
   // ── direct accessors used by indexer/CLI/status ────────────────────────────

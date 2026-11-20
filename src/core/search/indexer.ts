@@ -1593,6 +1593,33 @@ async function reindexInto(
     // may read it from here on (until here the record said `preparing`).
     recorder.ready();
 
+    // The brain store goes into the staging index first (design D5), every
+    // shard from offset 0, so the swapped-in index answers with the store
+    // from its first read instead of catching up on it afterwards, and a
+    // search that answers from the staging file while the build runs finds
+    // the signals, preferences and decisions before the vault's notes. It
+    // is best effort: a store that cannot be read must not throw the note
+    // rebuild away. A shard whose watermark was not written is read from
+    // offset 0 by the next catch-up, so nothing is lost; the failure is
+    // reported among the run's errors.
+    let storeError: { readonly path: string; readonly message: string } | null = null;
+    if (config.brainStore) {
+      try {
+        recorder.storeBegins();
+        await withStagingStore(tempConfig, (store) =>
+          ingestStoreInto(store, tempConfig, (done, total, records) =>
+            recorder?.store(done, total, records),
+          ),
+        );
+      } catch (e) {
+        storeError = {
+          path: STORE_RECORD_PATH_PREFIX,
+          message: `brain store not ingested, the next catch-up reads it: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+      recorder.storeEnds();
+    }
+
     // `force: false` on resume lets the fastpath skip the files the
     // partial build already committed; a fresh build forces every file.
     // `onProgress` is dropped from the forwarded options: the build
@@ -1604,34 +1631,7 @@ async function reindexInto(
       undefined,
       progress,
     );
-
-    // The brain store goes into the staging index too (design D5), every
-    // shard from offset 0, so the swapped-in index answers with the store
-    // from its first read instead of catching up on it afterwards. It is
-    // best effort: a store that cannot be read must not throw the note
-    // rebuild away. A shard whose watermark was not written is read from
-    // offset 0 by the next catch-up, so nothing is lost; the failure is
-    // reported among the run's errors.
-    if (config.brainStore) {
-      try {
-        await withStagingStore(tempConfig, (store) =>
-          ingestStoreInto(store, tempConfig, (done, total, records) =>
-            recorder?.store(done, total, records),
-          ),
-        );
-      } catch (e) {
-        stats = {
-          ...stats,
-          errors: [
-            ...stats.errors,
-            {
-              path: STORE_RECORD_PATH_PREFIX,
-              message: `brain store not ingested, the next catch-up reads it: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ],
-        };
-      }
-    }
+    if (storeError !== null) stats = { ...stats, errors: [...stats.errors, storeError] };
 
     // Clear the marker so the swapped-in live index carries no staging
     // state. Only present when resume was enabled.
