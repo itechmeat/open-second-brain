@@ -46,6 +46,7 @@ import {
   HELD_WITHHELD_MESSAGE,
   type HeldWithheldReason,
   heldRecordIds,
+  holdRefusal,
   readHeldRecords,
 } from "./held-records.ts";
 import { readDecisionEvents, withHeldDecisions } from "./held-decisions.ts";
@@ -457,6 +458,24 @@ function listJson(fold: TopicFold, scope: string | undefined): Record<string, un
     .map(topicHead);
 }
 
+/**
+ * An assign names a record a topic can hold (`holdRefusal`). A store that
+ * cannot be read here is refused too, although the topic read before
+ * succeeded: the write would otherwise land unchecked, since the writer
+ * checks that the topic exists, not the record.
+ */
+function refuseUnholdable(record: string, configPath: string | undefined): void {
+  const store = configuredStore(configPath);
+  if (store === null) {
+    throw new TopicActionError(
+      `assign: the brain store could not be read to check record ${record}; nothing was ` +
+        "written, try again once it can be read",
+    );
+  }
+  const refusal = holdRefusal(store, record);
+  if (refusal !== null) throw new TopicActionError(`assign: ${refusal}`);
+}
+
 /** The events of a write action, against what the caller can see. */
 function eventsOf(
   input: TopicActionInput,
@@ -615,6 +634,7 @@ export function runTopicAction(
       };
     }
   }
+  if (input.action === "assign") refuseUnholdable(need(input, "record"), context.configPath);
   const events = eventsOf(input, read, now, context.humanRequest === true);
   const written: AppendResult[] = writeTopicEvents(
     events

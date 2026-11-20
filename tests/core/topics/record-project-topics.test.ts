@@ -109,7 +109,7 @@ test("on a machine not yet switched the project rides the legacy day file and pa
     origin,
   });
   expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
-  const found = topicCandidates(a.records(), new Set()).filter((c) => c.text.startsWith(SUBJECT));
+  const found = topicCandidates(a.records(), new Set()).filter((c) => c.text.includes(SUBJECT));
   expect(found.map((c) => [c.project, c.session])).toEqual([
     ["release-tool", "s-42"],
     ["release-tool", "s-42"],

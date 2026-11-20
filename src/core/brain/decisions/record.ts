@@ -26,9 +26,9 @@ import { originFields, type RecordOrigin } from "../record-origin.ts";
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
-import { slugify } from "../../vault.ts";
+import { resolveTitleSlug, titleSlug } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
-import { addObligation } from "../obligations.ts";
+import { addObligation, resolveObligationSlug } from "../obligations.ts";
 import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { jaccard, tokenise } from "../similarity.ts";
@@ -318,6 +318,20 @@ function render(record: Omit<DecisionRecord, "path">): string {
   return lines.join("\n");
 }
 
+/**
+ * The slug of the decision page a caller's title or slug names: the
+ * {@link titleSlug} page, or a page an older release wrote under the
+ * Latin-only slug of the same title ({@link resolveTitleSlug}).
+ */
+export function resolveDecisionSlug(vault: string, value: string): string {
+  return resolveTitleSlug(value, (slug) => {
+    const path = decisionPath(vault, slug);
+    if (!lanePageExists(vault, path)) return null;
+    const [meta] = parseLanePage(vault, path);
+    return typeof meta["title"] === "string" ? [meta["title"]] : [];
+  });
+}
+
 function parsePage(
   vault: string,
   slug: string,
@@ -382,7 +396,9 @@ export function ensureReviewObligation(
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const obligationTitle = reviewObligationTitle(input.title);
-  const slug = slugify(obligationTitle);
+  // An older release's review obligation under the Latin-only slug of the
+  // same title is this decision's: reused, not opened a second time.
+  const slug = resolveObligationSlug(vault, obligationTitle);
   if (lanePageExists(vault, obligationPath(vault, slug))) {
     return { slug, created: false };
   }
@@ -418,10 +434,12 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
       : "";
   const commitment = validateCommitmentTier(input.commitment);
   const now = input.now ?? new Date();
-  const slug = slugify(title);
-
-  if (lanePageExists(vault, decisionPath(vault, slug))) {
-    throw new DecisionError(`decision already exists: ${slug} (backfill or remove it first)`);
+  const slug = titleSlug(title);
+  // The same title an older release stored under its Latin-only slug is
+  // the same decision: refused as it was then, not recorded a second time.
+  const existing = resolveDecisionSlug(vault, title);
+  if (lanePageExists(vault, decisionPath(vault, existing))) {
+    throw new DecisionError(`decision already exists: ${existing} (backfill or remove it first)`);
   }
 
   const explicitAgent = normalizeAgentArgument(input.agent ?? null);
@@ -455,6 +473,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
     eventType: BRAIN_LOG_EVENT_KIND.decisionRecord,
     body: {
       decision: `[[${record.id}]]`,
+      title,
       chosen,
       review_date: reviewDate,
       obligation: review.created ? review.slug : `${review.slug} (existing)`,
@@ -493,7 +512,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
 export function backfillOutcome(vault: string, input: BackfillOutcomeInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = slugify(input.slug);
+  const slug = resolveDecisionSlug(vault, input.slug);
   const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const outcome = sanitiseTextField(input.outcome, {
@@ -545,7 +564,7 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
 export function updateRating(vault: string, input: UpdateRatingInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = slugify(input.slug);
+  const slug = resolveDecisionSlug(vault, input.slug);
   const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const rating = requireRating(input.rating);
@@ -614,7 +633,7 @@ export function compareDecisions(
 ): DecisionRecord[] {
   const out: DecisionRecord[] = [];
   for (const slug of slugs) {
-    const page = parsePage(vault, slugify(slug), opts.readable);
+    const page = parsePage(vault, resolveDecisionSlug(vault, slug), opts.readable);
     if (page !== null) out.push(page);
   }
   return out;
@@ -628,7 +647,7 @@ export function showDecision(
   slug: string,
   opts: DecisionReadOptions = {},
 ): DecisionRecord | null {
-  return parsePage(vault, slugify(slug), opts.readable);
+  return parsePage(vault, resolveDecisionSlug(vault, slug), opts.readable);
 }
 
 /** Every decision, sorted by slug. */

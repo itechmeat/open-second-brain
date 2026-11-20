@@ -99,6 +99,21 @@ describe("StoreWriteError at the MCP boundary", () => {
     expect(lines).toEqual([]);
   });
 
+  test("a brain_topic write with no store answers the same code, never an unregistered one", async () => {
+    const server = new MCPServer({ vault: null }, { reach: TRANSPORT_REACH.local });
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 4,
+      method: "tools/call",
+      params: { name: "brain_topic", arguments: { action: "create", title: "Lands nowhere" } },
+    })) as JsonObject;
+    const result = res["result"] as JsonObject;
+    expect(result["isError"]).toBe(true);
+    expect(readToolErrorCode(result)).toBe("store_write_failed");
+    expect(result["_meta"][TOOL_ERROR_META_KEY]).toMatchObject({ reason: "no-store" });
+    expect(lines).toEqual([]);
+  });
+
   test("the JSON-RPC channel carries the reason and the remedy beside the code", () => {
     const err = new StoreWriteError("partition-unavailable", "private is not held");
     const res = internalErrorResponse(9, err, tmp, TRANSPORT_REACH.local) as JsonObject;

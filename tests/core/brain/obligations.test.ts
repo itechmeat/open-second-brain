@@ -1,5 +1,13 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,9 +18,11 @@ import {
   nextDueDate,
   parseCadence,
   removeObligation,
+  resolveObligationTarget,
   showObligation,
   ObligationError,
 } from "../../../src/core/brain/obligations.ts";
+import { IS_WINDOWS } from "../../helpers/platform.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
 
@@ -195,4 +205,96 @@ test("rejects overflow calendar dates instead of normalizing them", () => {
   expect(() => completeObligation(vault, { slug: "possible-anchor", date: "2026-04-31" })).toThrow(
     ObligationError,
   );
+});
+
+/**
+ * Move an obligation page to the name an older release gave it: a title's
+ * non-Latin words were dropped from its slug, and a device-name title
+ * ("NUL") kept the bare device name. No migration renames these pages.
+ */
+function storeUnderOldSlug(slug: string, oldSlug: string): void {
+  const dir = join(vault, "Brain", "obligations");
+  renameSync(join(dir, `${slug}.md`), join(dir, `${oldSlug}.md`));
+}
+
+test("an obligation stored under its old Latin-only slug is found by its title", () => {
+  const title = "Проверка release checklist";
+  const page = addObligation(vault, { title, cadence: "weekly", agent: "t", now: NOW });
+  storeUnderOldSlug(page.slug, "release-checklist");
+  expect(showObligation(vault, title)?.slug).toBe("release-checklist");
+  const done = completeObligation(vault, { slug: title, date: "2026-06-19" });
+  expect(done.lastDone).toBe("2026-06-19");
+  expect(done.path).toBe(join(vault, "Brain", "obligations", "release-checklist.md"));
+  // A different title that shared the old slug does not reach it.
+  expect(showObligation(vault, "Тема release checklist")).toBeNull();
+  const removed = removeObligation(vault, title);
+  expect(removed.archivePath).toBe(
+    join(vault, "Brain", "obligations", "archive", "release-checklist.md"),
+  );
+});
+
+test("a resolved target names one page: a page that appears under the new slug later is not taken instead", () => {
+  const title = "Проверка release checklist";
+  const page = addObligation(vault, { title, cadence: "weekly", agent: "t", now: NOW });
+  storeUnderOldSlug(page.slug, "release-checklist");
+  const target = resolveObligationTarget(vault, title);
+  expect(target.stem).toBe("release-checklist");
+  // Another writer puts a page under the new slug after the target was resolved.
+  const dir = join(vault, "Brain", "obligations");
+  writeFileSync(
+    join(dir, "проверка-release-checklist.md"),
+    readFileSync(join(dir, "release-checklist.md"), "utf8").replace(
+      "cadence: weekly",
+      "cadence: daily",
+    ),
+  );
+  expect(showObligation(vault, target)?.cadence).toBe("weekly");
+  const done = completeObligation(vault, { slug: target, date: "2026-06-19" });
+  expect(done.path).toBe(join(vault, "Brain", "obligations", "release-checklist.md"));
+  expect(removeObligation(vault, target).slug).toBe("release-checklist");
+  expect(showObligation(vault, title)?.cadence).toBe("daily");
+});
+
+// Windows reserves the device names with any extension, so `nul.md` cannot be made there.
+test.skipIf(IS_WINDOWS)(
+  "an obligation stored under a bare device name stays showable, completable and removable",
+  () => {
+    const page = addObligation(vault, { title: "NUL", cadence: "weekly", agent: "t", now: NOW });
+    storeUnderOldSlug(page.slug, "nul");
+    // The listed slug is the stored one, and every operation takes it back.
+    expect(listObligations(vault, { now: NOW }).map((o) => o.slug)).toEqual(["nul"]);
+    expect(showObligation(vault, "nul")?.title).toBe("NUL");
+    expect(showObligation(vault, "NUL")?.slug).toBe("nul");
+    expect(completeObligation(vault, { slug: "nul", date: "2026-06-19" }).lastDone).toBe(
+      "2026-06-19",
+    );
+    const removed = removeObligation(vault, "nul");
+    expect(removed.archivePath).toBe(join(vault, "Brain", "obligations", "archive", "nul.md"));
+    expect(listObligations(vault, { now: NOW })).toEqual([]);
+  },
+);
+
+test.skipIf(IS_WINDOWS)("adding the title of an old device-name page again is refused", () => {
+  const page = addObligation(vault, { title: "NUL", cadence: "weekly", agent: "t", now: NOW });
+  storeUnderOldSlug(page.slug, "nul");
+  expect(() =>
+    addObligation(vault, { title: "NUL", cadence: "weekly", agent: "t", now: NOW }),
+  ).toThrow(/obligation already exists: nul /);
+  expect(listObligations(vault, { now: NOW })).toHaveLength(1);
+});
+
+test("adding the title of an obligation stored under its old Latin-only slug is refused, another title is not", () => {
+  const title = "Проверка release checklist";
+  const page = addObligation(vault, { title, cadence: "weekly", agent: "t", now: NOW });
+  storeUnderOldSlug(page.slug, "release-checklist");
+  expect(() => addObligation(vault, { title, cadence: "weekly", agent: "t", now: NOW })).toThrow(
+    /obligation already exists: release-checklist /,
+  );
+  const other = addObligation(vault, {
+    title: "Тема release checklist",
+    cadence: "weekly",
+    agent: "t",
+    now: NOW,
+  });
+  expect(other.slug).toBe("тема-release-checklist");
 });

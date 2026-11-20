@@ -70,6 +70,7 @@ import { WriteBatchError } from "../core/brain/write-batch.ts";
 import { ConfigReadError } from "../core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../core/search/search-error.ts";
 import { StoreWriteError, type StoreWriteFailure } from "../core/store/store-write.ts";
+import type { TopicRefusalCode } from "../core/topics/write.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../core/write-binding/index.ts";
 import {
   VAULT_ADAPTER_REQUIRED_CODE,
@@ -300,6 +301,18 @@ const STORAGE_CAPACITY_CODES = exhaustiveMembers<StorageErrorCode>()([
 ]);
 
 /**
+ * The `brain_topic` refusals: a refused action is `topic_invalid`, a
+ * refused topic write `topic_` and its reason (`topics/write.ts`). The
+ * kebab `unknown-topic` is the reason's own spelling, kept as the wire
+ * already carries it.
+ */
+const TOPIC_REFUSAL_CODES = exhaustiveMembers<TopicRefusalCode>()([
+  "topic_invalid",
+  "topic_unknown-topic",
+  "topic_unreadable",
+]);
+
+/**
  * The leaf vocabulary, re-exported under the one name consumers of the
  * wire vocabulary already import from here. The canonical home stays in
  * the leaf; this only spares callers a second import path.
@@ -354,6 +367,7 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...STORAGE_CAPACITY_CODES,
     COUNT_GUARD_WIRE_CODE,
     ...EXPIRATION_REFUSAL_CODES,
+    ...TOPIC_REFUSAL_CODES,
   ] as const),
 ]);
 

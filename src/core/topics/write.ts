@@ -64,6 +64,19 @@ export interface TopicEvent {
 
 export type TopicWriteFailure = "invalid" | "unknown-topic" | "unreadable";
 
+/**
+ * The code a refused topic action or write answers with on the MCP wire
+ * (`brain_topic`): `topic_` and the reason. A refused action
+ * (`TopicActionError`, an assign of a record no topic can hold among
+ * them) is `topic_invalid`, the code of an invalid write.
+ */
+export type TopicRefusalCode = `topic_${TopicWriteFailure}`;
+
+/** The wire code of a refused topic write, or of a refused action (`invalid`). */
+export function topicRefusalCode(reason: TopicWriteFailure): TopicRefusalCode {
+  return `topic_${reason}`;
+}
+
 /** A topic write refused before anything was written. */
 export class TopicWriteError extends Error {
   readonly reason: TopicWriteFailure;

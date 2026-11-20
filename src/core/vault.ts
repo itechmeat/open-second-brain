@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import { scopedRuleKey } from "./brain/scoped-rule-key.ts";
 import { WIKILINK_TARGET_RE, isLiveWikilinkSpan, maskCodeRegions } from "./brain/wikilink.ts";
 import {
   FileAlreadyExistsError,
@@ -542,11 +543,12 @@ const SLUG_FALLBACK_HASH_LEN = 8;
  * idempotent under a second `slugify` pass.
  */
 function unnamedFallbackSlug(normalized: string): string {
-  const digest = createHash("sha256")
-    .update(normalized, "utf8")
-    .digest("hex")
-    .slice(0, SLUG_FALLBACK_HASH_LEN);
-  return `${SLUG_FALLBACK_PREFIX}-${digest}`;
+  return `${SLUG_FALLBACK_PREFIX}-${slugDigest(normalized)}`;
+}
+
+/** The short sha256 hex digest the fallback and device-name slugs carry. */
+function slugDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, SLUG_FALLBACK_HASH_LEN);
 }
 
 /**
@@ -566,6 +568,82 @@ export function slugify(value: string): string {
   // silently produce an empty slug.
   return slug || unnamedFallbackSlug(lowered);
 }
+
+/**
+ * Slug for a human title that names a record in a synced vault (a
+ * decision, an open question, an obligation): letters, combining marks and
+ * digits of ANY script stay, through the same key rule the project keys use
+ * ({@link scopedRuleKey}: NFC, lowercase, NFC again, every other run one
+ * `-`, at most {@link SLUG_MAX_LEN} code units, never half of a surrogate
+ * pair). `slugify` keeps only `a-z0-9`, so "Тема-три release" and
+ * "Проект release" both became `release` and the second record was refused
+ * as a duplicate, and a title with no Latin letter had no words at all.
+ *
+ * For an ASCII title the result is byte-identical to {@link slugify}, so
+ * every slug already on disk for such a title is unchanged, except a title
+ * that keys to a Windows device name (below); a title with no letter or
+ * digit (combining marks alone included) falls back to the same
+ * `unnamed-<hash>` slugify gives it. The output holds no path separator,
+ * dot, space or Windows-forbidden character, is never a Windows device
+ * name, is NFC (one key on macOS, Windows and Linux whatever form the
+ * title came in), and is idempotent, so a slug passed back in as a lookup
+ * key resolves to itself.
+ */
+export function titleSlug(value: string): string {
+  const key = scopedRuleKey(value);
+  if (key === null || !TITLE_KEY_WORD_RE.test(key)) {
+    return unnamedFallbackSlug(value.trim().toLowerCase());
+  }
+  return WINDOWS_DEVICE_KEY_RE.test(key) ? `${key}-${slugDigest(key)}` : key;
+}
+
+/**
+ * The slug of the page a lookup by `value` names, for a lane whose pages
+ * were once written under {@link slugify} and are never renamed: an older
+ * release dropped a title's non-Latin words ("Проект release" was
+ * `release`), gave a title with no Latin letter `unnamed-<hash>`, and kept
+ * a bare Windows device name (`nul`). The {@link titleSlug} page wins when
+ * it exists. Otherwise the old slug is taken when its page exists and is
+ * this record: `value` is that stored slug itself (a listed slug passed
+ * back), or one of the page's stored titles keys like `value`. So a
+ * different title that once shared the old slug ("Тема release") does not
+ * reach the page. When neither page is there the answer is the
+ * `titleSlug`, which a new record is written under.
+ *
+ * `storedTitles` answers the titles the page at a slug holds, or null when
+ * there is no page there.
+ */
+export function resolveTitleSlug(
+  value: string,
+  storedTitles: (slug: string) => readonly string[] | null,
+): string {
+  const slug = titleSlug(value);
+  if (storedTitles(slug) !== null) return slug;
+  const legacy = slugify(value);
+  if (legacy === slug) return slug;
+  const titles = storedTitles(legacy);
+  if (titles === null) return slug;
+  if (value.trim() === legacy || titles.some((t) => titleSlug(t) === slug)) return legacy;
+  return slug;
+}
+
+/**
+ * A letter or digit. A key of combining marks alone (a variation selector
+ * left after the symbol it modified was dropped: `"\u2764\uFE0F"` and
+ * `"\u2600\uFE0F"` both key to `"\uFE0F"`) names nothing, so such titles
+ * take the hashed fallback and stay apart.
+ */
+const TITLE_KEY_WORD_RE = /[\p{L}\p{N}]/u;
+
+/**
+ * The device names Windows reserves in every folder and with any extension,
+ * as a lowercase key: `con`, `prn`, `aux`, `nul`, and the `com` and `lpt`
+ * ports numbered 0-9 or with a superscript digit (`com¹`). A captured note
+ * is `captured/<slug>.md` and an obligation `<slug>.md`, with no prefix to
+ * protect them, so such a key gets the digest of itself as a suffix: still
+ * readable, stable on every machine, and a fixed point of `titleSlug`.
+ */
+const WINDOWS_DEVICE_KEY_RE = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/u;
 
 /**
  * Extract unique `[[wikilink]]` targets from Markdown content. Skips media

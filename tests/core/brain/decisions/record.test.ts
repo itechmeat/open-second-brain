@@ -1,9 +1,9 @@
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../../../../src/core/vault.ts";
+import { parseFrontmatter, slugify } from "../../../../src/core/vault.ts";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { listObligations } from "../../../../src/core/brain/obligations.ts";
@@ -99,6 +99,125 @@ describe("recordDecision", () => {
     expect(() => recordDecision(vault, baseInput({ reviewDate: "not-a-date" }))).toThrow(
       DecisionError,
     );
+  });
+});
+
+describe("a decision title in any script", () => {
+  test("the non-Latin words of a title stay in its slug, so two projects' titles do not collide", () => {
+    const first = recordDecision(vault, baseInput({ title: "Проект release checklist format s1" }));
+    const second = recordDecision(
+      vault,
+      baseInput({ title: "Тема-три release checklist format s1" }),
+    );
+    expect(first.record.slug).toBe("проект-release-checklist-format-s1");
+    expect(second.record.slug).toBe("тема-три-release-checklist-format-s1");
+    // Each decision opens its own review obligation: the obligation's slug
+    // comes from the same title, so it must not collide either.
+    expect(second.obligationCreated).toBe(true);
+    expect(listObligations(vault)).toHaveLength(2);
+  });
+
+  test("a title with no Latin character keys whole and reads back by its slug", () => {
+    const res = recordDecision(vault, baseInput({ title: "Формат страницы релиза" }));
+    expect(res.record.slug).toBe("формат-страницы-релиза");
+    expect(showDecision(vault, res.record.slug)?.title).toBe("Формат страницы релиза");
+    expect(listDecisions(vault).map((d) => d.slug)).toEqual(["формат-страницы-релиза"]);
+    const updated = backfillOutcome(vault, {
+      slug: res.record.slug,
+      outcome: "kept",
+      agent: "tester",
+    });
+    expect(updated.outcome).toBe("kept");
+  });
+
+  test("a decomposed title (as a macOS file system hands it over) keys like the composed one", () => {
+    recordDecision(vault, baseInput({ title: "Выбор й" }));
+    expect(() => recordDecision(vault, baseInput({ title: "Выбор \u0438\u0306" }))).toThrow(
+      DecisionError,
+    );
+  });
+
+  test("a Latin title keeps the slug it always had", () => {
+    const res = recordDecision(vault, baseInput({ title: "Adopt Bun: the primary runtime (v2)!" }));
+    expect(res.record.slug).toBe("adopt-bun-the-primary-runtime-v2");
+  });
+});
+
+/** Record `title`, then move its page to the name an older release gave it. */
+function storeUnderOldSlug(title: string, oldSlug: string): void {
+  const res = recordDecision(vault, baseInput({ title }));
+  const dir = join(vault, "Brain", "decisions");
+  renameSync(join(dir, `decision-${res.record.slug}.md`), join(dir, `decision-${oldSlug}.md`));
+}
+
+describe("a decision stored under its old Latin-only slug", () => {
+  // Before titles kept letters of any script, "Проект release checklist
+  // format" was written as decision-release-checklist-format.md and a
+  // title with no Latin letter as decision-unnamed-<hash>.md. Such pages
+  // stay where they are; the lookup must still find them by their title.
+  test("its title finds it for show, compare, backfill and rating", () => {
+    storeUnderOldSlug("Проект release checklist format", "release-checklist-format");
+    const title = "Проект release checklist format";
+    expect(showDecision(vault, title)?.slug).toBe("release-checklist-format");
+    expect(compareDecisions(vault, [title]).map((d) => d.slug)).toEqual([
+      "release-checklist-format",
+    ]);
+    const backfilled = backfillOutcome(vault, { slug: title, outcome: "kept", agent: "tester" });
+    expect(backfilled.path).toBe(
+      join(vault, "Brain", "decisions", "decision-release-checklist-format.md"),
+    );
+    const rated = updateRating(vault, { slug: title, rating: 4, agent: "tester" });
+    expect(rated.outcome).toBe("kept");
+    expect(rated.rating).toBe(4);
+    // Its stored slug still finds it too.
+    expect(showDecision(vault, "release-checklist-format")?.title).toBe(title);
+  });
+
+  test("a title with no Latin letter finds the page its hashed fallback named", () => {
+    const title = "Формат страницы релиза";
+    storeUnderOldSlug(title, slugify(title));
+    expect(slugify(title)).toMatch(/^unnamed-[0-9a-f]{8}$/u);
+    expect(showDecision(vault, title)?.title).toBe(title);
+  });
+
+  test("another title that shared the old slug does not reach the page", () => {
+    storeUnderOldSlug("Проект release checklist format", "release-checklist-format");
+    expect(showDecision(vault, "Тема-три release checklist format")).toBeNull();
+    expect(() =>
+      backfillOutcome(vault, {
+        slug: "Тема-три release checklist format",
+        outcome: "x",
+        agent: "tester",
+      }),
+    ).toThrow(DecisionError);
+  });
+
+  test("recording the same title again is refused, as it was before the slug changed", () => {
+    storeUnderOldSlug("Проект release checklist format", "release-checklist-format");
+    expect(() =>
+      recordDecision(vault, baseInput({ title: "Проект release checklist format" })),
+    ).toThrow(/decision already exists: release-checklist-format/);
+    expect(listDecisions(vault)).toHaveLength(1);
+  });
+
+  test("a review obligation an older release stored under its old slug is not opened twice", () => {
+    const title = "Проект release checklist format";
+    storeUnderOldSlug(title, "release-checklist-format");
+    const [review] = listObligations(vault);
+    const dir = join(vault, "Brain", "obligations");
+    renameSync(join(dir, `${review!.slug}.md`), join(dir, `${slugify(review!.title)}.md`));
+    // The decision page is removed by hand, the obligation stays; recording
+    // the title again reuses that obligation.
+    rmSync(join(vault, "Brain", "decisions", "decision-release-checklist-format.md"));
+    const again = recordDecision(vault, baseInput({ title }));
+    expect(again.obligationCreated).toBe(false);
+    expect(listObligations(vault)).toHaveLength(1);
+  });
+
+  test("a new decision keeps the new slug next to an old page", () => {
+    storeUnderOldSlug("Проект release checklist format", "release-checklist-format");
+    const res = recordDecision(vault, baseInput({ title: "Тема-три release checklist format" }));
+    expect(res.record.slug).toBe("тема-три-release-checklist-format");
   });
 });
 

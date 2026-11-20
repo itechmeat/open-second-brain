@@ -376,6 +376,13 @@ through unchanged:
   context, exact state, host memory writes, the count guard
   (`count_guard`), and the shared `config_invalid` and
   `preference_not_found`;
+- the `brain_topic` refusals: `topic_invalid` (an action the tool
+  refuses, an assign of a record no topic can hold among them, and a
+  topic record that fails its shape check), `topic_unknown-topic` (a
+  write that names no topic the caller can see) and `topic_unreadable`
+  (the topic records could not be read in full, so the write was not
+  checked); a `brain_topic` write the brain store refuses answers
+  `store_write_failed`, as every other writer;
 - the `brain_expire` refusals, sent under their error class names:
   `ExpirationValueError` (the date is not one the server can compare),
   `ExpirationTargetNotFoundError` (no signal or preference has that id)

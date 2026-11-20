@@ -21,7 +21,7 @@
 
 import { join } from "node:path";
 
-import { slugify } from "../vault.ts";
+import { resolveTitleSlug, titleSlug } from "../vault.ts";
 import { obligationPath, obligationsArchiveDir, obligationsDir, validateIsoDate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import {
@@ -32,7 +32,6 @@ import {
   moveLanePage,
   parseLanePage,
   readLaneFile,
-  readLaneText,
   removeLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
@@ -96,7 +95,8 @@ export interface AddObligationInput {
 }
 
 export interface CompleteObligationInput {
-  readonly slug: string;
+  /** A title or slug, resolved here, or a target resolved once by the caller. */
+  readonly slug: string | ObligationTarget;
   /** Completion date (`YYYY-MM-DD`); defaults to today (UTC). */
   readonly date?: string;
   readonly now?: Date;
@@ -265,9 +265,14 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
   const now = input.now ?? new Date();
   const today = isoDate(now);
   const anchor = input.anchor ? requireIsoDate(input.anchor, "anchor") : today;
-  const slug = slugify(title);
-  if (lanePageExists(vault, obligationPath(vault, slug))) {
-    throw new ObligationError(`obligation already exists: ${slug} (remove it first to recreate)`);
+  const slug = titleSlug(title);
+  // The same title an older release stored under its Latin-only slug is
+  // the same obligation: refused as it was then, not opened a second time.
+  const existing = resolveObligationSlug(vault, title);
+  if (lanePageExists(vault, obligationPath(vault, existing))) {
+    throw new ObligationError(
+      `obligation already exists: ${existing} (remove it first to recreate)`,
+    );
   }
   const page = {
     slug,
@@ -287,11 +292,48 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
   return Object.freeze({ ...page, path });
 }
 
+/**
+ * The slug of the obligation page a caller's title or slug names: the
+ * {@link titleSlug} page, or a page an older release wrote under the
+ * Latin-only slug of the same title, a bare Windows device name (`nul`)
+ * included ({@link resolveTitleSlug}). A listed slug is the page's stored
+ * stem, so it always finds its page again.
+ */
+export function resolveObligationSlug(vault: string, value: string): string {
+  return resolveTitleSlug(value, (slug) => {
+    const path = obligationPath(vault, slug);
+    if (!lanePageExists(vault, path)) return null;
+    const [meta] = parseLanePage(vault, path);
+    return typeof meta["title"] === "string" ? [meta["title"]] : [];
+  });
+}
+
+/**
+ * The obligation page a caller's title or slug resolved to, once. A caller
+ * that checks something about the page before it acts (the MCP reach
+ * check) passes this to the operation, so the page it checked is the page
+ * it acts on even if another writer adds a page under the preferred slug
+ * in between.
+ */
+export interface ObligationTarget {
+  /** The page's file stem under `Brain/obligations/`. */
+  readonly stem: string;
+}
+
+/** Resolve `value` to the page it names now ({@link resolveObligationSlug}). */
+export function resolveObligationTarget(vault: string, value: string): ObligationTarget {
+  return Object.freeze({ stem: resolveObligationSlug(vault, value) });
+}
+
+function targetStem(vault: string, value: string | ObligationTarget): string {
+  return typeof value === "string" ? resolveObligationSlug(vault, value) : value.stem;
+}
+
 /** Record a completion and advance next-due by one cadence interval. */
 export function completeObligation(vault: string, input: CompleteObligationInput): ObligationPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = slugify(input.slug);
+  const slug = targetStem(vault, input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw noObligationError(slug);
   const now = input.now ?? new Date();
@@ -313,17 +355,28 @@ export function completeObligation(vault: string, input: CompleteObligationInput
 }
 
 /** One obligation, or null. */
-export function showObligation(vault: string, slug: string): ObligationPage | null {
-  return parsePage(vault, slugify(slug));
+export function showObligation(
+  vault: string,
+  slug: string | ObligationTarget,
+): ObligationPage | null {
+  return parsePage(vault, targetStem(vault, slug));
 }
 
 /**
- * True when an active obligation page already exists for `slug`. Lets callers
- * (e.g. the inbox-drain pass) detect a same-title collision structurally
- * before attempting a create that {@link addObligation} would reject.
+ * The slug of the active obligation page `title` names (an older release's
+ * page under the Latin-only slug included), or `null` when there is none.
+ * Lets callers (e.g. the inbox-drain pass) detect a same-title collision
+ * structurally before attempting a create that {@link addObligation} would
+ * reject.
  */
-export function obligationExists(vault: string, slug: string): boolean {
-  return lanePageExists(vault, obligationPath(vault, slugify(slug)));
+export function existingObligationSlug(vault: string, title: string): string | null {
+  const slug = resolveObligationSlug(vault, title);
+  return lanePageExists(vault, obligationPath(vault, slug)) ? slug : null;
+}
+
+/** True when an active obligation page already exists for `title` ({@link existingObligationSlug}). */
+export function obligationExists(vault: string, title: string): boolean {
+  return existingObligationSlug(vault, title) !== null;
 }
 
 export interface ObligationListItem extends ObligationPage {
@@ -362,10 +415,13 @@ export function listObligations(
 }
 
 /** Retire an obligation into Brain/obligations/archive/. */
-export function removeObligation(vault: string, slug: string): RemoveObligationResult {
+export function removeObligation(
+  vault: string,
+  slug: string | ObligationTarget,
+): RemoveObligationResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const normalized = slugify(slug);
+  const normalized = targetStem(vault, slug);
   const activePath = obligationPath(vault, normalized);
   if (!lanePageExists(vault, activePath)) throw noObligationError(normalized);
   const archiveDir = obligationsArchiveDir(vault);

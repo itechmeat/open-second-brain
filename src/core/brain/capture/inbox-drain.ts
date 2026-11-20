@@ -42,8 +42,13 @@ import { dirname, join } from "node:path";
 import type { FrontmatterMap } from "../../types.ts";
 import { atomicWriteText } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
-import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
-import { addObligation, obligationExists, parseCadence, ObligationError } from "../obligations.ts";
+import { formatFrontmatter, parseFrontmatter, resolveTitleSlug } from "../../vault.ts";
+import {
+  addObligation,
+  existingObligationSlug,
+  parseCadence,
+  ObligationError,
+} from "../obligations.ts";
 import { ingestSource } from "../ingest/ingest.ts";
 import { CAPACITY_GATE_DECISION, evaluateIngestAdmission } from "../storage/gate.ts";
 import type { IngestAdmission } from "../storage/gate.ts";
@@ -174,9 +179,9 @@ function planObligation(
   if (title.length === 0) {
     return new UnroutableCapture("obligation marker without a title");
   }
-  const slug = slugify(title);
-  if (obligationExists(vault, slug)) {
-    return new UnroutableCapture(`obligation already exists: ${slug}`);
+  const existing = existingObligationSlug(vault, title);
+  if (existing !== null) {
+    return new UnroutableCapture(`obligation already exists: ${existing}`);
   }
   return {
     classification: "obligation",
@@ -248,7 +253,18 @@ function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan | 
     if (!(err instanceof CaptureContractError)) throw err;
     return new UnroutableCapture(err.message);
   }
-  const slug = slugify(body);
+  // An idea note an older release named by the Latin words of the idea
+  // alone takes the same idea again; its "titles" are the ideas it holds:
+  // each paragraph block, and this idea itself when the note already holds
+  // it as a run of blocks, so a replayed multiline idea finds the note it
+  // was written to and the retry guard in `writeIdeaNote` applies there.
+  const slug = resolveTitleSlug(body, (candidate) => {
+    const path = ensureInsideVault(join(vault, CAPTURED_NOTES_DIR_REL, `${candidate}.md`), vault);
+    if (!existsSync(path)) return null;
+    const stored = parseFrontmatter(path)[1];
+    const blocks = stored.split(/\n{2,}/u);
+    return bodyContainsBlock(stored.trim(), body.trim()) ? [...blocks, body] : blocks;
+  });
   const relPath = `${CAPTURED_NOTES_DIR_REL}/${slug}.md`;
   const abs = ensureInsideVault(join(vault, relPath), vault);
   const merge = existsSync(abs);
@@ -302,12 +318,27 @@ function writeIdeaNote(
   atomicWriteText(abs, formatFrontmatter(nextMeta, mergedBody));
 }
 
-/** True when `block` is already present as a paragraph block of `body`. */
+/**
+ * True when `block` is already present in `body` as a run of whole paragraph
+ * blocks. A multiline idea is several blocks, so it is matched block by
+ * block: comparing it as one block never matched and a retry appended it
+ * again.
+ */
 function bodyContainsBlock(body: string, block: string): boolean {
-  return body
+  const have = paragraphBlocks(body);
+  const want = paragraphBlocks(block);
+  if (want.length === 0) return false;
+  for (let start = 0; start + want.length <= have.length; start += 1) {
+    if (want.every((b, i) => have[start + i] === b)) return true;
+  }
+  return false;
+}
+
+function paragraphBlocks(text: string): string[] {
+  return text
     .split(/\n{2,}/u)
     .map((b) => b.trim())
-    .includes(block);
+    .filter((b) => b !== "");
 }
 
 /** Classify and (in apply mode) route every staged capture. */

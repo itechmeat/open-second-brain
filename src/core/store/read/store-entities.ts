@@ -155,6 +155,14 @@ export interface StoreEntities {
    * stat each, instead of rescanning the shards).
    */
   readonly pendingBlobs: ReadonlyArray<string>;
+  /**
+   * How many signal lifecycle records (`signal-state`, `signal-removed`)
+   * this read left out of the signal fold because their body is a pending
+   * blob, quarantined or not. Such a body names its signal, so while any
+   * is counted no signal's state is known for certain. It comes from the
+   * scan that built `signals`, so the two always describe one read.
+   */
+  readonly pendingSignalLifecycle: number;
 }
 
 interface Cached {
@@ -287,6 +295,7 @@ function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
   const pinned = new Map<StorePartition, PinnedFold>();
   let skippedPending = false;
   const pendingBlobs: string[] = [];
+  let pendingSignalLifecycle = 0;
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS, {
       tails: tailsOf(store, partition),
@@ -295,6 +304,9 @@ function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
     });
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
+    pendingSignalLifecycle +=
+      (read.pendingKinds.get(SIGNAL_STATE_KIND) ?? 0) +
+      (read.pendingKinds.get(SIGNAL_REMOVED_KIND) ?? 0);
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records) all.push({ record, partition });
     pinned.set(
@@ -373,6 +385,7 @@ function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
     unreadable,
     skippedPending,
     pendingBlobs,
+    pendingSignalLifecycle,
   };
 }
 

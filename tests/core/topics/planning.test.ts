@@ -135,6 +135,65 @@ describe("topic planning", () => {
     expect(planned(plan()).created).toEqual([]);
   });
 
+  test("a hyphenated name in the records stays whole in the title, in any script", () => {
+    for (const [session, i] of [
+      ["s1", 0],
+      ["s1", 1],
+      ["s2", 2],
+      ["s2", 3],
+      ["s2", 4],
+    ] as const) {
+      signal(`Тема-три release checklist covers step ${i}`, { project: "тема-три", session });
+    }
+    expect(planned(plan()).created[0]!.title).toBe("Тема-три release checklist");
+  });
+
+  test("a compound whose parts are both subject words is named once in the title", () => {
+    ["s1", "s1", "s2", "s2", "s2"].forEach((session, i) =>
+      signal(`Release-checklist covers notes ${i}`, { session }),
+    );
+    expect(planned(plan()).created[0]!.title).toBe("Release-checklist covers notes");
+  });
+
+  test("a word the records write alone more often than in a compound is titled alone", () => {
+    const texts = [
+      "Shard-level compaction policy",
+      "Shard-level compaction policy",
+      "shard compaction policy",
+      "shard compaction policy",
+      "shard compaction policy",
+    ];
+    texts.forEach((text, i) => signal(text, { session: i < 2 ? "s1" : "s2" }));
+    expect(planned(plan()).created[0]!.title).toBe("Shard compaction policy");
+  });
+
+  test("a compound that repeats a part counts once for that part", () => {
+    // "peer-to-peer" holds "peer" twice: counted per part, two records
+    // would weigh four and outvote the three that write "peer" alone.
+    const texts = [
+      "peer-to-peer network transport",
+      "peer-to-peer network transport",
+      "peer network transport",
+      "peer network transport",
+      "peer network transport",
+    ];
+    texts.forEach((text, i) => signal(text, { session: i < 2 ? "s1" : "s2" }));
+    expect(planned(plan()).created[0]!.title).toBe("Peer network transport");
+  });
+
+  test("a word written with vowel signs is one subject word, not split at its marks", () => {
+    for (const [session, i] of [
+      ["s1", 0],
+      ["s1", 1],
+      ["s2", 2],
+      ["s2", 3],
+      ["s2", 4],
+    ] as const) {
+      signal(`रिलीज़ सूची नमस्ते ${i}`, { session });
+    }
+    expect(planned(plan()).created[0]!.title).toBe("रिलीज़ सूची नमस्ते".normalize("NFC"));
+  });
+
   test("a cluster written without word spaces still becomes a topic, its title cut to fit", () => {
     const longA = "シャードの圧縮".repeat(18);
     const longB = "毎月の小さなファイル".repeat(12);

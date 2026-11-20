@@ -71,8 +71,11 @@ describe("o2b topic verbs", () => {
     json(["topic", "goal", store, "--clear"]);
     expect(show(store)["goal"]).toBeNull();
 
+    // An id that names no note, signal or decision event is refused, and nothing is written.
     const record = "01KA0000000000000000000009";
-    json(["topic", "assign", store, record]);
+    const refused = cli(["topic", "assign", store, record, "--json"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain(`no note, signal or decision event with id ${record}`);
     json(["topic", "unassign", store, record]);
 
     json(["topic", "link", store, "--to", docs]);

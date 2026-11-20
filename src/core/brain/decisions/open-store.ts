@@ -46,13 +46,13 @@ import lockfile from "proper-lockfile";
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
-import { parseFrontmatterText, SLUG_MAX_LEN, slugify } from "../../vault.ts";
+import { parseFrontmatterText, SLUG_MAX_LEN, titleSlug } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { decisionsDir, decisionPath } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { recordDecision } from "./record.ts";
+import { recordDecision, resolveDecisionSlug } from "./record.ts";
 import { appendDecisionChangeReceipt, DECISION_CHANGE_REASON } from "./receipts.ts";
 import {
   assertLaneWrite,
@@ -638,7 +638,7 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
     const agent = explicitAgent ?? resolveAgentName(input.configPath);
 
     const dir = decisionsDir(vault);
-    const slug = slugify(title);
+    const slug = titleSlug(title);
     let id = `${OPEN_FILE_PREFIX}${slug}`;
     let suffix = 2;
     while (lanePageExists(vault, join(dir, `${id}${OPEN_FILE_EXT}`))) {
@@ -765,7 +765,7 @@ function mintHead(title: string): string {
   for (const word of title.split(/\s+/u)) {
     if (word === "") continue;
     const next = head === "" ? word : `${head} ${word}`;
-    if (slugify(next).length > MINT_HEAD_MAX) break;
+    if (titleSlug(next).length > MINT_HEAD_MAX) break;
     head = next;
   }
   return head;
@@ -774,19 +774,19 @@ function mintHead(title: string): string {
 /**
  * A derived mint title: `<head> (<id>)`, numbered `<head> (<id> N)` from
  * the second candidate on. The id - unique among records - is PRE-SHAVED
- * so the whole tail sits INSIDE the slug cap: `slugify` truncates from the
+ * so the whole tail sits INSIDE the slug cap: `titleSlug` truncates from the
  * START of the slug, so a tail appended past the cap is silently dropped
- * and every candidate would slugify identically - an occupied slug then
+ * and every candidate would titleSlug identically - an occupied slug then
  * wedges the mint walk forever. With the tail budgeted inside the cap the
  * numbered candidates keep their counter on the slug too (the id's slice
- * shrinks as the counter grows), so successive candidates slugify
+ * shrinks as the counter grows), so successive candidates titleSlug
  * distinctly and the walk terminates by construction.
  */
 function derivedMintTitle(sanitisedTitle: string, id: string, suffix: number): string {
   const counter = suffix === 0 ? "" : ` ${suffix}`;
   const counterLen = suffix === 0 ? 0 : 1 + String(suffix).length;
   const head = mintHead(sanitisedTitle);
-  const headLen = head === "" ? 0 : slugify(head).length + 1;
+  const headLen = head === "" ? 0 : titleSlug(head).length + 1;
   let budget = SLUG_MAX_LEN - headLen - counterLen;
   let effectiveHead = head;
   if (budget < 1) {
@@ -829,14 +829,17 @@ function resolveMintTarget(vault: string, record: OpenDecisionRecord): ResolveMi
   const reference = `[[${record.id}]]`;
   const sanitised = sanitiseMintTitle(record.title);
   let title = sanitised;
-  let slug = slugify(title);
   let suffix = 0;
   for (;;) {
+    // The page `recordDecision` would refuse this title for: the new slug,
+    // or a page an older release minted under the Latin-only slug of the
+    // same title. One that names this record is the crashed attempt's own;
+    // any other is taken, and the walk moves on to a derived title.
+    const slug = resolveDecisionSlug(vault, title);
     const path = decisionPath(vault, slug);
-    if (!lanePageExists(vault, path)) return { title, slug, ours: false };
+    if (!lanePageExists(vault, path)) return { title, slug: titleSlug(title), ours: false };
     if ((readLaneText(vault, path) ?? "").includes(reference)) return { title, slug, ours: true };
     title = sanitiseMintTitle(derivedMintTitle(sanitised, record.id, suffix));
-    slug = slugify(title);
     suffix = suffix === 0 ? 2 : suffix + 1;
   }
 }
@@ -927,6 +930,7 @@ export function resolveOpenDecision(
           body: {
             open: `[[${record.id}]]`,
             decision: `[[${decisionId}]]`,
+            title: record.title,
             choice,
             agent: actor,
             ...originFields(input.origin),

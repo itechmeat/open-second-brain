@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,7 @@ import {
   reachServer,
   type ReachLogFixture as Fixture,
 } from "../helpers/reach-log-fixture.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 const PRIVATE_TITLE = "Zzreservedduty";
 const PRIVATE_SLUG = "zzreservedduty";
@@ -144,6 +145,55 @@ describe("brain_obligation answers at the caller's reach", () => {
     writeFileSync(join(dir, `${UNSLUGGED_STEM}.md`), page.replace(PUBLIC_TITLE, UNSLUGGED_TITLE));
     expect(await obligation(a, { operation: "list" })).toContain(UNSLUGGED_TITLE);
   });
+
+  // Windows reserves the device names with any extension, so `nul.md` cannot be made there.
+  test.skipIf(IS_WINDOWS)(
+    "remote reach: a withheld page stored under a bare device name answers as absent",
+    async () => {
+      // An older release wrote the title "NUL" as nul.md; the lookup that
+      // still finds it must ask about that page, not the suffixed name.
+      const make = (withPrivate: boolean): Fixture => {
+        const f = fixture(false);
+        if (withPrivate) {
+          const page = addObligation(f.vault, { title: "NUL", cadence: "weekly", agent: AGENT });
+          const stored = join(f.vault, "Brain", "obligations", "nul.md");
+          renameSync(page.path, stored);
+          reserve(stored);
+        }
+        return f;
+      };
+      const a = make(true);
+      const b = make(false);
+      const stored = join(a.vault, "Brain", "obligations", "nul.md");
+      const before = readFileSync(stored, "utf8");
+      for (const args of [
+        { operation: "show", slug: "nul" },
+        { operation: "done", slug: "nul" },
+        { operation: "remove", slug: "nul" },
+      ]) {
+        // oxlint-disable-next-line no-await-in-loop
+        const withheld = await obligation(a, args);
+        // oxlint-disable-next-line no-await-in-loop
+        expect(withheld).toBe(await obligation(b, args));
+      }
+      expect(readFileSync(stored, "utf8")).toBe(before);
+      expect(
+        await obligation(a, { operation: "show", slug: "nul" }, TRANSPORT_REACH.local),
+      ).toContain('"present":true');
+    },
+  );
+
+  // Windows reserves the device names with any extension, so `nul.md` cannot be made there.
+  test.skipIf(IS_WINDOWS)(
+    "remote reach: a readable page stored under a bare device name is shown and completed",
+    async () => {
+      const a = fixture(false);
+      const page = addObligation(a.vault, { title: "NUL", cadence: "weekly", agent: AGENT });
+      renameSync(page.path, join(a.vault, "Brain", "obligations", "nul.md"));
+      expect(await obligation(a, { operation: "show", slug: "nul" })).toContain('"present":true');
+      expect(await obligation(a, { operation: "done", slug: "nul" })).toContain('"title":"NUL"');
+    },
+  );
 
   test("local control: the operator's own shell lists and shows the withheld page", async () => {
     const a = fixture(true);
