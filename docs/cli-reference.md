@@ -1079,6 +1079,24 @@ once per change, folding warning- and action-severity findings into
 per-detector counts and staying silent while the findings set is
 unchanged. Claude Code only: runtimes whose Stop block would force a
 continuation turn stay silent.
+`stop_guardrail_enabled` (env `OPEN_SECOND_BRAIN_STOP_GUARDRAIL_ENABLED`,
+default on) is the end-of-turn reminder to record a brain event after a
+turn that changed files; `"false"` or `"0"` turns it off.
+`quote_check_enabled` (env `OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED`,
+default on) is the answer-time quote check; `"false"` or `"0"` turns the
+whole hook off, whatever the per-phase `quote_check.<phase>` modes in
+`_brain.yaml` say. On Claude Code these Stop advisories (and the hygiene
+digest) are synchronous hooks that print nothing and hand their text to
+one `async` hook: the model reads it with the next user message, the chat
+does not print it and it starts no model turn of its own. A one-shot
+`claude -p` run kills that async hook at teardown, so it keeps the durable
+records but not the text; `stop_advisory_delivery` (env
+`OPEN_SECOND_BRAIN_STOP_ADVISORY_DELIVERY`, default `async`) set to
+`"sync"` prints the advisories synchronously instead (a chat line and one
+more model turn), for people who run headless. On Codex the reminder
+stays a synchronous `decision: "block"` continuation, the only Stop form
+Codex hands to the model. Details:
+[`hooks/README.md`](../hooks/README.md#what-the-person-sees-on-each-host).
 `backlog_nudge_enabled` (env
 `OPEN_SECOND_BRAIN_BACKLOG_NUDGE_ENABLED`, default off) adds a
 SessionStart line that reports the count of imported sessions never

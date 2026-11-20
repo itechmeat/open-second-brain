@@ -19,13 +19,14 @@
  *
  * What is mirrored, and what is deliberately NOT:
  *   - `skills/**` -> `plugins/codex/skills/**`, every file, byte for byte.
- *   - `hooks/hooks.json` -> `plugins/codex/hooks/hooks.json`, with two
+ *   - `hooks/hooks.json` -> `plugins/codex/hooks/hooks.json`, with three
  *     Codex-specific changes. SessionEnd timeouts are capped at
  *     {@link CODEX_SESSION_END_TIMEOUT_CAP_SEC}: Codex clamps them there
- *     anyway, and warns on every run while the file asks for more. And every
+ *     anyway, and warns on every run while the file asks for more. Every
  *     hook gets a `commandWindows` ({@link codexWindowsHookCommand}): on
  *     Windows Codex runs a hook as `%COMSPEC% /C "<command>"`, where the
- *     POSIX `command` cannot parse.
+ *     POSIX `command` cannot parse. And the hooks in
+ *     {@link CODEX_SKIPPED_HOOKS} are left out.
  *   - `LICENSE` and `.codexignore` -> the same names under `plugins/codex/`,
  *     byte for byte, so the subtree Codex installs carries its own license
  *     and ignore list.
@@ -65,6 +66,16 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * to 3s` on every run.
  */
 export const CODEX_SESSION_END_TIMEOUT_CAP_SEC = 3;
+
+/**
+ * Hooks the Codex mirror leaves out. `stop-advisory-deliver` is the
+ * background half of the Claude Code Stop advisories: on Codex the
+ * synchronous Stop hooks print their own `decision: "block"` (the only Stop
+ * form Codex hands to the model), nothing is handed over, and a background
+ * Codex hook can neither continue a turn nor have its Stop
+ * `additionalContext` read - so the entry would only cost a process per turn.
+ */
+export const CODEX_SKIPPED_HOOKS: ReadonlyArray<string> = ["stop-advisory-deliver"];
 
 export interface MirrorSpec {
   /** Source, relative to the repo root: a directory or a single file. */
@@ -113,32 +124,38 @@ export function codexHooksJson(source: string): string {
   const doc = JSON.parse(source) as { hooks?: Record<string, HookGroup[]> };
   for (const [event, groups] of Object.entries(doc.hooks ?? {})) {
     for (const group of groups) {
-      group.hooks = (group.hooks ?? []).map((hook) => {
-        if (
-          event === "SessionEnd" &&
-          typeof hook.timeout === "number" &&
-          hook.timeout > CODEX_SESSION_END_TIMEOUT_CAP_SEC
-        ) {
-          hook.timeout = CODEX_SESSION_END_TIMEOUT_CAP_SEC;
-        }
-        if (hook.command === undefined) return hook;
-        const name = POSIX_HOOK_COMMAND.exec(hook.command)?.[1];
-        if (name === undefined) {
-          // Fail the sync rather than ship a hook that cmd.exe cannot run.
-          throw new Error(
-            `${event} hook command does not end in the o2b-hook fallback; ` +
-              `cannot derive its Windows form: ${hook.command}`,
-          );
-        }
-        // Rebuilt key by key, so that commandWindows sits right after command.
-        const out: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(hook)) {
-          if (key === "commandWindows") continue;
-          out[key] = value;
-          if (key === "command") out["commandWindows"] = codexWindowsHookCommand(name);
-        }
-        return out;
-      });
+      group.hooks = (group.hooks ?? [])
+        .filter((hook) => {
+          const name =
+            hook.command === undefined ? undefined : POSIX_HOOK_COMMAND.exec(hook.command)?.[1];
+          return name === undefined || !CODEX_SKIPPED_HOOKS.includes(name);
+        })
+        .map((hook) => {
+          if (
+            event === "SessionEnd" &&
+            typeof hook.timeout === "number" &&
+            hook.timeout > CODEX_SESSION_END_TIMEOUT_CAP_SEC
+          ) {
+            hook.timeout = CODEX_SESSION_END_TIMEOUT_CAP_SEC;
+          }
+          if (hook.command === undefined) return hook;
+          const name = POSIX_HOOK_COMMAND.exec(hook.command)?.[1];
+          if (name === undefined) {
+            // Fail the sync rather than ship a hook that cmd.exe cannot run.
+            throw new Error(
+              `${event} hook command does not end in the o2b-hook fallback; ` +
+                `cannot derive its Windows form: ${hook.command}`,
+            );
+          }
+          // Rebuilt key by key, so that commandWindows sits right after command.
+          const out: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(hook)) {
+            if (key === "commandWindows") continue;
+            out[key] = value;
+            if (key === "command") out["commandWindows"] = codexWindowsHookCommand(name);
+          }
+          return out;
+        });
     }
   }
   return `${JSON.stringify(doc, null, 2)}\n`;

@@ -14,7 +14,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +38,7 @@ import {
   HYGIENE_DIGEST_SEVERITIES,
 } from "../../hooks/lib/hygiene-digest-text.ts";
 import { homeEnv } from "../helpers/platform.ts";
+import { stateRootDir } from "../../src/core/platform-dirs.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 
 // Tests here spawn processes; see tests/helpers/cli-timeout.ts.
@@ -42,6 +51,7 @@ const HOOK = resolve(
   "hooks",
   "hygiene-digest.ts",
 );
+const DELIVER = join(dirname(HOOK), "stop-advisory-deliver.ts");
 
 const FLAG_ON = { OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED: "true" };
 
@@ -148,8 +158,9 @@ async function runHook(
   payload: unknown,
   env: Record<string, string> = {},
   preload: ReadonlyArray<string> = [],
+  hook: string = HOOK,
 ): Promise<RunResult> {
-  const proc = Bun.spawn(["bun", "run", ...preload, HOOK], {
+  const proc = Bun.spawn(["bun", "run", ...preload, hook], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -299,6 +310,40 @@ describe("hygiene-digest hook", () => {
     // and the next eligible turn re-emits (lose-not-duplicate).
     expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
   }, 20_000);
+
+  test("Claude Code hand-over: the synchronous part alone writes the ledger and prints nothing; the deliver hook prints the line once", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    const payload = stopPayload(transcript, {
+      session_id: "sess-hygiene-1",
+      last_assistant_message: "done",
+    });
+    const sync = await runHook(payload, FLAG_ON);
+    expect(sync.exit).toBe(0);
+    expect(sync.stdout).toBe("");
+    // The ledger is the durable part: written before any async hook runs.
+    expect(readFileSync(hygieneDigestHashPath(vault), "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
+    const handoverDir = join(
+      stateRootDir({ platform: process.platform, home: configHome, env: homeEnv(configHome) }),
+      "stop-advisories",
+    );
+    expect(readdirSync(handoverDir).filter((name) => name.endsWith(".json"))).toHaveLength(1);
+    // The deliver hook waits only for the producers switched on.
+    const onlyDigest = {
+      ...FLAG_ON,
+      OPEN_SECOND_BRAIN_STOP_GUARDRAIL_ENABLED: "0",
+      OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED: "0",
+    };
+    const first = await runHook(payload, onlyDigest, [], DELIVER);
+    const parsed = JSON.parse(first.stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("Stop");
+    expect(parsed.hookSpecificOutput.additionalContext).toStartWith("Open Second Brain hygiene:");
+    expect(readdirSync(handoverDir).filter((name) => name.endsWith(".json"))).toEqual([]);
+    const second = await runHook(payload, onlyDigest, [], DELIVER);
+    expect(second.stdout).toBe("");
+  }, 30_000);
 
   test("an immediate second identical run is silent", async () => {
     seedConflict();

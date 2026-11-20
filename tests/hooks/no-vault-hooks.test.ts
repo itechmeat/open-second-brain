@@ -279,6 +279,7 @@ describe("hooks with no vault", () => {
     },
     "stop-log-guardrail": { payload: () => ({ hook_event_name: "Stop" }), flags: {} },
     "answer-quote-check": { payload: () => ({ hook_event_name: "Stop" }), flags: {} },
+    "stop-advisory-deliver": { payload: () => ({ hook_event_name: "Stop" }), flags: {} },
     "hygiene-digest": {
       payload: () => ({ hook_event_name: "Stop" }),
       flags: { OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED: "true" },

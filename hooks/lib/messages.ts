@@ -108,6 +108,18 @@ export const STOP_GUARDRAIL_TEXT =
   "Call brain_feedback, brain_apply_evidence or brain_note if one fits " +
   "(brain-memory skill); otherwise just finish.";
 
+/**
+ * The deferred Claude Code form of the reminder. With the default
+ * `stop_advisory_delivery: "async"` the line is handed to the async
+ * `stop-advisory-deliver` hook and reaches the model with the NEXT user
+ * message, not at the end of the turn that earned it - hence "the previous
+ * turn".
+ */
+export const STOP_GUARDRAIL_DEFERRED_TEXT =
+  "Open Second Brain: the previous turn changed files but recorded no brain event. " +
+  "Call brain_feedback, brain_apply_evidence or brain_note if one fits " +
+  "(brain-memory skill); otherwise carry on.";
+
 export type StopGuardrailOutput =
   | {
       readonly hookSpecificOutput: {
@@ -118,10 +130,12 @@ export type StopGuardrailOutput =
   | { readonly decision: "block"; readonly reason: string };
 
 /**
- * Hook output for the Stop guardrail. Claude Code gets the non-error
- * `additionalContext` channel; every other runtime gets the portable
- * `decision: "block"` shape. Both continue the turn once and carry the
- * same one-line text.
+ * Synchronous hook output for the Stop guardrail, used wherever the line is
+ * not handed over to `stop-advisory-deliver`. Claude Code (with
+ * `stop_advisory_delivery: "sync"`) gets `hookSpecificOutput.additionalContext`,
+ * which it prints as "Stop hook says: ..." and answers with one more turn.
+ * Every other runtime gets the portable `decision: "block"` shape, which
+ * continues the turn once with the line as the continuation prompt.
  */
 export function stopGuardrailOutput(runtime: HookRuntime): StopGuardrailOutput {
   if (runtime === "claudecode") {

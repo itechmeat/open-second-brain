@@ -1895,6 +1895,76 @@ export function resolveHygieneDigestEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Shared body for a default-ON switch: env var (trimmed) wins, falling
+ * back to the config key (trimmed); only the literal strings `"false"` and
+ * `"0"` turn it off, anything else (including absence) leaves it on - the
+ * `recall_inject_dedupe` reading.
+ */
+function resolveConfigSwitchDefaultOn(
+  envKey: string,
+  configKey: string,
+  configPath?: string,
+): boolean {
+  const raw = readSetting(envKey, configKey, () => discoverConfig(configPath).data);
+  return raw !== "false" && raw !== "0";
+}
+
+/**
+ * End-of-turn brain-event nudge (`hooks/stop-log-guardrail.ts`). Default
+ * ON: after a turn that changed files but recorded no brain event, the
+ * model is reminded once. `stop_guardrail_enabled: "false"` (or `"0"`, or
+ * the env override) turns the nudge off on this machine entirely.
+ */
+export function resolveStopGuardrailEnabled(configPath?: string): boolean {
+  return resolveConfigSwitchDefaultOn(
+    "OPEN_SECOND_BRAIN_STOP_GUARDRAIL_ENABLED",
+    "stop_guardrail_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Answer-time quote check (`hooks/answer-quote-check.ts`) master switch.
+ * Default ON. `quote_check_enabled: "false"` (or `"0"`, or the env
+ * override) turns the whole hook off on this machine: no annotation, no
+ * `enforce` Brain-log event, no `reply_presence` record - whatever the
+ * per-phase `quote_check.<phase>` modes in `_brain.yaml` say. With it on,
+ * those modes decide as before.
+ */
+export function resolveQuoteCheckEnabled(configPath?: string): boolean {
+  return resolveConfigSwitchDefaultOn(
+    "OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED",
+    "quote_check_enabled",
+    configPath,
+  );
+}
+
+/** How the end-of-turn advisories reach the model on Claude Code. */
+export type StopAdvisoryDelivery = "async" | "sync";
+
+/**
+ * Delivery form of the end-of-turn advisories on Claude Code (the brain-event
+ * nudge, the quote check and the hygiene digest). Default `async`: the
+ * synchronous Stop hooks compute and write their durable records, and the
+ * background `stop-advisory-deliver` hook hands the text to the model with
+ * the next user message - not printed in the chat, no extra model turn. A
+ * one-shot `claude -p` run kills that background hook at teardown, so the
+ * text never arrives there. `stop_advisory_delivery: "sync"` (or the env
+ * override `OPEN_SECOND_BRAIN_STOP_ADVISORY_DELIVERY`) selects the
+ * synchronous form instead: the text is printed as "Stop hook says: ..." and
+ * the turn continues once so the model can act on it - the form for people
+ * who run headless. Any other value reads as `async`.
+ */
+export function resolveStopAdvisoryDelivery(configPath?: string): StopAdvisoryDelivery {
+  const raw = readSetting(
+    "OPEN_SECOND_BRAIN_STOP_ADVISORY_DELIVERY",
+    "stop_advisory_delivery",
+    () => discoverConfig(configPath).data,
+  );
+  return raw === "sync" ? "sync" : "async";
+}
+
+/**
  * Tiered context-injection nav tier gate (retrieval-quality-and-context-delivery,
  * D1 / t_2d4f34d7). Default OFF: the additive navigation/map tier stays a
  * no-op unless `nav_tier_enabled: "true"` (or the matching env override). The

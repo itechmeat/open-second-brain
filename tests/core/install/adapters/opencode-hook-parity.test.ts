@@ -49,6 +49,8 @@ const DECLARED_OPENCODE_DIVERGENCES: Readonly<Record<string, string>> = Object.f
     "opencode exposes no stop hook to audit quoted spans against the turn's notes on turn end",
   "Stop:hygiene-digest":
     "opencode exposes no stop hook to surface pending hygiene findings on turn end",
+  "Stop:stop-advisory-deliver":
+    "opencode exposes no stop hook, so no end-of-turn advisory is handed over for a background hook to deliver",
   "SubagentStart:subagent-inject":
     "opencode has no subagent spawn hook; there is no subagent lifecycle event to deliver context to",
   "PreToolUse:nudge-channel":
