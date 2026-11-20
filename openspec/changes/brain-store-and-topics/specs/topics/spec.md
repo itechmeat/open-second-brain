@@ -17,6 +17,10 @@ Each topic SHALL be a folder in the human view holding a required `topic.md` and
 - **WHEN** a topic has more milestones, decisions or log entries than the page budget allows
 - **THEN** the oldest done milestones and log entries move to a companion archive file linked from the related section, and `topic.md` stays within its budget
 
+#### Scenario: A held decision is a decision item
+- **WHEN** a topic holds a decision an agent recorded with the decision kind (`brain_decision`), and no decision model gave the topic an item for it
+- **THEN** `topic.md` shows it as a decision item derived from that record when the page is rendered, marked when it resolved an open decision and with its outcome once one is recorded, and it leaves the page when the assignment or the topic is undone
+
 ### Requirement: Topic status lifecycle
 A topic SHALL have exactly one status from `Active`, `Waiting`, `Blocked`, `On hold`, `Done` and `Closed`. `Done` SHALL carry a resolved date. A topic with no new event for a configurable quiet period SHALL be offered to the user for a status decision rather than changed automatically.
 

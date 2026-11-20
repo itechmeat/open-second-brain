@@ -57,7 +57,7 @@ const MILESTONE_TAIL_RE = new RegExp(
   `\\s*\\((?:${alt(STRINGS.flatMap((s) => [template(s.milestoneDone("\u0001"), [DAY]), escape(s.milestoneLooksDone)]))})\\)\\s*$`,
 );
 const DECISION_TAIL_RE = new RegExp(
-  `\\s*\\((?:${alt(STRINGS.map((s) => template(s.serves("\u0001"), [".*"])))})\\)\\s*$`,
+  `\\s*\\((?:${alt(STRINGS.flatMap((s) => [template(s.serves("\u0001"), [".*"]), escape(s.decisionResolved), template(s.decisionOutcome("\u0001"), [".*"])]))})\\)\\s*$`,
 );
 const QUESTION_TAIL_RE = new RegExp(
   `\\s*\\((?:${alt(STRINGS.flatMap((s) => [template(s.questionAnswer("\u0001"), [".*"]), escape(s.questionLooksAnswered)]))})\\)\\s*$`,
@@ -115,8 +115,16 @@ function milestoneParts(line: string): { checked: boolean; text: string } {
 function itemText(kind: TopicItemKind, line: string): { text: string; reason?: string } {
   const rest = bare(line);
   switch (kind) {
-    case "decision":
-      return { text: rest.replace(DECISION_TAIL_RE, "").trim() };
+    case "decision": {
+      // A derived decision line can carry its resolution and its outcome
+      // as well as the milestones it serves, each in its own parentheses.
+      let text = rest;
+      for (let prior = ""; prior !== text;) {
+        prior = text;
+        text = text.replace(DECISION_TAIL_RE, "");
+      }
+      return { text: text.trim() };
+    }
     case "open-question":
       return { text: rest.replace(QUESTION_TAIL_RE, "").trim() };
     case "log-entry": {

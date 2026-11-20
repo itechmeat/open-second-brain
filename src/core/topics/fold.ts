@@ -115,6 +115,17 @@ export interface TopicItem {
   readonly resolveProposed?: TopicAuthor;
   /** Whether any record of the item, its completions and resolutions included, sits in `private`. */
   readonly private: boolean;
+  /**
+   * Set only on a decision item derived at read time from the decision
+   * events a topic holds (`held-decisions.ts`), never by the fold: no
+   * topic record stands behind it.
+   */
+  readonly derived?: {
+    /** The decision closed an open decision (`decision-resolved`). */
+    readonly resolved: boolean;
+    /** The newest outcome backfilled for the decision, or `null`. */
+    readonly outcome: string | null;
+  };
 }
 
 export interface GoalProposal extends TopicAuthor {
@@ -177,6 +188,13 @@ export interface TopicFold {
    * topic's, and its id can be recorded again.
    */
   movedAway(topic: string, item: string): boolean;
+  /**
+   * Whether any topic record ever named item `item` for `topic`, a topic
+   * merged into it, or a topic it was split from: removed items and
+   * items a split moved away included. A read-time derived item
+   * (`held-decisions.ts`) is shown only where this is false.
+   */
+  itemRecorded(topic: string, item: string): boolean;
   /**
    * Records any `assign`, `unassign` or `split` named, voided ones
    * included: material a topic once held. Automatic planning routes such a
@@ -659,6 +677,15 @@ function assemble(
     movedAway: (topic, item) => {
       const key = `${topic}\u0000${item}`;
       return s.itemFirst.has(key) && s.regs.owner.get(key)?.value !== topic;
+    },
+    itemRecorded: (topic, item) => {
+      const home = canonical(topic);
+      if (home === null) return false;
+      return (s.itemKeys.get(item) ?? []).some((key) => {
+        const first = key.slice(0, key.indexOf("\u0000"));
+        const owner = s.regs.owner.get(key)?.value;
+        return canonical(first) === home || (owner != null && canonical(owner) === home);
+      });
     },
     rejected: s.rejected,
   };

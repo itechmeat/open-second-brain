@@ -92,6 +92,7 @@ import { readPageStats, sameStat, statPage, writePageStats, type PageStats } fro
 import { pageFileInside } from "./page-path.ts";
 import { retirePages, type RetireContext } from "./retire.ts";
 import { topicPages } from "./topic-pages.ts";
+import { withHeldDecisions } from "../topics/held-decisions.ts";
 import { foldViewWriter } from "./writer-fold.ts";
 
 export interface ViewPassOptions extends RecordOptions {
@@ -142,7 +143,10 @@ export function buildPages(store: StoreHandle, read: ViewCatchUp): Map<string, P
   const corrections = foldCorrections(shared);
   // Topic records that carry a `<private>` region stay off the pages, as
   // every other record family's do.
-  const topics = foldTopics(shared.filter((r) => !valueCarriesPrivateRegion(r.body)));
+  const plain = shared.filter((r) => !valueCarriesPrivateRegion(r.body));
+  // A topic shows the decisions it holds as decision items, derived from
+  // the same shared records (`topics/held-decisions.ts`).
+  const topics = withHeldDecisions(foldTopics(plain), plain);
   const models = [
     aboutMePage(store.storeId, prefs, strings),
     decisionsPage(store.storeId, entries, strings),

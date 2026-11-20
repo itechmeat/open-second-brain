@@ -4,11 +4,13 @@
  *
  * A topic holds the notes, signals and decisions assigned to it (its
  * `assign` records, and those of the topics merged into it, as the fold
- * resolves them). Those records are not items of the topic page: the page
- * shows what is earned (spec "Log entries are earned"; design D10
+ * resolves them). Its notes and signals are not items of the topic page:
+ * the page shows what is earned (spec "Log entries are earned"; design D10
  * `event_kind`, whose deterministic answer for a record no agent gave a
- * kind is routine), so the page says how many records the topic holds and
- * names the command that lists them, and this module lists them.
+ * kind is routine); its decisions, whose kind the agent named, show as
+ * decision items derived when the page is read (`held-decisions.ts`). So
+ * the page says how many records the topic holds and names the command
+ * that lists them, and this module lists them.
  *
  * Log events (notes, decisions) are read from the `log` stream (the
  * stream reader, with its seen-shard and gap checks), keeping only held
