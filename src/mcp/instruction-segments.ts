@@ -216,7 +216,7 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       },
       {
         tools: ["brain_context"],
-        text: "brain_context bootstraps a session when the host injects no active-preferences hook",
+        text: "brain_context bootstraps a session whose context opened with no active-preferences digest (a host without hooks, or hooks the host did not run, as in a codex exec whose hooks are not trusted)",
         separator: SENTENCE,
       },
       unconditional(
@@ -317,8 +317,11 @@ const WRITER_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
           "                            pinned context and active-preference counts.\n" +
           "                            Read-only. Use at session\n" +
           "                            start when the host runtime lacks a SessionStart\n" +
-          "                            hook (Cursor, Aider, raw Claude API). Runtimes that\n" +
-          "                            already inject the digest via a hook can skip this.",
+          "                            hook (Cursor, Aider, raw Claude API) or did not run\n" +
+          "                            it (a codex exec whose hooks are not trusted): no\n" +
+          "                            active-preferences digest opened the context.\n" +
+          "                            Runtimes that already inject the digest via a hook\n" +
+          "                            can skip this.",
       },
     ],
   },

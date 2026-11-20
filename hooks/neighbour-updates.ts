@@ -3,17 +3,20 @@
  * UserPromptSubmit hook: neighbour updates (task 4.3, design D5, D10
  * `neighbour_relevant`). On by default when a brain store is in use;
  * `neighbour_updates_enabled: "false"` turns it off. Before each turn it
- * asks the index for the candidate records other devices wrote since this
- * session's last prompt (`probeNeighbours`: stream `topics`, the
- * neighbour kinds, never this device and agent), keeps those on topics
+ * asks the index for the candidate records written since this session's
+ * last prompt (`probeNeighbours`: stream `topics`, the neighbour kinds),
+ * drops this session's own, keeps those on topics
  * this session works on or in its project scope, gates them
  * deterministically (topic this session works on and kind `decision`),
  * refines the gate with the `neighbour_relevant` use, and injects at
- * most five fenced lines naming the record and how to open it.
+ * most five fenced lines, under one heading per topic naming how to open
+ * it, their texts cut to share 800 characters.
  *
- * Own records are never returned (same device and same resolved agent
- * name, as `log-catchup` resolves "me"; a model-derived item counts as
- * its source's). The first prompt of a session, the first after an index
+ * Own records are never returned: a record stamped with this session
+ * (`src/core/agent-context/session-identity.ts`), or an unstamped one of
+ * this device and resolved agent name, as `log-catchup` resolves "me"; a
+ * model-derived item counts as its source's. Another session of the same
+ * agent name, on this device or another, is a neighbour. The first prompt of a session, the first after an index
  * rebuild and the first after the state expired (a day without a prompt)
  * store the head watermark and inject nothing; later turns read every
  * candidate up to the head, the newest 2000 of them, and say in one line
@@ -45,6 +48,7 @@ import {
 } from "../src/core/agent-context/neighbours.ts";
 import { budgetCutLine } from "../src/core/agent-context/budget-line.ts";
 import { resolveNeighbourUpdatesEnabled } from "../src/core/agent-context/config.ts";
+import { isOwnRecord, sessionStamp } from "../src/core/agent-context/session-identity.ts";
 import { probeNeighbours } from "../src/core/search/brain-store/neighbour-probe.ts";
 import { getRecord } from "../src/core/search/store/brain-records.ts";
 import { resolveSearchConfig } from "../src/core/search/index.ts";
@@ -104,7 +108,11 @@ async function main(): Promise<void> {
     const storedData = stored?.data as { watermark?: unknown } | undefined;
     const storedWatermark = storedData === undefined ? undefined : storedData.watermark;
     const since = typeof storedWatermark === "string" ? storedWatermark : undefined;
-    const self = { device, agent };
+    // The same rule the writer stamps by: the launcher's name for the
+    // session when set, else the payload's id (`session-identity.ts`).
+    const session = sessionStamp({ env: process.env, hostSessionId: sessionId });
+    if (session === null) return;
+    const self = { device, agent, session };
     const probe = await probeNeighbours(config, {
       since,
       self,
@@ -128,15 +136,14 @@ async function main(): Promise<void> {
       storeWatermark(target.vault, sessionId, watermark, [...sessionTopics]);
       return;
     }
-    const candidates0 = selectNeighbourCandidates(probe.candidates, self);
     // Candidate rows the probe's limit left out: said in one line, with
     // the call that lists them. The count is of every topic and project
     // (the limit applies before the session's filter), and `brain_changes`
     // lists them among every other record since the old watermark.
     const skippedLine =
       probe.skipped > 0 && since !== undefined
-        ? `_${probe.skipped} older topic ${probe.skipped === 1 ? "record" : "records"} from ` +
-          `other devices, on any topic or project, arrived since the last turn and ` +
+        ? `_${probe.skipped} older topic ${probe.skipped === 1 ? "record" : "records"}, ` +
+          `on any topic or project, arrived since the last turn and ` +
           `${probe.skipped === 1 ? "was" : "were"} not read. \`brain_changes\` since ${since} ` +
           `lists them among every record written since then._`
         : "";
@@ -147,7 +154,7 @@ async function main(): Promise<void> {
 
     // Keep the groups whose topic is this session's or whose scope is the
     // session's project, before any cap; the candidates carry topic ids.
-    const scoped = candidates0.filter((row) => {
+    const scoped = probe.candidates.filter((row) => {
       if (row.topic !== null && sessionTopics.has(row.topic)) return true;
       if (projectScope === null || row.scope === null) return false;
       // Both sides through one normalisation: the topic scopes are slug
@@ -171,18 +178,17 @@ async function main(): Promise<void> {
     if (topics.unreadable.length > 0) return;
     // A model-derived item is its source's text: never returned to the
     // agent that wrote the source (spec: own records are never returned).
-    const sourceIds = scoped
+    const neighbours = selectNeighbourCandidates(scoped, self, topics.recordSessions);
+    const sourceIds = neighbours
       .map((row) => topics.recordSources.get(row.id))
       .filter((id): id is string => id !== undefined);
     const sources = new Map((indexRows(config, sourceIds) ?? []).map((r) => [r.id, r]));
-    const filtered = scoped
+    const filtered = neighbours
       .filter((row) => {
         const sourceId = topics.recordSources.get(row.id);
         const source = sourceId === undefined ? undefined : sources.get(sourceId);
         return !(
-          source !== undefined &&
-          source.device === self.device &&
-          source.agent === self.agent
+          source !== undefined && isOwnRecord(source, topics.recordSessions.get(source.id), self)
         );
       })
       .map((row) => candidateOf(row, topics))
@@ -273,7 +279,7 @@ function storeWatermark(
 
 /**
  * Most candidate rows one turn reads (stream `topics`, the neighbour
- * kinds, never this device and agent); older ones are counted and named.
+ * kinds, this session's own included); older ones are counted and named.
  */
 const NEIGHBOUR_PROBE_ROWS = 2000;
 

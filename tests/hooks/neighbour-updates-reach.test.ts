@@ -130,7 +130,7 @@ describe("the candidate limit", () => {
     const context = injected(result.stdout) ?? "";
     expect(context).toContain("<untrusted_source");
     expect(context).toMatch(
-      /_11 older topic records from other devices, on any topic or project, arrived since the last turn and were not read\. `brain_changes` since [0-9A-Z]{26}\.\d+ lists them among every record written since then\._/,
+      /_11 older topic records, on any topic or project, arrived since the last turn and were not read\. `brain_changes` since [0-9A-Z]{26}\.\d+ lists them among every record written since then\._/,
     );
     expect(context).not.toContain("another project's decision");
   });

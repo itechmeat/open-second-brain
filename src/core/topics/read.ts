@@ -17,6 +17,7 @@
  * Nothing is written.
  */
 
+import { recordSessionOf } from "../agent-context/session-identity.ts";
 import { privateWithheld } from "../store/caller-reach.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import type { StorePartition } from "../store/constants.ts";
@@ -42,6 +43,12 @@ export interface TopicRead {
    * dream-derived item), record id to source id.
    */
   readonly recordSources: ReadonlyMap<string, string>;
+  /**
+   * The session stamp each topic record read carries, record id to
+   * stamp (`agent-context/session-identity.ts`); a record without one is
+   * absent.
+   */
+  readonly recordSessions: ReadonlyMap<string, string>;
   /** The store id, `null` without a store. */
   readonly storeId: string | null;
 }
@@ -53,6 +60,7 @@ const EMPTY: TopicRead = Object.freeze({
   recordTopics: new Map<string, string>(),
   privateRecords: new Set<string>(),
   recordSources: new Map<string, string>(),
+  recordSessions: new Map<string, string>(),
   storeId: null,
 });
 
@@ -81,7 +89,10 @@ export function readTopicsOf(store: StoreInspection): TopicRead {
   }
   const recordTopics = new Map<string, string>();
   const recordSources = new Map<string, string>();
+  const recordSessions = new Map<string, string>();
   for (const record of records) {
+    const session = recordSessionOf(record.body);
+    if (session !== undefined) recordSessions.set(record.id, session);
     if (record.topic !== null) recordTopics.set(record.id, record.topic);
     const source = record.body["source"];
     if (record.body["authority"] === "model" && typeof source === "string") {
@@ -95,6 +106,7 @@ export function readTopicsOf(store: StoreInspection): TopicRead {
     recordTopics,
     privateRecords: privateIds,
     recordSources,
+    recordSessions,
     storeId: store.storeId,
   };
 }

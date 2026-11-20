@@ -8,14 +8,18 @@
  * kind `decision`"; `neighbour_relevant` refines it.
  *
  * Own records are never returned (spec "Records it wrote itself SHALL
- * never be returned"): same device and same resolved agent name, the
- * rule `log-catchup` already applies (design D20 item 16).
+ * never be returned"). "Own" is the session: a record stamped with this
+ * session, or a record with no session stamp written by this device and
+ * resolved agent name (the rule `log-catchup` applies, design D20 item
+ * 16). A record another session of the same agent name stamped on this
+ * device is a neighbour's (`session-identity.ts`).
  */
 
 import { compareCodeUnits } from "../store/compare.ts";
 import { stripPrivateRegions } from "../redactor.ts";
 import { neutralizeSingleLine } from "../brain/untrusted-source.ts";
 import { TOPIC_DECISION_LIMITS } from "../decision-model/questions-topics.ts";
+import { isOwnRecord } from "./session-identity.ts";
 
 /** The record kinds the lane may surface, newest first among themselves. */
 export const NEIGHBOUR_KINDS = Object.freeze([
@@ -41,6 +45,12 @@ export const NEIGHBOUR_CHARS_MAX = 800;
 
 /** Most characters of a record's text in one line. */
 export const NEIGHBOUR_TEXT_CLIP = 200;
+
+/**
+ * Fewest characters of a record's text a shown line keeps (or all of a
+ * shorter text): below it the block shows one line fewer instead.
+ */
+export const NEIGHBOUR_TEXT_FLOOR = 60;
 
 /** One candidate record, as the hook shell resolves it. */
 export interface NeighbourCandidate {
@@ -83,20 +93,22 @@ export interface NeighbourRecordRow {
 }
 
 /**
- * The records the lane may surface: a neighbour's (never this device and
- * this agent), of the candidate kinds, on stream `topics`, newest first.
+ * The records the lane may surface: a neighbour's (never this session's
+ * own, {@link isOwnRecord} over the session stamps `sessions` maps record
+ * ids to), of the candidate kinds, on stream `topics`, newest first.
  * Uncapped: the caller filters by the session's topics and project first
  * and caps after ({@link capNeighbourCandidates}), so a record that
  * matters here is never pushed out by newer records of other projects.
  */
 export function selectNeighbourCandidates(
   rows: ReadonlyArray<NeighbourRecordRow>,
-  self: { readonly device: string; readonly agent: string },
+  self: { readonly device: string; readonly agent: string; readonly session: string },
+  sessions: ReadonlyMap<string, string>,
 ): NeighbourRecordRow[] {
   return rows
     .filter(
       (row) =>
-        !(row.device === self.device && row.agent === self.agent) &&
+        !isOwnRecord(row, sessions.get(row.id), self) &&
         row.stream === "topics" &&
         (NEIGHBOUR_KINDS as ReadonlyArray<string>).includes(row.kind),
     )
@@ -126,19 +138,105 @@ export function deterministicNeighbourGate(
   return sessionTopics.has(candidate.topic) && candidate.kind === "decision";
 }
 
-/** One rendered line (task 4.3 item 7). */
-export function renderNeighbourLine(candidate: NeighbourCandidate): string {
-  const text =
-    candidate.text === null
-      ? ""
-      : `: ${neutralizeSingleLine(stripPrivateRegions(candidate.text)).slice(0, NEIGHBOUR_TEXT_CLIP)}`;
+/**
+ * The heading of one topic's updates: the title and the one call that
+ * opens the topic, said once for all its lines.
+ */
+function topicHeading(candidate: NeighbourCandidate): string {
+  return (
+    `On "${neutralizeSingleLine(stripPrivateRegions(candidate.topicTitle))}" ` +
+    `(open it with \`brain_topic\` action \`show\` topic ${candidate.topic}):`
+  );
+}
+
+/** A line's fixed part: who recorded what, before the text. */
+function linePrefix(candidate: NeighbourCandidate): string {
   return (
     `- ${neutralizeSingleLine(candidate.agent)} on ${neutralizeSingleLine(candidate.device)} ` +
     `recorded a ${candidate.modelDerived === true ? "model-derived " : ""}` +
-    `${neutralizeSingleLine(candidate.kind)} on ` +
-    `"${neutralizeSingleLine(stripPrivateRegions(candidate.topicTitle))}"${text}. ` +
-    `Open it with \`brain_topic\` action \`show\` topic ${candidate.topic}.`
+    neutralizeSingleLine(candidate.kind)
   );
+}
+
+/** A record's text as one line, before any clip; null without a text. */
+function lineText(candidate: NeighbourCandidate): string | null {
+  return candidate.text === null ? null : neutralizeSingleLine(stripPrivateRegions(candidate.text));
+}
+
+/** `text` cut to `max` characters, an ellipsis marking a cut. */
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return max <= 1 ? "\u2026".slice(0, max) : `${text.slice(0, max - 1)}\u2026`;
+}
+
+/**
+ * How many characters of text each line gets from `budget`: a line whose
+ * text is shorter than an even share keeps all of it and leaves the rest
+ * to the others. Null when an even share falls below the floor.
+ */
+function shareTexts(lengths: ReadonlyArray<number>, budget: number): number[] | null {
+  const order = lengths.map((length, i) => ({ length, i })).toSorted((a, b) => a.length - b.length);
+  const out = new Array<number>(lengths.length).fill(0);
+  let left = budget;
+  for (let k = 0; k < order.length; k++) {
+    const { length, i } = order[k]!;
+    const share = Math.floor(left / (order.length - k));
+    const take = Math.min(length, share);
+    if (take < Math.min(length, NEIGHBOUR_TEXT_FLOOR)) return null;
+    out[i] = take;
+    left -= take;
+  }
+  return out;
+}
+
+/**
+ * The block of `shown` within the character cap with `tail` as its last
+ * line, or null when the lines cannot keep their text floor. Lines are
+ * grouped under their topic's heading, in the order the first of each
+ * topic comes.
+ */
+function layoutBlock(shown: ReadonlyArray<NeighbourCandidate>, tail: string): string | null {
+  const topics: string[] = [];
+  const byTopic = new Map<string, NeighbourCandidate[]>();
+  for (const candidate of shown) {
+    const group = byTopic.get(candidate.topic);
+    if (group === undefined) {
+      topics.push(candidate.topic);
+      byTopic.set(candidate.topic, [candidate]);
+    } else group.push(candidate);
+  }
+  const ordered = topics.flatMap((topic) => byTopic.get(topic)!);
+  const texts = ordered.map(lineText);
+  const prefixes = ordered.map(
+    (candidate, i) => `${linePrefix(candidate)}${texts[i] === null ? "" : ": "}`,
+  );
+  const headings = topics.map((topic) => topicHeading(byTopic.get(topic)![0]!));
+  const lineCount = headings.length + ordered.length + (tail === "" ? 0 : 1);
+  const fixed =
+    headings.reduce((n, h) => n + h.length, 0) +
+    prefixes.reduce((n, p) => n + p.length, 0) +
+    tail.length +
+    (lineCount - 1);
+  // A line asks for at most the clip; `clip` cuts the whole text, so a
+  // text one character over the clip still ends in an ellipsis.
+  const lengths = texts.map((t) => (t === null ? 0 : Math.min(t.length, NEIGHBOUR_TEXT_CLIP)));
+  const shares = shareTexts(lengths, NEIGHBOUR_CHARS_MAX - fixed);
+  if (shares === null) return null;
+  const lines: string[] = [];
+  let k = 0;
+  for (const [g, topic] of topics.entries()) {
+    lines.push(headings[g]!);
+    for (const _ of byTopic.get(topic)!) {
+      const text = texts[k];
+      lines.push(
+        `${prefixes[k]!}${text === null || text === undefined ? "" : clip(text, shares[k]!)}`,
+      );
+      k += 1;
+    }
+  }
+  if (tail !== "") lines.push(tail);
+  const body = lines.join("\n");
+  return body.length <= NEIGHBOUR_CHARS_MAX ? body : null;
 }
 
 export interface NeighbourBlock {
@@ -151,11 +249,17 @@ export interface NeighbourBlock {
 }
 
 /**
- * Render the gated candidates (task 4.3 item 7): at most
- * {@link NEIGHBOUR_LINES_MAX} update lines and {@link NEIGHBOUR_CHARS_MAX}
- * characters for the whole body, the cut line included; candidates cut by the caps, and the `capped` ones the
- * candidate cap removed before the gate, end the block with the cut line
- * (the caller supplies it, naming the old watermark).
+ * Render the gated candidates (task 4.3 item 7): the newest at most
+ * {@link NEIGHBOUR_LINES_MAX} as update lines, grouped under one heading
+ * per topic that names the call opening it, and {@link NEIGHBOUR_CHARS_MAX}
+ * characters for the whole body, the cut line included. What the cap
+ * leaves after the headings, the lines' fixed parts and the cut line is
+ * shared among the lines' texts (each at most {@link NEIGHBOUR_TEXT_CLIP},
+ * an ellipsis marking a cut); a line is given up, newest kept, only when
+ * a share would fall below {@link NEIGHBOUR_TEXT_FLOOR}. Candidates the
+ * caps cut, and the `capped` ones the candidate cap removed before the
+ * gate, end the block with the cut line (the caller supplies it, naming
+ * the old watermark).
  */
 export function renderNeighbourBlock(
   candidates: ReadonlyArray<NeighbourCandidate>,
@@ -164,33 +268,15 @@ export function renderNeighbourBlock(
   capped = 0,
 ): NeighbourBlock {
   const gated = candidates.filter(gate);
-  const lines: string[] = [];
-  let chars = 0;
-  let cut = capped;
-  for (const candidate of gated) {
-    const line = renderNeighbourLine(candidate);
-    if (lines.length >= NEIGHBOUR_LINES_MAX || chars + line.length + 1 > NEIGHBOUR_CHARS_MAX) {
-      cut += 1;
-      continue;
-    }
-    lines.push(line);
-    chars += line.length + 1;
+  for (let n = Math.min(NEIGHBOUR_LINES_MAX, gated.length); n >= 1; n--) {
+    const cut = capped + gated.length - n;
+    const body = layoutBlock(gated.slice(0, n), cut > 0 ? cutLine(cut) : "");
+    if (body !== null) return { body, cutCount: cut, gated };
   }
-  // The character cap holds the whole body, the cut line included: lines
-  // give way to it from the end, each one then counted in it.
-  for (;;) {
-    // No line shown: when updates were cut (by the caps or by the
-    // candidate cap before the gate), the cut line alone names them,
-    // since the watermark moves past them; with nothing cut there is
-    // nothing to say.
-    if (lines.length === 0) {
-      const tail = cut > 0 ? cutLine(cut) : "";
-      return { body: tail.length <= NEIGHBOUR_CHARS_MAX ? tail : "", cutCount: cut, gated };
-    }
-    const tail = cutLine(cut);
-    const body = [...lines, ...(tail !== "" ? [tail] : [])].join("\n");
-    if (body.length <= NEIGHBOUR_CHARS_MAX) return { body, cutCount: cut, gated };
-    lines.pop();
-    cut += 1;
-  }
+  // No line shown: when updates were cut (by the caps or by the candidate
+  // cap before the gate), the cut line alone names them, since the
+  // watermark moves past them; with nothing cut there is nothing to say.
+  const cut = capped + gated.length;
+  const tail = cut > 0 ? cutLine(cut) : "";
+  return { body: tail.length <= NEIGHBOUR_CHARS_MAX ? tail : "", cutCount: cut, gated };
 }

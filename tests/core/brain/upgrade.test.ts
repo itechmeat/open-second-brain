@@ -255,6 +255,10 @@ describe("applyUpgrade", () => {
     expect(logBody).toContain(res.run_id);
     expect(logBody).toContain("claude-vps-agent");
     expect(logBody).toContain("Brain/_BRAIN.md");
+    // The log is synced: the snapshot is named by its vault-relative
+    // path, never by this machine's absolute one.
+    expect(logBody).not.toContain(vault);
+    expect(logBody).toContain(`Brain/.snapshots/${res.run_id}`);
   });
 
   test("malformed _brain.yaml refuses to apply (no snapshot taken)", () => {

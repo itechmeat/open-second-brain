@@ -260,14 +260,16 @@ Shared mechanics:
 
 - **When it runs:** in the neighbour-updates hook, before a turn, over the
   candidate records the index returns since the last turn (stream
-  `topics`, the neighbour kinds, never this device and agent; the newest
+  `topics`, the neighbour kinds; the newest
   2000, the older ones of every topic and project counted in one line
   that names the `brain_changes` call listing them among every record
   since): filtered by the topics this session works on
   and its project first, then the newest 20 (the ones the cap removes are
-  counted in the cut line). A routine log entry is never a
-  candidate, and an item a model derived from this agent's own record is
-  never returned to it; one derived from a neighbour's record is named as
+  counted in the cut line). A routine log entry and this session's own
+  records are never candidates (a record stamped with this session, or an
+  unstamped one of this device and agent name; another session of the same
+  agent name is a neighbour), and an item a model derived from an own
+  record is never returned to it; one derived from a neighbour's record is named as
   model-derived.
 - **What it sends:** one `noul` question per record (`matters_<k>`, naming
   `records.R<k>`); the state carries the prompt (its `<private>` regions
@@ -280,7 +282,9 @@ Shared mechanics:
   kind `decision`.
 - **What `enforce` changes:** the candidates judged at or above the
   threshold are injected (at most 5 lines and 800 characters, the cut line
-  included in the 800; when no update line fits, or none passes the gate
+  included in the 800, one heading per topic naming the `brain_topic` call
+  that opens it, the texts cut to share what is left, at least 60
+  characters each; when no update line fits, or none passes the gate
   but the candidate cap removed some, the cut line alone names them);
   candidates
   judged below it are not, the deterministic ones included. A candidate the

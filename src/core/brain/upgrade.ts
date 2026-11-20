@@ -306,7 +306,9 @@ export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): Upg
       body: {
         run_id: runId,
         agent,
-        snapshot: snap.path,
+        // The log is synced to every machine: the archive is named by its
+        // vault-relative path, never by this machine's absolute one.
+        snapshot: vaultRelative(snap.path, vault),
         files: updated,
       },
     });
