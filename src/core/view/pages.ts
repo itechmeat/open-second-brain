@@ -37,6 +37,7 @@ import { foldPreferences, type PreferenceState } from "../store/fold-preferences
 import { parseHlc } from "../store/hlc.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { compareCodeUnits } from "../store/compare.ts";
+import { isDecisionEvent } from "../topics/held-decisions.ts";
 import {
   VIEW_ABOUT_ME_PAGE,
   VIEW_DECISIONS_PAGE,
@@ -83,7 +84,12 @@ const VIEW_EVENT_TYPES: ReadonlySet<unknown> = new Set([
  * never holds the whole log.
  */
 export function isViewInput(record: StoreRecord): boolean {
-  return record.kind !== LOG_EVENT_KIND || VIEW_EVENT_TYPES.has(record.body["event_type"]);
+  return (
+    record.kind !== LOG_EVENT_KIND ||
+    VIEW_EVENT_TYPES.has(record.body["event_type"]) ||
+    // Topic pages show a held decision's outcome (`topics/held-decisions.ts`).
+    isDecisionEvent(record)
+  );
 }
 
 /** The confirmed and retired statuses of a preference. */

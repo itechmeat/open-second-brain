@@ -49,6 +49,10 @@ export interface ViewStrings {
   readonly questionAnswer: (answer: string) => string;
   readonly goalProposal: (agent: string, goal: string) => string;
   readonly serves: (list: string) => string;
+  /** The mark of a decision item that closed an open decision. */
+  readonly decisionResolved: string;
+  /** The outcome backfilled for a decision item. */
+  readonly decisionOutcome: (outcome: string) => string;
   readonly logClass: Readonly<Record<EarnedLogClass, string>>;
   readonly because: (reason: string) => string;
   readonly scopePersonal: string;
@@ -107,6 +111,8 @@ const EN: ViewStrings = {
   questionAnswer: (answer) => `answer: ${answer}`,
   goalProposal: (agent, goal) => `Goal proposed by ${agent}: ${goal}`,
   serves: (list) => `serves: ${list}`,
+  decisionResolved: "resolved open decision",
+  decisionOutcome: (outcome) => `outcome: ${outcome}`,
   logClass: {
     correction: "correction",
     decision: "decision",
@@ -172,6 +178,8 @@ const RU: ViewStrings = {
   questionAnswer: (answer) => `ответ: ${answer}`,
   goalProposal: (agent, goal) => `Цель, предложенная ${agent}: ${goal}`,
   serves: (list) => `служит: ${list}`,
+  decisionResolved: "решённый открытый вопрос",
+  decisionOutcome: (outcome) => `итог: ${outcome}`,
   logClass: {
     correction: "исправление",
     decision: "решение",

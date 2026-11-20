@@ -145,7 +145,7 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
 }
 
 /** `text` with every `<private>` region cut out, no placeholder left behind. */
-function withoutPrivateRegions(text: string): string {
+export function withoutPrivateRegions(text: string): string {
   const stripped = stripPrivateRegions(text);
   if (stripped === text) return text;
   return stripped

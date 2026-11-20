@@ -48,6 +48,7 @@ import {
   heldRecordIds,
   readHeldRecords,
 } from "./held-records.ts";
+import { readDecisionEvents, withHeldDecisions } from "./held-decisions.ts";
 import { configuredStore } from "../store/read/store-entities.ts";
 import { createTopicEvent, writeTopicEvents, type TopicEvent } from "./write.ts";
 import { privateWithheld } from "../store/caller-reach.ts";
@@ -396,6 +397,25 @@ function heldListing(
   };
 }
 
+/**
+ * `read` with the decision items its topics' held decision events give
+ * (`held-decisions.ts`), read at the caller's reach: the `log` stream of
+ * the partitions the caller may read.
+ */
+function withHeldDecisionsOf(
+  read: TopicRead,
+  configPath: string | undefined,
+): { readonly read: TopicRead; readonly incomplete: boolean } {
+  const store = configuredStore(configPath);
+  if (store === null) return { read, incomplete: false };
+  const events = readDecisionEvents(store);
+  return {
+    read: { ...read, fold: withHeldDecisions(read.fold, events.records, events.privateIds) },
+    // A `log` shard not read in full may hold a decision of the topic.
+    incomplete: events.unreadable.length > 0,
+  };
+}
+
 /** The topic `id` names after merges, if the caller can see it. */
 function visibleTopic(read: TopicRead, id: string): TopicState {
   const canonical = read.fold.canonical(id);
@@ -564,11 +584,16 @@ export function runTopicAction(
       return { action: "list", topics: listJson(read.fold, input.listScope) };
     case "show": {
       const topic = visibleTopic(read, need(input, "topic"));
+      const held = heldRecordIds(read.fold, topic.id).length;
+      const derived =
+        held > 0 ? withHeldDecisionsOf(read, context.configPath) : { read, incomplete: false };
+      const shown = derived.read;
       return {
         action: "show",
-        topic: topicDetail(topic, heldRecordIds(read.fold, topic.id).length),
+        ...(derived.incomplete ? { decisions_incomplete: true } : {}),
+        topic: topicDetail(shown.fold.topics.get(topic.id) ?? topic, held),
         ...(input.held === true ? heldListing(read, topic, context.configPath) : {}),
-        page: shownMarkdown(read, topic, context.configPath),
+        page: shownMarkdown(shown, topic, context.configPath),
       };
     }
     case "review": {
