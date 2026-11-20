@@ -123,7 +123,7 @@ describe("hooks.json Stop hygiene-digest entry", () => {
       }
     ).hooks["Stop"] ?? [];
 
-  test("exactly one Stop * group carries exactly one hygiene-digest entry, last in the group", () => {
+  test("exactly one Stop * group carries exactly one hygiene-digest entry, last before the deliver hook", () => {
     const stars = stopGroups.filter((group) => group.matcher === "*");
     expect(stars.length).toBe(1);
     const hooks = stars[0]!.hooks;
@@ -132,7 +132,7 @@ describe("hooks.json Stop hygiene-digest entry", () => {
     const digestIndices = hooks
       .map((h, i) => (h.command.includes("o2b-hook hygiene-digest") ? i : -1))
       .filter((i) => i >= 0);
-    expect(digestIndices).toEqual([hooks.length - 1]);
+    expect(digestIndices).toEqual([hooks.length - 2]);
   });
 
   test("the Stop * group carries exactly one answer-quote-check entry, after stop-log-guardrail", () => {
@@ -157,6 +157,37 @@ describe("hooks.json Stop hygiene-digest entry", () => {
     const match = /exec o2b-hook ([a-z0-9-]+); exit 0$/.exec(tail);
     expect(match).not.toBeNull();
     expect(existsSync(join(REPO, "hooks", match![1]! + ".ts"))).toBe(true);
+  });
+
+  test("the Stop advisories run synchronously and print nothing; one async deliver hook, last, hands their text to the model", () => {
+    // A synchronous Stop hook that exits 0 with no output shows nothing and
+    // adds no turn; an async hook's `additionalContext` reaches the model with
+    // the next user message, unprinted - but `claude -p` kills an async hook
+    // still running at teardown (https://code.claude.com/docs/en/hooks). So
+    // every durable write stays in the synchronous producers and only the
+    // text rides the async entry.
+    const hooks = stopGroups.find((group) => group.matcher === "*")!.hooks as Array<
+      HookEntry & { async?: boolean; timeout?: number }
+    >;
+    const names = hooks.map(
+      (h) => /exec o2b-hook ([a-z0-9-]+); exit 0$/.exec(h.command.trimEnd())?.[1],
+    );
+    expect(names).toEqual([
+      "session-capture",
+      "stop-log-guardrail",
+      "answer-quote-check",
+      "hygiene-digest",
+      "stop-advisory-deliver",
+    ]);
+    for (const hook of hooks.slice(0, -1)) expect(hook.async).toBeUndefined();
+    const deliver = hooks[hooks.length - 1]!;
+    expect(deliver.async).toBe(true);
+    // The shared timeout; Claude Code does not enforce it on an async hook,
+    // and the hook bounds its own wait (DELIVER_WAIT_MS).
+    expect(deliver.timeout).toBe(10);
+    expect(existsSync(join(REPO, "hooks", "stop-advisory-deliver.ts"))).toBe(true);
+    // Nothing else in the file runs in the background.
+    expect(readFileSync(HOOKS_JSON, "utf8").match(/"async": true/g)?.length).toBe(1);
   });
 
   test("the hygiene-digest dispatch target resolves to an existing hook file with the sibling timeout and fail-soft shape", () => {

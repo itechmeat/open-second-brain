@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   CODEX_SESSION_END_TIMEOUT_CAP_SEC,
+  CODEX_SKIPPED_HOOKS,
   codexHooksJson,
   codexWindowsHookCommand,
   findDrift,
@@ -41,6 +42,23 @@ setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 type HookGroups = Array<{ hooks: Array<{ command: string; commandWindows?: string }> }>;
+
+/** A POSIX hook command in the shape the sync accepts. */
+function CMD(name: string): string {
+  return `command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook ${name}; exit 0`;
+}
+
+/** Every hook name a hooks.json document runs, in file order. */
+function hookNames(doc: { hooks: Record<string, HookGroups> }): string[] {
+  return Object.values(doc.hooks).flatMap((groups) =>
+    groups.flatMap((group) => group.hooks.map((hook) => hookName(hook.command) ?? "")),
+  );
+}
+
+/** The hook name a POSIX command runs. */
+function hookName(command: string): string | undefined {
+  return /exec o2b-hook ([a-z0-9-]+); exit 0$/.exec(command)?.[1];
+}
 
 describe("the repository", () => {
   test("the Codex plugin mirrors are in sync with their sources", () => {
@@ -81,11 +99,18 @@ describe("the Codex hooks.json", () => {
       expect(hook.timeout).toBeLessThanOrEqual(CODEX_SESSION_END_TIMEOUT_CAP_SEC);
     }
 
-    // Apart from those timeouts and the added Windows commands, the Codex
-    // copy is the shared file.
+    // Apart from those timeouts, the added Windows commands and the
+    // skipped hooks, the Codex copy is the shared file.
     for (const group of src.hooks.SessionEnd) {
       for (const hook of group.hooks)
         hook.timeout = Math.min(hook.timeout, CODEX_SESSION_END_TIMEOUT_CAP_SEC);
+    }
+    for (const groups of Object.values(src.hooks) as HookGroups[]) {
+      for (const group of groups) {
+        group.hooks = group.hooks.filter(
+          (hook) => !CODEX_SKIPPED_HOOKS.includes(hookName(hook.command) ?? ""),
+        );
+      }
     }
     for (const groups of Object.values(out.hooks) as HookGroups[]) {
       for (const group of groups) {
@@ -93,6 +118,40 @@ describe("the Codex hooks.json", () => {
       }
     }
     expect(out).toEqual(src);
+  });
+
+  test("leaves out the background Stop deliver hook, and nothing else", () => {
+    // The shared file carries the async deliver half of the Claude Code Stop
+    // advisories; on Codex the synchronous Stop hooks print their own block
+    // and nothing is handed over, so the copy has no such entry.
+    const source = readFileSync(join(REPO_ROOT, "hooks/hooks.json"), "utf8");
+    const src = hookNames(JSON.parse(source));
+    const out = hookNames(JSON.parse(codexHooksJson(source)));
+    expect(src).toContain("stop-advisory-deliver");
+    expect(out).not.toContain("stop-advisory-deliver");
+    expect(out).toEqual(src.filter((name) => name !== "stop-advisory-deliver"));
+    expect(CODEX_SKIPPED_HOOKS).toEqual(["stop-advisory-deliver"]);
+    // No async entry is left for Codex, where a background Stop hook reaches nobody.
+    expect(codexHooksJson(source)).not.toContain('"async"');
+  });
+
+  test("a skipped hook goes wherever it sits; its siblings stay", () => {
+    const source = JSON.stringify({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: CMD("stop-log-guardrail") },
+              { type: "command", command: CMD("stop-advisory-deliver"), async: true },
+            ],
+          },
+        ],
+      },
+    });
+    const out = JSON.parse(codexHooksJson(source));
+    expect(out.hooks.Stop[0].hooks.map((h: { command: string }) => hookName(h.command))).toEqual([
+      "stop-log-guardrail",
+    ]);
   });
 
   test("gives every hook a cmd.exe form that runs the same o2b-hook", () => {
@@ -139,10 +198,10 @@ describe("the Codex hooks.json", () => {
   test("keeps the source's formatting, so the mirror passes fmt:check", () => {
     // With the timeouts already within the cap, everything but the added
     // commandWindows lines is the source, byte for byte.
-    const source = readFileSync(join(REPO_ROOT, "hooks/hooks.json"), "utf8").replace(
-      /"timeout": 10/g,
-      '"timeout": 2',
-    );
+    // The skipped deliver entry is cut from the source the same way.
+    const source = readFileSync(join(REPO_ROOT, "hooks/hooks.json"), "utf8")
+      .replace(/"timeout": 10/g, '"timeout": 2')
+      .replace(/,\n *\{\n[^{}]*o2b-hook stop-advisory-deliver[^{}]*\}/, "");
     const out = codexHooksJson(source)
       .split("\n")
       .filter((line) => !line.trimStart().startsWith('"commandWindows": '))

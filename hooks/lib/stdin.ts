@@ -36,6 +36,15 @@ export interface HookPayloadBase {
   /** UserPromptSubmit: the submitted user prompt text. */
   readonly prompt?: string;
   readonly stop_hook_active?: boolean;
+  /**
+   * Claude Code: the id of the user prompt being processed (a common field
+   * on every event, absent before the first prompt). With the session id
+   * and `last_assistant_message` it keys one Stop event for the advisory
+   * hand-over (`stop-advisory-handover.ts`).
+   */
+  readonly prompt_id?: string;
+  /** Stop / SubagentStop: the text of the final assistant message. */
+  readonly last_assistant_message?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
   /**

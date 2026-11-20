@@ -2575,6 +2575,7 @@ __export(exports_config, {
   resolveNearDuplicateWriteWideningEnabled: () => resolveNearDuplicateWriteWideningEnabled,
   resolvePartnerCodegraphDisabled: () => resolvePartnerCodegraphDisabled,
   resolvePostCompactSurvivalAudit: () => resolvePostCompactSurvivalAudit,
+  resolveQuoteCheckEnabled: () => resolveQuoteCheckEnabled,
   resolveRecallAdequacyThresholds: () => resolveRecallAdequacyThresholds,
   resolveRecallGateTelemetry: () => resolveRecallGateTelemetry,
   resolveRecallInjectCaps: () => resolveRecallInjectCaps,
@@ -2593,6 +2594,8 @@ __export(exports_config, {
   resolveSkillsAttachTriggers: () => resolveSkillsAttachTriggers,
   resolveSkillsAttachUsageOrdering: () => resolveSkillsAttachUsageOrdering,
   resolveSkillsDir: () => resolveSkillsDir,
+  resolveStopAdvisoryDelivery: () => resolveStopAdvisoryDelivery,
+  resolveStopGuardrailEnabled: () => resolveStopGuardrailEnabled,
   resolveStoreDualWrite: () => resolveStoreDualWrite,
   resolveTailTrimContextPack: () => resolveTailTrimContextPack,
   resolveTelegramBotToken: () => resolveTelegramBotToken,
@@ -3237,6 +3240,20 @@ function resolveRegroundPartChars(runtime, configPath) {
 }
 function resolveHygieneDigestEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED", "hygiene_digest_enabled", configPath);
+}
+function resolveConfigSwitchDefaultOn(envKey, configKey, configPath) {
+  const raw = readSetting(envKey, configKey, () => discoverConfig(configPath).data);
+  return raw !== "false" && raw !== "0";
+}
+function resolveStopGuardrailEnabled(configPath) {
+  return resolveConfigSwitchDefaultOn("OPEN_SECOND_BRAIN_STOP_GUARDRAIL_ENABLED", "stop_guardrail_enabled", configPath);
+}
+function resolveQuoteCheckEnabled(configPath) {
+  return resolveConfigSwitchDefaultOn("OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED", "quote_check_enabled", configPath);
+}
+function resolveStopAdvisoryDelivery(configPath) {
+  const raw = readSetting("OPEN_SECOND_BRAIN_STOP_ADVISORY_DELIVERY", "stop_advisory_delivery", () => discoverConfig(configPath).data);
+  return raw === "sync" ? "sync" : "async";
 }
 function resolveNavTierEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_NAV_TIER_ENABLED", "nav_tier_enabled", configPath);

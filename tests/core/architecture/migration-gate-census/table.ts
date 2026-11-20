@@ -845,6 +845,7 @@ export const HOOK_CENSUS: Readonly<Record<string, HookRow>> = Object.freeze({
   "Stop:answer-quote-check": { kind: "reader" },
   "Stop:hygiene-digest": { kind: "reader" },
   "Stop:session-capture": { kind: "writer", guard: V },
+  "Stop:stop-advisory-deliver": { kind: "reader" },
   "Stop:stop-log-guardrail": { kind: "reader" },
   "SubagentStart:subagent-inject": { kind: "reader" },
   "SubagentStop:session-capture": { kind: "writer", guard: V },

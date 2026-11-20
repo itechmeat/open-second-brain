@@ -30,12 +30,26 @@
  * Brain-log event per turn with the unverified spans, so findings survive
  * the session - and never blocks.
  *
- * Channel. The annotation rides `hookSpecificOutput.additionalContext`
- * on the Stop event, which Claude Code renders into the turn. Codex and
- * grok accept the registration but render no Stop annotation - and grok
- * ships no `transcript_path` at all - so the check is silently inert on
- * them: fail-open silence, kept deliberately, with the `enforce`
- * Brain-log trail as the one finding surface that survives the session.
+ * Channel. This hook is synchronous and does every read and every durable
+ * write itself (the `reply_presence` record and the `enforce` Brain-log
+ * event below). On Claude Code with the default
+ * `stop_advisory_delivery: "async"` it prints nothing: the annotation -
+ * worded as a finding about "the previous answer" - is handed over
+ * (hooks/lib/stop-advisory-handover.ts) to the async `stop-advisory-deliver`
+ * hook, whose `hookSpecificOutput.additionalContext` reaches the model with
+ * the next user message, unprinted and without a model turn of its own. A
+ * one-shot `claude -p` run kills that async hook at teardown and so loses
+ * the annotation, never a record. With `"sync"` the annotation rides a
+ * synchronous Stop `additionalContext`, which Claude Code prints as "Stop
+ * hook says: ..." and answers with one more turn. Codex and grok accept the
+ * registration but read no Stop annotation - and grok ships no
+ * `transcript_path` at all - so the check is silently inert on them:
+ * fail-open silence, kept deliberately, with the `enforce` Brain-log
+ * trail as the one finding surface that survives the session.
+ *
+ * Switch. `quote_check_enabled: "false"` (machine config, env
+ * `OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED`) turns the whole hook off
+ * before any read: no annotation, no Brain-log event, no presence record.
  *
  * Reply presence (t_f8510c55). Wherever a transcript exists - annotation
  * rendering or not - every checked turn also appends exactly one
@@ -78,6 +92,7 @@ import {
   resolveAnswerQuoteCheckRecall,
   resolveAnswerQuoteCheckSubagent,
   resolveAgentName,
+  resolveQuoteCheckEnabled,
   resolveRecallInjectEnabled,
   type AnswerQuoteCheckMode,
   type AnswerQuoteCheckPhase,
@@ -103,7 +118,8 @@ import { isoSecond } from "../src/core/brain/time.ts";
 import { appendContinuityRecord } from "../src/core/brain/continuity/store.ts";
 import { CONTINUITY_SESSION_ID_KEY } from "../src/core/brain/continuity/types.ts";
 import { ensureInsideVault } from "../src/core/path-safety.ts";
-import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { asHookPayload, type HookPayloadBase, readHookInput } from "./lib/stdin.ts";
+import { stopAdvisoryHandsOver, writeStopAdvisoryHandover } from "./lib/stop-advisory-handover.ts";
 import {
   isRealSessionId,
   LEDGER_KEY_REGROUND,
@@ -959,16 +975,20 @@ function listedFindings(
  * to the reader as data: the frame is the last trusted line the
  * annotation emits, and the spans beneath it are answer text.
  */
-function annotation(findings: ReadonlyArray<AnswerQuoteSpanFinding>): string {
+function annotation(findings: ReadonlyArray<AnswerQuoteSpanFinding>, deferred: boolean): string {
   const listed = listedFindings(findings);
   const lines = [
-    `Open Second Brain quote check: ${findings.length} quoted span(s) were not found in the notes this turn had:`,
+    deferred
+      ? `Open Second Brain quote check: ${findings.length} quoted span(s) in the previous answer were not found in the notes that turn had:`
+      : `Open Second Brain quote check: ${findings.length} quoted span(s) were not found in the notes this turn had:`,
   ];
   if (listed.length < findings.length) {
     lines.push(`... and ${findings.length - listed.length} more unverified span(s) not listed.`);
   }
   lines.push(
-    "Advisory only; the answer is not blocked. Verify the quotes against the note, or reword.",
+    deferred
+      ? "Advisory only; the answer was not blocked. Verify those quotes against the note, and correct any that do not hold."
+      : "Advisory only; the answer is not blocked. Verify the quotes against the note, or reword.",
     untrustedFramingHeader(QUOTE_CHECK_FRAMING_ORIGIN),
   );
   for (const finding of listed) lines.push(findingLine(finding.span, finding.verdict));
@@ -988,14 +1008,42 @@ async function main(): Promise<void> {
   // Once per turn: the runtime already continued this turn on a Stop
   // hook's output, so re-annotating would loop.
   if (payload.stop_hook_active === true) return;
+  if (!resolveQuoteCheckEnabled()) return;
+  // Claude Code with the default async delivery: every read and every
+  // durable write happens here, in the synchronous hook, and only the text
+  // goes to the async `stop-advisory-deliver` hook - which a `claude -p`
+  // teardown may kill without losing a record.
+  const handsOver = stopAdvisoryHandsOver(payload);
+  let text: string | null = null;
+  try {
+    text = checkTurn(payload, handsOver);
+  } finally {
+    // Past the switch the deliver hook waits for this producer, so the
+    // hand-over is written on every path, "nothing" and a crash included.
+    if (handsOver) writeStopAdvisoryHandover(payload, "answer-quote-check", text);
+  }
+  if (handsOver || text === null) return;
+  process.stdout.write(
+    `${JSON.stringify({
+      hookSpecificOutput: { hookEventName: "Stop", additionalContext: text },
+    })}\n`,
+  );
+}
+
+/**
+ * The check itself: the reads, the `reply_presence` record and the
+ * `enforce` Brain-log event. Returns the annotation, worded for the next
+ * turn when `deferred`, or null when there is nothing to report.
+ */
+function checkTurn(payload: HookPayloadBase, deferred: boolean): string | null {
   const transcriptPath = payload.transcript_path;
-  if (typeof transcriptPath !== "string" || transcriptPath.length === 0) return;
+  if (typeof transcriptPath !== "string" || transcriptPath.length === 0) return null;
   // A transcript the host has not created yet is a fresh session, not an
   // error: silence, like every other empty-handed arm.
-  if (!existsSync(transcriptPath)) return;
+  if (!existsSync(transcriptPath)) return null;
   // With no vault the hook does its store-side part (design D14, task 2.10).
   const target = resolveHookTarget();
-  if (target === null) return;
+  if (target === null) return null;
   const vault = target.vault;
   const sessionId = isRealSessionId(payload.session_id) ? payload.session_id : null;
   const started = Date.now();
@@ -1011,7 +1059,7 @@ async function main(): Promise<void> {
   // Every phase `off` reports nothing and enforces nothing, so the run
   // pays no ledger read at all: the injection ledgers - whose member
   // strings are prose that gets path-scanned - stay unopened.
-  if (ANSWER_QUOTE_CHECK_PHASES.every((phase) => modes[phase] === "off")) return;
+  if (ANSWER_QUOTE_CHECK_PHASES.every((phase) => modes[phase] === "off")) return null;
   const ledgerNotes: Readonly<Record<AnswerQuoteCheckPhase, ReturnType<typeof ledgerCandidates>>> =
     {
       recall: ledgerCandidates(vault, sessionId, "recall", now),
@@ -1033,7 +1081,7 @@ async function main(): Promise<void> {
   const running = ANSWER_QUOTE_CHECK_PHASES.filter(
     (phase) => gates[phase] && modes[phase] !== "off",
   );
-  if (running.length === 0) return;
+  if (running.length === 0) return null;
   const candidates = mergeCandidateViews(
     ANSWER_QUOTE_CHECK_PHASES.filter((phase) => gates[phase]).map((phase) => ledgerNotes[phase]),
   );
@@ -1130,7 +1178,7 @@ async function main(): Promise<void> {
   }
 
   const unique = dedupeFindings(findings);
-  if (unique.length === 0) return;
+  if (unique.length === 0) return null;
 
   if (enforceable > 0) {
     // Exactly one Brain-log event per turn, best-effort: a failed append
@@ -1161,11 +1209,7 @@ async function main(): Promise<void> {
     }
   }
 
-  process.stdout.write(
-    `${JSON.stringify({
-      hookSpecificOutput: { hookEventName: "Stop", additionalContext: annotation(unique) },
-    })}\n`,
-  );
+  return annotation(unique, deferred);
 }
 
 // Run only as the hook process itself (the `o2b-hook` shim execs this

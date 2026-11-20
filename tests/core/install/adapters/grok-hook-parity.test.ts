@@ -44,6 +44,8 @@ const DECLARED_GROK_DIVERGENCES: Readonly<Record<string, string>> = Object.freez
   "UserPromptSubmit:reground-deliver": REGROUND_DIVERGENCE,
   "SubagentStart:subagent-inject":
     "grok has no SubagentStart event; the PostToolUse write carrier covers it",
+  "Stop:stop-advisory-deliver":
+    "the Stop advisories print their own synchronous block on grok, so nothing is handed over for a background hook to deliver",
 });
 
 /** `<event>:<hook-script-name>` for every hook one JSON hooks file registers. */
