@@ -93,6 +93,11 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "bootstrap. This is the path that CREATES the tree and stamps the marker; " +
     "gating it on the marker it is about to write would refuse `o2b brain init` " +
     "on the very root it exists to serve.",
+  "src/core/brain/snapshot-transient.ts":
+    "never writes. It names `openSync` only to open a small lock candidate " +
+    "read-only (O_RDONLY | O_NOFOLLOW) and read at most 129 bytes of it, to tell " +
+    "a lock the product stamped from a file of the person's; it decides what a " +
+    "snapshot leaves out and writes nothing.",
   "src/core/brain/doctor/migration-check.ts":
     'opens files read-only (`openSync(path, "r")`) to read the head of a page in a ' +
     "reappeared legacy tree for its writer; it writes nothing.",
@@ -177,6 +182,7 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/ingest/source-read.ts": "never writes",
   "src/core/brain/ingest/tail-read.ts": "never writes",
   "src/core/brain/intake/source-trust.ts": "never writes",
+  "src/core/brain/snapshot-transient.ts": "never writes",
   "src/core/brain/doctor/migration-check.ts": "never writes",
   "src/core/brain/dedup-index-cache.ts": "writes only outside the vault (the user cache dir)",
   "src/core/brain/init.ts": ASKS_THE_GATE,

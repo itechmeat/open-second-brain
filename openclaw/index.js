@@ -4036,6 +4036,7 @@ function resolveLockWaitBudgetMs(env = process.env) {
 }
 var heldLocks, LOCK_WAIT_BUDGET_MS = 5000, LOCK_WAIT_BUDGET_ENV = "OPEN_SECOND_BRAIN_LOCK_WAIT_MS", RETRY_SLEEP_CEILING_MS = 25, contendedReleases, HANDOFF_WINDOW_MS, AGED_WAITER_AFTER_MS, POSIX_MIN_STAMP_BYTES = 48, WIN32_MIN_STAMP_BYTES = 30, MIN_STAMP_BYTES, WAITER_MARK, MARK_OPEN_FLAGS;
 var init_sync_lockfile = __esm(() => {
+  init_fs_atomic();
   init_path_constants();
   heldLocks = new Map;
   contendedReleases = new Map;

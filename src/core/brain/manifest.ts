@@ -23,6 +23,7 @@ import {
   snapshotsDir,
   validateRunId,
 } from "./paths.ts";
+import { productTransientKind } from "./snapshot-transient.ts";
 import { isoSecond } from "./time.ts";
 import { isBrainSnapshotReason, type BrainSnapshotReason } from "./types.ts";
 import type { WriteLane } from "./freeze-marker.ts";
@@ -271,6 +272,13 @@ export function buildManifest(brainRoot: string, opts: BuildManifestOptions = {}
       // `..notes.md` (legal as a Unix dotfile) is not silently dropped
       // from manifest coverage.
       if (pathCovers("..", rel)) continue;
+      // The product's own transients the archive leaves out (one rule,
+      // `snapshot-transient.ts`): a manifest that listed them would read as
+      // drift at rollback once their writer removed them. `vanished` (gone
+      // since the `lstat` above) is left out too, as a vanished entry is.
+      if (productTransientKind(abs, name, st, (original) => existsSync(join(dir, original)))) {
+        continue;
+      }
       if (st.isDirectory()) {
         stack.push(abs);
         continue;

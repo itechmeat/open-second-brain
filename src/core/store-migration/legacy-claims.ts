@@ -29,7 +29,12 @@ import {
   parseShardedName,
   syncConflictOriginalName,
 } from "../brain/ledger-shards.ts";
-import { isAtomicWriteTemp, writerTempOriginals } from "../fs-atomic.ts";
+import {
+  isAtomicWriteTemp,
+  LOCK_SIBLING_SUFFIX,
+  lockSiblingOriginal,
+  writerTempOriginals,
+} from "../fs-atomic.ts";
 import { isStoreFamilyEntry } from "../search/store-family.ts";
 import { OS_METADATA_NAMES } from "../store/legacy-tree.ts";
 import type { Locator } from "./destinations.ts";
@@ -49,13 +54,11 @@ function within(child: string, parent: string): boolean {
 /** The extensions a record-lane entry file carries, unless any file is one. */
 export const ENTRY_EXTENSIONS: ReadonlyArray<string> = Object.freeze([".md", ".json"]);
 
-/** The suffix of the sibling a lock writer creates beside the file it holds. */
-const LOCK_SUFFIX = ".lock";
-
 /** The path and base name of the file a `.lock` sibling is the lock of. */
 function lockTarget(path: string, name: string): [string, string] | null {
-  if (!name.endsWith(LOCK_SUFFIX)) return null;
-  return [path.slice(0, -LOCK_SUFFIX.length), name.slice(0, -LOCK_SUFFIX.length)];
+  const original = lockSiblingOriginal(name);
+  if (original === null) return null;
+  return [path.slice(0, -LOCK_SIBLING_SUFFIX.length), original];
 }
 
 function entryClaims(
