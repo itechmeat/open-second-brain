@@ -35,7 +35,7 @@ test("should_read ranks the title match first and reaches a 2-hop note via BFS",
   await indexVault(config);
   const store = await Store.open(config, { mode: "read" });
   try {
-    const plan = planReadShortlist(store, "Alpha Topic", { maxHops: 2, hopDecay: 0.5 });
+    const plan = planReadShortlist(store, "Alpha Topic", { vault, maxHops: 2, hopDecay: 0.5 });
     expect(plan.mode).toBe("should_read");
     const paths = plan.shortlist.map((e) => e.path);
     // The title match is the top seed.
@@ -57,7 +57,7 @@ test("index_only answers from metadata with zero note bodies read", async () => 
   await indexVault(config);
   const store = await Store.open(config, { mode: "read" });
   try {
-    const plan = planReadShortlist(store, "Alpha Topic", { indexOnly: true, maxHops: 2 });
+    const plan = planReadShortlist(store, "Alpha Topic", { vault, indexOnly: true, maxHops: 2 });
     expect(plan.mode).toBe("index_only");
     expect(plan.notesRead).toBe(0);
     expect(plan.shortlist.length).toBeGreaterThan(0);
@@ -74,7 +74,7 @@ test("should_read hydrates a bounded number of summaries (bodies read > 0)", asy
   await indexVault(config);
   const store = await Store.open(config, { mode: "read" });
   try {
-    const plan = planReadShortlist(store, "Alpha Topic", { maxHops: 1 });
+    const plan = planReadShortlist(store, "Alpha Topic", { vault, maxHops: 1 });
     expect(plan.notesRead).toBeGreaterThan(0);
     const hub = plan.shortlist.find((e) => e.path === "hub.md");
     expect(hub!.summary).toContain("entry point");
@@ -88,7 +88,7 @@ test("a query matching nothing yields an empty shortlist", async () => {
   await indexVault(config);
   const store = await Store.open(config, { mode: "read" });
   try {
-    const plan = planReadShortlist(store, "zzzznomatch", { maxHops: 2 });
+    const plan = planReadShortlist(store, "zzzznomatch", { vault, maxHops: 2 });
     expect(plan.shortlist.length).toBe(0);
   } finally {
     await store.close();

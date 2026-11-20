@@ -365,9 +365,9 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
   {
     key: "discipline_report",
     doc: [
-      "`o2b discipline report`. No defaults: the block is all-or-nothing,",
-      "and an absent block means the report is disabled. The values below",
-      "are an illustration, not defaults - every field must be supplied.",
+      "`o2b discipline report`. An absent block means the report is",
+      "disabled. A field left out reads as off, UTC, no watched paths",
+      "and no known agents, so each field can be set on its own.",
     ],
     emit: "commented-example",
     keys: [

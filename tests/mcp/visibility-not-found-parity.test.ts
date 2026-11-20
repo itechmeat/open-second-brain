@@ -295,6 +295,9 @@ describe("the by-chunk-id drill-down", () => {
   test("hydrates the reserved page at local reach", async () => {
     const result = await expandHit(makeConfig({ vault, dbPath }), {
       chunkId: await reservedChunkId(),
+      // The drill-down repeats the scope of the search that handed out
+      // the card, as that search needed it to show the page.
+      visibility: [REMOTE_DENY_VISIBILITY_TOKEN],
       transportReach: TRANSPORT_REACH.local,
     });
     expect(result.note.path).toBe(`${MARKER}.md`);

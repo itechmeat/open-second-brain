@@ -17,11 +17,12 @@
  * an unprovenanced claim.
  */
 
+import { createHash } from "node:crypto";
 import { relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { slugify } from "../../vault.ts";
+import { SLUG_MAX_LEN, slugify } from "../../vault.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { reportPagePath } from "../paths.ts";
 import {
@@ -55,7 +56,14 @@ import {
   createTavilyProvider,
 } from "./providers/tavily.ts";
 import type { ProviderSearchResult, ResearchProvider } from "./providers/provider.ts";
-import { assertLaneWrite, lanePageExists, writeLanePage } from "../../store/lane-pages.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  readLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
+import { laneLockTarget } from "../../store/lane-fold-cache.ts";
+import { withLocalLock } from "../../store/local-lock.ts";
 
 export { BRAVE_API_KEY_ENV, BRAVE_PROVIDER_NAME, TAVILY_API_KEY_ENV, TAVILY_PROVIDER_NAME };
 export type { ProviderSearchResult, ResearchProvider };
@@ -212,6 +220,57 @@ function captureScopeAtReach(
   return readable(backing) ? scope : CAPTURE_SCOPE.urlOnly;
 }
 
+/** Hex characters of the title digest that tell two reports of one slug apart. */
+const REPORT_TITLE_SUFFIX_HEX = 8;
+
+/**
+ * The page a report of `title` on `date` is written to: the date and the
+ * title's slug, the page of the same title when it is there (a re-run
+ * rewrites its own report). The slug keeps only Latin letters and digits,
+ * so two titles can share it ("Отчёт release" and "Обзор release" are both
+ * `release`); a report of another title already at the slug path keeps
+ * its page, and this one takes the slug with a digest of its title. A
+ * path held by yet another title is refused rather than overwritten.
+ */
+function reportPathFor(vault: string, date: string, title: string): string {
+  const base = slugify(title);
+  const digest = createHash("sha256")
+    .update(title, "utf8")
+    .digest("hex")
+    .slice(0, REPORT_TITLE_SUFFIX_HEX);
+  const head = base.slice(0, SLUG_MAX_LEN - REPORT_TITLE_SUFFIX_HEX - 1).replace(/-+$/, "");
+  const candidates = [base, `${head}-${digest}`].map((slug) => {
+    const path = reportPagePath(vault, date, slug);
+    return { path, page: readLanePage(vault, path) };
+  });
+  // The page of this title wins wherever it is, so a re-run of a report
+  // that took the digest page still finds it after the base page is gone;
+  // only then is a free page taken.
+  const own = candidates.find((c) => c.page !== null && c.page.frontmatter["title"] === title);
+  if (own !== undefined) return own.path;
+  const free = candidates.find((c) => c.page === null);
+  if (free !== undefined) return free.path;
+  throw new ResearchValidationError(
+    `a report of another title already holds both pages ${JSON.stringify(title)} could take on ${date}; give the report a distinct title`,
+  );
+}
+
+/**
+ * The device-local lock every report of `date` chooses and writes its page
+ * under. One lock per date, not per slug: a report can take a page whose
+ * slug is not its own base slug (the digest page), and that page is
+ * another title's base page (a title spelled `release-<digest>`), so
+ * locks keyed by slug would let two writers whose candidate pages overlap
+ * both find the page free. Reports of one date are few, so the wider lock
+ * costs nothing.
+ */
+export function reportSlotLockTarget(vault: string, date: string): string {
+  return laneLockTarget(
+    reportPagePath(vault, date, "research-report-slot"),
+    "research-report\u0000",
+  );
+}
+
 /**
  * Write a dated, cited research report. Validates the citation contract first
  * (throwing {@link ResearchValidationError} with no write on failure), then
@@ -228,7 +287,7 @@ export function writeResearchReport(
 
   const date = isoDate(opts.now);
   const stamp = isoSecond(opts.now);
-  const absPath = reportPagePath(vault, date, slugify(input.title));
+  const title = input.title.trim();
 
   const findingLines = input.findings.map((f) => {
     const cites = f.sources.map(asWikilink).join(", ");
@@ -272,13 +331,22 @@ export function writeResearchReport(
     tags: ["brain", "brain/report"],
   };
 
-  // Idempotent on date+title: a re-run rewrites the same report page in
-  // place (a file on an unswitched machine, a lane entry on a store-only
+  // Idempotent on date+title (see `reportPathFor`): a re-run rewrites the
+  // same report page in place, and a report of another title is never
+  // overwritten (a file on an unswitched machine, a lane entry on a store-only
   // one). `lanePageExists` drives the `created` flag in both modes; the
   // overwrite then surfaces a real write error directly instead of a catch
   // masking it as a re-run.
-  const created = !lanePageExists(vault, absPath);
-  writeLanePage(vault, absPath, meta, body, { overwrite: true });
+  // Choosing the page and writing it are one step under a device-local
+  // lock named by the date and the base slug (both candidates derive from
+  // them): two reports of different titles written at once cannot both
+  // choose one free page and overwrite each other.
+  const { absPath, created } = withLocalLock(reportSlotLockTarget(vault, date), () => {
+    const path = reportPathFor(vault, date, title);
+    const isNew = !lanePageExists(vault, path);
+    writeLanePage(vault, path, meta, body, { overwrite: true });
+    return { absPath: path, created: isNew };
+  });
 
   return {
     reportPath: canonicalNotePath(relative(vault, absPath)),

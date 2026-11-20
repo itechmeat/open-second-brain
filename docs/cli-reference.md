@@ -1234,6 +1234,9 @@ and with no watermark set every output is byte-identical to v1.37.0.
 ```text
 o2b search query --agent-scope <name>    restrict results to pages that are ownerless or owned by <name>
 o2b search expand --agent-scope <name>   same rule on the chunk drill-down; a withheld chunk is indistinguishable from an absent one
+o2b search expand --visibility <tag>     the visibility scope of the card's search; a tagged page outside it is withheld the same way
+o2b search expand --session-scope <s> --project-scope <p>   the card's session/project scope; a page outside it is withheld the same way
+o2b search plan --visibility <tag> --agent-scope <name>   the read planner withholds what `o2b search query` withholds under the same flags
 o2b brain sgrep --agent-scope <name>     same rule on the structured grep surface
 bun run link-ratchet                     measure the vault-wide broken-link count and record it as the new ceiling
 bun run link-ratchet:check               fail with exit 1 when the count has risen above the committed ceiling
@@ -2226,6 +2229,9 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               --match-mode all|any picks the keyword match breadth: all (default) requires every
                               term, any matches a note carrying any one term; typed AND/OR/NOT/NEAR stay dropped
 o2b search expand             Drill one card: --chunk <id> (printed on the card) returns the fuller note and the raw chunk transcript, paged by --cursor; read-only
+                              --visibility, --agent-scope, --session-scope and --project-scope repeat the card's search scopes: a page they withhold
+                              from the search is refused here like an absent chunk (brain_search_expand takes
+                              visibility, agent_scope, session_scope and project_scope)
 o2b search feedback           Record explicit recall feedback for one result
                               (--query Q --result <path> --verdict up|down; one JSON event file
                               under Brain/search/feedback/, learned weights refresh deterministically)

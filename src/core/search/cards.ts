@@ -7,6 +7,7 @@
 import { storeRecordJudge } from "./brain-store/entity-filter.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
+import { admitIndexRefs, resolvePoolFilters } from "./pipeline/pool-filters.ts";
 import { isPathOwnerVisible, isPathReadableAtReach } from "./result-filters.ts";
 import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { markWindow, matchOffset, toCodePointOffset, windowStartWithin } from "./snippet-window.ts";
@@ -168,7 +169,12 @@ export async function expandHit(
     // A card handed out before its store record was forgotten, marked or
     // staged expands to nothing once the store rule hides it, also while
     // the index still holds it (`brain-store/entity-filter.ts`).
-    if (!storeRecordJudge(store)(hit.path)) {
+    //
+    // Every other rule the result list runs (visibility and session/project
+    // scope, the status rule): the card came from a search that withheld
+    // what these withhold, so the drill-down by a sequential id cannot
+    // serve it either.
+    if (!storeRecordJudge(store)(hit.path) || !admittedAsSearchRow(config, store, hit, input)) {
       throw notFound(input.chunkId);
     }
     // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
@@ -234,6 +240,25 @@ function notFound(chunkId: number): SearchError {
  * the page's visibility is honoured beside the file's - see
  * {@link isPathReadableAtReach}.
  */
+function admittedAsSearchRow(
+  config: ResolvedSearchConfig,
+  store: Store,
+  hit: { readonly path: string; readonly documentId: number },
+  input: ExpandHitInput,
+): boolean {
+  const filters = resolvePoolFilters({
+    query: "",
+    ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
+    ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+    ...(input.agentScope !== undefined ? { agentScope: input.agentScope } : {}),
+    ...(input.scope !== undefined ? { scope: input.scope } : {}),
+  });
+  const ctx = { vault: config.vault, store, frontmatterCache: new Map() };
+  return (
+    admitIndexRefs([{ path: hit.path, documentId: hit.documentId }], filters, ctx).length === 1
+  );
+}
+
 function reachReadable(
   config: ResolvedSearchConfig,
   store: Store,

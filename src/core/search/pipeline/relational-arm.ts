@@ -17,10 +17,9 @@
  */
 
 import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-vocab.ts";
-import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
-import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
+import type { TransportReach } from "../../graph/transport-reach.ts";
 import { EXACT_WIKILINK_RE } from "../../brain/wikilink.ts";
 import { SUPERSEDED_BY_KEY } from "../../brain/lifecycle/tombstone-read.ts";
 import { discoverConfig } from "../../config.ts";
@@ -33,12 +32,8 @@ import {
   type TraversalBudgets,
 } from "../relational-fanout.ts";
 import { parseRelationalQuery } from "../relational-query.ts";
-import {
-  isPathOwnerVisible,
-  isPathReadableAtReach,
-  readCachedFrontmatterEntry,
-  type FrontmatterCache,
-} from "../result-filters.ts";
+import { readCachedFrontmatterEntry, type FrontmatterCache } from "../result-filters.ts";
+import { admitIndexRefs, resolvePoolFilters } from "./pool-filters.ts";
 import { parseValidityWindow } from "../validity.ts";
 import { SearchError } from "../search-error.ts";
 import {
@@ -162,6 +157,18 @@ export interface RelationalArmOptions {
    */
   readonly agentScope?: string | null;
   /**
+   * The caller's content-visibility scope, on the terms
+   * {@link SearchOptions.visibility} has: absent reaches untagged pages
+   * only, exactly as the row-level filters resolve it, so provenance never
+   * names a tagged page the rows withhold.
+   */
+  readonly visibility?: ReadonlyArray<string>;
+  /**
+   * The caller's session/project scope, on the terms
+   * {@link SearchOptions.scope} has: an absent axis filters nothing.
+   */
+  readonly scope?: SearchOptions["scope"];
+  /**
    * The config file the caller's own config resolution read, threaded
    * from the resolved search config. Default: null - the knobs resolve
    * env-only, exactly as a caller that consulted no config file did.
@@ -181,9 +188,9 @@ export interface RelationalReach {
   readonly via: ReadonlyArray<string>;
   readonly hops: number;
   /**
-   * The ordered steps that reached this node, gated per node at the
-   * caller's reach and owner scope: a step whose page is unreadable there
-   * or owned by another agent is omitted - never named, and never
+   * The ordered steps that reached this node, gated per node by the
+   * result list's own filters (reach, visibility, owner, session/project
+   * scope): a step whose page those withhold is omitted - never named, and never
    * counted, so the provenance a row shows reads the same whether the
    * walk crossed unreadable documents or not (the views'
    * identical-to-absent convention: a count would tell the caller that a
@@ -228,24 +235,38 @@ export interface RelationalArmOutcome {
 }
 
 /**
- * Whether a caller at this reach and owner scope could read the page: the
- * exact verdict {@link gatePath} applies to every provenance step, so
- * both disclosure channels - the provenance beside a row and the trust
- * receipts' refusal records - are held to the same line.
+ * Whether the caller could see the page: the result list's own pool
+ * filters (reach, visibility, owner, session/project scope, status) over
+ * one index reference, so both disclosure channels - the provenance beside
+ * a row and the trust receipts' refusal records - withhold exactly what
+ * the rows withhold. One verdict per document per arm run.
  */
-function isCallerReadable(
+type CallerVerdict = (ref: { readonly path: string; readonly documentId: number }) => boolean;
+
+function callerVerdict(
+  store: Store,
   vault: string | null,
-  path: string,
-  reach: TransportReach,
-  agentScope: string | null,
+  opts: RelationalArmOptions,
   cache: FrontmatterCache,
-  store: Pick<Store, "indexedVisibilityByPaths">,
-): boolean {
-  const indexedTags = store.indexedVisibilityByPaths([path]).get(path);
-  return (
-    isPathReadableAtReach(vault, path, reach, cache, indexedTags) &&
-    (agentScope === null || isPathOwnerVisible(vault, path, agentScope, cache))
-  );
+): CallerVerdict {
+  const filters = resolvePoolFilters({
+    query: "",
+    ...(opts.reach !== undefined ? { transportReach: opts.reach } : {}),
+    ...(opts.visibility !== undefined ? { visibility: opts.visibility } : {}),
+    ...(opts.agentScope !== undefined && opts.agentScope !== null
+      ? { agentScope: opts.agentScope }
+      : {}),
+    ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
+  });
+  const ctx = { vault, store, frontmatterCache: cache };
+  const verdicts = new Map<number, boolean>();
+  return (ref) => {
+    const known = verdicts.get(ref.documentId);
+    if (known !== undefined) return known;
+    const ok = admitIndexRefs([ref], filters, ctx).length === 1;
+    verdicts.set(ref.documentId, ok);
+    return ok;
+  };
 }
 
 /**
@@ -334,14 +355,12 @@ export function runRelationalArm(
   });
   const reps = store.representativeChunks(nodes.map((n) => n.documentId));
   // Per-node gating for the ordered path provenance: one titles read and
-  // one frontmatter cache per arm run, shared by every node's gate. The
-  // caller's owner scope rides beside the transport reach, so a
-  // reach-readable node another agent owns is withheld the same way. The
-  // absent reach resolves exactly as the row-level filters resolve it,
-  // so a withheld page is never named in provenance the rows do not show.
-  const reach = resolvedTransportReach(opts.reach);
-  const agentScope = normalizeAgentScope(opts.agentScope ?? undefined);
+  // one verdict cache per arm run, shared by every node's gate. The verdict
+  // is the result list's own pool filters, so a page the rows withhold
+  // (reach, visibility, owner, session/project scope) is never named in
+  // provenance; absent members resolve as they do for the rows.
   const frontmatterCache: FrontmatterCache = new Map();
+  const callerSees = callerVerdict(store, vault, opts, frontmatterCache);
   const titles = store.documentTitles();
   const nowMs = Date.now();
   const seenKeys = new Set<string>();
@@ -379,18 +398,12 @@ export function runRelationalArm(
         // documents or not. The enforcement verdict below stays the FULL
         // classification: the exclusion (enforce) or the kept
         // contribution (shadow) does not depend on what was recordable.
-        const recordable = isCallerReadable(
-          vault,
-          rep.path,
-          reach,
-          agentScope,
-          frontmatterCache,
-          store,
-        )
+        const recordable = callerSees(rep)
           ? [
               ...eligibility.node,
               ...(sourcePath === null ||
-              isCallerReadable(vault, sourcePath, reach, agentScope, frontmatterCache, store)
+              (sourceStep !== undefined &&
+                callerSees({ path: sourcePath, documentId: sourceStep.documentId }))
                 ? eligibility.source
                 : []),
             ]
@@ -411,16 +424,7 @@ export function runRelationalArm(
         if (trustGateMode === SEARCH_TRUST_GATE_MODE.enforce) continue;
       }
     }
-    const gated = gatePath(
-      vault,
-      node.path,
-      titles,
-      reach,
-      agentScope,
-      frontmatterCache,
-      nowMs,
-      store,
-    );
+    const gated = gatePath(vault, node.path, titles, callerSees, frontmatterCache, nowMs);
     outcome.rankedChunkIds.push(rep.chunkId);
     outcome.reachByChunk.set(rep.chunkId, {
       via: node.viaLinkTypes,
@@ -593,8 +597,8 @@ function classifyArrivalEligibility(input: {
 }
 
 /**
- * Gate one node's walked path at the caller's reach and owner scope:
- * unreadable steps and steps another agent owns (under a requested scope)
+ * Gate one node's walked path with the caller's verdict: steps the result
+ * list would withhold (reach, visibility, owner, session/project scope)
  * are omitted alike, so a hidden node's document id is never named, never
  * counted, and never contributes the supersession annotation; the first
  * readable, in-scope step carrying a closed supersession names the
@@ -607,11 +611,9 @@ function gatePath(
   vault: string | null,
   steps: ReadonlyArray<RelationalPathStep>,
   titles: ReadonlyMap<number, { readonly path: string }>,
-  reach: TransportReach,
-  agentScope: string | null,
+  callerSees: CallerVerdict,
   cache: FrontmatterCache,
   nowMs: number,
-  store: Store,
 ): {
   readonly path: ReadonlyArray<RelationalPathStep>;
   readonly supersededBy?: string;
@@ -620,9 +622,9 @@ function gatePath(
   let supersededBy: string | undefined;
   for (const step of steps) {
     const meta = titles.get(step.documentId);
-    const unreadable =
-      meta === undefined || !isCallerReadable(vault, meta.path, reach, agentScope, cache, store);
-    if (unreadable) continue;
+    if (meta === undefined || !callerSees({ path: meta.path, documentId: step.documentId })) {
+      continue;
+    }
     gated.push(step);
     if (supersededBy === undefined) {
       const tip = closedSupersessionTip(vault, meta.path, cache, nowMs);

@@ -48,7 +48,7 @@ beforeEach(async () => {
   );
   writeFileSync(
     join(vault, OWNED_B),
-    `---\nowner: ${OWNER_B}\n---\n\n# B\n\n${QUERY} owned by b\n`,
+    `---\nowner: ${OWNER_B}\nproject: beta\n---\n\n# B\n\n${QUERY} owned by b\n`,
   );
   writeFileSync(join(vault, SHARED), `# Shared\n\n${QUERY} shared with everyone\n`);
   configPath = join(tmp, "config.yaml");
@@ -170,6 +170,22 @@ test("`search expand --agent-scope` leaves a shared chunk reachable", async () =
   );
   expect(scoped.returncode).toBe(0);
   expect(scoped.stdout).toContain(SHARED);
+});
+
+test("`search expand --project-scope` withholds another project's chunk like an absent one", async () => {
+  const chunkId = await chunkIdFor(OWNED_B);
+  const other = await runCli(
+    ["search", "expand", "--chunk", String(chunkId), "--json", "--project-scope", "alpha"],
+    { env: env() },
+  );
+  expect(other.returncode).toBe(2);
+  expect(other.stderr).toContain(`chunk not found: ${chunkId}`);
+  const own = await runCli(
+    ["search", "expand", "--chunk", String(chunkId), "--json", "--project-scope", "beta"],
+    { env: env() },
+  );
+  expect(own.returncode).toBe(0);
+  expect(own.stdout).toContain(OWNED_B);
 });
 
 // ─── o2b brain sgrep ─────────────────────────────────────────────────────────

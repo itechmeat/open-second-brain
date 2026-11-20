@@ -142,7 +142,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "root C - the key-addressed read. It asks isPathReadableAtReach on EVERY call rather than " +
       "only when an argument arrived, and refuses a reserved page with the SAME error an absent " +
       "chunk produces, because a chunk id is a sequential integer and a distinguishable refusal " +
-      "over an enumerable key space is an existence oracle. Delivery shaping (delivery-trust, " +
+      "over an enumerable key space is an existence oracle. It then runs the search pipeline's " +
+      "own pool filters over the chunk's page (admitIndexRefs in pipeline/pool-filters.ts), so " +
+      "the caller's visibility, owner and session/project scope (the visibility, agent_scope, " +
+      "session_scope and project_scope arguments brain_search takes) withhold here what they " +
+      "withhold from the card's search, refused the same way. Delivery shaping (delivery-trust, " +
       "lane A): the hydrated chunk text is fenced at remote reach through the same shaper, " +
       "byte-identical at local reach.",
   },
@@ -1206,7 +1210,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "src/cli/search/verbs/expand.ts calls expandHit() directly - the same root-C chunk_id " +
       "hydration brain_search_expand uses - and passes CLI_TRANSPORT_REACH, so the operator's own " +
-      "shell is answered in full by decision rather than by omission.",
+      "shell is answered in full by decision rather than by omission. Its --visibility and " +
+      "--agent-scope flags reach the same pool filters `search query` runs.",
   },
   {
     surface: "brain backlinks",

@@ -18,7 +18,8 @@
  * What a page shows:
  *
  *  - about-me: confirmed preferences, grouped by their scope (the subject);
- *  - decisions: `decision-record` and `decision-resolved` log events, newest first;
+ *  - decisions: `decision-record` and `decision-resolved` log events, newest first,
+ *    each as "<title>: <choice>";
  *  - history: per ISO week (UTC), day by day, the notes (`note` log events),
  *    decisions, and the rules confirmed that day.
  *
@@ -217,6 +218,21 @@ function textField(body: unknown, field: string): string | null {
 }
 
 /**
+ * The text of a decision entry: "<title>: <choice>", since the option
+ * chosen alone ("one markdown page") does not say what was decided. The
+ * title is the event's own `title` field; an event written before decision
+ * events carried one reads as its choice. A title that ends in its own
+ * punctuation (a question) gets no colon. Topic pages name a held decision
+ * by the same rule.
+ */
+function decisionEntryText(payload: unknown, choiceField: string): string | null {
+  const choice = textField(payload, choiceField);
+  const title = textField(payload, "title");
+  if (choice === null || title === null) return choice;
+  return /[?:!.]$/u.test(title) ? `${title} ${choice}` : `${title}: ${choice}`;
+}
+
+/**
  * The record that retired `pref`, when the user did (an edit of the
  * profile page, or a command): the winning `status` is `retired` and its
  * record has human authority. Retirements by an agent or by dream are not
@@ -271,7 +287,7 @@ export function viewEntries(
         entries.push({ key, day, kind: "note", text, order: record, at });
       }
     } else if (type === DECISION_RECORD_EVENT || type === DECISION_RESOLVED_EVENT) {
-      const text = textField(payload, type === DECISION_RECORD_EVENT ? "chosen" : "choice");
+      const text = decisionEntryText(payload, type === DECISION_RECORD_EVENT ? "chosen" : "choice");
       if (text === null) continue;
       const review = textField(payload, "review_date") ?? undefined;
       entries.push({

@@ -24,6 +24,9 @@ export async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<numb
     "raw-limit": { type: "string" },
     cursor: { type: "string" },
     "agent-scope": { type: "string" },
+    visibility: { type: "string-array" },
+    "session-scope": { type: "string" },
+    "project-scope": { type: "string" },
     json: { type: "boolean" },
   });
   const chunkId = Number(flags["chunk"]);
@@ -41,6 +44,11 @@ export async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<numb
   const cfg = resolveConfig(flags);
   const cursor = flagString(flags, "cursor");
   const agentScope = flagString(flags, "agent-scope");
+  const visibility = flags["visibility"] as string[] | undefined;
+  // The session/project scope of the search that handed out the card, as
+  // brain_search_expand takes it: an absent axis filters nothing.
+  const sessionScope = flagString(flags, "session-scope");
+  const projectScope = flagString(flags, "project-scope");
   let result;
   try {
     result = await expandHit(cfg, {
@@ -49,6 +57,15 @@ export async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<numb
       ...(rawLimit !== undefined ? { rawLimit } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...(agentScope !== undefined ? { agentScope } : {}),
+      ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
+      ...(sessionScope !== undefined || projectScope !== undefined
+        ? {
+            scope: {
+              ...(sessionScope !== undefined ? { session: sessionScope } : {}),
+              ...(projectScope !== undefined ? { project: projectScope } : {}),
+            },
+          }
+        : {}),
     });
   } catch (e) {
     if (e instanceof SearchError) {

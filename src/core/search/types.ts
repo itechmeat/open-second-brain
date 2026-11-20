@@ -795,6 +795,19 @@ export interface ExpandHitInput {
    * follows, for the same reason.
    */
   readonly transportReach?: TransportReach;
+  /**
+   * The caller's content-visibility scope, on the terms
+   * {@link SearchOptions.visibility} has: absent reaches untagged pages
+   * only. The search that handed out the card withheld a tagged page
+   * outside this scope, so the drill-down withholds it too, refused like
+   * an absent chunk.
+   */
+  readonly visibility?: ReadonlyArray<string>;
+  /**
+   * The caller's session/project scope, on the terms
+   * {@link SearchOptions.scope} has: an absent axis filters nothing.
+   */
+  readonly scope?: SearchOptions["scope"];
 }
 
 /**
