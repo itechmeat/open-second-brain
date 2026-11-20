@@ -243,6 +243,32 @@ describe("view pages", () => {
     expect(decisions).toContain("2026-11-03: Earlier choice");
   });
 
+  test("a decision entry names the decision's title with the option chosen", () => {
+    seedLogEvent(a, MON + 1 * DAY, "decision-record", {
+      decision: "[[decision-release-page-format]]",
+      title: "Release page format",
+      chosen: "one markdown page",
+    });
+    seedLogEvent(a, MON + 2 * DAY, "decision-resolved", {
+      open: "[[open-decision-cadence]]",
+      title: "Which release cadence?",
+      choice: "per release",
+    });
+    // An event written before decision events carried a title.
+    seedLogEvent(a, MON + 3 * DAY, "decision-record", {
+      decision: "[[decision-store]]",
+      chosen: "Keep the store outside the vault",
+    });
+    render();
+    const decisions = page("decisions.md");
+    expect(decisions).toContain("- 2026-11-03: Release page format: one markdown page\n");
+    expect(decisions).toContain("- 2026-11-04: Which release cadence? per release\n");
+    expect(decisions).toContain("- 2026-11-05: Keep the store outside the vault\n");
+    const week = page("history/2026-W45.md");
+    expect(week).toContain("- Decision: Release page format: one markdown page\n");
+    expect(week).toContain("- Decision: Which release cadence? per release\n");
+  });
+
   test("with no view folder configured, the writer writes no page", () => {
     seed();
     claimViewWriter(a, { agent: "t", now });

@@ -18,10 +18,26 @@ import { runFtsQueryDetailed } from "./fts.ts";
 import { Store } from "./store.ts";
 import type { BrainSearchResult, EvidenceUnionRecord } from "./types.ts";
 
+/**
+ * The caller's admission rule over index references: which of the named
+ * pages the caller may see. The union fetches straight from the keyword
+ * lane, past the ranked pool, so it has to ask the same filters the main
+ * result list runs (reach, visibility, owner, session/project scope,
+ * status) or it names pages the caller's own search withholds.
+ */
+export type UnionAdmission = <T extends { readonly path: string; readonly documentId: number }>(
+  refs: ReadonlyArray<T>,
+) => ReadonlyArray<T>;
+
 /** Cap on extra records fetched per uncovered term (Feature C union). */
 const UNION_RECORDS_PER_TERM = 2;
 /** Cap on the total recall-union fetch per query. */
 const UNION_RECORDS_TOTAL = 8;
+/**
+ * Keyword hits fetched per uncovered term before the admission rule runs:
+ * a withheld page must not crowd an admitted one out of the term's slots.
+ */
+const UNION_FETCH_PER_TERM = UNION_RECORDS_PER_TERM * 4;
 
 /**
  * Coverage verification for evidence-pack mode (recall-trust-suite,
@@ -113,6 +129,11 @@ export function buildEvidenceVerification(
    * disagree with the outcome's own match quality.
    */
   coverage: CoverageReport,
+  /**
+   * Required, with no permissive default: a caller that forgets it would
+   * get the unfiltered union, so the type makes forgetting impossible.
+   */
+  admit: UnionAdmission,
 ): EvidenceVerification {
   const unionRecords: EvidenceUnionRecord[] = [];
   // Straight from the keyword lane, past every pool filter: a store record
@@ -122,15 +143,19 @@ export function buildEvidenceVerification(
     if (t.covered || t.df === 0) continue; // nothing in the corpus covers a df=0 term
     if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
     const outcome = runFtsQueryDetailed(store, t.term, {
-      limit: UNION_RECORDS_PER_TERM,
+      limit: UNION_FETCH_PER_TERM,
       pathPrefix,
     });
     const ids = outcome.hits.map((h) => h.chunkId);
     const hydrated = store.hydrateChunks(ids);
-    for (const hit of outcome.hits) {
-      if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
+    const named = outcome.hits.flatMap((hit) => {
       const h = hydrated.get(hit.chunkId);
-      if (!h || !shown(h.path)) continue;
+      return h === undefined || !shown(h.path) ? [] : [h];
+    });
+    let perTerm = 0;
+    for (const h of admit(named)) {
+      if (unionRecords.length >= UNION_RECORDS_TOTAL || perTerm >= UNION_RECORDS_PER_TERM) break;
+      perTerm++;
       unionRecords.push(
         Object.freeze({
           term: t.term,

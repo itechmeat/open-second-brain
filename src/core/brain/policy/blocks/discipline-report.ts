@@ -5,9 +5,15 @@
  * One reason to change: what the daily discipline report needs to be
  * configured with. This is the only block that WARNS AND DROPS instead of
  * throwing: the report is an optional side surface, and a malformed
- * section must not take the rest of the CLI down with it. Every field is
- * mandatory once the section is present, so a partial section is dropped
- * whole rather than half-applied.
+ * section must not take the rest of the CLI down with it. A field of the
+ * wrong type drops the whole section rather than half-applying it.
+ *
+ * A field the section leaves out reads as its fallback
+ * ({@link FIELD_FALLBACKS}: off, UTC, no watched paths, no known agents).
+ * The settings writer sets one field at a time and validates each change
+ * against the settings in force, so a section accepted only whole made the
+ * first field of a fresh section unsettable ("not a brain setting"), and a
+ * section is no setting name of its own, so it could not be set at all.
  */
 
 import type { DisciplineReportConfig } from "../../types.ts";
@@ -20,6 +26,14 @@ const KNOWN_KEYS = ["enabled", "timezone", "watched_paths", "known_agents"] as c
 
 const IGNORED = "section ignored";
 
+/** What a field the section leaves out reads as. */
+const FIELD_FALLBACKS: Readonly<DisciplineReportConfig> = Object.freeze({
+  enabled: false,
+  timezone: "UTC",
+  watched_paths: Object.freeze([]),
+  known_agents: Object.freeze([]),
+});
+
 export function parseDisciplineReportBlock(
   ctx: BlockParseContext,
 ): DisciplineReportConfig | undefined {
@@ -30,8 +44,12 @@ export function parseDisciplineReportBlock(
     return undefined;
   }
 
-  const drObj = dr as Record<string, unknown>;
-  warnUnknownKeys(ctx, drObj, KNOWN_KEYS, BLOCK);
+  const given = dr as Record<string, unknown>;
+  warnUnknownKeys(ctx, given, KNOWN_KEYS, BLOCK);
+  const drObj: Record<string, unknown> = { ...FIELD_FALLBACKS };
+  for (const key of KNOWN_KEYS) {
+    if (Object.hasOwn(given, key) && given[key] !== undefined) drObj[key] = given[key];
+  }
   let ok = true;
 
   if (typeof drObj["enabled"] !== "boolean") {

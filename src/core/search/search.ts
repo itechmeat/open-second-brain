@@ -34,7 +34,7 @@ import {
   withIndexStale,
 } from "./pipeline/outcome.ts";
 import { applyPostRankPhases } from "./pipeline/post-rank.ts";
-import { resolvePoolFilters } from "./pipeline/pool-filters.ts";
+import { cachedAnswerAdmitted, resolvePoolFilters } from "./pipeline/pool-filters.ts";
 import { resolveQueryShape } from "./pipeline/query-shape.ts";
 import {
   isRelationalArmActive,
@@ -582,8 +582,18 @@ export async function search(
         store,
         cachedMarker?.phase === "needs-llm-step" ? cachedMarker.poolIds : [],
       );
-      if (
+      // The key partitions by the caller's reach and scopes; the pages the
+      // row names are judged again under them, since a frontmatter edit
+      // the index has not ingested changes what they admit.
+      const callerAdmitted =
         stillAdmitted &&
+        cachedAnswerAdmitted(cache.hit, resolvePoolFilters(opts), {
+          vault: effectiveConfig.vault,
+          store,
+          frontmatterCache,
+        });
+      if (
+        callerAdmitted &&
         (cachedToken === undefined ||
           !iterativeTokenSpent(store, effectiveConfig, cachedToken, nowMs))
       ) {
@@ -746,6 +756,10 @@ export async function search(
           // reach-readable node another agent owns is omitted from the
           // ordered path, never named and never counted in the trail.
           ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
+          // Visibility and session/project scope gate them the same way,
+          // so provenance names no page the result list withholds.
+          ...(opts.visibility !== undefined ? { visibility: opts.visibility } : {}),
+          ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
         })
       : noRelationalArm();
 
@@ -1023,6 +1037,8 @@ export async function search(
       );
       const outcome = emptyOutcome({
         store,
+        vault: effectiveConfig.vault,
+        frontmatterCache,
         opts,
         query,
         pathPrefix,

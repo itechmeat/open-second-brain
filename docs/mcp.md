@@ -543,7 +543,9 @@ body-derived anchor, with document mtime only as the last rung);
 predecessors undemoted (history mode); and `evidence_pack: true` to return
 significant/matched/missing terms, abstention text, terminal-state downrank
 reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
-classification, per-token `union_records` for uncovered terms, and a
+classification, per-token `union_records` for uncovered terms (a union
+record names only a page the caller's reach, visibility, owner and
+session/project scope admit, the same filters the results pass), and a
 `completeness` verdict whose `uncovered_but_present_in_corpus` list is the
 false-absence guard. It can also emit opt-in recall telemetry with
 `telemetry: true`. The whole query language is published as a versioned

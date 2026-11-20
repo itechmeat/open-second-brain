@@ -253,7 +253,7 @@ store into the `view_target` folder:
 | --- | --- |
 | `about-me.md` | What the brain knows about you: confirmed rules, grouped by subject |
 | `history/<YYYY>-W<ww>.md` | One page per week of what happened, in plain language |
-| `decisions.md` | Decisions that were recorded |
+| `decisions.md` | Decisions that were recorded, each as its title with the option chosen (the choice alone for an event that carries no title) |
 | `topics/<date>-<slug>/topic.md` | One page per shared topic: status, goal, milestones, decisions, open questions, log and related, with an `archive.md` beside it for older entries |
 | `reports/<entry>.md` | One page per research report |
 | `sources/<entry>.md` | One page per ingested source summary |

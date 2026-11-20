@@ -5,8 +5,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
@@ -15,12 +16,14 @@ import { setSecret } from "../../../../src/core/brain/secrets/store.ts";
 import { SecretReferenceError } from "../../../../src/core/secret-ref.ts";
 import {
   writeResearchReport,
+  reportSlotLockTarget,
   ResearchValidationError,
   resolveResearchPoolEnv,
   BRAVE_API_KEY_ENV,
   TAVILY_API_KEY_ENV,
 } from "../../../../src/core/brain/research/research.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
+import { acquireDirLock, STORE_LOCK_STALE_MS } from "../../../../src/core/store/local-lock.ts";
 
 let vault: string;
 let configHome: string;
@@ -54,6 +57,117 @@ const INPUT = {
 };
 
 describe("writeResearchReport", () => {
+  test("a title spelled like another report's digest page never takes that page", () => {
+    // "Обзор release" takes release-<digest> once "Отчёт release" holds
+    // release; a report titled release-<digest> has that page as its base,
+    // so the two contend for one page.
+    const digest = createHash("sha256").update("Обзор release", "utf8").digest("hex").slice(0, 8);
+    const spelled = `release-${digest}`;
+    writeResearchReport(vault, { ...INPUT, title: "Отчёт release" }, { agent: "claude", now: NOW });
+    const b = writeResearchReport(
+      vault,
+      { ...INPUT, title: "Обзор release" },
+      { agent: "claude", now: NOW },
+    );
+    expect(b.reportPath).toBe(`Brain/reports/2026-06-13-${spelled}.md`);
+    const c = writeResearchReport(
+      vault,
+      { ...INPUT, title: spelled },
+      { agent: "claude", now: NOW },
+    );
+    expect(c.reportPath).not.toBe(b.reportPath);
+    expect(readFileSync(join(vault, b.reportPath), "utf8")).toContain("# Обзор release");
+    expect(readFileSync(join(vault, c.reportPath), "utf8")).toContain(`# ${spelled}`);
+  });
+
+  test("every report of one date takes one lock, so overlapping candidate pages serialize", () => {
+    const digest = createHash("sha256").update("Обзор release", "utf8").digest("hex").slice(0, 8);
+    const lockTarget = reportSlotLockTarget(vault, "2026-06-13");
+    mkdirSync(dirname(lockTarget), { recursive: true });
+    const release = acquireDirLock(lockTarget, {
+      staleMs: STORE_LOCK_STALE_MS,
+      budgetMs: 1000,
+      label: "test",
+      remedy: "none",
+    });
+    const before = process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"];
+    process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = "50";
+    try {
+      // Both writers of the pair whose candidate pages overlap wait on it.
+      for (const title of ["Обзор release", `release-${digest}`]) {
+        expect(() =>
+          writeResearchReport(vault, { ...INPUT, title }, { agent: "claude", now: NOW }),
+        ).toThrow(/busy/);
+      }
+    } finally {
+      if (before === undefined) delete process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"];
+      else process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = before;
+      release();
+    }
+  });
+
+  test("a re-run finds its digest page after the base page is gone", () => {
+    const first = { ...INPUT, title: "Отчёт release" };
+    const second = { ...INPUT, title: "Обзор release" };
+    const a = writeResearchReport(vault, first, { agent: "claude", now: NOW });
+    const b = writeResearchReport(vault, second, { agent: "claude", now: NOW });
+    rmSync(join(vault, a.reportPath));
+    const again = writeResearchReport(vault, second, { agent: "claude", now: LATER });
+    expect(again.reportPath).toBe(b.reportPath);
+    expect(again.created).toBe(false);
+  });
+
+  test("choosing the page and writing it wait for the report's slot lock", () => {
+    const title = "Отчёт release";
+    const lockTarget = reportSlotLockTarget(vault, "2026-06-13");
+    mkdirSync(dirname(lockTarget), { recursive: true });
+    const release = acquireDirLock(lockTarget, {
+      staleMs: STORE_LOCK_STALE_MS,
+      budgetMs: 1000,
+      label: "test",
+      remedy: "none",
+    });
+    const before = process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"];
+    process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = "50";
+    try {
+      // A second title of the same slug contends for the same lock, so it
+      // cannot choose a page while another report holds it.
+      expect(() =>
+        writeResearchReport(
+          vault,
+          { ...INPUT, title: "Обзор release" },
+          { agent: "claude", now: NOW },
+        ),
+      ).toThrow(/busy/);
+      expect(existsSync(join(vault, "Brain/reports/2026-06-13-release.md"))).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"];
+      else process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = before;
+      release();
+    }
+    expect(
+      writeResearchReport(vault, { ...INPUT, title }, { agent: "claude", now: NOW }).created,
+    ).toBe(true);
+  });
+
+  test("two titles that share only their Latin words keep two reports on one day", () => {
+    const first = { ...INPUT, title: "Отчёт release" };
+    const second = { ...INPUT, title: "Обзор release" };
+    const a = writeResearchReport(vault, first, { agent: "claude", now: NOW });
+    const b = writeResearchReport(vault, second, { agent: "claude", now: LATER });
+    expect(b.reportPath).not.toBe(a.reportPath);
+    expect(b.created).toBe(true);
+    expect(readFileSync(join(vault, a.reportPath), "utf8")).toContain("# Отчёт release");
+    expect(readFileSync(join(vault, b.reportPath), "utf8")).toContain("# Обзор release");
+    // A re-run of either title still rewrites its own page in place.
+    const again = writeResearchReport(vault, second, { agent: "claude", now: LATER });
+    expect(again.reportPath).toBe(b.reportPath);
+    expect(again.created).toBe(false);
+    expect(writeResearchReport(vault, first, { agent: "claude", now: LATER }).reportPath).toBe(
+      a.reportPath,
+    );
+  });
+
   test("writes a dated report page with per-finding citations and a Sources section", () => {
     const res = writeResearchReport(vault, INPUT, { agent: "claude", now: NOW });
     expect(res.created).toBe(true);

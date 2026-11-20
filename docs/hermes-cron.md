@@ -98,6 +98,6 @@ discipline_report:
     - "@codex-vps-agent"
 ```
 
-When the section is absent or `enabled: false`, the report exits `0` with a stderr note and the cron job stays silent.
+When the section is absent or `enabled: false`, the report exits `0` with a stderr note and the cron job stays silent. A field the section leaves out reads as its fallback (`enabled: false`, `timezone: "UTC"`, no watched paths, no known agents), so each field can be set on its own with `o2b brain settings set discipline_report.<field> <value>` (or `brain_settings`); on a machine that keeps its brain in the store, `timezone` is a setting of each machine (`brain_discipline_report_timezone` in the machine config). A field of the wrong type still drops the whole section with a warning.
 
 A weekly digest variant ships under `--weekly` (Monday 08:59 local timezone by default); `o2b discipline uninstall --weekly` removes only the weekly job, without the flag removes both.

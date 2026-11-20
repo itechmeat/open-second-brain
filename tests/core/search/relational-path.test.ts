@@ -109,9 +109,11 @@ test("path nodes unreadable at the caller's reach are omitted, never named and n
     // identical-to-absent convention, so the provenance answer is the
     // same whether the walk crossed an unreadable document or not.
     expect("withheld" in farEntry![1]).toBe(false);
-    // At an explicitly local reach the same walk keeps the whole path.
+    // At an explicitly local reach, with the visibility scope a search
+    // needs to see the tagged page, the same walk keeps the whole path.
     const local = runRelationalArm(store, vault, "[[seed]] related extends", {
       reach: TRANSPORT_REACH.local,
+      visibility: ["private"],
     });
     const farLocal = [...local.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farLocal![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
@@ -168,10 +170,11 @@ test("an absent reach behaves like remote: provenance never names a page the row
     // tip never announced: provenance reads the same as the row gate.
     expect(absentEntry!.path).toEqual([]);
     expect(absentEntry!.supersededBy).toBeUndefined();
-    // An explicitly local reach keeps the wide walk: the local caller
-    // sees the whole path and the annotation.
+    // An explicitly local reach with the page's visibility scope keeps
+    // the wide walk: that caller sees the whole path and the annotation.
     const local = runRelationalArm(store, vault, "[[seed]] related extends", {
       reach: TRANSPORT_REACH.local,
+      visibility: ["private"],
     });
     const localEntry = local.reachByChunk.get(midChunk.chunkId);
     expect(localEntry).toBeDefined();

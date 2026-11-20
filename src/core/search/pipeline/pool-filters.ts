@@ -32,6 +32,7 @@ import { applyStoreEntityFilter } from "../brain-store/entity-filter.ts";
 import { documentSources } from "../store/brain-records.ts";
 import type { DegreePredicate } from "../property-filter.ts";
 import type { BrainSearchResult, SearchOptions } from "../types.ts";
+import { parseLinePointer } from "../line-numbering.ts";
 
 export interface PoolFilters {
   /**
@@ -284,8 +285,148 @@ export function applyPoolFilters(
   return {
     preVisibility: reachable.length,
     prePoolFilters: degreeFiltered.length + entityWithheld,
-    visible: compositeScoped,
+    visible: stripWithheldDuplicates(compositeScoped, filters, ctx),
   };
+}
+
+/** A bare index reference: a page path and the document id it is stored under. */
+export interface IndexRef {
+  readonly path: string;
+  readonly documentId: number;
+}
+
+/**
+ * The pool filters over bare index references, for every surface that
+ * names indexed pages without going through the ranked pool: the evidence
+ * pack's recall union, the read planner, any later one. Each ref becomes a
+ * synthetic row and runs through {@link applyPoolFilters} itself, so such
+ * a surface and the main result list cannot disagree about what the
+ * caller may see. The rows are marked as traversal rows (`searchType`
+ * "link") because no lane's SQL constrained them, which makes the promoted
+ * property filter judge them live. Order is kept; a ref the filters drop
+ * is gone.
+ */
+export function admitIndexRefs<T extends IndexRef>(
+  refs: ReadonlyArray<T>,
+  filters: PoolFilters,
+  ctx: FilterContext,
+): ReadonlyArray<T> {
+  if (refs.length === 0) return refs;
+  // The synthetic chunk id is the ref's position, so a surface without a
+  // chunk (the planner names documents) maps back exactly.
+  const rows: BrainSearchResult[] = refs.map((ref, i) => ({
+    documentId: ref.documentId,
+    chunkId: i + 1,
+    path: ref.path,
+    title: null,
+    content: "",
+    startLine: 0,
+    endLine: 0,
+    score: 0,
+    keywordScore: 0,
+    semanticScore: 0,
+    linkBoost: 0,
+    recencyBoost: 0,
+    searchType: "link",
+    reasons: Object.freeze([]),
+  }));
+  const kept = new Set(applyPoolFilters(rows, filters, ctx).visible.map((r) => r.chunkId));
+  return refs.filter((_, i) => kept.has(i + 1));
+}
+
+/** The pages an answer names, by path and by bare document id. */
+interface NamedPages {
+  readonly paths: Set<string>;
+  readonly ids: Set<number>;
+}
+
+/**
+ * Every page named anywhere below `value`: a string under a `path` key (a
+ * row, a card, a duplicate location, an evidence record), the document ids
+ * of a numeric `path` (a relational trail entry), and the page of each
+ * `duplicatePointers` pointer (a card's folded copies).
+ */
+function namedPages(value: unknown, out: NamedPages, depth = 0): void {
+  if (depth > 32 || typeof value !== "object" || value === null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) namedPages(item, out, depth + 1);
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "path" && typeof item === "string") out.paths.add(item);
+    else if (key === "path" && Array.isArray(item) && item.every((v) => typeof v === "number")) {
+      for (const id of item as number[]) out.ids.add(id);
+    } else if (key === "duplicatePointers" && Array.isArray(item)) {
+      for (const pointer of item) {
+        const parsed = typeof pointer === "string" ? parseLinePointer(pointer) : null;
+        // A pointer that does not parse names a page nobody can check.
+        out.paths.add(parsed === null ? "" : parsed.path);
+      }
+    } else namedPages(item, out, depth + 1);
+  }
+}
+
+/**
+ * Whether a precomputed answer (a query-cache row) may be served to this
+ * caller: every page it names, in any shape (results, cards and their
+ * duplicate pointers, duplicate locations, evidence pack records, the
+ * relational trail's document ids), is a page the caller's pool filters
+ * admit now. The cache key already partitions by the caller's reach and
+ * scopes, so no row reaches a narrower caller than the one that cached
+ * it; this covers the page side, a frontmatter edit (a visibility tag, an
+ * owner, a project) the index has not ingested yet, which the corpus
+ * generation does not see. A named page the index no longer holds fails
+ * closed, so the answer is computed again.
+ */
+export function cachedAnswerAdmitted(
+  outcome: unknown,
+  filters: PoolFilters,
+  ctx: FilterContext,
+): boolean {
+  const named: NamedPages = { paths: new Set(), ids: new Set() };
+  namedPages(outcome, named);
+  const refs = new Map<number, IndexRef>();
+  for (const path of named.paths) {
+    const documentId = path === "" ? null : ctx.store.getDocumentIdByPath(path);
+    if (documentId === null) return false;
+    refs.set(documentId, { path, documentId });
+  }
+  if ([...named.ids].some((id) => !refs.has(id))) {
+    const titles = ctx.store.documentTitles();
+    for (const id of named.ids) {
+      if (refs.has(id)) continue;
+      const meta = titles.get(id);
+      if (meta === undefined) return false;
+      refs.set(id, { path: meta.path, documentId: id });
+    }
+  }
+  const all = [...refs.values()];
+  return admitIndexRefs(all, filters, ctx).length === all.length;
+}
+
+/**
+ * The visible rows with every folded duplicate location the filters
+ * withhold taken out: the exact-duplicate merge runs before the filters,
+ * so a copy whose own frontmatter now withholds it (a tag, an owner or a
+ * project added since the copies were indexed alike) would otherwise ride
+ * along on its twin as a path, title and line span. The row itself stays.
+ */
+function stripWithheldDuplicates(
+  rows: ReadonlyArray<BrainSearchResult>,
+  filters: PoolFilters,
+  ctx: FilterContext,
+): ReadonlyArray<BrainSearchResult> {
+  if (!rows.some((r) => (r.duplicates?.length ?? 0) > 0)) return rows;
+  return rows.map((row) => {
+    const duplicates = row.duplicates;
+    if (duplicates === undefined || duplicates.length === 0) return row;
+    const kept = admitIndexRefs(duplicates, filters, ctx);
+    if (kept.length === duplicates.length) return row;
+    const { duplicates: _withheld, ...rest } = row;
+    return (
+      kept.length > 0 ? { ...rest, duplicates: Object.freeze([...kept]) } : rest
+    ) as BrainSearchResult;
+  });
 }
 
 /**

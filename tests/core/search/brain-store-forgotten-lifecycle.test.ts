@@ -604,7 +604,12 @@ test("a card or a read plan never reaches a record the store hides, before any c
   const expand = () => expandHit(config, { chunkId, transportReach: TRANSPORT_REACH.local });
   expect((await expand()).note.path).toBe(storeRecordPath("shared", id));
   const planned = async (): Promise<string[]> =>
-    (await planRead(config, "signal")).shortlist.map((e) => e.path);
+    // The planner withholds what a search by the same caller withholds,
+    // and no reach given is the narrowest: the local caller the expansion
+    // above is.
+    (
+      await planRead(config, "signal", { filters: { transportReach: TRANSPORT_REACH.local } })
+    ).shortlist.map((e) => e.path);
   // The plan names it while it is live (its title is the record kind).
   expect(await planned()).toContain(storeRecordPath("shared", id));
   patch(local, "sig-card", TOMBSTONE, T0 + 5000);

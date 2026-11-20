@@ -209,12 +209,41 @@ function storeView(target: SettingTarget, fold: SettingsFold): BrainSettingView 
   };
 }
 
+/**
+ * The first warning in `after` about `block` that validating `raw` alone
+ * does not give, or null. A `raw` that does not validate gives no
+ * baseline, so every warning about the block counts as new.
+ */
+function newBlockWarnings(
+  raw: Record<string, unknown>,
+  after: ReadonlyArray<{ readonly message: string }>,
+  block: string,
+  source: string,
+): string | null {
+  const about = (message: string): boolean =>
+    message.startsWith(`${block}.`) || message.startsWith(`${block}:`);
+  let before: ReadonlySet<string> = new Set();
+  try {
+    before = new Set(validateBrainConfigDetailed(raw, source).warnings.map((w) => w.message));
+  } catch {
+    // No baseline: a raw config that does not validate.
+  }
+  for (const w of after) if (about(w.message) && !before.has(w.message)) return w.message;
+  return null;
+}
+
 /** Validate `raw` with `value` placed at the target; throws `invalid_setting_value`. */
 function validateCandidate(
   raw: Record<string, unknown>,
   target: SettingTarget,
   value: unknown,
   source: string,
+  /**
+   * The settings before the change, when `raw` already holds it (the
+   * legacy path validates the file as it would be written); defaults to
+   * `raw`.
+   */
+  baseline: Record<string, unknown> = raw,
 ): void {
   const candidate: Record<string, unknown> = { ...raw };
   if (target.field === undefined) {
@@ -231,17 +260,33 @@ function validateCandidate(
     candidate[target.block] = block;
   }
   let config;
+  let knownKeys;
+  let warnings;
   try {
-    ({ config } = validateBrainConfigDetailed(candidate, source));
+    ({ config, knownKeys, warnings } = validateBrainConfigDetailed(candidate, source));
   } catch (err) {
     if (err instanceof BrainConfigError)
       throw new BrainSettingError("invalid_setting_value", err.message);
     throw err;
   }
+  // A block parser that meets a value of the wrong type warns and drops
+  // the value (or its whole block) instead of throwing, so a warning the
+  // change adds for its block is a refused value: persisting it would
+  // read back as the block's fallback, an enabled block silently off.
+  // Recognising the key (below) is a separate question from this one.
+  if (value !== REMOVE_KEY) {
+    const added = newBlockWarnings(baseline, warnings, target.block, source);
+    if (added !== null) throw new BrainSettingError("invalid_setting_value", added);
+  }
   // Block parsers drop a field they do not read without a warning, so a
-  // field is known when it has a shipped default or survives validation.
+  // field is known when it has a shipped default, is a key its block parser
+  // reads (the validator's own key index, recorded by construction: a
+  // parser that stores a key under another name, such as
+  // `active.most_applied_window_days` read into `most_applied`, still
+  // reads it), or survives validation.
   if (value === REMOVE_KEY || target.field === undefined) return;
   if (defaultOf(target.block, target.field) !== undefined) return;
+  if (knownKeys.subKeys.get(target.block)?.has(target.field) === true) return;
   const block = (config as unknown as Record<string, unknown>)[target.block];
   const known =
     block !== null &&
@@ -485,7 +530,15 @@ function legacyCommitLocked(vault: string, target: SettingTarget, requested: unk
     );
   }
   const back = readBack(parsed, target);
-  validateCandidate(parsed, target, back === undefined ? REMOVE_KEY : back, path);
+  let before: Record<string, unknown> = {};
+  try {
+    const prior = parseBrainYaml(text);
+    if (prior !== null && typeof prior === "object" && !Array.isArray(prior))
+      before = prior as Record<string, unknown>;
+  } catch {
+    // No baseline: every warning about the block counts as new.
+  }
+  validateCandidate(parsed, target, back === undefined ? REMOVE_KEY : back, path, before);
   const wanted = value === REMOVE_KEY ? undefined : value;
   if (
     (back === undefined) !== (wanted === undefined) ||

@@ -28,7 +28,11 @@ import {
   type RelationalPathTrailEntry,
   type RetrievalDegradationDetail,
 } from "../retrieval-trail.ts";
-import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
+import {
+  buildEvidenceVerification,
+  coverageOverResults,
+  type UnionAdmission,
+} from "../evidence-verification.ts";
 import { fnv1aHex } from "../feedback.ts";
 import {
   attachTrustMetadata,
@@ -36,6 +40,7 @@ import {
   isPathReadableAtReach,
   type FrontmatterCache,
 } from "../result-filters.ts";
+import { admitIndexRefs, resolvePoolFilters } from "./pool-filters.ts";
 import type { RelationalReach } from "./relational-arm.ts";
 import type {
   CoverageIndexSnapshot,
@@ -80,8 +85,27 @@ function relationalPathEntries(
   return entries.length > 0 ? entries : undefined;
 }
 
+/**
+ * The evidence pack's recall union names pages fetched past the ranked
+ * pool, so it runs the caller's own pool filters - the ones that built
+ * the result list - over every page it would name.
+ */
+function unionAdmission(
+  store: Store,
+  vault: string | null,
+  opts: SearchOptions,
+  frontmatterCache: FrontmatterCache,
+): UnionAdmission {
+  const filters = resolvePoolFilters(opts);
+  const ctx = { vault, store, frontmatterCache };
+  return (refs) => admitIndexRefs(refs, filters, ctx);
+}
+
 export interface EmptyOutcomeInput {
   readonly store: Store;
+  /** The vault the frontmatter-reading filters resolve paths against. */
+  readonly vault: string | null;
+  readonly frontmatterCache: FrontmatterCache;
   readonly opts: SearchOptions;
   /** Residual query text. */
   readonly query: string;
@@ -116,7 +140,12 @@ export function emptyOutcome(input: EmptyOutcomeInput): SearchOutcome {
       ? buildEvidencePack(
           input.query,
           [],
-          buildEvidenceVerification(input.store, input.pathPrefix, coverage),
+          buildEvidenceVerification(
+            input.store,
+            input.pathPrefix,
+            coverage,
+            unionAdmission(input.store, input.vault, input.opts, input.frontmatterCache),
+          ),
         )
       : undefined;
   // A zero-candidate outcome is always attributable: either a lane
@@ -227,7 +256,12 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
     ? buildEvidencePack(
         query,
         finalResults,
-        buildEvidenceVerification(input.store, input.pathPrefix, coverage),
+        buildEvidenceVerification(
+          input.store,
+          input.pathPrefix,
+          coverage,
+          unionAdmission(input.store, config.vault, opts, input.frontmatterCache),
+        ),
         terminalPaths,
       )
     : undefined;

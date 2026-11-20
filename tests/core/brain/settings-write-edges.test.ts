@@ -35,6 +35,18 @@ describe("the settings writer on an unswitched machine", () => {
     expect(getBrainSetting({ vault: env.vault }, "primary_agent").set).toBe(false);
   });
 
+  test("a key its block parser reads under another name is a setting", () => {
+    // `active.most_applied_window_days` is read into `active.most_applied`,
+    // so it never survives validation under its own name; it is still a
+    // key the parser reads, on both kinds of machine.
+    env = makeStoreEnv("osb-settings-renamed-key-");
+    const out = setBrainSetting(human(env.vault), "active.most_applied_window_days", 14);
+    expect(out).toMatchObject({ value: 14, changed: true });
+    expect(readFileSync(brainConfigPath(env.vault), "utf8")).toMatch(
+      /^ {2}most_applied_window_days: 14$/m,
+    );
+  });
+
   test("list answers on a vault with no settings file yet", () => {
     env = makeStoreEnv("osb-settings-list-nofile-");
     rmSync(brainConfigPath(env.vault));
