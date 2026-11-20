@@ -276,9 +276,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (   {   'name': 'brain_feedbac
                            'additionalProperties': False}},
     {   'name': 'brain_context',
         'description': 'Pull the active-preferences digest, pinned current-task context, and '
-                       'active-preference counts. Use at session start when SessionStart hook '
-                       'is unavailable (Cursor, Aider, raw Claude API). Regenerates the digest '
-                       'when absent or stale.',
+                       'active-preference counts. Use at session start when no digest opened '
+                       'the context: no SessionStart hook (Cursor, Aider, raw Claude API), or '
+                       'untrusted ones (codex exec). Regenerates the digest when absent or '
+                       'stale.',
         'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {   'name': 'brain_context_pack',
         'description': 'Return the highest-tier, most recent vault slice under `max_tokens` - '

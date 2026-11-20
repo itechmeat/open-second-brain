@@ -11,6 +11,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import {
+  SESSION_ENV,
+  SESSION_FIELD,
+  sessionKey,
+} from "../../src/core/agent-context/session-identity.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { withPrivateWithheld } from "../../src/core/store/caller-reach.ts";
 import { readPartition } from "../../src/core/store/state-digest.ts";
@@ -37,6 +42,16 @@ const local = async (args: Answer): Promise<Answer> => (await handler(ctx, args)
 const remote = async (args: Answer): Promise<Answer> =>
   (await withPrivateWithheld(true, () =>
     handler({ ...ctx, reach: TRANSPORT_REACH.remote }, args),
+  )) as Answer;
+
+const claudeLocal = async (args: Answer): Promise<Answer> =>
+  (await handler(
+    {
+      ...ctx,
+      reach: TRANSPORT_REACH.local,
+      ruleScope: { workspaceDir: null, harness: "claude-code" },
+    },
+    args,
   )) as Answer;
 
 const ids = (answer: Answer) => (answer["topics"] as Answer[]).map((t) => t["id"]);
@@ -648,6 +663,70 @@ describe("brain_topic review fixes", () => {
     await local({ action: "undo", record: (undo["records"] as string[])[0] });
     expect(((await local({ action: "list" }))["topics"] as Answer[]).map((t) => t["id"])).toEqual([
       topic,
+    ]);
+  });
+});
+
+describe("brain_topic session stamp", () => {
+  const saved = { claude: process.env["CLAUDE_CODE_SESSION_ID"], own: process.env[SESSION_ENV] };
+  afterEach(() => {
+    for (const [key, value] of [
+      ["CLAUDE_CODE_SESSION_ID", saved.claude],
+      [SESSION_ENV, saved.own],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  test("a local call for Claude Code stamps the session; a caller cannot name one", async () => {
+    delete process.env[SESSION_ENV];
+    process.env["CLAUDE_CODE_SESSION_ID"] = "window-one";
+    const made = await claudeLocal({ action: "create", title: "Stamped", scope: "project:o2b" });
+    await claudeLocal({
+      action: "record",
+      topic: made["topic"],
+      kind: "decision",
+      fields: { text: "pick the north bank" },
+    });
+    const forged = await refusal(
+      claudeLocal({
+        action: "record",
+        topic: made["topic"],
+        kind: "decision",
+        fields: { text: "forged", session: "f".repeat(32) },
+      }),
+    );
+    expect(forged.message).toContain("takes no field 'session'");
+    const sessions = topicRecords("shared").map((r) => r.body[SESSION_FIELD]);
+    expect(sessions).toEqual([sessionKey("window-one"), sessionKey("window-one")]);
+  });
+
+  test("a remote call, a call for another host and a call without a session write no stamp", async () => {
+    delete process.env[SESSION_ENV];
+    process.env["CLAUDE_CODE_SESSION_ID"] = "window-one";
+    const made = await remote({ action: "create", title: "Remote", scope: "project:o2b" });
+    const topic = made["topic"];
+    await handler(
+      { ...ctx, reach: TRANSPORT_REACH.local, ruleScope: { workspaceDir: null, harness: "codex" } },
+      { action: "record", topic, kind: "decision", fields: { text: "from codex" } },
+    );
+    await local({ action: "record", topic, kind: "decision", fields: { text: "no reach named" } });
+    expect(topicRecords("shared").map((r) => r.body[SESSION_FIELD])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
+  test("the explicit variable names the session on every host", async () => {
+    process.env[SESSION_ENV] = "named-by-the-launcher";
+    await handler(
+      { ...ctx, reach: TRANSPORT_REACH.local, ruleScope: { workspaceDir: null, harness: "codex" } },
+      { action: "create", title: "Named", scope: "project:o2b" },
+    );
+    expect(topicRecords("shared").map((r) => r.body[SESSION_FIELD])).toEqual([
+      sessionKey("named-by-the-launcher"),
     ]);
   });
 });

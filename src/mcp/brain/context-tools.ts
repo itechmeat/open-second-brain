@@ -252,7 +252,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     // one shared file beside each other on the stdio read path.
     kind: "write",
     description:
-      "Pull the active-preferences digest, pinned current-task context, and active-preference counts. Use at session start when SessionStart hook is unavailable (Cursor, Aider, raw Claude API). Regenerates the digest when absent or stale.",
+      "Pull the active-preferences digest, pinned current-task context, and active-preference counts. Use at session start when no digest opened the context: no SessionStart hook (Cursor, Aider, raw Claude API), or untrusted ones (codex exec). Regenerates the digest when absent or stale.",
     inputSchema: {
       type: "object",
       properties: {},

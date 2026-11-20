@@ -1397,8 +1397,8 @@ export interface BrainMergeLogEvent extends BrainLogEventBase {
 /**
  * `upgrade` entry — operator ran `o2b brain upgrade --apply`.
  * Payload carries the upgrade run id (`upgrade-<ts>`), agent
- * identity, the pre-apply snapshot path, and the vault-relative
- * paths of every managed file the run rewrote.
+ * identity, the vault-relative path of the pre-apply snapshot, and
+ * the vault-relative paths of every managed file the run rewrote.
  */
 export interface BrainUpgradeLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.upgrade;

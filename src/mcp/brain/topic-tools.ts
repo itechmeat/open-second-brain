@@ -12,6 +12,8 @@
  * proposal mentions it. The work lives in `core/topics/actions.ts`.
  */
 
+import { writerSessionKey } from "../../core/agent-context/session-identity.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { StoreWriteError } from "../../core/store/store-write.ts";
 import {
   runTopicAction,
@@ -103,6 +105,19 @@ function inputOf(args: Record<string, unknown>, action: string): TopicActionInpu
   return input as unknown as TopicActionInput;
 }
 
+/**
+ * The session stamp of a local call: the session the host started this
+ * server for (`agent-context/session-identity.ts`). A call that came
+ * over a transport, or under a token, is not that session's and is not
+ * stamped.
+ */
+function sessionOf(ctx: ServerContext): string | undefined {
+  if (ctx.reach !== TRANSPORT_REACH.local || ctx.requestIdentity !== undefined) return undefined;
+  return (
+    writerSessionKey({ env: process.env, harness: ctx.ruleScope?.harness ?? null }) ?? undefined
+  );
+}
+
 /** The agent a record is written under: the token's agent, else the server's. */
 function agentOf(ctx: ServerContext): string | undefined {
   return ctx.requestIdentity?.via === "token" ? ctx.requestIdentity.agent : ctx.agentName;
@@ -120,6 +135,7 @@ function toolBrainTopic(
     return runTopicAction(inputOf(args, action), {
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
       ...(agentOf(ctx) !== undefined ? { agent: agentOf(ctx)! } : {}),
+      ...(sessionOf(ctx) !== undefined ? { session: sessionOf(ctx)! } : {}),
     });
   } catch (err) {
     if (err instanceof TopicActionError || err instanceof TopicWriteError) {

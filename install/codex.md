@@ -147,12 +147,67 @@ the code.
 
 Run the daily-identity check from `install/prerequisites.md`.
 
-## Lifecycle hooks (auto-enabled)
+## Lifecycle hooks (trust them once)
 
-The bundled `hooks/hooks.json` registers a `PostToolUse` hook
-(matcher `Write|Edit|MultiEdit|apply_patch`) that invokes
-`o2b-hook` from PATH after every file-mutating tool succeeds. Step
-2 above wires it.
+The bundled `hooks/hooks.json` registers the same hooks as the Claude
+Code plugin, on nine events: `SessionStart` (the session start digest),
+`UserPromptSubmit` (the per-turn lanes such as neighbour updates and
+recall), `PreToolUse` (orientation and the host-file backup before a
+write), `PostToolUse` (the write reminders and re-grounding), `Stop`,
+`SubagentStart`, `SubagentStop`, `SessionEnd` and `PostCompact` (session
+capture, subagent context and the digest after a compaction). Each runs
+`o2b-hook` from PATH, which step 2 above wires.
+
+Codex runs a hook only after you have trusted it. Its hooks documentation
+says that non-managed hooks (the plugin's, and a `hooks.json` in
+`CODEX_HOME` or a project's `.codex`) must be reviewed and trusted before
+they run, that trust is recorded against each hook's hash, and that a new
+or changed hook, or a plugin update that changes a bundled script, is
+skipped until it is trusted again. Hooks are on by default; `[features]
+hooks = false` in `config.toml` turns them off.
+
+- **Interactive Codex:** open `/hooks` in the CLI (in the desktop app,
+  **Review hooks** in the composer or **Settings > Hooks**) and trust the
+  Open Second Brain hooks. Do it again after a plugin update asks for it.
+- **`codex exec`:** a non-interactive run never asks and skips an
+  untrusted hook without a word (openai/codex issue 46210, open at the
+  time of writing): the MCP tools work, but no digest and no neighbour
+  updates reach the model. Trust the hooks once in an interactive session
+  with the same `CODEX_HOME`, and later `codex exec` runs use them. For
+  automation that vets its hook sources itself, `codex exec
+  --dangerously-bypass-hook-trust` runs the enabled hooks for that one
+  invocation without stored trust.
+- **Without hooks** a session gets the Open Second Brain context only
+  through the `brain_context` tool, and the MCP server's instructions tell
+  a session whose context opened without the active-preferences digest to
+  call it first. Neighbour updates have no tool form; such a session sees
+  what other sessions recorded on a topic through `brain_topic` action
+  `show`.
+
+The Codex MCP server is not told which Codex session it serves, so the
+topic records a Codex agent writes carry no session stamp, and another
+session of the same agent name on the same machine counts them as its own
+(see "Neighbour updates" in [`docs/how-it-works.md`](../docs/how-it-works.md)).
+A launcher that knows the session can name it with
+`OPEN_SECOND_BRAIN_SESSION_ID`. Set it in the environment Codex starts
+with, where the hooks see it, and forward it to the Open Second Brain
+servers with `env_vars = ["OPEN_SECOND_BRAIN_SESSION_ID"]` in their
+`[mcp_servers.<name>]` tables: Codex gives an MCP server only a short
+fixed list of variables otherwise (checked on codex-cli 0.169.0). Without
+the forwarding the records stay unstamped, which is the old behaviour,
+not a fault; never set it only in a server's `env` table, which the
+hooks do not see. The writer and the hook both prefer this variable to
+any host session id. Two mistakes give different results. A value shared
+by several sessions (set machine-wide, or once for a launcher or bridge
+that serves several) gives them all one stamp: each session takes the
+others' records for its own, and none of them gets the others' neighbour
+updates. A value that reaches only one side (the server stamps it while
+the hooks resolve Codex's own session id, or the other way round) gives
+the two sides different stamps: each session is shown its own records
+once. Set it per session, in the environment both sides see. Use a value
+nobody can guess, such as a UUID: the stamp is an unsalted hash of the
+value and is synced with the record, so a short or predictable value can
+be recovered from it.
 
 ## Machine-enforce write protection (optional)
 

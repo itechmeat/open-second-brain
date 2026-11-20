@@ -321,7 +321,11 @@ export function renderMigration(result: MigrationResult): string {
     for (const gap of result.gaps) out.push(`  ${gap.key}: ${gap.reason}`);
   } else {
     out.push(
-      `recorded migration-done ${result.migration_done} and device-switched ${result.device_switched}`,
+      // Only the first machine records the completion; a later machine
+      // records its own switch alone, so its completion record is none.
+      result.migration_done === null
+        ? `migration-done: none here, the first machine recorded it; recorded device-switched ${result.device_switched ?? "none"}`
+        : `recorded migration-done ${result.migration_done} and device-switched ${result.device_switched ?? "none"}`,
       `view writer: ${result.view_writer ?? "none"}`,
     );
     if (result.device_tokens !== null && result.device_tokens.status !== "none") {

@@ -18,6 +18,7 @@
  * `agent` authority unless `--as-human`.
  */
 
+import { writerSessionKey } from "../core/agent-context/session-identity.ts";
 import { ConfigReadError } from "../core/config.ts";
 import { StoreWriteError } from "../core/store/store-write.ts";
 import { runTopicAction, TopicActionError, type TopicActionInput } from "../core/topics/actions.ts";
@@ -248,9 +249,13 @@ export async function handleTopicSubcommand(argv: ReadonlyArray<string>): Promis
     const input = inputOf(verb, positional, flags);
     const configPath = str(flags, "config");
     // A command is the user asking: requested actions carry human authority.
+    // Only a session the caller names explicitly is stamped: a command
+    // has no host session of its own (`agent-context/session-identity.ts`).
+    const session = writerSessionKey({ env: process.env });
     const answer = runTopicAction(input, {
       humanRequest: true,
       ...(configPath !== undefined ? { configPath } : {}),
+      ...(session !== null ? { session } : {}),
     });
     process.stdout.write(json ? `${JSON.stringify(answer, sortedReplacer, 2)}\n` : render(answer));
     // A review over a partial read is not a clean review.

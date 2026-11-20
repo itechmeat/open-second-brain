@@ -33,6 +33,7 @@ import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { readViewWriter } from "../../../src/core/view/writer.ts";
 import { makeFleet, type Fleet } from "./fixtures/fleet.ts";
+import { renderMigration } from "../../../src/cli/brain/verbs/migrate-store.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 
 // Tests here run whole migrations; see tests/helpers/cli-timeout.ts.
@@ -94,6 +95,10 @@ describe("a later machine", () => {
     expect(second.ok).toBe(true);
     expect(second.role).toBe("later");
     expect(second.migration_done).toBeNull();
+    // The text says why no completion was recorded here, never "null".
+    const text = renderMigration(second);
+    expect(text).toContain("migration-done: none here, the first machine recorded it");
+    expect(text).not.toContain("null");
 
     const byKey = b.byKey();
     expect(importedBy(byKey, "dev-b")).toEqual([

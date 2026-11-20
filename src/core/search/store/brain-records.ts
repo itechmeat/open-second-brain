@@ -323,17 +323,17 @@ export interface NeighbourRecordFilter {
   readonly upTo: number;
   readonly stream: string;
   readonly kinds: ReadonlyArray<string>;
-  /** The writer left out: this device and this agent. */
-  readonly device: string;
-  readonly agent: string;
 }
 
+// This device and agent's rows are answered too: another session of the
+// same agent name on this device is a neighbour, and only the record's
+// session stamp, read from its body, tells the two apart
+// (`agent-context/session-identity.ts`).
 const NEIGHBOUR_WHERE =
-  "seq > ? AND seq <= ? AND stream = ? AND kind IN (SELECT value FROM json_each(?)) " +
-  "AND NOT (device = ? AND agent = ?)";
+  "seq > ? AND seq <= ? AND stream = ? AND kind IN (SELECT value FROM json_each(?))";
 
-function neighbourArgs(f: NeighbourRecordFilter): [number, number, string, string, string, string] {
-  return [f.after, f.upTo, f.stream, JSON.stringify(f.kinds), f.device, f.agent];
+function neighbourArgs(f: NeighbourRecordFilter): [number, number, string, string] {
+  return [f.after, f.upTo, f.stream, JSON.stringify(f.kinds)];
 }
 
 /**
@@ -348,7 +348,7 @@ export function neighbourRecords(
 ): { readonly rows: StoredRecord[]; readonly skipped: number } {
   const args = neighbourArgs(filter);
   const rows = db
-    .query<RecordSqlRow, [number, number, string, string, string, string, number]>(
+    .query<RecordSqlRow, [number, number, string, string, number]>(
       `SELECT ${RECORD_COLUMNS} FROM ${RECORDS_TABLE} WHERE ${NEIGHBOUR_WHERE} ` +
         "ORDER BY seq DESC LIMIT ?",
     )
@@ -358,7 +358,7 @@ export function neighbourRecords(
   if (rows.length < limit) return { rows, skipped: 0 };
   const total =
     db
-      .query<{ n: number }, [number, number, string, string, string, string]>(
+      .query<{ n: number }, [number, number, string, string]>(
         `SELECT COUNT(*) AS n FROM ${RECORDS_TABLE} WHERE ${NEIGHBOUR_WHERE}`,
       )
       .get(...args)?.n ?? rows.length;

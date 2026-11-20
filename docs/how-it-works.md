@@ -542,10 +542,35 @@ flowchart LR
   they run whenever a brain store is in use, on every host OpenCode
   included, and the machine-config key `neighbour_updates_enabled` set to
   `false` or `0` (environment `OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED`)
-  turns them off. Each turn asks the index for the records other devices
-  wrote on topics since the last turn, so a large import of other records
-  in between hides nothing; the session's own topics come from its own
-  newest records. The first prompt of a session, the first after an index
+  turns them off. Each turn asks the index for the topic records written
+  since the last turn, so a large import of other records in between
+  hides nothing; the session's own topics come from its own newest
+  records. "Own" is the session, not the agent name: another window of
+  the same agent on the same machine is a neighbour. A Claude Code
+  session stamps the topic records its MCP server writes with a stamp of
+  its session id, and the hook drops only the records stamped with its
+  own session; a record with no stamp (an older release, the CLI without
+  `OPEN_SECOND_BRAIN_SESSION_ID`, a host that names no session to its MCP
+  server, such as Codex) still counts as own when this device and agent
+  name wrote it. The stamp is the first 32 characters of the lowercase
+  hex sha256 of the UTF-8 bytes of `open-second-brain-session`, one NUL
+  character (U+0000) and the trimmed session id. The writer and the hook
+  take the session id by one rule: `OPEN_SECOND_BRAIN_SESSION_ID` when
+  it is set (any launcher can name the session with it, and `o2b topic`
+  stamps from it too), else the host's own id (`CLAUDE_CODE_SESSION_ID`
+  for the Claude Code MCP server, the payload's `session_id` for the
+  hook). Set it in the environment of the host process, which its hooks
+  and its MCP server both inherit (Codex forwards it to an MCP server
+  only when the server's `env_vars` names it), never only in an MCP
+  server's own `env` block, never machine-wide and never once for a
+  launcher or bridge that serves several sessions. A value several
+  sessions share gives them one stamp: each takes the others' records
+  for its own and gets none of their neighbour updates. A value that
+  reaches only one side (the writer or the hook) gives the two sides
+  different stamps: each session is shown its own records once. Use a
+  value nobody can guess, such as a UUID:
+  the stamp is an unsalted hash of the value and travels with the synced
+  record. The first prompt of a session, the first after an index
   rebuild and the first after a day without a prompt start at the head of
   the store, so old history is never replayed.
   Fails soft - every error path in the memory lane exits 0 and the

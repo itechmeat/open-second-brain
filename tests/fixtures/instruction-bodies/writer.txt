@@ -15,8 +15,11 @@ preserved for backward compatibility with existing client configs):
                             pinned context and active-preference counts.
                             Read-only. Use at session
                             start when the host runtime lacks a SessionStart
-                            hook (Cursor, Aider, raw Claude API). Runtimes that
-                            already inject the digest via a hook can skip this.
+                            hook (Cursor, Aider, raw Claude API) or did not run
+                            it (a codex exec whose hooks are not trusted): no
+                            active-preferences digest opened the context.
+                            Runtimes that already inject the digest via a hook
+                            can skip this.
 
 The remaining Brain surface lives on the sibling "open-second-brain"
 MCP server (deferred), including additional read-only, analytics,

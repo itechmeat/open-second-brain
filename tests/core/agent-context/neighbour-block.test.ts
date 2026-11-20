@@ -29,6 +29,69 @@ function candidate(i: number): NeighbourCandidate {
 const cutLine = (n: number): string =>
   n === 0 ? "" : `_${n} more neighbour updates are not shown. ${"y".repeat(100)}_`;
 
+/** A decision as the owner check's agents wrote them: long names, 200 characters of text. */
+function ownerCheckDecision(i: number, topic = "01M7V5XAK3ZQ3RFJV0DBFETKV7"): NeighbourCandidate {
+  return {
+    ...candidate(i),
+    topic,
+    topicTitle: "Owner check topic",
+    device: "check-devbox",
+    agent: "check-devbox-agent",
+    text: `DECISION window ${i}: ${"reasoning ".repeat(30)}`.slice(0, 200),
+  };
+}
+
+test.each([3, 5])(
+  "%i long decisions with long names are all shown, cut, under one heading",
+  (n) => {
+    const block = renderNeighbourBlock(
+      Array.from({ length: n }, (_, i) => ownerCheckDecision(i)),
+      () => true,
+      cutLine,
+    );
+    const lines = block.body.split("\n");
+    const updates = lines.filter((l) => l.startsWith("- "));
+    expect(updates).toHaveLength(n);
+    expect(block.cutCount).toBe(0);
+    expect(block.body.length).toBeLessThanOrEqual(NEIGHBOUR_CHARS_MAX);
+    for (const [i, line] of updates.entries()) {
+      expect(line).toContain(`DECISION window ${i}: `);
+      expect(line.endsWith("\u2026")).toBe(true);
+    }
+    expect(lines.filter((l) => l.includes("action `show` topic"))).toHaveLength(1);
+  },
+);
+
+test("updates of two topics are grouped under one heading each", () => {
+  const other = "01M7V5XAK3ZQ3RFJV0DBFETKV8";
+  const block = renderNeighbourBlock(
+    [ownerCheckDecision(0), ownerCheckDecision(1, other), ownerCheckDecision(2)],
+    () => true,
+    cutLine,
+  );
+  const lines = block.body.split("\n");
+  const headings = lines.filter((l) => !l.startsWith("- "));
+  expect(headings).toHaveLength(2);
+  expect(headings[0]!.endsWith("topic 01M7V5XAK3ZQ3RFJV0DBFETKV7):")).toBe(true);
+  expect(headings[1]!.endsWith(`topic ${other}):`)).toBe(true);
+  // The two lines of the first topic sit under its heading.
+  expect(lines[1]).toContain("DECISION window 0: ");
+  expect(lines[2]).toContain("DECISION window 2: ");
+  expect(lines.filter((l) => l.startsWith("- "))).toHaveLength(3);
+});
+
+test.each([
+  [200, false],
+  [201, true],
+])("one text of %i characters, with room to spare, ends in an ellipsis: %p", (length, cut) => {
+  const text = "a".repeat(length);
+  const block = renderNeighbourBlock([{ ...candidate(0), text }], () => true, cutLine);
+  const line = block.body.split("\n").find((l) => l.startsWith("- "))!;
+  const shown = line.slice(line.indexOf(": ") + 2);
+  expect(shown.length).toBe(200);
+  expect(shown.endsWith("\u2026")).toBe(cut);
+});
+
 test("the cut line counts toward the character cap", () => {
   const block = renderNeighbourBlock(
     Array.from({ length: 6 }, (_, i) => candidate(i)),

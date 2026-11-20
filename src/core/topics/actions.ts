@@ -43,6 +43,7 @@ import { reviewTopics } from "./plan.ts";
 import { readTopics, type TopicRead } from "./read.ts";
 import { createTopicEvent, writeTopicEvents, type TopicEvent } from "./write.ts";
 import { privateWithheld } from "../store/caller-reach.ts";
+import { SESSION_FIELD } from "../agent-context/session-identity.ts";
 import { SETTING_TOPIC_QUIET_DAYS } from "../store/constants.ts";
 
 export const TOPIC_ACTIONS = Object.freeze([
@@ -118,6 +119,19 @@ export interface TopicActionContext {
    * `brain_topic`) defaults to `agent` and must name `human` to claim it.
    */
   readonly humanRequest?: boolean;
+  /**
+   * The writing session's stamp (`agent-context/session-identity.ts`),
+   * set on the body of every record the action writes. A caller cannot
+   * name it: `fields` takes no `session`.
+   */
+  readonly session?: string;
+}
+
+/** An event with the writing session's stamp in its body, when there is one. */
+function stampSession(event: TopicEvent, session: string | undefined): TopicEvent {
+  return session === undefined
+    ? event
+    : { ...event, body: { ...event.body, [SESSION_FIELD]: session } };
 }
 
 function need(input: TopicActionInput, field: keyof TopicActionInput): string {
@@ -522,7 +536,9 @@ export function runTopicAction(
   }
   const events = eventsOf(input, read, now, context.humanRequest === true);
   const written: AppendResult[] = writeTopicEvents(
-    events.map((e) => (context.agent !== undefined ? { ...e, agent: context.agent } : e)),
+    events
+      .map((e) => stampSession(e, context.session))
+      .map((e) => (context.agent !== undefined ? { ...e, agent: context.agent } : e)),
     {
       ...(context.configPath !== undefined ? { configPath: context.configPath } : {}),
       ...(input.private !== undefined ? { private: input.private } : {}),

@@ -132,10 +132,10 @@ describe("the candidate cap", () => {
     await h.reindex();
     const result = await h.runHook(h.payload("Next.", "s1"));
     const context = injected(result.stdout) ?? "";
-    // Five lines and the cut line would pass 800 characters: the fifth
-    // line gives way and is counted.
-    expect(context.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(4);
-    expect(context).toContain("_21 more neighbour updates are not shown.");
+    // Five short lines and the cut line fit the 800 characters; the
+    // candidate cap's five and the fifteen past the line cap are counted.
+    expect(context.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(5);
+    expect(context).toContain("_20 more neighbour updates are not shown.");
   });
 });
 

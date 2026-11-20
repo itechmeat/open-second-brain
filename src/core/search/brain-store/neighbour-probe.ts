@@ -3,10 +3,13 @@
  * neighbour-updates lane asks before a turn, answered from the index.
  *
  * Unlike {@link brainChanges} it never pages over every record: it asks
- * the index for the candidate rows only (one stream, the neighbour kinds,
- * never this device and agent) after the watermark and up to the head, so
+ * the index for the candidate rows only (one stream, the neighbour kinds)
+ * after the watermark and up to the head, so
  * its limit applies to candidates and a turn that follows a large import
- * of other records still sees the update on its topic. What the limit
+ * of other records still sees the update on its topic. This device and
+ * agent's rows are candidates too: another session of the same agent
+ * name is a neighbour, and the hook drops the session's own records by
+ * their session stamp (`agent-context/session-identity.ts`). What the limit
  * leaves out is counted. It also answers this device and agent's newest
  * own records, from which the hook seeds the session's topics, so an own
  * record older than any page still counts.
@@ -83,8 +86,6 @@ export async function probeNeighbours(
         upTo: head,
         stream: opts.stream,
         kinds: opts.kinds,
-        device: opts.self.device,
-        agent: opts.self.agent,
       },
       opts.limit,
     );
