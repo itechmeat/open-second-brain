@@ -202,6 +202,19 @@ describe("the classifier", () => {
     );
   });
 
+  test.skipIf(IS_WINDOWS)("a FIFO swapped in after the lstat is content, never waited on", () => {
+    const path = join(brain, "pinned.md.lock");
+    writeFileSync(path, "1234\n");
+    const stat = lstatSync(path);
+    rmSync(path);
+    expect(spawnSync("mkfifo", [path]).status).toBe(0);
+
+    // A blocking open of a FIFO with no writer never returns; the guarded
+    // opener refuses it, so this returns at once.
+    expect(productTransientKind(path, "pinned.md.lock", stat, beside)).toBeNull();
+    rmSync(path);
+  });
+
   test("a .lock larger than a stamp is content, whatever it begins with", () => {
     const path = join(brain, "big.md.lock");
     const stamp = `1234\n${"0".repeat(8)}-0000-4000-8000-${"0".repeat(12)}\n2026-11-20T00:00:00.000Z\n`;

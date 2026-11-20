@@ -3997,6 +3997,12 @@ var init_clock_floor = __esm(() => {
   floors = new Map;
 });
 
+// src/core/fs-identity.ts
+function sameDevIno(a, b) {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+var init_fs_identity = () => {};
+
 // src/core/brain/sync-lockfile.ts
 import {
   closeSync as closeSync2,
@@ -4037,6 +4043,7 @@ function resolveLockWaitBudgetMs(env = process.env) {
 var heldLocks, LOCK_WAIT_BUDGET_MS = 5000, LOCK_WAIT_BUDGET_ENV = "OPEN_SECOND_BRAIN_LOCK_WAIT_MS", RETRY_SLEEP_CEILING_MS = 25, contendedReleases, HANDOFF_WINDOW_MS, AGED_WAITER_AFTER_MS, POSIX_MIN_STAMP_BYTES = 48, WIN32_MIN_STAMP_BYTES = 30, MIN_STAMP_BYTES, WAITER_MARK, MARK_OPEN_FLAGS;
 var init_sync_lockfile = __esm(() => {
   init_fs_atomic();
+  init_fs_identity();
   init_path_constants();
   heldLocks = new Map;
   contendedReleases = new Map;
@@ -4438,25 +4445,34 @@ function openRegularFileForRead(path, partitionRoot) {
   }
   let keep = false;
   try {
-    const opened = fstatSync2(fd);
-    keep = opened.isFile() && (NO_FOLLOW !== 0 || nameIsOpenedFile(path, opened)) && (partitionRoot === undefined || isRealDirBelowPartition(partitionRoot, dirname7(path)));
+    const opened = fstatSync2(fd, { bigint: true });
+    keep = opened.isFile() && (NO_FOLLOW !== 0 || nameIsOpenedFile(path, opened)) && (partitionRoot === undefined || isRealDirBelowPartition(partitionRoot, dirname7(path.toString())));
   } finally {
     if (!keep)
       closeSync3(fd);
   }
   return keep ? fd : null;
 }
+function lstatBigOrNull(path) {
+  try {
+    return lstatSync2(path, { bigint: true });
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT")
+      return null;
+    throw err;
+  }
+}
 function nameIsOpenedFile(path, opened) {
-  const now = lstatOrNull(path);
-  return now !== null && !now.isSymbolicLink() && now.ino === opened.ino && now.dev === opened.dev;
+  const now = lstatBigOrNull(path);
+  return now !== null && !now.isSymbolicLink() && sameDevIno(now, opened);
 }
 function assertNameIsOpenedFile(path, opened) {
-  const now = lstatOrNull(path);
+  const now = lstatBigOrNull(path);
   if (now === null)
     throw new StoreUnsafePathError(path, "was removed while it was opened");
   if (now.isSymbolicLink())
     throw new StoreUnsafePathError(path, "is a symbolic link");
-  if (now.ino !== opened.ino || now.dev !== opened.dev) {
+  if (!sameDevIno(now, opened)) {
     throw new StoreUnsafePathError(path, "was replaced while it was opened");
   }
 }
@@ -4473,10 +4489,10 @@ function openShardForAppend(path) {
     throw err;
   }
   try {
-    const stat = fstatSync2(fd);
+    const stat = fstatSync2(fd, { bigint: true });
     if (!stat.isFile())
       throw new StoreUnsafePathError(path, "is not a regular file");
-    if (stat.nlink > 1)
+    if (stat.nlink > 1n)
       throw new StoreUnsafePathError(path, `has ${stat.nlink} hard links`);
     if (NO_FOLLOW === 0)
       assertNameIsOpenedFile(path, stat);
@@ -4488,6 +4504,7 @@ function openShardForAppend(path) {
 }
 var STORE_DIR_MODE = 448, STORE_FILE_MODE = 384, StoreUnsafePathError, NO_FOLLOW, NON_BLOCK;
 var init_safe_fs = __esm(() => {
+  init_fs_identity();
   StoreUnsafePathError = class StoreUnsafePathError extends Error {
     path;
     constructor(path, why) {
@@ -6591,7 +6608,7 @@ function prefixSha(path, bytes, partitionRoot) {
   return hash.digest("hex");
 }
 function sameStamp(a, b) {
-  return a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  return sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
 function isCleanRead(read) {
   return read.diagnostics.length === 0 && read.pendingTailBytes === 0 && read.records.every((r) => r.bodyState !== "pending");
@@ -6599,10 +6616,11 @@ function isCleanRead(read) {
 function readShardWithTails(path, rel, partitionRoot, tails) {
   const kept = tails.get(rel);
   let base = null;
-  const now = lstatSync4(path);
+  const now = lstatSync4(path, { bigint: true });
   if (kept !== undefined) {
-    if (now.ino === kept.ino && now.dev === kept.dev && now.size >= kept.size) {
-      if (now.size === kept.size && now.mtimeMs === kept.mtimeMs && now.ctimeMs === kept.ctimeMs) {
+    const size = Number(now.size);
+    if (sameDevIno(now, kept) && size >= kept.size) {
+      if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs) {
         return kept.read;
       }
       if (prefixSha(path, kept.size, partitionRoot) === kept.sha)
@@ -6614,8 +6632,8 @@ function readShardWithTails(path, rel, partitionRoot, tails) {
     ...base !== null ? { offset: base.size } : {}
   });
   tails.delete(rel);
-  const after = lstatSync4(path);
-  if (base !== null && (after.ino !== now.ino || after.dev !== now.dev)) {
+  const after = lstatSync4(path, { bigint: true });
+  if (base !== null && !sameDevIno(after, now)) {
     return readShard(path, { partitionRoot });
   }
   const read = base === null ? fresh : {
@@ -6625,17 +6643,18 @@ function readShardWithTails(path, rel, partitionRoot, tails) {
   };
   if (!isCleanRead(read))
     return read;
-  if (after.ino === 0 || after.size !== read.nextOffset || !sameStamp(now, after))
+  if (after.ino === 0n || Number(after.size) !== read.nextOffset || !sameStamp(now, after)) {
     return read;
+  }
   const sha = prefixSha(path, read.nextOffset, partitionRoot);
-  if (sha === null || !sameStamp(after, lstatSync4(path)))
+  if (sha === null || !sameStamp(after, lstatSync4(path, { bigint: true })))
     return read;
   tails.set(rel, {
     ino: after.ino,
     dev: after.dev,
     size: read.nextOffset,
-    mtimeMs: after.mtimeMs,
-    ctimeMs: after.ctimeMs,
+    mtimeNs: after.mtimeNs,
+    ctimeNs: after.ctimeNs,
     sha,
     read
   });
@@ -6723,6 +6742,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
 }
 var PREFIX_CHUNK_BYTES;
 var init_stream_read = __esm(() => {
+  init_fs_identity();
   init_constants();
   init_reader();
   init_seen_shards();
@@ -7558,7 +7578,7 @@ function readFreezeMarker(vault) {
   }
   let stat;
   try {
-    stat = statSync10(path, { throwIfNoEntry: false });
+    stat = statSync10(path, { bigint: true, throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -7567,14 +7587,14 @@ function readFreezeMarker(vault) {
     return null;
   }
   const cached = MARKER_STAMPS.get(root);
-  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeNs === stat.mtimeNs) {
     return cached.marker;
   }
   const marker = parseMarker(path);
   MARKER_STAMPS.set(root, {
     ino: stat.ino,
     size: stat.size,
-    mtimeMs: stat.mtimeMs,
+    mtimeNs: stat.mtimeNs,
     marker
   });
   return marker;
@@ -7934,7 +7954,7 @@ function currentVaultId(root) {
   }
   let stat;
   try {
-    stat = statSync12(path, { throwIfNoEntry: false });
+    stat = statSync12(path, { bigint: true, throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -7943,7 +7963,7 @@ function currentVaultId(root) {
     return null;
   }
   const cached = MARKER_STAMPS2.get(root);
-  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeNs === stat.mtimeNs) {
     return cached.vaultId;
   }
   const identity = readVaultIdentity(root);
@@ -7954,7 +7974,7 @@ function currentVaultId(root) {
   MARKER_STAMPS2.set(root, {
     ino: stat.ino,
     size: stat.size,
-    mtimeMs: stat.mtimeMs,
+    mtimeNs: stat.mtimeNs,
     vaultId: identity.vault_id
   });
   return identity.vault_id;

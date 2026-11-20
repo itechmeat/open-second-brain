@@ -80,6 +80,7 @@
  * the file surface - no destructive snapshot is taken for a move.
  */
 
+import { pathIdentity, sameIdentity } from "../../fs-identity.ts";
 import {
   existsSync,
   lstatSync,
@@ -679,12 +680,13 @@ function resolveFolderDestination(
     // spelled rungs above judge spellings, and a host that answers a
     // spelled path from a differently spelled real entry can slip a
     // mismatch past every one of them.
-    const sourceEntry = statOrNull(source.abs);
-    if (sourceEntry !== null && sourceEntry.ino !== 0) {
+    // Compared as bigint (`fs-identity.ts`): NTFS file ids exceed 2^53, and
+    // as numbers two neighbouring folders could read as one entry.
+    const sourceEntry = pathIdentity(source.abs);
+    if (sourceEntry !== null) {
       let cursor = destinationDirectory.abs;
       for (;;) {
-        const entry = statOrNull(cursor);
-        if (entry !== null && entry.ino === sourceEntry.ino && entry.dev === sourceEntry.dev) {
+        if (sameIdentity(pathIdentity(cursor), sourceEntry)) {
           throw new NoteLifecycleError(
             "destination_inside_source",
             `${action} destination ${destinationDirectory.relPath} is the source folder ` +

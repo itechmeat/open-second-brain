@@ -26,6 +26,7 @@
  * milliseconds, and a sync setup should ignore them.
  */
 
+import { sameDevIno } from "../fs-identity.ts";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -47,7 +48,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { READ_NO_FOLLOW_FLAGS } from "../derived-store-guard.ts";
@@ -373,16 +374,17 @@ export function listCompanions(dir: string, skip: ReadonlySet<string>): string[]
   }
 }
 
-/** Whether two stats are one version of one file: same file, same size, same modification time. */
-function sameVersion(a: Stats, b: Stats | null): boolean {
-  return (
-    b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
-  );
+/**
+ * Whether two stats are one version of one file: same file (device and
+ * inode as bigint, `fs-identity.ts`), same size, same modification time.
+ */
+function sameVersion(a: BigIntStats, b: BigIntStats | null): boolean {
+  return b !== null && sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs;
 }
 
-function lstatOrNull(path: string): Stats | null {
+function lstatOrNull(path: string): BigIntStats | null {
   try {
-    return lstatSync(path);
+    return lstatSync(path, { bigint: true });
   } catch {
     return null;
   }
@@ -409,7 +411,7 @@ function lstatOrNull(path: string): Stats | null {
  * until that program lets go.
  */
 function moveNoReplace(from: string, to: string): void {
-  const stat = lstatSync(from);
+  const stat = lstatSync(from, { bigint: true });
   if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
     if (existsSync(to)) return;
@@ -425,7 +427,7 @@ function moveNoReplace(from: string, to: string): void {
     const code = errnoCode(err);
     if (code === undefined || !NO_LINK_CODES.has(code)) throw err;
     copyFileSync(from, to, fsConstants.COPYFILE_EXCL);
-    placed = lstatSync(to);
+    placed = lstatSync(to, { bigint: true });
   }
   const now = lstatOrNull(from);
   if (now === null) return; // gone meanwhile: the new name holds the only copy
@@ -456,7 +458,7 @@ function moveNoReplace(from: string, to: string): void {
  * move created): it is renamed to a temp name first and checked there, so
  * a file a sync tool put under the name meanwhile is put back, not removed.
  */
-function removeIfVersion(path: string, ours: Stats): void {
+function removeIfVersion(path: string, ours: BigIntStats): void {
   const away = tempName(dirname(path), "back");
   try {
     renameSync(path, away);

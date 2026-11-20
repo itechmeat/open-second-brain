@@ -231,8 +231,12 @@ describe("moveCompanions", () => {
     const realLstat = fs.lstatSync;
     writeFileSync(join(dir, "newer.tmp"), "newer\n");
     let seen = 0;
-    const lstat = spyOn(fs, "lstatSync").mockImplementation(((p: fs.PathLike) => {
-      const stat = realLstat(p);
+    const lstat = spyOn(fs, "lstatSync").mockImplementation(((
+      p: fs.PathLike,
+      options?: fs.StatSyncOptions,
+    ) => {
+      // The options travel on: the move reads `bigint` stats.
+      const stat = realLstat(p, options);
       // The second look at the source is the last check before it goes.
       if (String(p) === source && ++seen === 2) {
         lstat.mockRestore();

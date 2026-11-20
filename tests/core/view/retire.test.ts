@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import * as fs from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { join } from "node:path";
 
 import { appendRecord } from "../../../src/core/store/appender.ts";
@@ -27,6 +28,7 @@ import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import { newUlid } from "../../../src/core/store/ulid.ts";
 import { capturePage, NotAPageFileError } from "../../../src/core/view/page-io.ts";
 import { runViewPass } from "../../../src/core/view/render.ts";
+import { sameFileStats } from "../../../src/core/view/retire.ts";
 import { bytesSum, writeBase } from "../../../src/core/view/view-records.ts";
 import { claimViewWriter } from "../../../src/core/view/writer.ts";
 import { makeMachines, type Machines } from "./fixtures/machines.ts";
@@ -444,5 +446,40 @@ describe("pages leaving the view: review follow-ups", () => {
       "topic.md",
     ]);
     expect(readdirSync(view("topics", base))).not.toContain("a-notes.md");
+  });
+});
+
+/** `bigint` stats as a filesystem reports them; only the compared fields matter. */
+function stats(fields: { dev: bigint; ino: bigint; size?: bigint; t?: bigint }): BigIntStats {
+  return {
+    dev: fields.dev,
+    ino: fields.ino,
+    size: fields.size ?? 12n,
+    mtimeNs: fields.t ?? 1_700_000_000_000_000_000n,
+    ctimeNs: fields.t ?? 1_700_000_000_000_000_000n,
+  } as unknown as BigIntStats;
+}
+
+describe("whether a retiring page is the live page's file (constructed stats)", () => {
+  test("a volume with no inode: one file under two spellings is the same, so it is spared", () => {
+    // A network share or a FAT-family volume answers ino 0 for every file.
+    const one = stats({ dev: 7n, ino: 0n });
+    expect(sameFileStats(one, stats({ dev: 7n, ino: 0n }))).toBe(true);
+  });
+
+  test("a volume with no inode: files of another size or time are not taken for one", () => {
+    const one = stats({ dev: 7n, ino: 0n });
+    expect(sameFileStats(one, stats({ dev: 7n, ino: 0n, size: 13n }))).toBe(false);
+    expect(sameFileStats(one, stats({ dev: 7n, ino: 0n, t: 1n }))).toBe(false);
+    expect(sameFileStats(one, stats({ dev: 8n, ino: 0n }))).toBe(false);
+  });
+
+  test("with inodes the exact identity decides, above 2^53 too", () => {
+    const base = (0x2bn << 48n) | 0x1_2345_6788n;
+    expect(sameFileStats(stats({ dev: 7n, ino: base }), stats({ dev: 7n, ino: base }))).toBe(true);
+    expect(sameFileStats(stats({ dev: 7n, ino: base }), stats({ dev: 7n, ino: base + 1n }))).toBe(
+      false,
+    );
+    expect(sameFileStats(null, stats({ dev: 7n, ino: base }))).toBe(false);
   });
 });

@@ -18,8 +18,9 @@
  * Nothing here writes: no store is created, no partition copy refreshed.
  */
 
+import { sameDevIno } from "../../fs-identity.ts";
 import { createHash } from "node:crypto";
-import { closeSync, lstatSync, readSync } from "node:fs";
+import { type BigIntStats, closeSync, lstatSync, readSync } from "node:fs";
 
 import { BLOB_REF_KEY, type StorePartition } from "../constants.ts";
 import type { StoreRecord } from "../envelope.ts";
@@ -84,12 +85,13 @@ export interface StreamReadOptions {
  * it next time.
  */
 export interface ShardTail {
-  readonly ino: number;
-  readonly dev: number;
+  /** Device and inode as `bigint` (`fs-identity.ts`: NTFS ids exceed 2^53). */
+  readonly ino: bigint;
+  readonly dev: bigint;
   /** Bytes read: every complete line, up to and including the last newline. */
   readonly size: number;
-  readonly mtimeMs: number;
-  readonly ctimeMs: number;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
   /** sha256 of those bytes. */
   readonly sha: string;
   readonly read: ShardRead;
@@ -148,16 +150,9 @@ function prefixSha(path: string, bytes: number, partitionRoot: string): string |
   return hash.digest("hex");
 }
 
-function sameStamp(
-  a: { ino: number; dev: number; size: number; mtimeMs: number; ctimeMs: number },
-  b: { ino: number; dev: number; size: number; mtimeMs: number; ctimeMs: number },
-): boolean {
+function sameStamp(a: BigIntStats, b: BigIntStats): boolean {
   return (
-    a.ino === b.ino &&
-    a.dev === b.dev &&
-    a.size === b.size &&
-    a.mtimeMs === b.mtimeMs &&
-    a.ctimeMs === b.ctimeMs
+    sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
   );
 }
 
@@ -181,10 +176,11 @@ function readShardWithTails(
   // lstat: a link swapped in under the name has an inode of its own. Taken
   // before the read too, so a read is kept only when the file did not
   // change from before the read to after its checksum.
-  const now = lstatSync(path);
+  const now = lstatSync(path, { bigint: true });
   if (kept !== undefined) {
-    if (now.ino === kept.ino && now.dev === kept.dev && now.size >= kept.size) {
-      if (now.size === kept.size && now.mtimeMs === kept.mtimeMs && now.ctimeMs === kept.ctimeMs) {
+    const size = Number(now.size);
+    if (sameDevIno(now, kept) && size >= kept.size) {
+      if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs) {
         return kept.read;
       }
       if (prefixSha(path, kept.size, partitionRoot) === kept.sha) base = kept;
@@ -195,13 +191,13 @@ function readShardWithTails(
     ...(base !== null ? { offset: base.size } : {}),
   });
   tails.delete(rel);
-  const after = lstatSync(path);
+  const after = lstatSync(path, { bigint: true });
   // The suffix is combined with the kept prefix only when it came from the
   // file the prefix was checked against: a shard replaced under its name
   // after the checksum and before the read would pair another file's lines
   // with the kept records. Then the combination is dropped and the shard
   // is read whole, as with no kept tail.
-  if (base !== null && (after.ino !== now.ino || after.dev !== now.dev)) {
+  if (base !== null && !sameDevIno(after, now)) {
     return readShard(path, { partitionRoot });
   }
   const read: ShardRead =
@@ -217,15 +213,17 @@ function readShardWithTails(
   // checksum (inode, device, size, mtime, ctime): a write or a same-size
   // replacement landing anywhere in between leaves it unkept, and the
   // next read reads it whole. Two lstats per kept read.
-  if (after.ino === 0 || after.size !== read.nextOffset || !sameStamp(now, after)) return read;
+  if (after.ino === 0n || Number(after.size) !== read.nextOffset || !sameStamp(now, after)) {
+    return read;
+  }
   const sha = prefixSha(path, read.nextOffset, partitionRoot);
-  if (sha === null || !sameStamp(after, lstatSync(path))) return read;
+  if (sha === null || !sameStamp(after, lstatSync(path, { bigint: true }))) return read;
   tails.set(rel, {
     ino: after.ino,
     dev: after.dev,
     size: read.nextOffset,
-    mtimeMs: after.mtimeMs,
-    ctimeMs: after.ctimeMs,
+    mtimeNs: after.mtimeNs,
+    ctimeNs: after.ctimeNs,
     sha,
     read,
   });
