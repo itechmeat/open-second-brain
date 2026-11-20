@@ -166,9 +166,32 @@ or changed hook, or a plugin update that changes a bundled script, is
 skipped until it is trusted again. Hooks are on by default; `[features]
 hooks = false` in `config.toml` turns them off.
 
-- **Interactive Codex:** open `/hooks` in the CLI (in the desktop app,
-  **Review hooks** in the composer or **Settings > Hooks**) and trust the
-  Open Second Brain hooks. Do it again after a plugin update asks for it.
+- **Interactive Codex:** start `codex` once in the project folder with
+  the same `CODEX_HOME`. It first asks whether to trust the folder; accept.
+  It then shows "Hooks need review" with the new or changed hooks and three
+  choices: review them, trust all and continue, or continue without trusting
+  (the hooks do not run). "Trust all and continue" trusts them at once.
+  "Review hooks" only opens the hooks browser: trust each new or changed
+  Open Second Brain hook there before you leave it, or those hooks stay
+  off. Trusting writes a `trusted_hash` entry per hook under
+  `[hooks.state]` in `CODEX_HOME/config.toml`. Later, `/hooks` in the CLI (in the desktop app,
+  **Review hooks** in the composer or **Settings > Hooks**) reviews them
+  again; do it after a plugin update asks for it.
+- **Leave that session with `/quit`, not Ctrl-C.** Interrupting it with
+  Ctrl-C can print "Disconnected from this task. Any running work
+  continues" and leave `codex app-server` processes running under that
+  `CODEX_HOME`. Every Codex client of one `CODEX_HOME` shares its
+  app-server, so a running app-server cannot be told to belong to the
+  session you left, and stopping it interrupts every other Codex session
+  of that home. Stop it only when no Codex session, interactive or
+  `codex exec`, of that `CODEX_HOME` is still open, and no task a closed
+  session left running on it is still working (a session left with
+  Ctrl-C says "Any running work continues"): close the sessions first,
+  wait for such a task to finish, or stop it on purpose, then run `CODEX_HOME=<that home> codex app-server daemon stop` (codex-cli
+  0.169.0), which asks it to end gracefully first; only if a process is
+  still left after that, end it by its process id with `kill <pid>`. Do
+  not kill an app-server process while another session of that home may
+  use it.
 - **`codex exec`:** a non-interactive run never asks and skips an
   untrusted hook without a word (openai/codex issue 46210, open at the
   time of writing): the MCP tools work, but no digest and no neighbour

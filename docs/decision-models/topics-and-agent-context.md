@@ -259,7 +259,8 @@ Shared mechanics:
 ## neighbour_relevant
 
 - **When it runs:** in the neighbour-updates hook, before a turn, over the
-  candidate records the index returns since the last turn (stream
+  candidate records appended to the store's topics shards since the last
+  turn, read past a per-session cursor without the index (stream
   `topics`, the neighbour kinds; the newest
   2000, the older ones of every topic and project counted in one line
   that names the `brain_changes` call listing them among every record

@@ -1,3 +1,5 @@
+Call brain_context first when this session opened without an active-preferences digest (a host without hooks, or hooks it did not run, as in a codex exec whose hooks are not trusted).
+
 Open Second Brain — always-loaded MCP surface.
 
 Five tools live here (four writers + one reader; the server's name is
@@ -13,13 +15,9 @@ preserved for backward compatibility with existing client configs):
                             rotation without becoming permanent preferences.
   - brain_context         — pull the active-preferences digest plus
                             pinned context and active-preference counts.
-                            Read-only. Use at session
-                            start when the host runtime lacks a SessionStart
-                            hook (Cursor, Aider, raw Claude API) or did not run
-                            it (a codex exec whose hooks are not trusted): no
-                            active-preferences digest opened the context.
-                            Runtimes that already inject the digest via a hook
-                            can skip this.
+                            Read-only. Call it first when no digest opened
+                            the session (see the first line); a host whose
+                            hook injected the digest can skip it.
 
 The remaining Brain surface lives on the sibling "open-second-brain"
 MCP server (deferred), including additional read-only, analytics,

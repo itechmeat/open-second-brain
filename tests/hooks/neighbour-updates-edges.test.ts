@@ -22,6 +22,7 @@ import { startFakeSystemOne } from "../helpers/fake-decision-provider.ts";
 import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts";
 import { isLoopbackUrl } from "../../src/core/decision-model/egress-guard.ts";
 import { reindexVault } from "../../src/core/search/indexer.ts";
+import { appendRecord } from "../../src/core/store/appender.ts";
 import { newUlid } from "../../src/core/store/ulid.ts";
 
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS * 2);
@@ -223,6 +224,36 @@ describe("model-derived items and routine entries", () => {
     expect(context).not.toContain("derived from my own note");
     expect(context).toContain("derived from the neighbour's note");
     expect(context).toMatch(/model-derived decision/);
+  });
+
+  test("an item derived from a record whose writer neither the topics nor the index know is left out", async () => {
+    const topic = newUlid(h.clock());
+    h.decision(LOCAL_DEVICE, topic, "the session's own decision");
+    await h.reindex();
+    await h.runHook(h.payload("Start.", "s1"));
+    // The session's own record in another stream, which the index has not
+    // ingested: whose it is cannot be told from the topics read.
+    const own = appendRecord(
+      h.fx().open(LOCAL_DEVICE),
+      {
+        partition: "shared",
+        stream: "events",
+        kind: "note",
+        agent: SELF_AGENT,
+        body: { authority: "agent", text: "the session's own event" },
+      },
+      { now: h.now },
+    ).record.id;
+    h.decision(REMOTE_DEVICE, topic, "derived from an event nobody indexed", {
+      agent: "dream",
+      authority: "model",
+      extra: { item: own, source: own },
+    });
+    h.decision(REMOTE_DEVICE, topic, "a plain neighbour decision", { agent: NEIGHBOUR_AGENT });
+    const result = await h.runHook(h.payload("Next.", "s1"));
+    const context = injected(result.stdout) ?? "";
+    expect(context).toContain("a plain neighbour decision");
+    expect(context).not.toContain("derived from an event nobody indexed");
   });
 
   test("a routine log entry never becomes a candidate, even when the model would pass it", async () => {

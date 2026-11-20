@@ -106,6 +106,29 @@ describe("a fully available runtime renders exactly what shipped before", () => 
   }
 });
 
+describe("the brain_context bootstrap leads the body", () => {
+  for (const scope of [TOOL_SCOPE.full, TOOL_SCOPE.writer]) {
+    test(`${scope}: the first sentence after the identity line calls brain_context`, () => {
+      const text = buildInstructions({ agent: AGENT, scope, capabilities: reportFor(scope) });
+      const body = text.slice(`${IDENTITY_LINE}${PARAGRAPH_BREAK}`.length);
+      expect(body.startsWith("Call brain_context first when this session opened without")).toBe(
+        true,
+      );
+      // The instruction sits where hosts read most reliably: early.
+      expect(text.indexOf("brain_context")).toBeLessThan(200);
+    });
+  }
+
+  test("a runtime that withholds brain_context gets no bootstrap sentence", () => {
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.full,
+      capabilities: reportFor(TOOL_SCOPE.full, { disabledTools: ["brain_context"] }),
+    });
+    expect(text).not.toContain("Call brain_context first");
+  });
+});
+
 describe("a withheld tool loses its guidance rather than gaining a retraction", () => {
   const window: RuntimeCapabilityWindow = { disabledTools: [WITHHELD_TOOL] };
 
@@ -232,9 +255,6 @@ describe("a dropped clause takes its punctuation and leaves its lead-in", () => 
         "an active preference scopes to (result: applied | violated | " +
         "outdated); brain_note for narrative milestones that fit neither; " +
         "brain_pinned_context for current-task facts that must survive context rotation. " +
-        "brain_context bootstraps a session whose context opened with no active-preferences " +
-        "digest (a host without hooks, or hooks the host did not run, as in a codex exec " +
-        "whose hooks are not trusted). " +
         "Skip Brain calls for casual chat, exploration, and trivial edits - " +
         "a misrecorded signal is worse than a missed one.",
     );

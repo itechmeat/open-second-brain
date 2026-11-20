@@ -187,7 +187,29 @@ function unconditional(text: string, separator?: string): InstructionSegment {
   return { tools: [], text, ...(separator === undefined ? {} : { separator }) };
 }
 
+/**
+ * The first sentence of every body that offers `brain_context`: an
+ * agent whose host injected no digest (no hooks, or hooks the host did
+ * not run) gets the context only by calling the tool, and the owner check
+ * found a model that passed over the same advice inside the memory
+ * contract. Hosts read the start of the instructions most reliably, so it
+ * leads, as one imperative naming the tool.
+ */
+const BOOTSTRAP_PARAGRAPH: InstructionParagraph = Object.freeze({
+  end: ".",
+  segments: [
+    {
+      tools: ["brain_context"],
+      text:
+        "Call brain_context first when this session opened without an active-preferences " +
+        "digest (a host without hooks, or hooks it did not run, as in a codex exec whose " +
+        "hooks are not trusted)",
+    },
+  ],
+});
+
 const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
+  BOOTSTRAP_PARAGRAPH,
   {
     end: ".",
     segments: [
@@ -212,11 +234,6 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
       {
         tools: ["brain_pinned_context"],
         text: "brain_pinned_context for current-task facts that must survive context rotation",
-        separator: SENTENCE,
-      },
-      {
-        tools: ["brain_context"],
-        text: "brain_context bootstraps a session whose context opened with no active-preferences digest (a host without hooks, or hooks the host did not run, as in a codex exec whose hooks are not trusted)",
         separator: SENTENCE,
       },
       unconditional(
@@ -270,6 +287,7 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
 ]);
 
 const WRITER_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
+  BOOTSTRAP_PARAGRAPH,
   { segments: [unconditional("Open Second Brain — always-loaded MCP surface.")] },
   {
     segments: [
@@ -315,13 +333,9 @@ const WRITER_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
         text:
           `${BULLET}brain_context         — pull the active-preferences digest plus\n` +
           "                            pinned context and active-preference counts.\n" +
-          "                            Read-only. Use at session\n" +
-          "                            start when the host runtime lacks a SessionStart\n" +
-          "                            hook (Cursor, Aider, raw Claude API) or did not run\n" +
-          "                            it (a codex exec whose hooks are not trusted): no\n" +
-          "                            active-preferences digest opened the context.\n" +
-          "                            Runtimes that already inject the digest via a hook\n" +
-          "                            can skip this.",
+          "                            Read-only. Call it first when no digest opened\n" +
+          "                            the session (see the first line); a host whose\n" +
+          "                            hook injected the digest can skip it.",
       },
     ],
   },

@@ -49,6 +49,8 @@ export interface TopicRead {
    * absent.
    */
   readonly recordSessions: ReadonlyMap<string, string>;
+  /** The device and agent each topic record read was written by, record id to writer. */
+  readonly recordWriters: ReadonlyMap<string, { readonly device: string; readonly agent: string }>;
   /** The store id, `null` without a store. */
   readonly storeId: string | null;
 }
@@ -61,6 +63,7 @@ const EMPTY: TopicRead = Object.freeze({
   privateRecords: new Set<string>(),
   recordSources: new Map<string, string>(),
   recordSessions: new Map<string, string>(),
+  recordWriters: new Map<string, { readonly device: string; readonly agent: string }>(),
   storeId: null,
 });
 
@@ -90,7 +93,9 @@ export function readTopicsOf(store: StoreInspection): TopicRead {
   const recordTopics = new Map<string, string>();
   const recordSources = new Map<string, string>();
   const recordSessions = new Map<string, string>();
+  const recordWriters = new Map<string, { readonly device: string; readonly agent: string }>();
   for (const record of records) {
+    recordWriters.set(record.id, { device: record.device, agent: record.agent });
     const session = recordSessionOf(record.body);
     if (session !== undefined) recordSessions.set(record.id, session);
     if (record.topic !== null) recordTopics.set(record.id, record.topic);
@@ -107,6 +112,7 @@ export function readTopicsOf(store: StoreInspection): TopicRead {
     privateRecords: privateIds,
     recordSources,
     recordSessions,
+    recordWriters,
     storeId: store.storeId,
   };
 }
