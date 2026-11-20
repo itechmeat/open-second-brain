@@ -17,7 +17,7 @@ import { preferenceSlug, type PlanState, type ScanResult } from "./dream-plan.ts
 import { writeCrossTopicLedger, type CrossTopicLedger } from "./dream-plan-cross-topic.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
 import { WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
-import { appendLogEvent } from "./log.ts";
+import { appendLogEvents, type BrainLogEntry } from "./log.ts";
 import type { ReconcileOutcomes } from "./reconcile-outcomes.ts";
 import { writeRollupLedger, type RollupLadderPlan } from "./rollup-ladder.ts";
 import { isoSecond } from "./time.ts";
@@ -66,9 +66,17 @@ export interface DreamReportInput {
 export function writeDreamLog(input: DreamReportInput): void {
   const { vault, plan, reconcile, workrun } = input;
   const nextStamp = createStampCursor(input.now);
+  // The events are appended in batches (`appendLogEvents`), not one synced
+  // write each: a first pass over a migrated history notes thousands of
+  // signals. A batch lands before the workrun marker that claims it.
+  const events: BrainLogEntry[] = [];
+  const flush = (): void => {
+    appendLogEvents(vault, events);
+    events.length = 0;
+  };
 
   for (const corrupt of input.scan.corrupted) {
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter,
       body: {
@@ -78,7 +86,7 @@ export function writeDreamLog(input: DreamReportInput): void {
   }
 
   for (const noted of plan.notedRedundant) {
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.notedRedundant,
       body: {
@@ -92,7 +100,7 @@ export function writeDreamLog(input: DreamReportInput): void {
   // auto-resolution. Persisted only on this changed path so a no-op
   // run stays byte-identical.
   for (const q of reconcile.openQuestions) {
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.reconcile,
       body: {
@@ -106,7 +114,7 @@ export function writeDreamLog(input: DreamReportInput): void {
     });
   }
   for (const r of reconcile.autoResolved) {
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.reconcile,
       body: {
@@ -125,10 +133,11 @@ export function writeDreamLog(input: DreamReportInput): void {
   // journal-lies failure this release removes. The marker therefore
   // trails `heal_complete` in the file - emission order is execution
   // order, not the reporting order of DREAM_PHASE_ORDER.
+  flush();
   workrun?.checkpoint(WORKRUN_PHASE.reconcileComplete);
 
   for (const suppressed of plan.signalsSuppressed) {
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.signalSuppressed,
       body: {
@@ -146,7 +155,7 @@ export function writeDreamLog(input: DreamReportInput): void {
     // attempted-but-blocked reason). We log it as a `retire` event
     // with a `blocked: pinned` payload field so the parser
     // round-trips cleanly and the doctor command can flag it.
-    appendLogEvent(vault, {
+    events.push({
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.retire,
       body: {
@@ -157,11 +166,12 @@ export function writeDreamLog(input: DreamReportInput): void {
     });
   }
 
-  appendLogEvent(vault, {
+  events.push({
     timestamp: nextStamp(),
     eventType: BRAIN_LOG_EVENT_KIND.dream,
     body: buildSummaryBody(input),
   });
+  flush();
 
   // S3: persist the advanced rollup-ladder counters only when a rung
   // fired. A below-threshold run never touches the ledger, so its

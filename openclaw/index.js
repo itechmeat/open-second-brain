@@ -4911,9 +4911,6 @@ function appendLine(partitionRoot, path, bytes) {
   if (created)
     fsyncDirBestEffort(dirname9(path));
 }
-function appendRecord(store, input, options = {}) {
-  return appendRecords(store, [input], options)[0];
-}
 function prepareLine(store, input, hlc) {
   const ref = input.ledger === undefined ? { stream: input.stream } : { stream: input.stream, ledger: input.ledger };
   const month = shardMonth(hlc.physical);
@@ -6561,6 +6558,84 @@ var init_record_path = __esm(() => {
 });
 
 // src/core/store/read/stream-read.ts
+import { createHash as createHash5 } from "node:crypto";
+import { closeSync as closeSync8, lstatSync as lstatSync4, readSync as readSync5 } from "node:fs";
+function prefixSha(path, bytes, partitionRoot) {
+  const hash = createHash5("sha256");
+  let fd;
+  try {
+    fd = openRegularFileForRead(path, partitionRoot);
+  } catch {
+    return null;
+  }
+  if (fd === null)
+    return null;
+  try {
+    const chunk = Buffer.alloc(Math.min(PREFIX_CHUNK_BYTES, Math.max(bytes, 1)));
+    let position = 0;
+    while (position < bytes) {
+      const n = readSync5(fd, chunk, 0, Math.min(chunk.length, bytes - position), position);
+      if (n === 0)
+        return null;
+      hash.update(chunk.subarray(0, n));
+      position += n;
+    }
+  } finally {
+    closeSync8(fd);
+  }
+  return hash.digest("hex");
+}
+function sameStamp(a, b) {
+  return a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+function isCleanRead(read) {
+  return read.diagnostics.length === 0 && read.pendingTailBytes === 0 && read.records.every((r) => r.bodyState !== "pending");
+}
+function readShardWithTails(path, rel, partitionRoot, tails) {
+  const kept = tails.get(rel);
+  let base = null;
+  const now = lstatSync4(path);
+  if (kept !== undefined) {
+    if (now.ino === kept.ino && now.dev === kept.dev && now.size >= kept.size) {
+      if (now.size === kept.size && now.mtimeMs === kept.mtimeMs && now.ctimeMs === kept.ctimeMs) {
+        return kept.read;
+      }
+      if (prefixSha(path, kept.size, partitionRoot) === kept.sha)
+        base = kept;
+    }
+  }
+  const fresh = readShard(path, {
+    partitionRoot,
+    ...base !== null ? { offset: base.size } : {}
+  });
+  tails.delete(rel);
+  const after = lstatSync4(path);
+  if (base !== null && (after.ino !== now.ino || after.dev !== now.dev)) {
+    return readShard(path, { partitionRoot });
+  }
+  const read = base === null ? fresh : {
+    ...fresh,
+    records: [...base.read.records, ...fresh.records],
+    compactions: [...base.read.compactions, ...fresh.compactions]
+  };
+  if (!isCleanRead(read))
+    return read;
+  if (after.ino === 0 || after.size !== read.nextOffset || !sameStamp(now, after))
+    return read;
+  const sha = prefixSha(path, read.nextOffset, partitionRoot);
+  if (sha === null || !sameStamp(after, lstatSync4(path)))
+    return read;
+  tails.set(rel, {
+    ino: after.ino,
+    dev: after.dev,
+    size: read.nextOffset,
+    mtimeMs: after.mtimeMs,
+    ctimeMs: after.ctimeMs,
+    sha,
+    read
+  });
+  return read;
+}
 function monthOf2(rel) {
   const name = rel.slice(rel.lastIndexOf("/") + 1);
   return name.slice(0, 7);
@@ -6597,8 +6672,9 @@ function readStreamRecords(root, partition, ref, options = {}) {
       continue;
     let read;
     try {
-      read = readShard(shard.path, { partitionRoot });
+      read = options.tails === undefined ? readShard(shard.path, { partitionRoot }) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails);
     } catch {
+      options.tails?.delete(shard.rel);
       unreadable.push(shard.rel);
       continue;
     }
@@ -6622,6 +6698,12 @@ function readStreamRecords(root, partition, ref, options = {}) {
       }
     }
   }
+  if (options.tails !== undefined && options.device === undefined && options.month === undefined) {
+    const listed = new Set(shards.map((shard) => shard.rel));
+    for (const rel of options.tails.keys())
+      if (!listed.has(rel))
+        options.tails.delete(rel);
+  }
   const gone = trackSeenShards(partitionRoot, {
     prefix: `${streamPrefix(ref)}/`,
     ...options.device !== undefined ? { device: options.device } : {},
@@ -6634,12 +6716,15 @@ function readStreamRecords(root, partition, ref, options = {}) {
     pendingBlobs
   };
 }
+var PREFIX_CHUNK_BYTES;
 var init_stream_read = __esm(() => {
   init_constants();
   init_reader();
   init_seen_shards();
+  init_safe_fs();
   init_shard_list();
   init_store_paths();
+  PREFIX_CHUNK_BYTES = 1 << 20;
 });
 
 // src/core/store-migration/migration-records.ts
@@ -7011,14 +7096,14 @@ var init_owner_acl = __esm(() => {
 import { randomBytes as randomBytes3 } from "node:crypto";
 import {
   chmodSync,
-  closeSync as closeSync8,
+  closeSync as closeSync9,
   constants as constants2,
   copyFileSync,
   existsSync as existsSync7,
   fsyncSync as fsyncSync4,
   openSync as openSync6,
   linkSync as linkSync3,
-  lstatSync as lstatSync4,
+  lstatSync as lstatSync5,
   mkdirSync as mkdirSync12,
   readdirSync as readdirSync3,
   readFileSync as readFileSync14,
@@ -7033,7 +7118,7 @@ import { basename as basename7, dirname as dirname13, join as join19, relative a
 function filesBelow(path) {
   let stat;
   try {
-    stat = lstatSync4(path);
+    stat = lstatSync5(path);
   } catch {
     return [];
   }
@@ -7063,11 +7148,11 @@ function writeExclusive(path, bytes) {
     writeSync5(fd, bytes);
     fsyncSync4(fd);
   } catch (err) {
-    closeSync8(fd);
+    closeSync9(fd);
     tryUnlink(path);
     throw err;
   }
-  closeSync8(fd);
+  closeSync9(fd);
 }
 function tryUnlink(path) {
   try {
@@ -7109,7 +7194,7 @@ function copyNoClobber(file, target) {
 function removeEmptyDirs(dir) {
   let stat;
   try {
-    stat = lstatSync4(dir);
+    stat = lstatSync5(dir);
   } catch {
     return;
   }
@@ -7192,7 +7277,7 @@ var init_state_moves = __esm(() => {
 });
 
 // src/core/state/machine-state.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { cpSync, existsSync as existsSync8, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname14, join as join20, relative as relative5, resolve as resolve10, sep as sep5 } from "node:path";
 function storeIdAt(root) {
@@ -7221,7 +7306,7 @@ function deviceStateDir(storeId) {
   return storeId === null ? storesStateDir(source) : deviceStateDirFor(storeId, source);
 }
 function vaultKey(vault) {
-  return createHash5("sha256").update(resolve10(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
+  return createHash6("sha256").update(resolve10(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
 }
 function freshVaultRel(vault) {
   return join20(FRESH_STATE_DIR, vaultKey(vault));
@@ -8532,6 +8617,20 @@ function sharedCountersOf(history, privateIds) {
   }
   return out;
 }
+function tailsOf(store, partition) {
+  const quarantine = quarantineStamp(store.root);
+  let held = tailsByRoot.get(store.root);
+  if (held === undefined || held.quarantine !== quarantine) {
+    held = { quarantine, tails: new Map };
+    tailsByRoot.set(store.root, held);
+  }
+  let tails = held.tails.get(partition);
+  if (tails === undefined) {
+    tails = new Map;
+    held.tails.set(partition, tails);
+  }
+  return tails;
+}
 function fingerprintOf(store) {
   const parts = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
@@ -8567,7 +8666,9 @@ function build(store) {
   let skippedPending = false;
   const pendingBlobs = [];
   for (const partition of store.partitions) {
-    const read = readStreamRecords(store.root, partition, EVENTS);
+    const read = readStreamRecords(store.root, partition, EVENTS, {
+      tails: tailsOf(store, partition)
+    });
     if (read.skippedPending)
       skippedPending = true;
     for (const sha of read.pendingBlobs)
@@ -8645,7 +8746,7 @@ function readStoreEntities(configPath) {
   const store = configuredStore(configPath);
   return store === null ? null : readEntitiesOf(store);
 }
-var cache, EVENTS;
+var cache, tailsByRoot, EVENTS;
 var init_store_entities = __esm(() => {
   init_constants();
   init_private_page();
@@ -8659,6 +8760,7 @@ var init_store_entities = __esm(() => {
   init_stream_read();
   init_shard_quarantine();
   cache = new Map;
+  tailsByRoot = new Map;
   EVENTS = { stream: "events" };
 });
 
@@ -9226,7 +9328,7 @@ function appendStoreRecords(store, records, context) {
       if (!store.partitions.has(at))
         throw new PartitionUnavailableError(at, store.root);
     }
-    return placed.map(([record, at]) => appendRecord(store, {
+    return appendRecords(store, placed.map(([record, at]) => ({
       partition: at,
       stream: record.stream,
       ...record.ledger !== undefined ? { ledger: record.ledger } : {},
@@ -9235,7 +9337,7 @@ function appendStoreRecords(store, records, context) {
       scope: record.scope ?? null,
       topic: record.topic ?? null,
       body: { ...record.body, [VAULT_ID_FIELD]: vaultId }
-    }));
+    })));
   } catch (err) {
     if (typeof err === "object" && err !== null) {
       failedPlacement.set(err, new Set(placed.map(([, at]) => at)));
@@ -9579,7 +9681,7 @@ var init_store_write = __esm(() => {
 });
 
 // src/core/reliability/audit.ts
-import { closeSync as closeSync9, fsyncSync as fsyncSync5, mkdirSync as mkdirSync17, openSync as openSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { closeSync as closeSync10, fsyncSync as fsyncSync5, mkdirSync as mkdirSync17, openSync as openSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename as basename9, join as join28 } from "node:path";
 function appendAuditRecord(auditRoot, record, vault, options = {}) {
   const timestamp = new Date(record.timestamp);
@@ -9632,7 +9734,7 @@ function appendLegacyAuditLine(auditRoot, timestamp, line) {
 `, "utf8");
     fsyncSync5(fileDescriptor);
   } finally {
-    closeSync9(fileDescriptor);
+    closeSync10(fileDescriptor);
   }
   return path;
 }
@@ -9729,7 +9831,7 @@ var init_value_cipher = () => {};
 import { randomBytes as randomBytes5, scryptSync, timingSafeEqual } from "node:crypto";
 import {
   chmodSync as chmodSync2,
-  closeSync as closeSync10,
+  closeSync as closeSync11,
   fsyncSync as fsyncSync6,
   openSync as openSync8,
   readFileSync as readFileSync22,
@@ -9949,13 +10051,13 @@ function writeRawKeyfileBytes(keyPath, dek) {
       written += writeSync6(fd, dek, written, dek.byteLength - written);
     }
     fsyncSync6(fd);
-    closeSync10(fd);
+    closeSync11(fd);
     fd = null;
     renameWithRetry(tmp, keyPath);
   } catch (err) {
     if (fd !== null) {
       try {
-        closeSync10(fd);
+        closeSync11(fd);
       } catch {}
     }
     try {
@@ -9968,7 +10070,7 @@ function writeRawKeyfileBytes(keyPath, dek) {
     try {
       fsyncSync6(dfd);
     } finally {
-      closeSync10(dfd);
+      closeSync11(dfd);
     }
   } catch {}
 }
@@ -10040,7 +10142,7 @@ var init_envelope2 = __esm(() => {
 import { randomBytes as randomBytes6 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
-  closeSync as closeSync11,
+  closeSync as closeSync12,
   existsSync as existsSync13,
   mkdirSync as mkdirSync18,
   openSync as openSync9,
@@ -10100,7 +10202,7 @@ function loadOrCreateKey(keyPath) {
   try {
     writeSync7(fd, key);
   } finally {
-    closeSync11(fd);
+    closeSync12(fd);
   }
   restrictToOwner(keyPath, "file");
   return key;
@@ -10786,7 +10888,7 @@ import {
   readFileSync as readFileSync25,
   rmSync as rmSync4,
   writeSync as writeSync8,
-  closeSync as closeSync12
+  closeSync as closeSync13
 } from "node:fs";
 import { dirname as dirname23, join as join32 } from "node:path";
 
@@ -11169,7 +11271,7 @@ function checkVaultWriteable(vault) {
   const probe = join32(vault, ".open-second-brain-doctor-test");
   try {
     const fd = openSync10(probe, "w");
-    closeSync12(fd);
+    closeSync13(fd);
     rmSync4(probe);
   } catch (exc) {
     return {
@@ -11189,7 +11291,7 @@ function checkConfigWriteable(config) {
       createdForCheck = true;
     const fd = openSync10(config, "a");
     writeSync8(fd, "");
-    closeSync12(fd);
+    closeSync13(fd);
     if (createdForCheck)
       rmSync4(config);
   } catch (exc) {

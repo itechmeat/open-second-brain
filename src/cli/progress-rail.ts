@@ -29,6 +29,7 @@
  */
 
 import {
+  PROGRESS_KIND,
   PROGRESS_REASON,
   isProgressKind,
   type ProgressEvent,
@@ -122,6 +123,46 @@ export function progressIsLegal(stream: ProgressStream): boolean {
  */
 export function renderProgressLine(event: ProgressEvent): string {
   return `${JSON.stringify(event)}\n`;
+}
+
+/**
+ * The short human line for one event, or `null` for an event a person
+ * watching a terminal does not need (an advance inside a stage): the stage
+ * a run enters, and how it ended. Rendered from the identifiers only, as
+ * {@link renderProgressLine} is.
+ */
+export function renderProgressStep(event: ProgressEvent): string | null {
+  switch (event.kind) {
+    case PROGRESS_KIND.started:
+      return `${event.operation}: ${event.stage}${event.total !== undefined ? ` (${event.total})` : ""}\n`;
+    case PROGRESS_KIND.finished:
+      return `${event.operation}: done\n`;
+    case PROGRESS_KIND.stopped:
+      return `${event.operation}: stopped in ${event.stage}${event.reason !== undefined ? ` (${event.reason})` : ""}\n`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The step names of a run on an interactive stderr, without `--progress`:
+ * a long pass (a first dream over a migrated store) otherwise printed
+ * nothing until it ended, which a person cannot tell from a hang. Only
+ * when stderr is a terminal and the caller asked for no JSON, so no
+ * script, pipe or test sees a byte more than before; `--progress` keeps
+ * its newline-delimited records.
+ */
+export function attachStepProgress(
+  stream: ProgressStream & { readonly interactive: boolean },
+  write: (chunk: string) => void = (chunk) => {
+    process.stderr.write(chunk);
+  },
+): ProgressSink | undefined {
+  if (!stream.interactive || stream.jsonRequested || !progressIsLegal(stream)) return undefined;
+  return (event) => {
+    const line = renderProgressStep(event);
+    if (line !== null) write(line);
+  };
 }
 
 /** What one rail attachment decided, in full. */

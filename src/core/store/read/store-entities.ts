@@ -59,7 +59,7 @@ import { privateWithheld } from "../caller-reach.ts";
 import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
 import { partitionDir, pendingBlobStampLines, resolveConfiguredStoreRoot } from "../store-paths.ts";
-import { readStreamRecords } from "./stream-read.ts";
+import { readStreamRecords, type ShardTails } from "./stream-read.ts";
 import { quarantineStamp } from "../shard-quarantine.ts";
 
 /** One preference of the fold, with its privacy. */
@@ -160,6 +160,34 @@ interface Cached {
 
 const cache = new Map<string, Cached>();
 
+/**
+ * The `events` shards each store's reads kept, by store root, then by
+ * partition (`stream-read.ts` `ShardTails`): a rebuild after this process
+ * appended a record (a dream pass retires, moves and refreshes hundreds of
+ * entities, each append moving the fingerprint) parses only the appended
+ * lines instead of the whole stream. Kept for one quarantine stamp: a
+ * quarantine that changes may change what a shard reads as.
+ */
+const tailsByRoot = new Map<
+  string,
+  { readonly quarantine: string; readonly tails: Map<StorePartition, ShardTails> }
+>();
+
+function tailsOf(store: StoreInspection, partition: StorePartition): ShardTails {
+  const quarantine = quarantineStamp(store.root);
+  let held = tailsByRoot.get(store.root);
+  if (held === undefined || held.quarantine !== quarantine) {
+    held = { quarantine, tails: new Map() };
+    tailsByRoot.set(store.root, held);
+  }
+  let tails = held.tails.get(partition);
+  if (tails === undefined) {
+    tails = new Map();
+    held.tails.set(partition, tails);
+  }
+  return tails;
+}
+
 const EVENTS = { stream: "events" } as const;
 
 /**
@@ -213,7 +241,9 @@ function build(store: StoreInspection): StoreEntities {
   let skippedPending = false;
   const pendingBlobs: string[] = [];
   for (const partition of store.partitions) {
-    const read = readStreamRecords(store.root, partition, EVENTS);
+    const read = readStreamRecords(store.root, partition, EVENTS, {
+      tails: tailsOf(store, partition),
+    });
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));

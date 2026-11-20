@@ -25,10 +25,10 @@
 
 import { legacyVaultOf } from "./no-vault.ts";
 import type { Authority } from "../store/constants.ts";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync } from "node:fs";
 import { basename } from "node:path";
 
-import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
+import { openReceiptBatch } from "./decisions/receipts.ts";
 import { preferenceSlug, type PlanState } from "./dream-plan.ts";
 import { SafeguardAbortError, SafeguardTimeoutError, type Safeguard } from "./safeguard.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
@@ -39,7 +39,7 @@ import { runHealEnrichment } from "./heal-run.ts";
 import { CHAIN_DECAY_STALE_DAYS } from "./inject-governor.ts";
 import { appendLogEvent } from "./log.ts";
 import { archivedSignalPath, brainDirs, preferencePathOf, processedSignalPath } from "./paths.ts";
-import { loadPreference, moveToRetired } from "./preference.ts";
+import { loadPreference, moveToRetired, preferenceFromStoreEntry } from "./preference.ts";
 import { isRetiredEntry, preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
 import { isoSecond } from "./time.ts";
@@ -55,7 +55,15 @@ import {
 import { renameWithRetry } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { routeSignalState, signalsStoreOnly } from "./signal-state.ts";
-import { readStoreEntities } from "../store/read/store-entities.ts";
+import {
+  configuredStore,
+  readStoreEntities,
+  type StorePreference,
+} from "../store/read/store-entities.ts";
+import { readShard, shardReadGap } from "../store/reader.ts";
+import { listShards } from "../store/shard-list.ts";
+import type { StoreInspection } from "../store/store-open.ts";
+import { partitionDir } from "../store/store-paths.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
 
 /**
@@ -128,8 +136,13 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   // With no vault the store writes check the store identity (D14 item 13).
   if (vault !== null) assertVaultIdentityForWrite(vault);
 
-  writePreferences(input, agent);
-  writeConfidenceReceipts(vault, refresh, agent, now);
+  // Each rewrite's confidence receipt is written right after it, so a pass
+  // stopped at its deadline between two rewrites still leaves the receipt
+  // of every band change it wrote (the next pass sees the new band and
+  // plans no receipt for it); the rest are written after the loop.
+  const receipts = confidenceReceipts(vault, refresh, agent, now);
+  writePreferences(input, agent, receipts);
+  receipts.rest();
 
   // Synthesize is durable here and nowhere earlier: every new
   // unconfirmed preference, every refreshed preference and every
@@ -139,7 +152,7 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   workrun?.checkpoint(WORKRUN_PHASE.promoteComplete);
   workrun?.checkpoint(WORKRUN_PHASE.synthesizeComplete);
 
-  const gatedRetires = executeRetires(vault, cfg, now, plan, wikilinkToRun);
+  const gatedRetires = executeRetires(vault, cfg, now, plan, wikilinkToRun, input.safeguard);
 
   // Every planned retire has been moved (or explicitly gated) by here.
   workrun?.checkpoint(WORKRUN_PHASE.retireComplete);
@@ -172,7 +185,11 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
  * array is deliberate - dream's plan-time logic has already decided to
  * proceed; the txn just owns the bookkeeping.
  */
-function writePreferences(input: DreamApplyInput, agent: string): void {
+function writePreferences(
+  input: DreamApplyInput,
+  agent: string,
+  receipts: ConfidenceReceipts,
+): void {
   const { vault, cfg, now, plan, refresh } = input;
   const historyOpts = { agent, now: () => now };
 
@@ -254,6 +271,11 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
   }
 
   for (const update of refresh.updated.values()) {
+    // Between rewrites: each is a whole write of one preference that the
+    // next pass plans again from what is on disk, so a pass past its
+    // deadline stops here with what it wrote kept, rather than after the
+    // last of hundreds of rewrites on a migrated store.
+    input.safeguard?.checkpoint();
     // Rebuild the evidence slice from the log on every pass so the
     // pref body stays in sync with the counters even when the
     // counters themselves stayed put (e.g. dropping the
@@ -308,6 +330,7 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
       { overwrite: true, authority: DREAM_AUTHORITY },
       historyOpts,
     );
+    receipts.of(update.slug);
   }
 }
 
@@ -320,20 +343,37 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
  * byte-identical no-op guarantees. The receipt's idempotency key
  * (subject + before + after) makes a re-run a no-op. Fail-soft.
  */
-function writeConfidenceReceipts(
+interface ConfidenceReceipts {
+  /** Write the receipts of preference `slug`'s band changes, once. */
+  of(slug: string): void;
+  /** Write every receipt not yet written. */
+  rest(): void;
+}
+
+/**
+ * The pass's confidence receipts, written through one receipts batch: the
+ * ledger is read once for the whole pass, not once per drop. That widens
+ * the idempotency window from one receipt to the whole pass: another
+ * writer appending the same receipt (subject, before and after) while the
+ * pass runs is not seen, so the worst case is one duplicate ledger line,
+ * which every reader dedupes by its idempotency key.
+ */
+function confidenceReceipts(
   vault: string | null,
   refresh: RefreshResult,
   agent: string,
   now: Date,
-): void {
+): ConfidenceReceipts {
   // Decision-change receipts are a vault lane until the decisions lane has
   // a record kind (design D14 item 2); with no vault they are not written.
-  if (vault === null) return;
-  for (const d of refresh.bandDrops) {
+  const pending = vault === null ? [] : [...refresh.bandDrops];
+  let batch: ReturnType<typeof openReceiptBatch> | null = null;
+  const write = (d: RefreshResult["bandDrops"][number]): void => {
     const before = `confidence:${d.previous}${d.previous_value !== null ? `(${d.previous_value.toFixed(2)})` : ""}`;
     const after = `confidence:${d.next}(${d.next_value.toFixed(2)})`;
     try {
-      appendDecisionChangeReceipt(vault, {
+      batch ??= openReceiptBatch(vault!);
+      batch.append({
         subject: d.id,
         before,
         after,
@@ -347,7 +387,17 @@ function writeConfidenceReceipts(
       // Accountability mirror is best-effort; the refreshed preference
       // bytes remain authoritative.
     }
-  }
+  };
+  const take = (match: (d: RefreshResult["bandDrops"][number]) => boolean): void => {
+    for (let i = 0; i < pending.length;) {
+      if (match(pending[i]!)) write(pending.splice(i, 1)[0]!);
+      else i += 1;
+    }
+  };
+  return {
+    of: (slug) => take((d) => d.id === `pref-${slug}`),
+    rest: () => take(() => true),
+  };
 }
 
 /** Step 3: move each planned retire into `retired/`, honouring the evidence gate. */
@@ -357,17 +407,36 @@ function executeRetires(
   now: Date,
   plan: PlanState,
   wikilinkToRun: string,
+  safeguard?: Safeguard,
 ): DreamGatedRetireEntry[] {
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
   // Always an array (even when no gate is configured) so the eventual
   // DreamRunSummary.gated_retires field is consistently shaped.
   const gatedRetires: DreamGatedRetireEntry[] = [];
   const gateThreshold = cfg.retire.confirmed_evidence_min_threshold;
+  // The store's fold is read once for the whole loop, not once per retire:
+  // a retire changes only its own preference, and that one is noted here,
+  // so the snapshot answers every later slug as a fresh read would. What
+  // it does not see is another machine's record that arrives while the
+  // loop runs, so before each retire the bytes appended to the `events`
+  // shards since the snapshot are checked for a record about that
+  // preference, and when one is there the fold is read afresh (below).
+  // The evidence gate keeps reading the snapshot: its counters decide
+  // only whether to skip, never what to write.
+  const held = heldPreferences(vault);
+  const retiredHere = new Set<string>();
 
   for (const r of plan.retires) {
+    // Between retires, like the rewrites above: a retire not reached is
+    // planned again by the next pass.
+    safeguard?.checkpoint();
     const fromPath = preferencePathOf(vault, r.slug);
     // The page on an unswitched machine, the store's fold once switched.
-    if (!preferenceHeld(vault, r.slug, fromPath)) continue;
+    if (
+      held === null ? !existsSync(fromPath) : !held.entries.has(r.slug) || retiredHere.has(r.slug)
+    ) {
+      continue;
+    }
     // v0.12.0 Brain Integrity Suite: destructive-from-confirmed gate.
     // When the operator has set retire.confirmed_evidence_min_threshold,
     // refuse to retire a confirmed (unpinned) pref whose accumulated
@@ -375,7 +444,13 @@ function executeRetires(
     // retires bypass.
     if (gateThreshold !== undefined && gateThreshold > 0) {
       try {
-        const existing = loadPreference(vault, r.slug);
+        // From the loop's snapshot when the store holds it: loading it
+        // again would rebuild the fold after the previous retire's append.
+        const entry = held?.entries.get(r.slug);
+        const existing =
+          entry !== undefined
+            ? preferenceFromStoreEntry(vault, r.slug, entry)
+            : loadPreference(vault, r.slug);
         if (existing !== null && shouldGateRetireFromConfirmed(existing, r.reason, gateThreshold)) {
           gatedRetires.push({
             pref_id: existing.id,
@@ -392,13 +467,31 @@ function executeRetires(
         // (moveToRetired will surface the error through stderr below).
       }
     }
+    // The entry the retire writes from: the snapshot's, unless a record
+    // about this preference arrived since the snapshot (another machine's
+    // removal or retire, a person's edit), or the check cannot tell; then
+    // the fold is read afresh, and a preference no longer active is left
+    // alone. A stale entry would otherwise propose, with the snapshot's
+    // fields, that a removed preference exists again.
+    let storeEntry = held?.entries.get(r.slug);
+    if (held !== null && storeEntry !== undefined) {
+      const touched =
+        held.mark === null ? null : preferenceTouchedSince(held.mark, `pref-${r.slug}`);
+      if (touched !== false) {
+        const fresh = storePreferenceEntry(r.slug);
+        if (fresh === undefined || isRetiredEntry(fresh)) continue;
+        storeEntry = fresh;
+      }
+    }
     try {
       moveToRetired(vault, fromPath, r.reason, {
         now,
         authority: DREAM_AUTHORITY,
         retired_by: wikilinkToRun,
         ...(r.supersededBy ? { superseded_by: r.supersededBy } : {}),
+        ...(storeEntry !== undefined ? { storeEntry } : {}),
       });
+      retiredHere.add(r.slug);
       // Belief lifecycle suite (A4): record the accelerated retirement of
       // a low-recall superseded ancestor as a dedicated audit event.
       if (r.chainDecay) {
@@ -426,11 +519,100 @@ function executeRetires(
   return gatedRetires;
 }
 
-/** Whether the active preference `slug` exists: its page, or the store's fold once switched. */
-function preferenceHeld(vault: string | null, slug: string, pagePath: string): boolean {
-  if (!preferencesStoreOnly(vault)) return existsSync(pagePath);
-  const found = storePreferenceEntry(slug);
-  return found !== undefined && !isRetiredEntry(found);
+/**
+ * The slugs of the active preferences the store's fold holds, read once;
+ * `null` on an unswitched machine, where each page is asked on disk.
+ */
+function heldPreferences(vault: string | null): HeldPreferences | null {
+  if (!preferencesStoreOnly(vault)) return null;
+  // Marked before the read: a record that lands between the two is seen as
+  // appended since, so it is checked rather than missed.
+  const store = configuredStore();
+  const mark = store === null ? null : markEvents(store);
+  const entries = new Map<string, StorePreference>();
+  for (const [id, entry] of readStoreEntities()?.preferences ?? []) {
+    if (!id.startsWith("pref-") || !entry.state.exists || isRetiredEntry(entry)) continue;
+    entries.set(id.slice("pref-".length), entry);
+  }
+  return { entries, mark };
+}
+
+/** The loop's snapshot of the active preferences, and where the `events` shards ended when it was read. */
+interface HeldPreferences {
+  readonly entries: ReadonlyMap<string, StorePreference>;
+  readonly mark: EventsMark | null;
+}
+
+/** Each `events` shard as it was at a moment: its identity and the bytes it held. */
+interface EventsMark {
+  readonly shards: ReadonlyArray<{
+    readonly path: string;
+    readonly partitionRoot: string;
+    /** null: the shard did not exist then (read whole now). */
+    readonly stamp: { readonly ino: number; readonly dev: number; readonly size: number } | null;
+  }>;
+  readonly store: StoreInspection;
+}
+
+function markEvents(store: StoreInspection): EventsMark {
+  const shards: Array<EventsMark["shards"][number]> = [];
+  for (const partition of store.partitions) {
+    const partitionRoot = partitionDir(store.root, partition);
+    for (const shard of listShards(partitionRoot, { stream: "events" })) {
+      try {
+        const st = lstatSync(shard.path);
+        shards.push({
+          path: shard.path,
+          partitionRoot,
+          stamp: { ino: st.ino, dev: st.dev, size: st.size },
+        });
+      } catch {
+        shards.push({ path: shard.path, partitionRoot, stamp: null });
+      }
+    }
+  }
+  return { shards, store };
+}
+
+/**
+ * Whether a record about preference `id` (a set, a removal, evidence) was
+ * appended to the `events` stream since `mark`: only the bytes after the
+ * mark are read, so the check costs what arrived, not the stream. `null`
+ * when it cannot tell (a shard replaced, shorter, unreadable, or one that
+ * appeared since): the caller then reads the fold afresh.
+ */
+function preferenceTouchedSince(mark: EventsMark, id: string): boolean | null {
+  const known = new Set(mark.shards.map((s) => s.path));
+  for (const partition of mark.store.partitions) {
+    const partitionRoot = partitionDir(mark.store.root, partition);
+    try {
+      for (const shard of listShards(partitionRoot, { stream: "events" })) {
+        if (!known.has(shard.path)) return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  for (const shard of mark.shards) {
+    if (shard.stamp === null) return null;
+    let read: ReturnType<typeof readShard>;
+    try {
+      const st = lstatSync(shard.path);
+      if (st.ino !== shard.stamp.ino || st.dev !== shard.stamp.dev || st.size < shard.stamp.size) {
+        return null;
+      }
+      if (st.size === shard.stamp.size) continue;
+      read = readShard(shard.path, {
+        partitionRoot: shard.partitionRoot,
+        offset: shard.stamp.size,
+      });
+    } catch {
+      return null;
+    }
+    if (shardReadGap(read) !== null) return null;
+    if (read.records.some((r) => r.record.body["preference"] === id)) return true;
+  }
+  return false;
 }
 
 /**

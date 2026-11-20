@@ -33,12 +33,15 @@
 
 import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../redactor.ts";
 import { scopeFromFrontmatter } from "../scope-key.ts";
-import { LOG_EVENT_KIND, SIGNAL_KIND } from "../store/constants.ts";
+import { LOG_EVENT_KIND, SIGNAL_KIND, type StoreStream } from "../store/constants.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import { SIGNAL_REMOVED_KIND } from "../store/fold-signals.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { LEGACY_DEVICE_FIELD, migratedMark } from "../store-migration/migration-records.ts";
+
+/** The record a `human_readable` verdict stores about a note (`verdict-writes.ts`). */
+const HISTORY_VERDICT_KIND = "history-verdict";
 
 /** Log event types whose text a person would read on a topic. */
 const READABLE_EVENTS: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
@@ -148,6 +151,22 @@ function withoutPrivateRegions(text: string): string {
     .join(" ")
     .replaceAll(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+/**
+ * Whether topic planning needs `record` (read from `stream`) at all: every
+ * topic and settings record (the fold, the writer, the thresholds, the
+ * stored history verdicts) and every record {@link topicCandidates} could
+ * make a candidate of or forget one by (signals, their removals, readable
+ * log events). The planning read keeps only these, so a store that holds
+ * a long migrated log is not held whole while topics are planned.
+ */
+export function isTopicPlanningInput(record: StoreRecord, stream: StoreStream): boolean {
+  if (stream === "topics" || stream === "settings") return true;
+  if (record.kind === HISTORY_VERDICT_KIND) return true;
+  if (record.kind === SIGNAL_KIND || record.kind === SIGNAL_REMOVED_KIND) return true;
+  if (record.kind !== LOG_EVENT_KIND) return false;
+  return Object.hasOwn(READABLE_EVENTS, String(record.body["event_type"]));
 }
 
 /** The candidates among `records`; `privateIds` names those of the `private` partition. */

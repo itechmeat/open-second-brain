@@ -18,10 +18,20 @@
  * Nothing here writes: no store is created, no partition copy refreshed.
  */
 
+import { createHash } from "node:crypto";
+import { closeSync, lstatSync, readSync } from "node:fs";
+
 import { BLOB_REF_KEY, type StorePartition } from "../constants.ts";
 import type { StoreRecord } from "../envelope.ts";
-import { readShard, replacedShards, shardReadGap, type Compaction } from "../reader.ts";
+import {
+  readShard,
+  replacedShards,
+  shardReadGap,
+  type Compaction,
+  type ShardRead,
+} from "../reader.ts";
 import { trackSeenShards } from "../seen-shards.ts";
+import { openRegularFileForRead } from "../safe-fs.ts";
 import { listShards } from "../shard-list.ts";
 import { partitionDir, type StreamRef } from "../store-paths.ts";
 
@@ -59,6 +69,167 @@ export interface StreamReadOptions {
   readonly device?: string;
   /** Read only shards whose month (`YYYY-MM`) passes this test. */
   readonly month?: (month: string) => boolean;
+  /**
+   * What earlier reads of this stream in this process kept of each shard
+   * (keyed by the shard's partition-relative path), so only what was
+   * appended since is parsed and verified: see {@link ShardTails}. Read and
+   * updated in place; absent, every shard is read whole.
+   */
+  readonly tails?: ShardTails;
+}
+
+/**
+ * What a read kept of one shard it read whole and clean (no diagnostic, no
+ * pending body, no held-back last line), to read only what was appended to
+ * it next time.
+ */
+export interface ShardTail {
+  readonly ino: number;
+  readonly dev: number;
+  /** Bytes read: every complete line, up to and including the last newline. */
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
+  /** sha256 of those bytes. */
+  readonly sha: string;
+  readonly read: ShardRead;
+}
+
+/**
+ * The shards of one stream of one partition a caller has read before in
+ * this process (`StreamReadOptions.tails`). A shard is append-only, and a
+ * writer that appends to it changes its size and mtime, so a reader that
+ * re-reads a stream after every write (a pass that writes and reads the
+ * same fold many times) would otherwise parse and verify the whole stream
+ * once per write. With a tail kept:
+ *
+ *  - a shard whose inode, device, size, mtime and ctime are all unchanged
+ *    is not opened: the kept read answers;
+ *  - a shard with the same inode that is no shorter and whose first
+ *    `size` bytes still have the kept checksum is read from there: only
+ *    the appended lines are parsed and verified (the prefix is hashed, not
+ *    parsed);
+ *  - anything else (another inode, a shorter file, a changed prefix, no
+ *    usable inode) is read whole, and a read with a problem is not kept.
+ *
+ * The guarantee is the stamp's and the checksum's, as for the migration's
+ * incremental reads (`store-migration/incremental-reads.ts`).
+ */
+export type ShardTails = Map<string, ShardTail>;
+
+/** Chunk size the prefix checksum reads in. */
+const PREFIX_CHUNK_BYTES = 1 << 20;
+
+/** sha256 of the first `bytes` bytes of the file at `path`, or null when it holds fewer. */
+function prefixSha(path: string, bytes: number, partitionRoot: string): string | null {
+  const hash = createHash("sha256");
+  // The guarded opener (`safe-fs.ts`): a link or a FIFO swapped in under
+  // the name after the caller's lstat is refused, never followed or
+  // blocked on; a refusal is no reusable prefix.
+  let fd: number | null;
+  try {
+    fd = openRegularFileForRead(path, partitionRoot);
+  } catch {
+    return null;
+  }
+  if (fd === null) return null;
+  try {
+    const chunk = Buffer.alloc(Math.min(PREFIX_CHUNK_BYTES, Math.max(bytes, 1)));
+    let position = 0;
+    while (position < bytes) {
+      const n = readSync(fd, chunk, 0, Math.min(chunk.length, bytes - position), position);
+      if (n === 0) return null;
+      hash.update(chunk.subarray(0, n));
+      position += n;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+function sameStamp(
+  a: { ino: number; dev: number; size: number; mtimeMs: number; ctimeMs: number },
+  b: { ino: number; dev: number; size: number; mtimeMs: number; ctimeMs: number },
+): boolean {
+  return (
+    a.ino === b.ino &&
+    a.dev === b.dev &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs
+  );
+}
+
+function isCleanRead(read: ShardRead): boolean {
+  return (
+    read.diagnostics.length === 0 &&
+    read.pendingTailBytes === 0 &&
+    read.records.every((r) => r.bodyState !== "pending")
+  );
+}
+
+/** {@link readShard} through the caller's kept tails (see {@link ShardTails}). */
+function readShardWithTails(
+  path: string,
+  rel: string,
+  partitionRoot: string,
+  tails: ShardTails,
+): ShardRead {
+  const kept = tails.get(rel);
+  let base: ShardTail | null = null;
+  // lstat: a link swapped in under the name has an inode of its own. Taken
+  // before the read too, so a read is kept only when the file did not
+  // change from before the read to after its checksum.
+  const now = lstatSync(path);
+  if (kept !== undefined) {
+    if (now.ino === kept.ino && now.dev === kept.dev && now.size >= kept.size) {
+      if (now.size === kept.size && now.mtimeMs === kept.mtimeMs && now.ctimeMs === kept.ctimeMs) {
+        return kept.read;
+      }
+      if (prefixSha(path, kept.size, partitionRoot) === kept.sha) base = kept;
+    }
+  }
+  const fresh = readShard(path, {
+    partitionRoot,
+    ...(base !== null ? { offset: base.size } : {}),
+  });
+  tails.delete(rel);
+  const after = lstatSync(path);
+  // The suffix is combined with the kept prefix only when it came from the
+  // file the prefix was checked against: a shard replaced under its name
+  // after the checksum and before the read would pair another file's lines
+  // with the kept records. Then the combination is dropped and the shard
+  // is read whole, as with no kept tail.
+  if (base !== null && (after.ino !== now.ino || after.dev !== now.dev)) {
+    return readShard(path, { partitionRoot });
+  }
+  const read: ShardRead =
+    base === null
+      ? fresh
+      : {
+          ...fresh,
+          records: [...base.read.records, ...fresh.records],
+          compactions: [...base.read.compactions, ...fresh.compactions],
+        };
+  if (!isCleanRead(read)) return read;
+  // Kept only when the file is the same from before the read to after the
+  // checksum (inode, device, size, mtime, ctime): a write or a same-size
+  // replacement landing anywhere in between leaves it unkept, and the
+  // next read reads it whole. Two lstats per kept read.
+  if (after.ino === 0 || after.size !== read.nextOffset || !sameStamp(now, after)) return read;
+  const sha = prefixSha(path, read.nextOffset, partitionRoot);
+  if (sha === null || !sameStamp(after, lstatSync(path))) return read;
+  tails.set(rel, {
+    ino: after.ino,
+    dev: after.dev,
+    size: read.nextOffset,
+    mtimeMs: after.mtimeMs,
+    ctimeMs: after.ctimeMs,
+    sha,
+    read,
+  });
+  return read;
 }
 
 /** Month of a shard file name, `<YYYY-MM>[.<suffix>].jsonl`. */
@@ -115,8 +286,12 @@ export function readStreamRecords(
     if (options.month !== undefined && !options.month(monthOf(shard.rel))) continue;
     let read: ReturnType<typeof readShard>;
     try {
-      read = readShard(shard.path, { partitionRoot });
+      read =
+        options.tails === undefined
+          ? readShard(shard.path, { partitionRoot })
+          : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails);
     } catch {
+      options.tails?.delete(shard.rel);
       unreadable.push(shard.rel);
       continue;
     }
@@ -140,6 +315,11 @@ export function readStreamRecords(
         pendingBlobs.push(sha);
       }
     }
+  }
+  // A shard no longer listed (compacted away, removed) keeps nothing.
+  if (options.tails !== undefined && options.device === undefined && options.month === undefined) {
+    const listed = new Set(shards.map((shard) => shard.rel));
+    for (const rel of options.tails.keys()) if (!listed.has(rel)) options.tails.delete(rel);
   }
   const gone = trackSeenShards(
     partitionRoot,
