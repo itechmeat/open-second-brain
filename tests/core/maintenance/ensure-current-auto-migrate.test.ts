@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { listMetrics } from "../../../src/core/brain/metrics.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
@@ -410,7 +411,7 @@ describe("a start whose PATH has no Bun", () => {
     // time, and the outcome, also when the run succeeded.
     const log = readFileSync(autoMigrationWorkerLogPath(vault), "utf8");
     expect(log).toMatch(
-      /^\d{4}-\d\d-\d\dT[\d:.]+Z the automatic store migration worker \(process \d+\) starts/,
+      /^===== attempt \S+ started by process \d+ =====\n\d{4}-\d\d-\d\dT[\d:.]+Z the automatic store migration worker \(process \d+\) starts/,
     );
     for (const step of [
       "checking what a migration would move",
@@ -505,6 +506,19 @@ describe("a worker that exited before it started", () => {
     expect(r.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.spawned);
     expect(existsSync(autoMigrationWorkerLogPath(vault))).toBe(true);
   });
+
+  test("a worker spawned after a killed one keeps the killed run's lines, under a separator", async () => {
+    const log = autoMigrationWorkerLogPath(vault);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(log, "2026-11-20T07:25:40.000Z the killed run's last step\n");
+
+    const r = await ensureVaultCurrent(vault, { background: true, configPath });
+
+    expect(r.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.spawned);
+    const text = readFileSync(log, "utf8");
+    expect(text.startsWith("2026-11-20T07:25:40.000Z the killed run's last step\n")).toBe(true);
+    expect(text).toMatch(/\n===== attempt \S+ started by process \d+ =====\n/);
+  });
 });
 
 describe("the managed-file upgrade and the migration", () => {
@@ -592,6 +606,28 @@ describe("the managed-file upgrade and the migration", () => {
       expect(report.message).toContain("waits for this machine's managed-file upgrade to end");
       expect(report.message).toContain(`process ${process.pid} of this machine`);
       expect(report.nextStart).toContain("once that upgrade has ended");
+    } finally {
+      releaseSelfHealUpgradeLock(vault, token!);
+    }
+  });
+
+  test("a live upgrade of this machine: the doctor names it in the words of status", () => {
+    const token = claimSelfHealUpgradeLock(vault, new Date());
+    expect(token).not.toBeNull();
+    try {
+      const report = autoMigrationReport({ vault, configPath });
+      const uncertain = runDoctor(vault, { configPath }).uncertain ?? [];
+      const available = uncertain.find((u) => u.code === "migration-available");
+      const lock = uncertain.find(
+        (u) => u.code === "stale-lock" && u.path === selfHealUpgradeLockPath(vault),
+      );
+
+      // One text: the clause status shows is the one the doctor shows.
+      expect(report.waitsFor).not.toBeNull();
+      expect(available?.message).toContain(`The migration waits for ${report.waitsFor}.`);
+      expect(lock?.message).toContain(`process ${process.pid} of this machine holds`);
+      expect(lock?.message).toContain("waits for it to end");
+      expect(lock?.message).not.toContain("remove the file by hand");
     } finally {
       releaseSelfHealUpgradeLock(vault, token!);
     }

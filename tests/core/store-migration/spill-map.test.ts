@@ -96,6 +96,28 @@ test("without a scratch, or below the threshold, nothing is written", () => {
   expect(existsSync(join(d, SCRATCH_DIR))).toBe(false);
 });
 
+test("a closed run leaves no scratch folder; another live run's file keeps it", () => {
+  const d = tempDir();
+  const one = new MigrationScratch(d, { spillAt: 1 });
+  const two = new MigrationScratch(d, { spillAt: 1 });
+  const a = one.map();
+  const b = two.map();
+  a.set("k1", "v");
+  a.set("k2", "v");
+  b.set("k1", "v");
+  b.set("k2", "v");
+  expect(scratchFiles(d)).toHaveLength(2);
+
+  // The first run ends while the second still writes: its file stays.
+  one.close();
+  expect(scratchFiles(d)).toHaveLength(1);
+  expect(b.get("k2")).toBe("v");
+
+  // The last run ends: the empty folder goes with its file.
+  two.close();
+  expect(existsSync(join(d, SCRATCH_DIR))).toBe(false);
+});
+
 test("the scratch file of a process that is gone is removed by the next scratch", () => {
   const d = tempDir();
   mkdirSync(join(d, SCRATCH_DIR), { recursive: true });

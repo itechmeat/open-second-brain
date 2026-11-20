@@ -56,6 +56,7 @@
  * without pulling the worker in.
  */
 
+import { latestWorkerLogAttempt } from "./worker-log.ts";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -92,7 +93,7 @@ import { processStartIdentity } from "./process-identity.ts";
 
 /**
  * Suffix of the device-local file beside a vault's state folder that the
- * worker's error output goes to (truncated at every spawn). Beside the
+ * worker's output goes to (a new attempt at every spawn, the last few kept). Beside the
  * folder, not in it, so the folder still goes when its last record does.
  */
 export const AUTO_MIGRATION_WORKER_LOG_SUFFIX = ".worker.log";
@@ -223,7 +224,9 @@ export function readAutoMigrationWorkerLogTail(vault: string): string | null {
   } catch {
     return null;
   }
-  const trimmed = text.trim();
+  // Only what the latest attempt wrote: the log keeps the attempts before
+  // it too (`worker-log.ts`), and a lost worker is judged by its own output.
+  const trimmed = latestWorkerLogAttempt(text).trim();
   if (trimmed.length === 0) return null;
   const tail =
     trimmed.length <= WORKER_LOG_TAIL_CHARS

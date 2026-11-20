@@ -78,15 +78,19 @@ function dayOf(iso: string | null): string {
   return iso === null ? "none" : iso.slice(0, 10);
 }
 
-/** The cohort devices that switched and, apart from them, those retired by silence. */
+/**
+ * The devices that switched (every one with a switch record, a later
+ * machine's too), those retired by hand, and those retired by silence.
+ */
 export function cohortLines(
   result: Pick<
     SilenceReport,
-    "switched" | "retired_by_silence" | "silence_threshold_days" | "as_of"
+    "switched" | "retired" | "retired_by_silence" | "silence_threshold_days" | "as_of"
   >,
 ): string[] {
   const lines: string[] = [];
   if (result.switched.length > 0) lines.push(`switched: ${result.switched.join(", ")}`);
+  if (result.retired.length > 0) lines.push(`retired by hand: ${result.retired.join(", ")}`);
   if (result.retired_by_silence.length > 0) {
     const listed = result.retired_by_silence
       .map((d) => `${d.device} (last evidence ${dayOf(d.last_evidence)})`)

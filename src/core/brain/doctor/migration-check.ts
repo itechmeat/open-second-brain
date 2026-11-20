@@ -552,6 +552,7 @@ export const migrationCheck: DoctorCheck = {
         "migration itself when you want the brain store again.";
     } else if (auto.automatic) {
       tail =
+        (auto.waitsFor !== null ? ` The migration waits for ${auto.waitsFor}.` : "") +
         ` Open Second Brain migrates it on its own: the next start ${auto.nextStart} ` +
         "(to stop that, set `auto_store_migration: false` in the machine config). Run " +
         `${steps} to see what it would move.`;

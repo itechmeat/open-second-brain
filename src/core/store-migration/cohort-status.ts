@@ -47,7 +47,14 @@ export interface CohortStatus {
   readonly as_of: string | null;
   /** Every cohort device, sorted by id. */
   readonly devices: ReadonlyArray<CohortDevice>;
+  /**
+   * Every device with a standing `device-switched` record, the cohort's and
+   * a later machine's alike (a device that migrated after the cohort record
+   * was written is no cohort member, and switched all the same).
+   */
   readonly switched: ReadonlyArray<string>;
+  /** Cohort devices a human `device-retire` record took out of the cohort. */
+  readonly retired: ReadonlyArray<string>;
   readonly pending: ReadonlyArray<DeviceEvidenceDate>;
   readonly retired_by_silence: ReadonlyArray<DeviceEvidenceDate>;
   /** Nothing is pending: the legacy tree may leave the vault. */
@@ -120,7 +127,13 @@ export function cohortStatus(
     threshold_days: judgement.thresholdDays,
     as_of: iso(judgement.referenceMs),
     devices,
-    switched: devices.filter((d) => d.state === "switched").map((d) => d.device),
+    switched: [
+      ...new Set([
+        ...devices.filter((d) => d.state === "switched").map((d) => d.device),
+        ...[...switched].filter((d) => !legacy.has(d)),
+      ]),
+    ].toSorted(compareCodeUnits),
+    retired: devices.filter((d) => d.state === "retired").map((d) => d.device),
     pending,
     retired_by_silence: dated("silent"),
     can_leave: pending.length === 0,

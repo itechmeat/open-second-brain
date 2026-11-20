@@ -63,6 +63,7 @@ describe("removal with devices retired by silence", () => {
       pending: ["dev-b"],
       pending_evidence: [{ device: "dev-b", last_evidence: DEV_B_LAST }],
       switched: ["dev-a"],
+      retired: [],
       retired_by_silence: [{ device: "dev-c", last_evidence: DEV_C_LAST }],
       silence_threshold_days: 30,
       as_of: NOW.toISOString(),

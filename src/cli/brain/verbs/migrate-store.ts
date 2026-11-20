@@ -267,10 +267,20 @@ export function renderOutcome(outcome: MigrateStoreOutcome): string {
  * not imported, then the ignored sync temp files.
  */
 export function renderSyncCopies(report: SyncCopyReport, archive: string | null): string[] {
-  const files = report.surfaces.reduce((sum, s) => sum + s.copies, 0);
+  const inFolders = report.in_folders ?? [];
+  const files = report.surfaces.reduce((sum, s) => sum + s.copies, 0) + inFolders.length;
   const out = [
     `Sync conflict copies: ${files} file(s); sync temp files ignored: ${report.temps_ignored}`,
   ];
+  const goes: Record<string, string> = {
+    "device-local": "moved into device-local state with its folder",
+    backup: "kept in the backup with its folder",
+    "vault-files": "moved with its folder into the vault's own files (the skills/ folder)",
+    dropped: "dropped with its folder",
+  };
+  for (const c of inFolders) {
+    out.push(`  ${c.surface}: ${c.path} is in a folder taken whole, not imported: ${goes[c.goes]}`);
+  }
   for (const s of report.surfaces) {
     out.push(
       `  ${s.surface}: ${s.copies} copy file(s): ${s.imported} item(s) imported as records, ` +

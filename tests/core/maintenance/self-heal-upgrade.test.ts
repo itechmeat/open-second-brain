@@ -42,6 +42,7 @@ import {
   selfHealUpgradeMarkerPath,
   readSelfHealUpgradeFailure,
   readSelfHealUpgradeLock,
+  selfHealUpgradeLockAdvice,
   releaseSelfHealUpgradeLock,
   selfHealUpgradeLockPath,
   SELF_HEAL_UPGRADE_BASE_COOLDOWN_MS,
@@ -683,6 +684,41 @@ describe("the worker lock in a vault the file sync shares", () => {
       refused.mockRestore();
       releaseSelfHealUpgradeLock(vault, token!);
     }
+  });
+
+  test("a live process's claim past the ceiling is said to run, and to be taken over", () => {
+    // This test process is alive; its claim is two hours old.
+    plantClaim(claimRecord({ pid: process.pid, worker: true }));
+    const holder = readSelfHealUpgradeLock(vault, new Date(Date.now() + 2 * HOUR));
+    expect(holder).toMatchObject({ kind: "stale", held: false });
+
+    const advice = selfHealUpgradeLockAdvice(holder);
+    expect(advice).toContain(`process ${process.pid} of this machine still runs`);
+    expect(advice).toContain(
+      "older than the one-hour ceiling, so the next start takes the lock over",
+    );
+    expect(advice).toContain("do not remove the file while it runs");
+    expect(advice).not.toContain("holds nothing");
+    rmSync(selfHealUpgradeLockPath(vault));
+  });
+
+  test("a lock whose age cannot be read promises no expiry, and says to check access", () => {
+    const base = {
+      kind: "unknown" as const,
+      held: true,
+      path: selfHealUpgradeLockPath(vault),
+      pid: null,
+      host: null,
+      since: null,
+    };
+    const advice = selfHealUpgradeLockAdvice({ ...base, ageMs: null });
+    expect(advice).toContain("its age, and when it would expire, cannot be told");
+    expect(advice).toContain("check this user's access to the file");
+    expect(advice).not.toContain("an hour");
+    // With a known age the hour rule is still what it says.
+    expect(selfHealUpgradeLockAdvice({ ...base, ageMs: 1000 })).toContain(
+      "until an hour after it was written",
+    );
   });
 
   test("an older release's bare token keeps the age rule it always had", () => {

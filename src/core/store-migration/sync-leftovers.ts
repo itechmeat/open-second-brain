@@ -70,9 +70,25 @@ export interface SyncConflictCopy {
   readonly rule: SyncCopyRule;
 }
 
+/**
+ * A conflict copy inside a folder a mapping takes whole (a `tree` surface:
+ * the hook state, the secrets folder, a cache): it is no item of its own
+ * and goes with its folder, wherever the folder goes.
+ */
+export interface SyncCopyInFolder {
+  /** Vault-relative path of the copy. */
+  readonly path: string;
+  /** The surface whose folder holds it. */
+  readonly surface: string;
+  /** Where the folder goes: device-local state, the backup, the vault's own files, or nowhere (dropped). */
+  readonly goes: "device-local" | "backup" | "vault-files" | "dropped";
+}
+
 export interface SyncLeftovers {
   /** Sorted by path. */
   readonly copies: ReadonlyArray<SyncConflictCopy>;
+  /** Copies inside folders a mapping takes whole, sorted by path. */
+  readonly inFolders: ReadonlyArray<SyncCopyInFolder>;
   /** Vault-relative paths of the sync temp files no mapping reads, sorted. */
   readonly temps: ReadonlyArray<string>;
 }
@@ -190,7 +206,48 @@ export function findSyncLeftovers(
   }
   copies.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   temps.sort();
-  return { copies, temps };
+  return { copies, temps, inFolders: copiesInWholeFolders(catalogue, rel) };
+}
+
+/** Where a folder a mapping takes whole goes, for the report. */
+function folderGoes(entry: CatalogueEntry): SyncCopyInFolder["goes"] {
+  const to = entry.mapping.destination.to;
+  if (to === DESTINATION_KIND.deviceLocal) return "device-local";
+  if (to === DESTINATION_KIND.backup) return "backup";
+  // The accepted skills: the folder moves to the vault's own skills/ folder.
+  if (to === DESTINATION_KIND.vaultFiles) return "vault-files";
+  return "dropped";
+}
+
+/**
+ * The conflict copies inside the folders a `tree` mapping takes whole (no
+ * per-file grammar), which the walk above never lists: they go with their
+ * folder, and the report names them so its count is the vault's.
+ */
+function copiesInWholeFolders(
+  catalogue: ReadonlyArray<CatalogueEntry>,
+  rel: (path: string) => string,
+): SyncCopyInFolder[] {
+  const out: SyncCopyInFolder[] = [];
+  const seen = new Set<string>();
+  for (const entry of catalogue) {
+    for (const locator of entry.locators) {
+      if (locator.shape !== "tree" || locator.grammar !== undefined) continue;
+      const walk = (dir: string): void => {
+        for (const e of list(dir)) {
+          const path = join(dir, e.name);
+          if (e.isDirectory()) {
+            walk(path);
+          } else if (isSyncConflictName(e.name) && !seen.has(path)) {
+            seen.add(path);
+            out.push({ path: rel(path), surface: entry.id, goes: folderGoes(entry) });
+          }
+        }
+      };
+      walk(locator.path);
+    }
+  }
+  return out.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /** A conflict copy kept in the migration backup and not imported. */
@@ -231,6 +288,8 @@ export interface SyncCopyReport {
   readonly temps_ignored: number;
   /** Vault-relative paths of the ignored sync temp files. */
   readonly temps: ReadonlyArray<string>;
+  /** Copies inside folders a mapping takes whole: they go with their folder. */
+  readonly in_folders?: ReadonlyArray<SyncCopyInFolder>;
 }
 
 /** Counts a pass or a dry run keeps while it handles the leftovers. */
@@ -238,7 +297,10 @@ export class SyncCopyTally {
   private readonly bySurface = new Map<string, SyncCopySurface>();
   private readonly keptList: SyncCopyKept[] = [];
 
-  constructor(private readonly temps: ReadonlyArray<string>) {}
+  constructor(
+    private readonly temps: ReadonlyArray<string>,
+    private readonly inFolders: ReadonlyArray<SyncCopyInFolder> = [],
+  ) {}
 
   private surface(copy: SyncConflictCopy): SyncCopySurface {
     let row = this.bySurface.get(copy.entry.id);
@@ -284,13 +346,14 @@ export class SyncCopyTally {
       kept: [...this.keptList],
       temps_ignored: this.temps.length,
       temps: [...this.temps],
+      in_folders: [...this.inFolders],
     };
   }
 }
 
 /** The empty section, for a run that saw no leftovers. */
 export function emptySyncCopyReport(): SyncCopyReport {
-  return { surfaces: [], kept: [], temps_ignored: 0, temps: [] };
+  return { surfaces: [], kept: [], temps_ignored: 0, temps: [], in_folders: [] };
 }
 
 /**

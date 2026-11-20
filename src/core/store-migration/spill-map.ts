@@ -20,7 +20,7 @@
  */
 
 import { Database, type Statement } from "bun:sqlite";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { closeDatabase } from "../sqlite-close.ts";
@@ -92,14 +92,13 @@ export class MigrationScratch {
   database(): Database {
     if (this.db !== null) return this.db;
     const folder = join(this.dir, SCRATCH_DIR);
-    mkdirSync(folder, { recursive: true });
     const path = join(
       folder,
       `scratch-${process.pid}-${Math.random().toString(36).slice(2, 10)}.sqlite`,
     );
     let db: Database | null = null;
     try {
-      db = new Database(path, { create: true });
+      db = openScratchFile(folder, path);
       // Scratch: nothing here survives a crash on purpose. The rollback
       // journal stays in memory (bounded by one commit's writes) and
       // nothing is synced.
@@ -144,6 +143,38 @@ export class MigrationScratch {
     this.path = null;
     closeDatabase(db);
     if (path !== null) removeScratchFile(path);
+    removeEmptyScratchFolder(join(this.dir, SCRATCH_DIR));
+  }
+}
+
+/**
+ * Create the scratch file at `path` in `folder`, making the folder first.
+ * Another run's close may remove the folder once it is empty
+ * ({@link removeEmptyScratchFolder}) between the `mkdir` and the create:
+ * then it is made again, a bounded number of times.
+ */
+function openScratchFile(folder: string, path: string): Database {
+  for (let attempt = 0; ; attempt++) {
+    mkdirSync(folder, { recursive: true });
+    try {
+      return new Database(path, { create: true });
+    } catch (error) {
+      if (attempt >= 2 || existsSync(folder)) throw error;
+    }
+  }
+}
+
+/**
+ * Remove the scratch folder when it holds nothing: a run's own file is gone
+ * by now, and `rmdir` refuses a folder another live run still has a file
+ * in (or one a killed run left, which the next sweep removes), so only an
+ * empty folder goes. Best effort.
+ */
+function removeEmptyScratchFolder(folder: string): void {
+  try {
+    rmdirSync(folder);
+  } catch {
+    // not empty, already gone, or held (Windows): left as it is
   }
 }
 

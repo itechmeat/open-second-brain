@@ -177,6 +177,11 @@ export interface SelfSpawnOptions {
    * cannot be opened the output is dropped, as before.
    */
   readonly stderrLog?: string;
+  /**
+   * Append to `stderrLog` instead of truncating it: the caller opened the
+   * attempt's part of the log itself (`beginWorkerLogAttempt`).
+   */
+  readonly appendStderrLog?: boolean;
 }
 
 /**
@@ -196,7 +201,7 @@ export function spawnSelfDetached(
       // Truncated, then opened for appending: a child that keeps the log
       // to its tail (`worker-log.ts`) cuts it while it writes, and its
       // writes go on at the new end.
-      writeFileSync(opts.stderrLog, "");
+      if (opts.appendStderrLog !== true) writeFileSync(opts.stderrLog, "");
       fd = openSync(opts.stderrLog, "a");
     } catch {
       fd = null;

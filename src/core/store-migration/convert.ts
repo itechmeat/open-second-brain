@@ -474,7 +474,7 @@ function runPass(ctx: ConvertContext): PassResult {
     for (const problem of tally.problems) problems.push({ surface: entry.id, ...problem });
     for (const device of tally.devices.keys()) devices.add(device);
   }
-  const copies = new SyncCopyTally(leftovers.temps);
+  const copies = new SyncCopyTally(leftovers.temps, leftovers.inFolders);
   const fileVerdicts = fileCopyVerdicts(leftovers.copies);
   for (const temp of leftovers.temps) step(temp);
   for (const copy of leftovers.copies) {
