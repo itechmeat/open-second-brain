@@ -63,8 +63,15 @@ import {
   autoMigrationReport,
   type AutoMigrationReport,
 } from "../../store-migration/auto-report.ts";
-import { BRAIN_ROOT_REL } from "../path-constants.ts";
-import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
+import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "../path-constants.ts";
+import { describeBytes, treeBytes } from "../../store-migration/sizes.ts";
+import type {
+  DoctorCheck,
+  DoctorCheckContext,
+  DoctorFindings,
+  StoreSideCheckContext,
+  StoreSideDoctorCheck,
+} from "./check.ts";
 import { withoutSeenRecording } from "../../store/seen-shards.ts";
 
 /** The legacy tree is in the vault and this device has not switched to the store. */
@@ -78,6 +85,14 @@ export const LEGACY_TREE_CAN_LEAVE_CODE = "legacy-tree-can-leave";
 
 /** The command that moves the legacy tree out of the vault. */
 export const REMOVE_LEGACY_COMMAND = "o2b brain migrate-store --remove-legacy";
+
+/**
+ * The legacy Brain/ tree left this vault, and this machine's own legacy
+ * folder (`.open-second-brain/`: the search index, caches) is still in it:
+ * files the vault's sync never carried, so the deletion that took the tree
+ * away did not reach them.
+ */
+export const LEGACY_LOCAL_FILES_LEFT_CODE = "legacy-local-files-left";
 
 /** A legacy directory is back in the vault after the legacy tree was removed. */
 export const LEGACY_TREE_REAPPEARED_CODE = "legacy-tree-reappeared";
@@ -284,6 +299,75 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
       "every device of the migration cohort switched to the brain store or is retired " +
       `(${states}), so the legacy Brain/ tree can leave the vault: run ` +
       `\`${REMOVE_LEGACY_COMMAND}\`. Nothing is removed until you run it.`,
+  });
+}
+
+/** How many leftover entries the advice names before it counts the rest. */
+const LEFTOVERS_SHOWN = 5;
+
+/**
+ * The advice for a switched machine whose vault holds no Brain/ tree any
+ * more but still holds its legacy device-local folder: nothing reads it
+ * after the switch, and only the removal command takes it out (it moves
+ * what cannot be rebuilt into the archive and deletes the rest). Read-only.
+ */
+export const legacyLocalFilesCheck: StoreSideDoctorCheck = {
+  failSoft: true,
+  run(ctx: StoreSideCheckContext, out: DoctorFindings): void {
+    if (ctx.vault === null) return;
+    // Only where the tree has left: with Brain/ there, the transition
+    // findings speak, and the removal moves both folders together.
+    if (existsSync(join(ctx.vault, BRAIN_ROOT_REL))) return;
+    const store = withoutSeenRecording(() => migrationStoreHere(ctx.configPath));
+    if (store === null || !deviceSwitchedHere(store, store.device)) return;
+    leftoverLocalFinding(ctx.vault, out, withholdsPrivate(ctx));
+  },
+};
+
+function leftoverLocalFinding(vault: string, out: DoctorFindings, restricted: boolean): void {
+  const folder = join(vault, DERIVED_STORE_DIR);
+  let names: string[];
+  try {
+    if (!lstatSync(folder).isDirectory()) return;
+    names = readdirSync(folder);
+  } catch {
+    return;
+  }
+  const entries = names
+    .map((name) => ({ name, bytes: treeBytes(join(folder, name)) }))
+    .toSorted((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  if (entries.length === 0) return;
+  const total = entries.reduce((sum, e) => sum + e.bytes, 0);
+  const named = entries
+    .slice(0, LEFTOVERS_SHOWN)
+    .map((e) => `${DERIVED_STORE_DIR}/${e.name} (${describeBytes(e.bytes)})`)
+    .join(", ");
+  const more =
+    entries.length > LEFTOVERS_SHOWN ? ` and ${entries.length - LEFTOVERS_SHOWN} more` : "";
+  const count = `${entries.length} entr${entries.length === 1 ? "y" : "ies"}, ${describeBytes(total)}`;
+  const remedy =
+    "The vault's sync never carried them, so the deletion that took the tree away did not " +
+    "reach them, and nothing reads them since this machine switched to the brain store. Run " +
+    `\`${REMOVE_LEGACY_COMMAND}\` to clear them: it moves what cannot be rebuilt into this ` +
+    "machine's legacy archive and deletes the rebuildable rest (the search index, caches). " +
+    "Nothing is removed until you run it.";
+  // Below local reach the names and the folder are withheld, as the kept
+  // conflict copies are: the count and the size say what is there.
+  if (restricted) {
+    out.uncertain.push({
+      code: LEGACY_LOCAL_FILES_LEFT_CODE,
+      message:
+        "the legacy Brain/ tree is no longer in this vault, but this machine's legacy folder " +
+        `still is (${count}; run \`o2b brain doctor\` on this machine to see which). ${remedy}`,
+    });
+    return;
+  }
+  out.uncertain.push({
+    code: LEGACY_LOCAL_FILES_LEFT_CODE,
+    path: folder,
+    message:
+      `the legacy Brain/ tree is no longer in this vault, but this machine's legacy folder ` +
+      `${DERIVED_STORE_DIR}/ still is: ${count} (${named}${more}). ${remedy}`,
   });
 }
 

@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
@@ -41,9 +41,11 @@ import {
   claimSelfHealUpgradeLock,
   selfHealUpgradeMarkerPath,
   readSelfHealUpgradeFailure,
+  readSelfHealUpgradeLock,
   releaseSelfHealUpgradeLock,
   selfHealUpgradeLockPath,
   SELF_HEAL_UPGRADE_BASE_COOLDOWN_MS,
+  SELF_HEAL_UPGRADE_HANDOVER_GRACE_MS,
 } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 import { waitForSelfHealChildren } from "../../helpers/self-heal-children.ts";
@@ -570,5 +572,127 @@ describe("the worker applies the plan it computed", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/** The pid of a process that has ended: spawned, reaped, gone. */
+async function deadPid(): Promise<number> {
+  const child = Bun.spawn([process.execPath, "-e", ""], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await child.exited;
+  return child.pid;
+}
+
+/** A claim file as a release writes it, or as sync brought it from another machine. */
+function plantClaim(text: string): void {
+  const path = selfHealUpgradeLockPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
+
+function claimRecord(fields: { pid: number; host?: string; worker: boolean }): string {
+  return JSON.stringify({
+    token: "b".repeat(32),
+    pid: fields.pid,
+    host: fields.host ?? hostname(),
+    since: new Date().toISOString(),
+    worker: fields.worker,
+  });
+}
+
+describe("the worker lock in a vault the file sync shares", () => {
+  test("a claim another machine made holds nothing here, and is taken over", () => {
+    // Its pid is alive here only by chance: this test process.
+    plantClaim(claimRecord({ pid: process.pid, host: "another-machine", worker: true }));
+
+    expect(readSelfHealUpgradeLock(vault, new Date())).toMatchObject({
+      kind: "other-device",
+      held: false,
+    });
+    makeManualStale();
+    expect(runSelfHealUpgrade(vault).outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.applied);
+    expect(existsSync(selfHealUpgradeLockPath(vault))).toBe(false);
+  });
+
+  test("a claim of this machine whose process is gone holds nothing", async () => {
+    plantClaim(claimRecord({ pid: await deadPid(), worker: true }));
+
+    expect(readSelfHealUpgradeLock(vault, new Date())).toMatchObject({ kind: "gone", held: false });
+    const token = claimSelfHealUpgradeLock(vault, new Date());
+    expect(token).not.toBeNull();
+    releaseSelfHealUpgradeLock(vault, token!);
+  });
+
+  test("a claim handed to a worker holds while the worker starts, and not past the grace", async () => {
+    // The start that claimed has exited; the worker has not stamped yet.
+    plantClaim(claimRecord({ pid: await deadPid(), worker: false }));
+
+    expect(readSelfHealUpgradeLock(vault, new Date()).held).toBe(true);
+    const late = new Date(Date.now() + SELF_HEAL_UPGRADE_HANDOVER_GRACE_MS + 5_000);
+    expect(readSelfHealUpgradeLock(vault, late)).toMatchObject({ kind: "gone", held: false });
+    rmSync(selfHealUpgradeLockPath(vault));
+  });
+
+  test("the worker a claim was handed to stamps itself as its holder", () => {
+    makeManualStale();
+    const token = claimSelfHealUpgradeLock(vault, new Date(), { handed: true });
+    expect(token).not.toBeNull();
+    expect(JSON.parse(readFileSync(selfHealUpgradeLockPath(vault), "utf8")).worker).toBe(false);
+
+    expect(runSelfHealUpgrade(vault, { lockToken: token! }).outcome).toBe(
+      SELF_HEAL_UPGRADE_OUTCOME.applied,
+    );
+    const stamped = JSON.parse(readFileSync(selfHealUpgradeLockPath(vault), "utf8"));
+    expect([stamped.token, stamped.pid, stamped.worker]).toEqual([token, process.pid, true]);
+    releaseSelfHealUpgradeLock(vault, token!);
+  });
+
+  test("a claim that is there but cannot be read is held, never taken over as absent", () => {
+    // A directory where the claim file belongs: the stat succeeds, the read fails.
+    mkdirSync(selfHealUpgradeLockPath(vault), { recursive: true });
+
+    expect(readSelfHealUpgradeLock(vault, new Date())).toMatchObject({
+      kind: "unknown",
+      held: true,
+    });
+    expect(claimSelfHealUpgradeLock(vault, new Date())).toBeNull();
+    // Past the staleness ceiling it is stale, as a bare token is: an hour-old
+    // claim nobody can attribute never blocks the upgrade for good.
+    const later = new Date(Date.now() + 2 * HOUR);
+    expect(readSelfHealUpgradeLock(vault, later)).toMatchObject({ kind: "unknown", held: false });
+    rmSync(selfHealUpgradeLockPath(vault), { recursive: true });
+  });
+
+  test("a worker that cannot stamp its handed claim upgrades nothing and leaves it retryable", () => {
+    makeManualStale();
+    const token = claimSelfHealUpgradeLock(vault, new Date(), { handed: true });
+    expect(token).not.toBeNull();
+    const refused = spyOn(gateModule, "assertNoMigrationInProgress").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { lockToken: token! });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.running);
+      expect(planUpgrade(vault).pending).toBe(1);
+      expect(readSelfHealUpgradeFailure(vault)).toBeNull();
+    } finally {
+      refused.mockRestore();
+      releaseSelfHealUpgradeLock(vault, token!);
+    }
+  });
+
+  test("an older release's bare token keeps the age rule it always had", () => {
+    plantClaim("c".repeat(32));
+
+    expect(readSelfHealUpgradeLock(vault, new Date())).toMatchObject({
+      kind: "unknown",
+      held: true,
+    });
+    expect(readSelfHealUpgradeLock(vault, new Date(Date.now() + 2 * HOUR)).held).toBe(false);
+    rmSync(selfHealUpgradeLockPath(vault));
   });
 });

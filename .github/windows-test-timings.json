@@ -1291,7 +1291,7 @@
     "tests/core/lanes/skills-dir.test.ts": 1357,
     "tests/core/layering.test.ts": 1719,
     "tests/core/maintenance/dependency-tree.test.ts": 256,
-    "tests/core/maintenance/ensure-current-auto-migrate.test.ts": 63627,
+    "tests/core/maintenance/ensure-current-auto-migrate.test.ts": 72000,
     "tests/core/maintenance/ensure-current.test.ts": 4454,
     "tests/core/maintenance/o2b-command.test.ts": 27,
     "tests/core/maintenance/self-heal-reindex.test.ts": 7456,

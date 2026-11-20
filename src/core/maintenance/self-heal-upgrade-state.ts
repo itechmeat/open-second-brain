@@ -37,6 +37,7 @@
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -253,30 +254,217 @@ export function checkSelfHealUpgrade(vault: string): CheckResult {
 export const SELF_HEAL_UPGRADE_LOCK_FILE = "self-heal-upgrade.lock";
 
 /**
+ * How long a claim made for a worker (`handed`) is held while the process
+ * that made it is gone and the worker has not stamped it yet: the start
+ * that claims exits right after the spawn, and the worker stamps its own
+ * pid when it begins.
+ */
+export const SELF_HEAL_UPGRADE_HANDOVER_GRACE_MS = 60_000;
+
+/**
  * Lock path for `vault`'s worker: beside the marker in the per-device
  * `.open-second-brain/`, where the search writer lock also lives. Derived
  * from the vault alone, never from the environment: the MCP server, a hook
  * and the worker each run with their own `TMPDIR`, and a lock whose path
  * depended on it would be a different lock in each of them.
+ *
+ * On a machine that has not switched to the brain store this folder is
+ * inside the vault, and a file sync that does not ignore it carries the
+ * lock to every other machine of the vault. So the claim names its
+ * machine and process ({@link SelfHealUpgradeLockRecord}), and only a
+ * live process of this machine holds it ({@link readSelfHealUpgradeLock}).
  */
 export function selfHealUpgradeLockPath(vault: string): string {
   return machineStatePath(vault, DERIVED_STORE_DIR, SELF_HEAL_UPGRADE_LOCK_FILE);
 }
 
+/** What a claim records. Older releases wrote the bare token only. */
+export interface SelfHealUpgradeLockRecord {
+  readonly token: string;
+  /** The process holding the claim: the claimer, or the worker once it stamped it. */
+  readonly pid: number;
+  /** The machine that claimed it (`os.hostname()`). */
+  readonly host: string;
+  /** ISO-8601 instant of the claim. */
+  readonly since: string;
+  /** True once `pid` is the process that does the work (an in-process claim, or a worker's stamp). */
+  readonly worker: boolean;
+}
+
+/**
+ * Who holds the lock, as one look at it found it:
+ *
+ *  - `none`: no lock file;
+ *  - `here`: a live process of this machine (or a claim being handed to a
+ *    worker, within {@link SELF_HEAL_UPGRADE_HANDOVER_GRACE_MS});
+ *  - `other-device`: a claim another machine made, which only reached this
+ *    one through the file sync of the vault;
+ *  - `gone`: a claim of this machine whose process is gone;
+ *  - `stale`: a live claim older than {@link SELF_HEAL_UPGRADE_LOCK_STALE_MS};
+ *  - `unknown`: a bare token (an older release) or a file that does not
+ *    read as a claim: its machine and process cannot be told.
+ *
+ * `held` is the one judgement: `here` always, `unknown` while younger
+ * than the staleness ceiling (the rule older releases apply), nothing else.
+ */
+export interface SelfHealUpgradeLockHolder {
+  readonly kind: "none" | "here" | "other-device" | "gone" | "stale" | "unknown";
+  readonly held: boolean;
+  readonly path: string;
+  readonly pid: number | null;
+  readonly host: string | null;
+  readonly since: string | null;
+  /** Milliseconds since the file's mtime; null without a file. */
+  readonly ageMs: number | null;
+}
+
+function thisHost(): string {
+  try {
+    return hostname();
+  } catch {
+    return "";
+  }
+}
+
+function lockRecordText(token: string, worker: boolean, now: Date): string {
+  const record: SelfHealUpgradeLockRecord = {
+    token,
+    pid: process.pid,
+    host: thisHost(),
+    since: now.toISOString(),
+    worker,
+  };
+  return `${JSON.stringify(record)}\n`;
+}
+
+/** A claim's text as a record, or null for a bare token or anything else. */
+function parseLockRecord(text: string): SelfHealUpgradeLockRecord | null {
+  try {
+    const raw: unknown = JSON.parse(text);
+    if (typeof raw !== "object" || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r["token"] !== "string" || typeof r["pid"] !== "number") return null;
+    return {
+      token: r["token"],
+      pid: r["pid"],
+      host: typeof r["host"] === "string" ? r["host"] : "",
+      since: typeof r["since"] === "string" ? r["since"] : "",
+      worker: r["worker"] === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether process `pid` exists on this machine (a signal-0 probe; EPERM: it exists). */
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Who holds `vault`'s lock at `now` ({@link SelfHealUpgradeLockHolder}).
+ * Cheap: one stat, one small read and a signal probe, never a process
+ * identity query, so a session start may ask it.
+ */
+export function readSelfHealUpgradeLock(vault: string, now: Date): SelfHealUpgradeLockHolder {
+  const path = selfHealUpgradeLockPath(vault);
+  const blank = { path, pid: null, host: null, since: null };
+  let ageMs: number;
+  let text: string;
+  try {
+    ageMs = now.getTime() - statSync(path).mtimeMs;
+  } catch (err) {
+    // Only a confirmed absence is no claim. A lock that cannot even be
+    // stat'ed has no age to judge by and is held: the takeover would have
+    // to unlink it through the same failing directory entry, so treating
+    // it as free would only turn the refusal into a failed claim.
+    if (isMissing(err)) return { kind: "none", held: false, ...blank, ageMs: null };
+    return { kind: "unknown", held: true, ...blank, ageMs: null };
+  }
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    // Released between the stat and the read: no claim. Any other read
+    // failure (a permission, a directory in its place, an I/O error) is a
+    // claim whose holder cannot be told, judged exactly as one that reads
+    // but is no record (an older release's bare token, below): held while
+    // younger than SELF_HEAL_UPGRADE_LOCK_STALE_MS, stale and replaced
+    // after. The rule is deliberate in both branches: an hour-old claim
+    // nobody can attribute must not block the upgrade forever, and a live
+    // worker of this release is protected by its stamped process record,
+    // which reads.
+    if (isMissing(err)) return { kind: "none", held: false, ...blank, ageMs: null };
+    return { kind: "unknown", held: ageMs <= SELF_HEAL_UPGRADE_LOCK_STALE_MS, ...blank, ageMs };
+  }
+  const record = parseLockRecord(text);
+  if (record === null) {
+    return { kind: "unknown", held: ageMs <= SELF_HEAL_UPGRADE_LOCK_STALE_MS, ...blank, ageMs };
+  }
+  const seen = { path, pid: record.pid, host: record.host, since: record.since, ageMs };
+  if (record.host !== thisHost()) return { kind: "other-device", held: false, ...seen };
+  if (!pidAlive(record.pid)) {
+    // A claim made for a worker that has not stamped it yet: its claimer
+    // exits right after the spawn, so a gone claimer is no gone holder yet.
+    const handing = !record.worker && ageMs <= SELF_HEAL_UPGRADE_HANDOVER_GRACE_MS;
+    return handing ? { kind: "here", held: true, ...seen } : { kind: "gone", held: false, ...seen };
+  }
+  if (ageMs > SELF_HEAL_UPGRADE_LOCK_STALE_MS) return { kind: "stale", held: false, ...seen };
+  return { kind: "here", held: true, ...seen };
+}
+
+/** One sentence naming a lock's holder, for a log or a report. */
+export function describeSelfHealUpgradeLock(holder: SelfHealUpgradeLockHolder): string {
+  const since = holder.since !== null && holder.since !== "" ? `, since ${holder.since}` : "";
+  switch (holder.kind) {
+    case "none":
+      return `no claim on ${holder.path}`;
+    case "here":
+      return `process ${holder.pid} of this machine holds ${holder.path}${since}`;
+    case "other-device":
+      return (
+        `${holder.path} is a claim of another machine (${printable(holder.host ?? "")}, process ` +
+        `${holder.pid}${since}) that the vault's file sync brought here; it does not hold this machine`
+      );
+    case "gone":
+      return `${holder.path} names process ${holder.pid} of this machine, which is gone`;
+    case "stale":
+      return `${holder.path} is older than the staleness ceiling (process ${holder.pid}${since})`;
+    case "unknown":
+      return (
+        `${holder.path} holds a claim whose machine and process cannot be told (an older ` +
+        "release writes only a token)"
+      );
+  }
+}
+
 /**
  * Claim `vault`'s worker lock without waiting: an exclusive create
- * (`O_EXCL`) of a file holding a fresh random token. Returns the token, or
- * null when a live (not stale) claim exists. A stale claim is removed and
- * the create retried once.
+ * (`O_EXCL`) of a file holding a fresh random token, this process and this
+ * machine. Returns the token, or null when the lock is held
+ * ({@link readSelfHealUpgradeLock}). A claim that does not hold (another
+ * machine's, a gone process's, a stale one) is removed and the create
+ * retried once.
  *
  * The claim is a FILE, not a held descriptor, so it can be handed on: the
- * process that starts a detached worker claims first and passes the token
- * on the worker's command line. That closes the window a probe-then-spawn
- * leaves open - N sessions starting at once make N exclusive creates, one
- * wins, and only the winner spawns - and the worker, not its parent,
- * releases it when it ends.
+ * process that starts a detached worker claims first (`handed`) and passes
+ * the token on the worker's command line, and the worker stamps its own
+ * pid ({@link stampSelfHealUpgradeLock}). That closes the window a
+ * probe-then-spawn leaves open - N sessions starting at once make N
+ * exclusive creates, one wins, and only the winner spawns - and the worker,
+ * not its parent, releases it when it ends.
  */
-export function claimSelfHealUpgradeLock(vault: string, now: Date): string | null {
+export function claimSelfHealUpgradeLock(
+  vault: string,
+  now: Date,
+  opts: { readonly handed?: boolean } = {},
+): string | null {
   // The lock is a file in the per-vault state a migration of the vault is
   // moving: under its gate nothing is claimed (the refusal is thrown).
   assertNoMigrationInProgress(vault);
@@ -285,7 +473,7 @@ export function claimSelfHealUpgradeLock(vault: string, now: Date): string | nul
   const token = randomBytes(16).toString("hex");
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      writeFileSync(path, token, { flag: "wx" });
+      writeFileSync(path, lockRecordText(token, opts.handed !== true, now), { flag: "wx" });
       return token;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
@@ -300,23 +488,48 @@ export function claimSelfHealUpgradeLock(vault: string, now: Date): string | nul
   return null;
 }
 
-/** Whether a live (not stale) claim on `vault`'s lock exists at `now`. */
+/** Whether `vault`'s lock is held at `now` ({@link readSelfHealUpgradeLock}). */
 export function selfHealUpgradeLockHeld(vault: string, now: Date): boolean {
-  try {
-    const age = now.getTime() - statSync(selfHealUpgradeLockPath(vault)).mtimeMs;
-    return age <= SELF_HEAL_UPGRADE_LOCK_STALE_MS;
-  } catch {
-    return false;
-  }
+  return readSelfHealUpgradeLock(vault, now).held;
+}
+
+/** The token a claim's text carries: the record's, or an older release's bare token. */
+function tokenOf(text: string): string {
+  return parseLockRecord(text)?.token ?? text;
 }
 
 /** Whether `token` is the claim on `vault`'s lock right now. */
 export function ownsSelfHealUpgradeLock(vault: string, token: string): boolean {
   try {
-    return readFileSync(selfHealUpgradeLockPath(vault), "utf8") === token;
+    return tokenOf(readFileSync(selfHealUpgradeLockPath(vault), "utf8")) === token;
   } catch {
     return false;
   }
+}
+
+/**
+ * The worker a claim was handed to records itself as its holder: this
+ * process, this machine. Returns whether it did: a stamp that cannot be
+ * written leaves the claimer's record, held for the handover grace only,
+ * so the caller must not do the claim's work (another claimant may take
+ * the lock once the grace has run out).
+ */
+export function stampSelfHealUpgradeLock(vault: string, token: string, now: Date): boolean {
+  if (!ownsSelfHealUpgradeLock(vault, token)) return false;
+  try {
+    // A write into the vault's state folder: refused, like the claim, while
+    // a migration of the vault holds its gate.
+    assertNoMigrationInProgress(vault);
+    atomicWriteFileSync(selfHealUpgradeLockPath(vault), lockRecordText(token, true, now));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isMissing(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**

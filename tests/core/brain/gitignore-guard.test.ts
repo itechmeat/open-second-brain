@@ -432,6 +432,11 @@ const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
     "the shared checkpoint substrate under the store (ingest and session-import lanes)",
   ],
   ["core/brain/dead-letter.ts", "dead letters under the store"],
+  [
+    "core/brain/doctor/migration-check.ts",
+    "READS only: lists what a vault whose legacy tree left still holds of this machine's " +
+      "legacy folder, to name it and the removal command; it writes nothing there",
+  ],
   ["core/brain/gitignore-guard.ts", "composes the seeded guard entry from the constant"],
   ["core/brain/init.ts", "bootstraps the seed; names the entry in its step 1c docblock"],
   [

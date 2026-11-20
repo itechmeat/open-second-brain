@@ -11,6 +11,7 @@
 import { removeLegacy, rollback } from "../../../core/store-migration/outcome.ts";
 import { forceReleaseGate, MigrationGateBusyError } from "../../../core/store-migration/quiesce.ts";
 import type { SilenceReport } from "../../../core/store-migration/removal.ts";
+import { describeBytes } from "../../../core/store-migration/sizes.ts";
 import { RollbackRefusedError } from "../../../core/store-migration/rollback.ts";
 import { failWith, writeJson } from "../helpers.ts";
 
@@ -68,20 +69,7 @@ export function runRemoveLegacy(
     );
     return 1;
   }
-  const lines = [
-    `Moved ${result.moved.join(", ")} out of the vault into ${result.archive}; nothing was deleted.`,
-    `late legacy writes imported first: ${result.imported}`,
-    `left out of the archive as rebuildable (index, caches, generated pages): ${
-      result.skipped.length > 0 ? result.skipped.join(", ") : "none"
-    }`,
-  ];
-  lines.push(...cohortLines(result));
-  if (result.forced && result.stopped.length > 0) {
-    lines.push(
-      `forced: ${result.stopped.join(", ")} will no longer reach the brain store until migrated`,
-    );
-  }
-  process.stdout.write(`${lines.join("\n")}\n`);
+  process.stdout.write(`${removedLines(result).join("\n")}\n`);
   return 0;
 }
 
@@ -187,4 +175,40 @@ export function runRollback(vault: string, configPath: string, json: boolean): n
     ].join("\n") + "\n",
   );
   return 0;
+}
+
+/** How many entries a long list names before it counts the rest. */
+const LIST_SHOWN = 5;
+
+/** A list as "a, b, c, d, e and N more" (`--json` carries every entry). */
+export function summariseList(items: ReadonlyArray<string>, shown: number = LIST_SHOWN): string {
+  if (items.length <= shown) return items.join(", ");
+  return `${items.slice(0, shown).join(", ")} and ${items.length - shown} more`;
+}
+
+type RemovedResult = Extract<ReturnType<typeof removeLegacy>, { readonly removed: true }>;
+
+/** The text report of a removal that moved the tree, one line per fact. */
+export function removedLines(result: RemovedResult): string[] {
+  const dropped = result.skipped_sizes;
+  const lines = [
+    result.tree_already_left
+      ? `The legacy tree had already left the vault; moved this machine's leftover ` +
+        `${result.moved.join(", ")} out of the vault into ${result.archive}.`
+      : `Moved ${result.moved.join(", ")} out of the vault into ${result.archive}.`,
+    dropped.length > 0
+      ? `Deleted ${dropped.length} rebuildable file(s) instead of archiving them (index, caches, ` +
+        `generated pages; ${describeBytes(result.skipped_bytes)}, recreated by a rebuild): ` +
+        `${summariseList(dropped.map((d) => `${d.path} (${describeBytes(d.bytes)})`))}. ` +
+        "Everything else was moved into the archive, not deleted."
+      : "Nothing was deleted: everything was moved into the archive.",
+    `late legacy writes imported first: ${result.imported}`,
+  ];
+  lines.push(...cohortLines(result));
+  if (result.forced && result.stopped.length > 0) {
+    lines.push(
+      `forced: ${result.stopped.join(", ")} will no longer reach the brain store until migrated`,
+    );
+  }
+  return lines;
 }

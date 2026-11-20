@@ -116,7 +116,9 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // 34 -> 33: that module keeps the three files in the device-local folder
 // of all stores instead, never in a vault, and the three rows leave the
 // registry.
-const SWEPT_POPULATION_SIZE = 33;
+// 33 -> 34: the migration doctor check joins, excused: it lists what a
+// vault whose legacy tree left still holds of this machine's legacy folder.
+const SWEPT_POPULATION_SIZE = 34;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,

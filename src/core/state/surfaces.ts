@@ -1457,6 +1457,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
  */
 export const STATE_SURFACE_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/core/brain/doctor/migration-check.ts",
+    "it only READS: on a switched machine whose vault no longer holds the legacy Brain/ tree, " +
+      "the doctor lists what the vault still holds of this machine's legacy " +
+      "`.open-second-brain/` folder (files the vault's sync never carried) to name them and the " +
+      "removal command. It writes nothing there; the surfaces of that folder are the rows above",
+  ],
+  [
     "src/core/state/machine-state.ts",
     "it RELOCATES every surface rather than owning one: it names the directory only to copy, " +
       "once, the `.open-second-brain/` an older release kept in a bare vault into the " +

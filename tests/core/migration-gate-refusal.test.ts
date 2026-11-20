@@ -127,6 +127,9 @@ describe("a run that is still running", () => {
       expect(refusal.message).toContain("Try again when it has finished");
       expect(refusal.retry).toBe("later");
       expect(refusal.holder).toBe("running");
+      // Waiting is the remedy: the command that continues a stopped run
+      // is refused beside a live one.
+      expect(refusal.next_command).toBeNull();
     });
   }
 
@@ -200,6 +203,8 @@ describe("how the holder of the gate is judged", () => {
     expect(refusal.retry).toBe("later");
     expect(refusal.message).toContain("cannot be told");
     expect(refusal.message).toContain("o2b brain migrate-store --force-release-gate");
+    // Its process is alive: neither continuing nor forcing is the command.
+    expect(refusal.next_command).toBeNull();
   });
 });
 

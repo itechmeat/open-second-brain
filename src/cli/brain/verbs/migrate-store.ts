@@ -104,7 +104,18 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
     // can end. Its stderr is the device-local worker log: kept to its tail
     // within this run.
     boundStderrToLog(process.stderr, autoMigrationWorkerLogPath(vault));
-    runAutoStoreMigration(vault, { lockToken: autoToken, configPath: config });
+    // The log says what the worker did, not only how it crashed: its start,
+    // each step with its time, and its outcome.
+    const began = performance.now();
+    workerLogLine(
+      `the automatic store migration worker (process ${process.pid}) starts for ${vault}`,
+    );
+    const outcome = runAutoStoreMigration(vault, {
+      lockToken: autoToken,
+      configPath: config,
+      progress: workerLogLine,
+    });
+    workerLogLine(describeAutoWorkerOutcome(outcome, performance.now() - began));
     return 0;
   }
   if (flags["dry-run"] !== true) {
@@ -406,4 +417,32 @@ export function renderDryRun(plan: MigrationDryRun): string {
       : "The migration cannot run until every unmapped entry has a destination.",
   );
   return out.join("\n") + "\n";
+}
+
+/** The worker log's last line: how the attempt ended, in how long, and what to run when it did not finish. */
+export function describeAutoWorkerOutcome(
+  run: ReturnType<typeof runAutoStoreMigration>,
+  elapsedMs: number,
+): string {
+  const seconds = Math.round(elapsedMs / 100) / 10;
+  const parts = [`outcome ${run.outcome} after ${seconds} s`];
+  if (run.imported !== null) parts.push(`${run.imported} item(s) imported`);
+  if (run.wait !== null) {
+    parts.push(
+      run.wait.reason ??
+        `waits for ${run.wait.missing.length} store shard(s) of ${run.wait.firstMachines.join(", ") || "another device"}`,
+    );
+  }
+  if (run.error !== null) parts.push(run.error);
+  if (run.manualCommand !== null) parts.push(`run \`${run.manualCommand}\` to run it yourself`);
+  return parts.join("; ");
+}
+
+/** One line of the worker log: the time, then what happened. Never throws. */
+function workerLogLine(text: string): void {
+  try {
+    process.stderr.write(`${new Date().toISOString()} ${text}\n`);
+  } catch {
+    // a log that cannot be written never stops the worker
+  }
 }

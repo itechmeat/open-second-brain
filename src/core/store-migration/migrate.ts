@@ -264,6 +264,15 @@ export interface MigrationOptions {
    * the operator's to run.
    */
   readonly automatic?: boolean;
+  /**
+   * Each step the run records in its progress file (`migration-gate.ts`),
+   * with the import's counts once known: the automatic worker writes them
+   * to its log, `o2b update` to stderr. Called after every import batch.
+   */
+  readonly onProgress?: (
+    step: string,
+    counts?: { readonly journaled: number; readonly planned: number },
+  ) => void;
 }
 
 export interface MigrationResult {
@@ -721,10 +730,31 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
   // it to its holder.
   let held = false;
   let failure: { readonly error: unknown } | null = null;
+  // How far the run is, its step and, once its import began, its counts:
+  // the one progress file (`migration-gate.ts`), read by the writers it
+  // refuses, the status block and the doctor. Written from the moment this
+  // run holds the gate, so a write refused in the first seconds of the run
+  // (the settle wait, the checks made again under the gate) names the step.
+  let step = "";
+  let counts: { journaled: number; planned: number } | undefined;
+  const progress = (text: string = step): void => {
+    step = text;
+    recordMigrationGateProgress(state.run_id, step, counts);
+    try {
+      options.onProgress?.(step, counts);
+    } catch {
+      // a report of the progress never stops the run
+    }
+  };
   options.hooks?.beforeGate?.();
   try {
-    quiesceLegacyWriters(vault, state.run_id, options.settleMs ?? MIGRATION_SETTLE_MS);
+    // Only once the gate is this run's: the progress file is one per
+    // machine, and a run refused at the gate must not replace the holder's.
+    quiesceLegacyWriters(vault, state.run_id, options.settleMs ?? MIGRATION_SETTLE_MS, () =>
+      progress("the gate is closed; waiting for writers in flight to settle"),
+    );
     held = true;
+    progress("the gate is closed; checking the legacy tree again before the backups");
     // Every fact the run decided on before it held the gate is read again:
     // another run may have switched this device, recorded or rolled back a
     // run, or brought a done record in the meantime.
@@ -750,15 +780,6 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // says it is a migration's, which is how the next run on this vault
     // recognises it (`stoppedUnswitchedRun`).
     options.hooks?.atStep?.(MIGRATION_STEP.gateTaken);
-    // How far the run is, its step and, once its import began, its counts:
-    // the one progress file (`migration-gate.ts`), read by the writers it
-    // refuses, the status block and the doctor.
-    let step = "";
-    let counts: { journaled: number; planned: number } | undefined;
-    const progress = (text: string = step): void => {
-      step = text;
-      recordMigrationGateProgress(state.run_id, step, counts);
-    };
     progress("taking the backups");
     save({});
     options.hooks?.atStep?.(MIGRATION_STEP.gateClosed);

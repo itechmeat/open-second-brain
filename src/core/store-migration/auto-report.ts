@@ -11,6 +11,10 @@
  * files of `auto-state.ts`. It never claims, writes or clears anything.
  */
 
+import {
+  describeSelfHealUpgradeLock,
+  readSelfHealUpgradeLock,
+} from "../maintenance/self-heal-upgrade-state.ts";
 import { autoStoreMigrationSetting, describeAutoStoreMigrationProblem } from "../config.ts";
 import {
   MIGRATE_STORE_COMMAND,
@@ -180,6 +184,13 @@ export interface ReportFacts {
   readonly rollbackPending: "unfinished" | "unreadable" | null;
   /** How far this device's run in progress is (the gate's progress file, `migration-gate.ts`), or null. */
   readonly progress?: MigrationGateProgress | null;
+  /**
+   * A live managed-file upgrade of this machine holds its lock, which keeps
+   * the migration worker from starting the migration (it runs the upgrade
+   * first), as one sentence; absent or null otherwise. A claim another
+   * machine's sync brought here holds nothing (`self-heal-upgrade-state.ts`).
+   */
+  readonly upgradeLock?: string | null;
 }
 
 /** The report for `vault` on this machine. Never throws on a missing file. */
@@ -217,7 +228,18 @@ export function autoMigrationReport(source: AutoMigrationReportSource): AutoMigr
         ? null
         : g.state.rollback,
     progress: runProgress(g.context.own),
+    upgradeLock: upgradeLockText(source.vault, now),
   });
+}
+
+/** The live upgrade holding the migration off on `vault`, as one sentence, or null. */
+function upgradeLockText(vault: string, now: Date): string | null {
+  try {
+    const holder = readSelfHealUpgradeLock(vault, now);
+    return holder.kind === "here" ? describeSelfHealUpgradeLock(holder) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The lost worker's sentence for `vault`, or null (read judged exactly). */
@@ -484,6 +506,18 @@ function decisionReport(d: GateDecision, f: ReportFacts): AutoMigrationReport {
       if (f.waiting !== null) return waitingReport(f, f.waiting, "tries again");
       if (f.failure !== null) return failedReport(f, f.failure, true, "tries again");
       if (f.lostWorker != null) return lostWorkerReport(f.lostWorker);
+      if (f.upgradeLock != null) {
+        return report(AUTO_MIGRATION_STATE.pending, {
+          automatic: true,
+          message:
+            "a migration into the brain store is available on this machine, and waits for " +
+            `this machine's managed-file upgrade to end: ${reportableText(f.upgradeLock)}`,
+          nextStart:
+            "runs the migration in the background once that upgrade has ended (a claim older " +
+            "than an hour is taken over)",
+          manualCommand: manual,
+        });
+      }
       return report(AUTO_MIGRATION_STATE.pending, {
         automatic: true,
         message: "a migration into the brain store is available on this machine",

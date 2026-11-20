@@ -974,9 +974,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     categories: [C.lockPrimitive, C.retentionDelete],
     calls: ["unlinkSync", "writeFileSync"],
     reason:
-      "the automatic-upgrade worker lock is an exclusive create (`wx`) of a token file in " +
-      "`.open-second-brain/`, released by unlinking it; routing it through the atomic " +
-      "writer would lose the exclusivity that makes it a lock. The failed-upgrade marker is " +
+      "the automatic-upgrade worker lock is an exclusive create (`wx`) of a claim record " +
+      "(token, process, machine) in `.open-second-brain/`, released by unlinking it; routing " +
+      "the create through the atomic writer would lose the exclusivity that makes it a lock " +
+      "(the worker's stamp of its own pid on a claim it holds goes through " +
+      "`atomicWriteFileSync`). The failed-upgrade marker is " +
       "written through `atomicWriteFileSync` and unlinked once nothing is pending, which is " +
       "this tool's own per-device state, never a note.",
   },
