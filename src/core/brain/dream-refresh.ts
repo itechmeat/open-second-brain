@@ -137,12 +137,22 @@ export interface ApplyEvidenceEntry {
   readonly fromPrivatePartition?: true;
 }
 
-export function scanApplyEvidence(vault: string | null): ApplyEvidenceEntry[] {
+/**
+ * Every apply-evidence entry of the log, oldest first. `checkpoint` is
+ * called before each day (the pass's safeguard): a migrated history holds
+ * months of days, and a pass past its deadline stops here, before it has
+ * written anything, rather than after the whole walk.
+ */
+export function scanApplyEvidence(
+  vault: string | null,
+  checkpoint: () => void = () => {},
+): ApplyEvidenceEntry[] {
   const out: ApplyEvidenceEntry[] = [];
   const mergeAliases = new Map<string, string>();
   // Shard-aware (Memory Integrity Suite): merged per-day reads.
   const log = logDayReader(vault);
   for (const date of log.dates) {
+    checkpoint();
     const { entries } = log.day(date);
     for (const e of entries) {
       if (e.eventType === BRAIN_LOG_EVENT_KIND.merge) {
@@ -238,6 +248,8 @@ export function planRefresh(
   cfg: BrainConfig,
   now: Date,
   plan: PlanState,
+  /** Called before each preference (the pass's safeguard); planning writes nothing. */
+  checkpoint: () => void = () => {},
 ): RefreshResult {
   const confirmed = new Set<string>();
   const updated = new Map<string, RefreshUpdate>();
@@ -258,6 +270,7 @@ export function planRefresh(
   const retiringSlugs = new Set(plan.retires.map((r) => r.slug));
 
   for (const rec of scan.preferences) {
+    checkpoint();
     const slug = rec.pref.id.startsWith("pref-") ? rec.pref.id.slice("pref-".length) : rec.pref.id;
     if (retiringSlugs.has(slug)) continue;
     // The counters the preference holds now, counted by the rule the scan

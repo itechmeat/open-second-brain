@@ -16,8 +16,10 @@ import {
   isProgressOutcome,
   PROGRESS_OUTCOME,
   PROGRESS_OUTCOMES,
+  attachStepProgress,
   progressIsLegal,
   renderProgressLine,
+  renderProgressStep,
 } from "../../src/cli/progress-rail.ts";
 import { advisoryIsLegal } from "../../src/cli/advisory-rail.ts";
 import { COMMANDS_WITH_INTERNAL_JSON, withJsonFallback } from "../../src/cli/json-helpers.ts";
@@ -86,6 +88,43 @@ describe("progress rendering", () => {
   test("an event kind this build does not know is a defect, not a dropped line", () => {
     const attached = attachProgress({ command: "brain", argv: ["dream"], jsonRequested: false });
     expect(() => attached.sink?.({ ...EVENT, kind: "flying" as never })).toThrow(/unknown event/);
+  });
+});
+
+/** {@link EVENT} as another kind of event, for the step renderer. */
+function at(
+  kind: string,
+  extra: Record<string, unknown> = {},
+): Parameters<typeof renderProgressStep>[0] {
+  return { ...EVENT, kind, ...extra } as unknown as Parameters<typeof renderProgressStep>[0];
+}
+
+describe("step lines on a terminal", () => {
+  test("a stage entered, the end and a stop are one short line each; an advance is none", () => {
+    expect(renderProgressStep(at(PROGRESS_KIND.started, { stage: "topics" }))).toBe(
+      "dream: topics\n",
+    );
+    expect(renderProgressStep(at(PROGRESS_KIND.started, { stage: "plan", total: 260 }))).toBe(
+      "dream: plan (260)\n",
+    );
+    expect(renderProgressStep(at(PROGRESS_KIND.advanced))).toBeNull();
+    expect(renderProgressStep(at(PROGRESS_KIND.finished))).toBe("dream: done\n");
+    expect(
+      renderProgressStep(at(PROGRESS_KIND.stopped, { reason: PROGRESS_REASON.timedOut })),
+    ).toBe(`dream: stopped in scan (${PROGRESS_REASON.timedOut})\n`);
+  });
+
+  test("only an interactive stderr without JSON gets them", () => {
+    const stream = { command: "brain", argv: ["dream"], jsonRequested: false };
+    expect(attachStepProgress({ ...stream, interactive: false })).toBeUndefined();
+    expect(
+      attachStepProgress({ ...stream, jsonRequested: true, interactive: true }),
+    ).toBeUndefined();
+    const lines: string[] = [];
+    const sink = attachStepProgress({ ...stream, interactive: true }, (l) => lines.push(l));
+    sink?.(at(PROGRESS_KIND.started, { stage: "view" }));
+    sink?.(at(PROGRESS_KIND.advanced, { stage: "view" }));
+    expect(lines).toEqual(["dream: view\n"]);
   });
 });
 

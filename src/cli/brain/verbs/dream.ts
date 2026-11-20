@@ -60,7 +60,7 @@ import {
 } from "../../../core/topics/decide-auto.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
-import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
+import { attachProgress, attachStepProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import {
   brainVerbContext,
   describeErrorChain,
@@ -540,6 +540,18 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ? attachProgress({ command: "brain", argv: ["dream"], jsonRequested: asJson })
       : null;
   reportProgressRefusal(observation);
+  // Without `--progress`, a terminal still sees the step names, so a long
+  // first pass over a migrated store is not mistaken for a hang.
+  const steps =
+    observation === null
+      ? attachStepProgress({
+          command: "brain",
+          argv: ["dream"],
+          jsonRequested: asJson,
+          interactive: process.stderr.isTTY === true,
+        })
+      : undefined;
+  const sink = observation?.sink ?? steps;
   // The model verdicts are decided before the pass (design D10, D20):
   // only a live pass decides; a dry run gets the deterministic result.
   const dryRun = Boolean(flags["dry-run"]);
@@ -557,7 +569,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
       ...(agent ? { agentName: agent } : {}),
       safeguard: guard(),
-      ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
+      ...(sink !== undefined ? { onProgress: sink } : {}),
       ...(gates !== null ? { gates } : {}),
       ...(config !== undefined ? { configPath: config } : {}),
     });

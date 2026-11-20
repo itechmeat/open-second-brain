@@ -29,6 +29,7 @@ import { join } from "node:path";
 
 import { readDeviceId, resolveAgentName, resolveVault } from "../config.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
+import { collectBetweenSteps } from "../runtime/collect-garbage.ts";
 import { inspectStore, openStore, type StoreHandle } from "../store/store-open.ts";
 import { runAutoTransition } from "../store-migration/auto-transition.ts";
 import { deviceStateDirFor, resolveConfiguredStoreRoot } from "../store/store-paths.ts";
@@ -51,6 +52,12 @@ export interface AutoViewOptions {
   readonly now?: () => number;
   /** Stop between pages once this many milliseconds have passed. */
   readonly budgetMs?: number;
+  /**
+   * Called once the store is known to be in use here and the pass is not
+   * throttled, before anything is read: a dream pass opens its `view`
+   * progress stage there.
+   */
+  readonly onStart?: () => void;
 }
 
 export type AutoViewResult =
@@ -103,6 +110,7 @@ export function runAutoViewPass(options: AutoViewOptions): AutoViewResult | null
     // The budget runs from the start of the pass, the transition import
     // below included: the whole pass is synchronous, so nothing else can
     // stop it inside the hook's ceiling. Measured on the pass's own clock.
+    options.onStart?.();
     const started = now();
     const vault = resolveVault(options.configPath);
     const agent = resolveAgentName(options.configPath);
@@ -117,6 +125,10 @@ export function runAutoViewPass(options: AutoViewOptions): AutoViewResult | null
       trigger: options.trigger,
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
+    // The import reads the whole store, shard by shard, and keeps little of
+    // it; its garbage is collected before the render reads the store again,
+    // or the pass's peak memory is the two reads together.
+    collectBetweenSteps();
     const target = resolveViewTarget(store.root, options.configPath, vault);
     const budget = options.budgetMs;
     return runViewPass(store, {

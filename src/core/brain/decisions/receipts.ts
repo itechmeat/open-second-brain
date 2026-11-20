@@ -254,6 +254,65 @@ export function appendDecisionChangeReceipt(
   vault: string,
   input: AppendReceiptInput,
 ): AppendReceiptResult {
+  return appendReceiptAgainst(vault, input, (key, readOptions) =>
+    readDecisionChangeReceipts(vault, readOptions).receipts.find((r) => r.idempotency_key === key),
+  );
+}
+
+/** Appends receipts to one vault against one read of the receipts on disk. */
+export interface ReceiptBatch {
+  /** {@link appendDecisionChangeReceipt}, answered from the batch's read. */
+  append(input: AppendReceiptInput): AppendReceiptResult;
+}
+
+/**
+ * A batch of {@link appendDecisionChangeReceipt} calls on one vault: the
+ * receipts already on disk are read once per config, at the first append
+ * that needs them, instead of once per receipt (a dream pass that refreshes
+ * every preference of a large store used to re-read the whole ledger for
+ * each), and each receipt the batch appends counts as on disk for the ones
+ * after it. Each append returns, or throws, what the single append would;
+ * a failed read is not kept, so the next append reads again.
+ */
+export function openReceiptBatch(vault: string): ReceiptBatch {
+  const known = new Map<string, Map<string, DecisionChangeReceipt>>();
+  const byKeyFor = (readOptions: { readonly configPath?: string }) => {
+    const config = readOptions.configPath ?? "";
+    let byKey = known.get(config);
+    if (byKey === undefined) {
+      byKey = new Map();
+      for (const receipt of readDecisionChangeReceipts(vault, readOptions).receipts) {
+        if (!byKey.has(receipt.idempotency_key)) byKey.set(receipt.idempotency_key, receipt);
+      }
+      known.set(config, byKey);
+    }
+    return byKey;
+  };
+  return {
+    append: (input) => {
+      const result = appendReceiptAgainst(vault, input, (key, readOptions) =>
+        byKeyFor(readOptions).get(key),
+      );
+      const byKey = known.get(input.configPath ?? "");
+      if (result.appended && byKey !== undefined) {
+        byKey.set(result.receipt.idempotency_key, result.receipt);
+      }
+      return result;
+    },
+  };
+}
+
+/** The receipt already on disk under an idempotency key, for one config. */
+type ExistingReceipt = (
+  key: string,
+  readOptions: { readonly configPath?: string },
+) => DecisionChangeReceipt | undefined;
+
+function appendReceiptAgainst(
+  vault: string,
+  input: AppendReceiptInput,
+  existingOf: ExistingReceipt,
+): AppendReceiptResult {
   // Closed-schema gate: reject any unexpected field before doing anything.
   for (const key of Object.keys(input)) {
     if (!ALLOWED_INPUT_KEYS.has(key)) {
@@ -292,9 +351,7 @@ export function appendDecisionChangeReceipt(
   // instead of appending a second copy of the same change.
   const readOptions = input.configPath !== undefined ? { configPath: input.configPath } : {};
   const storeOnly = isStoreOnly({ vault, ...readOptions });
-  const existing = readDecisionChangeReceipts(vault, readOptions).receipts.find(
-    (r) => r.idempotency_key === idempotencyKey,
-  );
+  const existing = existingOf(idempotencyKey, readOptions);
   if (existing) {
     // The same `path` rule as an append: the shard on an unswitched
     // machine, the store ledger once switched (no legacy path that never

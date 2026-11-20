@@ -52,7 +52,7 @@ import { resolveAgentName, resolveStoreDualWrite } from "../config.ts";
 import { ORIGIN_CHANNEL, resolveOriginChannel } from "../origin-channel.ts";
 import { resolveAppendShardId } from "../brain/ledger-shards.ts";
 import { readVaultIdentity } from "../brain/vault-identity.ts";
-import { appendRecord, PartitionUnavailableError, type AppendResult } from "./appender.ts";
+import { appendRecords, PartitionUnavailableError, type AppendResult } from "./appender.ts";
 import {
   STORE_PARTITIONS,
   VAULT_ID_FIELD,
@@ -386,8 +386,12 @@ export function appendStoreRecords(
     for (const [, at] of placed) {
       if (!store.partitions.has(at)) throw new PartitionUnavailableError(at, store.root);
     }
-    return placed.map(([record, at]) =>
-      appendRecord(store, {
+    // One batch (`appendRecords`): one clock tick and one write and fsync
+    // per shard for the whole operation, in order, instead of three synced
+    // writes per record.
+    return appendRecords(
+      store,
+      placed.map(([record, at]) => ({
         partition: at,
         stream: record.stream,
         ...(record.ledger !== undefined ? { ledger: record.ledger } : {}),
@@ -397,7 +401,7 @@ export function appendStoreRecords(
         scope: record.scope ?? null,
         topic: record.topic ?? null,
         body: { ...record.body, [VAULT_ID_FIELD]: vaultId },
-      }),
+      })),
     );
   } catch (err) {
     if (typeof err === "object" && err !== null) {

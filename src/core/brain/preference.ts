@@ -437,6 +437,14 @@ export interface MoveToRetiredOptions {
    * not change the legacy file.
    */
   readonly authority?: Authority;
+  /**
+   * The store's fold entry of the preference, already read by the caller
+   * (a store-only retire). A dream pass retires many preferences in one
+   * loop and reads the fold once for all of them; without this each retire
+   * re-read the whole `events` stream, since the previous retire's record
+   * changed the shard the fold cache is stamped on. Absent: read here.
+   */
+  readonly storeEntry?: StorePreference;
 }
 
 export interface MoveToRetiredResult {
@@ -1385,6 +1393,26 @@ export function loadPreference(
 }
 
 /**
+ * {@link loadPreference} of a store-only machine for a fold entry the
+ * caller already read (a dream pass reads the fold once for its whole
+ * retire loop): the same parse of the same meta, without reading the fold
+ * again after the caller's previous write moved its cache stamp. `null`
+ * for a retired entry, as `loadPreference` answers.
+ */
+export function preferenceFromStoreEntry(
+  vault: string | null,
+  slug: string,
+  entry: StorePreference,
+  options: ParsePreferenceOptions = {},
+): BrainPreference | null {
+  if (!entry.state.exists) return null;
+  const page = storeEntryMeta(entry, slug);
+  return page.retired
+    ? null
+    : preferenceFromMeta(page.meta, preferencePathOf(vault, slug), options);
+}
+
+/**
  * Whether the preference `pref-<slug>` is active, retired or absent: its
  * pages on an unswitched machine, the store's fold once switched.
  */
@@ -1778,7 +1806,9 @@ export function moveToRetired(
   // Store-only (task 2.10): the preference is read from the store's fold
   // and the retire is records only; no page is written or removed.
   const storeOnly = vault === null || preferencesStoreOnly(vault);
-  const [meta, body] = storeOnly ? storeRetireSource(prefPath) : parseFrontmatter(prefPath);
+  const [meta, body] = storeOnly
+    ? storeRetireSource(prefPath, opts.storeEntry)
+    : parseFrontmatter(prefPath);
   if (meta["kind"] !== "brain-preference") {
     throw new Error(
       `moveToRetired: expected a preference file; got kind ${JSON.stringify(meta["kind"])} (${prefPath})`,
@@ -1870,7 +1900,8 @@ export function moveToRetired(
     // Once switched, a preference the fold holds as private (any of its
     // records sits in `private/`, whatever its fields say) keeps its
     // retire there too: one entity, one partition, as the other writers.
-    const heldPrivate = storeOnly && (storePreferenceEntry(slug)?.private ?? true);
+    const heldPrivate =
+      storeOnly && ((opts.storeEntry ?? storePreferenceEntry(slug))?.private ?? true);
     return preferenceStoreRecords(
       oldId,
       lifecycle,
@@ -1971,9 +2002,17 @@ export function moveToRetired(
  * page is not written). Throws when the fold holds no active preference
  * of that id, as the page read throws for a missing page.
  */
-function storeRetireSource(prefPath: string): [FrontmatterMap, string] {
+function storeRetireSource(
+  prefPath: string,
+  entry: StorePreference | undefined,
+): [FrontmatterMap, string] {
   const slug = basename(prefPath, ".md").slice("pref-".length);
-  const page = slug === "" ? null : storePreferenceMeta(slug);
+  const page =
+    slug === ""
+      ? null
+      : entry !== undefined && entry.state.exists
+        ? storeEntryMeta(entry, slug)
+        : storePreferenceMeta(slug);
   if (page === null || page.retired) {
     throw new Error(`moveToRetired: the brain store holds no active preference pref-${slug}`);
   }

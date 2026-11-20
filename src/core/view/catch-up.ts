@@ -10,7 +10,7 @@
  * them.
  */
 
-import type { StorePartition } from "../store/constants.ts";
+import type { StorePartition, StoreStream } from "../store/constants.ts";
 import { compareRecords, type StoreRecord } from "../store/envelope.ts";
 import { prepareRecords } from "../store/fold.ts";
 import { observeClock } from "../store/clock-store.ts";
@@ -18,7 +18,11 @@ import { parseHlc } from "../store/hlc.ts";
 import { readShard, shardReadGap } from "../store/reader.ts";
 import { trackSeenShards } from "../store/seen-shards.ts";
 import { listShards } from "../store/shard-list.ts";
-import { readPartition, type UnreadableShard } from "../store/state-digest.ts";
+import {
+  forEachPartitionShard,
+  readPartition,
+  type UnreadableShard,
+} from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 
@@ -45,6 +49,43 @@ export function catchUp(store: StoreHandle, now?: () => number): ViewCatchUp {
     if (last !== undefined && (newest === undefined || compareRecords(last, newest) > 0)) {
       newest = last;
     }
+  }
+  if (newest !== undefined) {
+    observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
+  }
+  return { records, unreadable };
+}
+
+/**
+ * {@link catchUp} keeping only the records `keep` passes, judged shard by
+ * shard as each is read: for a pass that folds a few kinds out of a large
+ * store (topic planning reads signals, notes and topic records, not the
+ * whole migrated log), so the records it drops are never all held at once.
+ * The clock is raised past the newest record read, kept or not, exactly as
+ * {@link catchUp} raises it, and an unreadable shard is reported the same
+ * way.
+ */
+export function catchUpWhere(
+  store: StoreHandle,
+  keep: (record: StoreRecord, stream: StoreStream) => boolean,
+  now?: () => number,
+): ViewCatchUp {
+  const records = new Map<StorePartition, ReadonlyArray<StoreRecord>>();
+  const unreadable: Array<UnreadableShard & { partition: StorePartition }> = [];
+  let newest: StoreRecord | undefined;
+  for (const partition of store.partitions) {
+    const kept: StoreRecord[] = [];
+    forEachPartitionShard(
+      partitionDir(store.root, partition),
+      { onUnreadable: (shard) => unreadable.push({ ...shard, partition }) },
+      (shard) => {
+        for (const record of shard.records) {
+          if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
+          if (keep(record, shard.stream)) kept.push(record);
+        }
+      },
+    );
+    records.set(partition, prepareRecords(kept).records);
   }
   if (newest !== undefined) {
     observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);

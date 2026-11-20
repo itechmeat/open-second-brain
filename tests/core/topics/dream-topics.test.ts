@@ -3,16 +3,23 @@
  * view writer the summary lists the topic it created with the command
  * that undoes it, and the render that follows writes the topic's page.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
 import { withTopicPass } from "../../../src/core/brain/dream-tail.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
-import { appendRecord } from "../../../src/core/store/appender.ts";
+import * as appender from "../../../src/core/store/appender.ts";
+import { appendRecord, appendRecords } from "../../../src/core/store/appender.ts";
 import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { emptyTopicVerdicts } from "../../../src/core/topics/verdicts.ts";
+import {
+  PROGRESS_KIND,
+  PROGRESS_REASON,
+  type ProgressEvent,
+} from "../../../src/core/brain/progress.ts";
+import { SafeguardTimeoutError } from "../../../src/core/brain/safeguard.ts";
 import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import {
   AUTO_NOW,
@@ -87,6 +94,94 @@ describe("topic planning in a dream pass", () => {
     const second = dream(vault, { configPath: config });
     expect(second.topics?.report.status).toBe("planned");
     expect(second.changed).toBe(true);
+  });
+
+  test("the progress stream reports the topic and view steps before it finishes", () => {
+    seedCluster(store);
+    dream(vault); // the claim's wait
+    const events: ProgressEvent[] = [];
+    dream(vault, { onProgress: (e) => events.push(e) });
+    const started = events.filter((e) => e.kind === PROGRESS_KIND.started).map((e) => e.stage);
+    // On a large store these two steps are most of the pass; a stream that
+    // finished before them read as a pass that hung.
+    expect(started.slice(-2)).toEqual(["topics", "view"]);
+    expect(events.at(-1)?.kind).toBe(PROGRESS_KIND.finished);
+  });
+
+  test("a deadline that passes at the topic step ends the stream stopped, not finished", () => {
+    seedCluster(store);
+    dream(vault); // the claim's wait
+    const events: ProgressEvent[] = [];
+    let inTopics = false;
+    const guard = {
+      operation: "dream",
+      timeoutMs: 1,
+      checkpoint: () => {
+        if (inTopics) throw new SafeguardTimeoutError("dream", 1);
+      },
+    };
+    const out = dream(vault, {
+      safeguard: guard,
+      onProgress: (e) => {
+        events.push(e);
+        if (e.kind === PROGRESS_KIND.started && e.stage === "topics") inTopics = true;
+      },
+    });
+    expect(out.topics).toBeUndefined();
+    const last = events.at(-1);
+    expect(last?.kind).toBe(PROGRESS_KIND.stopped);
+    expect(last?.stage).toBe("topics");
+    expect(last?.reason).toBe(PROGRESS_REASON.timedOut);
+    expect(events.some((e) => e.kind === PROGRESS_KIND.finished)).toBe(false);
+  });
+
+  test("a failed batch of assignments keeps the earlier batches in the report", () => {
+    // More members than one write batch takes, so the topic's assigns go
+    // in two batches; the second fails.
+    const n = 1100;
+    appendRecords(
+      store,
+      Array.from({ length: n }, (_, i) => ({
+        partition: "shared" as const,
+        stream: "events" as const,
+        kind: "signal",
+        agent: "agent-1",
+        body: {
+          id: `sig-2026-11-06-b${i}`,
+          path: `Brain/inbox/b${i}.md`,
+          staged: false,
+          frontmatter: {
+            principle: `Release notes list every migration step ${i}`,
+            project: "o2b",
+            session: i % 2 === 0 ? "s1" : "s2",
+          },
+          raw: null,
+          raw_shape: "bare",
+        },
+      })),
+      { now: () => AUTO_NOW - 5_000 },
+    );
+    dream(vault); // the claim's wait
+    let assignBatches = 0;
+    const real = appender.appendRecords;
+    const spy = spyOn(appender, "appendRecords").mockImplementation((s, inputs, opts) => {
+      if (inputs.some((input) => input.kind === "assign")) {
+        assignBatches += 1;
+        if (assignBatches === 2) throw new Error("disk full");
+      }
+      return real(s, inputs, opts);
+    });
+    let report;
+    try {
+      report = dream(vault).topics?.report;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(report?.status).toBe("error");
+    if (report?.status !== "error") return;
+    expect(report.created).toHaveLength(1);
+    // Before: 0, as if none of the first batch's assigns had landed.
+    expect(report.created[0]!.members).toBe(1024);
   });
 
   test("a pass whose deadline has passed plans no topic", () => {

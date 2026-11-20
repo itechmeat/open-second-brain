@@ -32,6 +32,7 @@ import { join, relative, sep } from "node:path";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { applyDreamPlan } from "../../../src/core/brain/dream-apply.ts";
 import { scanBrain } from "../../../src/core/brain/dream-scan.ts";
+import { logDayReader } from "../../../src/core/brain/log-days.ts";
 import type { PlanState } from "../../../src/core/brain/dream-plan.ts";
 import type { RefreshResult } from "../../../src/core/brain/dream-refresh.ts";
 import { runHealEnrichment } from "../../../src/core/brain/heal-run.ts";
@@ -302,6 +303,24 @@ describe("dream safeguard checkpoints", () => {
     const summary = dream(vault, { now: NOW, safeguard: guard });
     expect(summary.changed).toBe(false);
     expect(calls()).toBe(1 + scan);
+  });
+
+  test("the evidence walk and the refresh checkpoint once per log day and per preference", () => {
+    // The two planning walks that grow with the history: a migrated vault
+    // holds months of log days and hundreds of preferences, and before
+    // they were guarded the pass checked its deadline only around them.
+    seedPromotion();
+    dream(vault, { now: NOW });
+    const days = logDayReader(vault).dates.length;
+    const prefs = scanBrain(vault).preferences.length;
+    // Non-vacuous: the first pass left a preference and a log day.
+    expect(days).toBeGreaterThan(0);
+    expect(prefs).toBeGreaterThan(0);
+    const scan = scanCheckpoints();
+    const { guard, calls } = countingGuard(null);
+    const summary = dream(vault, { now: NOW, safeguard: guard });
+    expect(summary.changed).toBe(false);
+    expect(calls()).toBe(1 + scan + days + prefs);
   });
 
   test("the heal enrichment inside a pass is guarded like the step on its own", () => {

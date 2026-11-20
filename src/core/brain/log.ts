@@ -58,6 +58,7 @@ import { isValidDeviceId } from "../config.ts";
 import { listShardedFiles, resolveAppendShardId } from "./ledger-shards.ts";
 import type { DualWriteRecord } from "../store/dual-write.ts";
 import { routeWrite, type StoreWriteError } from "../store/store-write.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 import { acquireDirLock } from "../store/local-lock.ts";
 import { logEventRecord } from "../store/dual-write-records.ts";
 import { operationPrivacy, type PrivacyVerdict } from "../store/operation-privacy.ts";
@@ -394,11 +395,20 @@ export function logEventPrivacyContent(body: Readonly<Record<string, unknown>>):
   return { value: body, opaque: LOG_EVENT_OPAQUE_FIELDS };
 }
 
-export function appendLogEvent(
+/** One event made ready to append: what both appenders below write. */
+interface PreparedLogEvent {
+  readonly diskEvent: BrainLogEntry;
+  readonly ts: { readonly date: string; readonly hms: string };
+  readonly deviceId: string;
+  /** The store record of the event, with its privacy verdict judged. */
+  readonly storeRecord: () => DualWriteRecord;
+}
+
+function prepareLogEvent(
   vault: string | null,
   event: BrainLogEntry,
-  opts: AppendLogEventOptions = {},
-): AppendLogEventResult {
+  opts: AppendLogEventOptions,
+): PreparedLogEvent {
   if (!BRAIN_LOG_EVENT_KIND_SET.has(event.eventType)) {
     throw new Error(
       `appendLogEvent: unknown event kind '${event.eventType}' — must be one of ${Object.values(
@@ -465,6 +475,15 @@ export function appendLogEvent(
     return logEventRecord(diskEvent, isPrivate());
   };
 
+  return { diskEvent, ts, deviceId, storeRecord };
+}
+
+export function appendLogEvent(
+  vault: string | null,
+  event: BrainLogEntry,
+  opts: AppendLogEventOptions = {},
+): AppendLogEventResult {
+  const { diskEvent, ts, deviceId, storeRecord } = prepareLogEvent(vault, event, opts);
   const routed = routeWrite({
     legacy: () => appendLegacyLogEvent(requireLegacyVault(vault), diskEvent, ts, deviceId),
     store: storeRecord,
@@ -496,6 +515,61 @@ export function appendLogEvent(
     recordId: landed.record.id,
     storeShard: `${basename(partitionDir)}/${landed.rel}`,
   };
+}
+
+/**
+ * {@link appendLogEvent} for several events of one operation, in order, as
+ * one write: each event is prepared and judged exactly as a single append
+ * judges it, and its record keeps the partition its own verdict gives it
+ * (`located`), so batching never moves an event between partitions. On a
+ * store-only machine the records are appended in one batch (one clock tick
+ * and one fsync per shard instead of three synced writes per event: a dream
+ * pass over a migrated history writes thousands of events); an unswitched
+ * machine appends each event to its legacy day files, one by one, as a
+ * single append writes it. Throws as {@link appendLogEvent} throws.
+ *
+ * Not all or nothing. A refusal found before the first write (a partition
+ * this machine does not hold, no store, no device id) writes none of the
+ * batch. A failure while writing (a full disk, a lock that cannot be taken)
+ * can leave the shards written before it: a batch whose events fall into
+ * `shared` and `private` is two shards, each written and synced on its
+ * own, and a crash inside one shard's write leaves a prefix of its lines,
+ * as a crash between single appends does. A caller that retries a failed
+ * batch may therefore write again events that already landed; the dream
+ * log, the one caller, does not retry (the next pass writes its own).
+ */
+export function appendLogEvents(
+  vault: string | null,
+  events: ReadonlyArray<BrainLogEntry>,
+  opts: AppendLogEventOptions = {},
+): void {
+  if (events.length === 0) return;
+  const context = {
+    vault,
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  };
+  if (!isStoreOnly(context)) {
+    // Unswitched: each event exactly as a single append writes it.
+    for (const event of events) appendLogEvent(vault, event, opts);
+    return;
+  }
+  const prepared = events.map((event) => prepareLogEvent(vault, event, opts));
+  routeWrite({
+    legacy: () => {
+      const legacyVault = requireLegacyVault(vault);
+      for (const p of prepared) appendLegacyLogEvent(legacyVault, p.diskEvent, p.ts, p.deviceId);
+    },
+    store: () =>
+      prepared.map((p) => {
+        const { private: isPrivate, ...record } = p.storeRecord();
+        return {
+          ...record,
+          located: { partition: isPrivate === true ? "private" : "shared", content: true },
+        };
+      }),
+    context,
+    ...(opts.failOpen === true ? { failOpen: true } : {}),
+  });
 }
 
 /** An unswitched machine has a legacy tree, so it has a vault. */

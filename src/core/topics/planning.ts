@@ -28,7 +28,7 @@
 import { join } from "node:path";
 
 import { readDeviceId, resolveAgentName } from "../config.ts";
-import { appendRecord } from "../store/appender.ts";
+import { appendRecord, appendRecords, type AppendInput } from "../store/appender.ts";
 import {
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
@@ -41,14 +41,14 @@ import { withLocalLock } from "../store/local-lock.ts";
 import { inspectStore, openStore, type StoreHandle } from "../store/store-open.ts";
 import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
 import { newUlid } from "../store/ulid.ts";
-import { catchUp, catchUpSettings, partitionRecords } from "../view/catch-up.ts";
+import { catchUpSettings, catchUpWhere, partitionRecords } from "../view/catch-up.ts";
 import { VIEW_STATE_DIR } from "../view/constants.ts";
 import { foldViewWriter } from "../view/writer-fold.ts";
 import { claimSeen, releaseIfRequested } from "../view/writer.ts";
 import { resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import { TOPIC_ASSIGN_KIND, TOPIC_CREATE_KIND, TOPIC_STREAM } from "./constants.ts";
-import { topicCandidates } from "./candidates.ts";
+import { isTopicPlanningInput, topicCandidates } from "./candidates.ts";
 import { topicBodyRejection } from "./records.ts";
 import { foldTopics } from "./fold.ts";
 import { planTopics, type MergeProposal, type QuietPrompt, type SplitProposal } from "./plan.ts";
@@ -61,6 +61,9 @@ import {
 
 /** The command that undoes one automatic topic record. */
 export const TOPIC_UNDO_COMMAND = "o2b topic undo";
+
+/** Records one batched topic write appends at most (one write and fsync per shard each). */
+const TOPIC_WRITE_BATCH = 1024;
 
 /** Device-local lock target of the planning step. */
 const PLAN_LOCK = "topic-plan";
@@ -96,6 +99,14 @@ export type TopicPlanningReport =
   | TopicPlanningError
   | {
       readonly status: "planned";
+      /**
+       * The records no topic holds that planning read (signals, notes,
+       * decisions), and how many of them name no project: topics are made
+       * only from the records of one project, so a history whose records
+       * name none plans nothing, and the summary says why.
+       */
+      readonly unheld: number;
+      readonly unheldWithoutProject: number;
       readonly created: ReadonlyArray<CreatedTopic>;
       readonly routed: ReadonlyArray<RoutedRecord>;
       readonly merges: ReadonlyArray<MergeProposal>;
@@ -259,7 +270,9 @@ function planUnderLock(
   clock: () => number,
 ): TopicPlanningReport {
   const fence = topicRecordIds(store);
-  const read = catchUp(store, options.now);
+  // Only what planning folds is kept (`isTopicPlanningInput`): a migrated
+  // store's log is mostly events no topic is made of.
+  const read = catchUpWhere(store, isTopicPlanningInput, options.now);
   if (read.unreadable.length > 0) {
     return { status: "incomplete-read", shards: read.unreadable.map((s) => s.path) };
   }
@@ -326,6 +339,54 @@ function planUnderLock(
       options.now !== undefined ? { now: options.now } : {},
     ).record.id;
   };
+  /**
+   * Several records of one kind in one batch (`appendRecords`): one clock
+   * tick and one write and fsync per shard instead of one per record, so a
+   * topic of thousands of members created from a migrated history does not
+   * cost thousands of synced writes. A record whose partition this machine
+   * does not hold is skipped and counted, as {@link append} skips it;
+   * `landed` hears each record written (its entry's index and record id),
+   * one batch at a time.
+   */
+  const appendMany = (
+    entries: ReadonlyArray<{
+      readonly isPrivate: boolean;
+      readonly topic: string;
+      readonly body: Record<string, unknown>;
+    }>,
+    kind: string,
+    landed: (index: number, id: string) => void,
+  ): void => {
+    const held: number[] = [];
+    const inputs: AppendInput[] = [];
+    entries.forEach((entry, i) => {
+      const partition: StorePartition = entry.isPrivate ? "private" : "shared";
+      if (!store.partitions.has(partition)) {
+        skipped += 1;
+        return;
+      }
+      held.push(i);
+      inputs.push({
+        partition,
+        stream: TOPIC_STREAM,
+        kind,
+        agent: options.agent,
+        scope: null,
+        topic: entry.topic,
+        body: { authority: "agent", ...entry.body },
+      });
+    });
+    for (let start = 0; start < inputs.length; start += TOPIC_WRITE_BATCH) {
+      const results = appendRecords(
+        store,
+        inputs.slice(start, start + TOPIC_WRITE_BATCH),
+        options.now !== undefined ? { now: options.now } : {},
+      );
+      // Reported batch by batch, so a later batch that fails leaves the
+      // records of the earlier ones in the report, with their undo.
+      results.forEach((result, j) => landed(held[start + j]!, result.record.id));
+    }
+  };
   const created: Array<Mutable<CreatedTopic>> = [];
   const routed: RoutedRecord[] = [];
   try {
@@ -340,8 +401,13 @@ function planUnderLock(
       ...verdictCounts,
     };
   }
+  const unheld = candidates.filter(
+    (c) => !fold.assignments.has(c.id) && (c.topic === null || fold.canonical(c.topic) === null),
+  );
   return {
     status: "planned",
+    unheld: unheld.length,
+    unheldWithoutProject: unheld.filter((c) => c.project === null).length,
     created,
     routed,
     merges: plan.merges,
@@ -385,24 +451,32 @@ function planUnderLock(
         ...(plannedTopic.verdict !== undefined ? { verdict: plannedTopic.verdict } : {}),
       };
       created.push(entry);
-      for (const member of plannedTopic.members) {
-        if (append(plannedTopic.private, TOPIC_ASSIGN_KIND, topic, { record: member }) !== null) {
-          entry.members += 1;
-        }
-      }
-    }
-    for (const route of plan.routes) {
-      const assign = append(
-        route.private,
+      appendMany(
+        plannedTopic.members.map((member) => ({
+          isPrivate: plannedTopic.private,
+          topic,
+          body: { record: member },
+        })),
         TOPIC_ASSIGN_KIND,
-        route.topic,
-        route.verdict !== undefined
-          ? { authority: "model", record: route.record, verdict: route.verdict }
-          : { record: route.record },
+        () => {
+          entry.members += 1;
+        },
       );
-      if (assign !== null)
-        routed.push({ ...route, assign, undo: undoOf(assign, options.configPath) });
     }
+    appendMany(
+      plan.routes.map((route) => ({
+        isPrivate: route.private,
+        topic: route.topic,
+        body:
+          route.verdict !== undefined
+            ? { authority: "model", record: route.record, verdict: route.verdict }
+            : { record: route.record },
+      })),
+      TOPIC_ASSIGN_KIND,
+      (i, assign) => {
+        routed.push({ ...plan.routes[i]!, assign, undo: undoOf(assign, options.configPath) });
+      },
+    );
     // The item and proposal records the model verdicts decide (design
     // D10): behind the same fence, in the partition the subject or its
     // topic dictates, skipped and counted without that partition.
@@ -501,9 +575,29 @@ export function describeTopicPlanning(
         `${report.created.length} topic(s) created, ${report.routed.length} record(s) routed, ` +
         `${report.merges.length} merge and ${report.splits.length} split proposal(s)` +
         `${modelMergeNote(report.merges)}, ${report.quiet.length} quiet topic(s)` +
-        decidedNote(report)
+        decidedNote(report) +
+        unscopedNote(report)
       );
   }
+}
+
+/**
+ * Why a pass that created nothing created nothing, when the reason is that
+ * the records no topic holds name no project: planning makes a topic only
+ * from the records of one project (a signal's or log event's `project`
+ * field), and the notes and signals the tools write (and a migrated
+ * history of them) carry none. Without this the summary read as if there
+ * were nothing to plan. No decision model is involved: the deterministic
+ * rule is the whole of it.
+ */
+function unscopedNote(report: Extract<TopicPlanningReport, { status: "planned" }>): string {
+  if (report.created.length > 0 || report.unheldWithoutProject === 0) return "";
+  const all = report.unheldWithoutProject === report.unheld;
+  return (
+    `; ${all ? "none" : `${report.unheld - report.unheldWithoutProject}`} of the ` +
+    `${report.unheld} record(s) no topic holds name${all ? "s" : ""} a project, and a topic is ` +
+    "made only from the records of one project (a personal topic only on request: o2b topic create)"
+  );
 }
 
 /** ", N decided by a decision model" when records of the pass carry a verdict (design D10). */

@@ -40,8 +40,8 @@ import { withLocalLock } from "../store/local-lock.ts";
 import { textCarriesPrivateRegion, valueCarriesPrivateRegion } from "../store/private-region.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import {
-  catchUp,
   catchUpSettings,
+  catchUpWhere,
   partitionRecords,
   withOwnRecord,
   type ViewCatchUp,
@@ -65,6 +65,7 @@ import {
   confirmedPreferences,
   decisionsPage,
   historyPages,
+  isViewInput,
   sharedPreferences,
   viewEntries,
   type PageModel,
@@ -209,7 +210,7 @@ function ingest(
       ? { records: [], refusal: null }
       : reviewedEdits(page, pageLines(base.text), base.keys, pageLines(text));
   const done = ingestVersion(ctx.store, page, text, reason, reviewed.records, ctx.options);
-  ctx.read = catchUp(ctx.store, ctx.options.now);
+  ctx.read = catchUpWhere(ctx.store, isViewInput, ctx.options.now);
   delete ctx.models;
   return {
     records: done.records,
@@ -326,6 +327,7 @@ function renderPageNow(ctx: PageContext, page: string, path: string): PageReport
 
 /** Write the render records a dead pass left only as intents. */
 function recoverIntents(ctx: PageContext, target: string): void {
+  let wrote = false;
   for (const intent of pendingIntents(ctx.store)) {
     const path = pageFileInside(target, intent.page);
     let disk: Buffer | null = null;
@@ -337,10 +339,14 @@ function recoverIntents(ctx: PageContext, target: string): void {
     const recorded = ownSums(ctx.read, intent.page).has(intent.sum);
     if (disk !== null && bytesSum(disk) === intent.sum && !recorded) {
       writeRender(ctx.store, intent, ctx.options);
+      wrote = true;
     }
     clearIntent(ctx.store, intent.page);
   }
-  ctx.read = catchUp(ctx.store, ctx.options.now);
+  // Read again only when a render record was written: the pass's own read
+  // (taken under the render lock) already holds everything else, and a
+  // second whole-store read cost a large store as much as the first.
+  if (wrote) ctx.read = catchUpWhere(ctx.store, isViewInput, ctx.options.now);
 }
 
 /** Errors of a page another program holds; the page is rendered on a later pass. */
@@ -426,7 +432,7 @@ export function runViewPass(store: StoreHandle, options: ViewPassOptions): ViewP
     // The catch-up is taken under the lock too: a pass that rendered while
     // this one waited wrote render records a read from before the wait
     // would not know, and its pages would then read as a human edit.
-    const read = catchUp(store, options.now);
+    const read = catchUpWhere(store, isViewInput, options.now);
     if (read.unreadable.length > 0) {
       return { status: "incomplete-read", shards: read.unreadable.map((s) => s.path) };
     }

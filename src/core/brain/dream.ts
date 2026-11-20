@@ -87,12 +87,14 @@ import { logShardWikilink } from "./log.ts";
 import {
   OPERATION,
   progressCounter,
+  PROGRESS_REASON,
   progressReasonForError,
   type ProgressCounter,
 } from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { brainDirsForWrite, collisionCandidateName } from "./paths.ts";
 import { isStoreOnly } from "../store/store-only.ts";
+import { collectBetweenSteps } from "../runtime/collect-garbage.ts";
 import { repairLaneEntryIds } from "../store-migration/lane-id-repair.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
@@ -142,6 +144,13 @@ const DREAM_STAGE = Object.freeze({
   apply: "apply",
   log: "log",
   finalize: "finalize",
+  /**
+   * The tail steps that belong to the brain store (`dream-tail.ts`):
+   * entered only where the store is in use and the pass is no dry run, so
+   * a pass on a machine without a store reports the five stages above.
+   */
+  topics: "topics",
+  view: "view",
 } as const);
 
 /** Code carried on the summary when the caller's progress sink failed. */
@@ -213,17 +222,76 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
   const progress = progressCounter(OPERATION.dream, opts.onProgress, {
     onSinkError: (error) => progressFaults.push(errorMessage(error)),
   });
+  // A tail step stopped at the deadline ends the stream there, with its
+  // reason; a step after it still runs, unreported, as before.
+  let stopped = false;
   try {
-    // One read pass for the whole dream: the store-only log is read once
-    // and shared by every preference's evidence walk (log-days.ts).
-    return withLogReadPass(() =>
-      withViewPass(withTopicPass(dreamRun(vault, opts, progress, progressFaults), opts), opts),
+    // One read pass for the consolidation: the store-only log is read once
+    // and shared by every preference's evidence walk (log-days.ts). It
+    // ends before the topic and view steps, which read the store on their
+    // own and never the log days: holding the whole log through them only
+    // added it to their peak memory.
+    const summary = withViewPass(
+      afterStep(
+        withTopicPass(
+          afterStep(withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults))),
+          opts,
+          {
+            start: () => progress.start(DREAM_STAGE.topics),
+            done: () => progress.advance(DREAM_STAGE.topics),
+            stopped: (error) => {
+              stopped = true;
+              progress.stop(progressReasonForError(error) ?? PROGRESS_REASON.failed);
+            },
+          },
+        ),
+      ),
+      opts,
+      {
+        start: () => {
+          if (!stopped) progress.start(DREAM_STAGE.view);
+        },
+        done: () => {
+          if (!stopped) progress.advance(DREAM_STAGE.view);
+        },
+        stopped: (error) => {
+          if (stopped) return;
+          stopped = true;
+          progress.stop(progressReasonForError(error) ?? PROGRESS_REASON.failed);
+        },
+      },
     );
+    // The stream ends after the tail steps, not after the consolidation:
+    // on a large store they are where most of the time goes, and a stream
+    // that reported "finished" before them read as a pass that hung.
+    if (!stopped) progress.finish();
+    return withLateProgressFault(summary, progressFaults);
   } catch (error) {
     const reason = progressReasonForError(error);
-    if (reason !== null) progress.stop(reason);
+    if (reason !== null && !stopped) progress.stop(reason);
     throw error;
   }
+}
+
+/** `value`, once the garbage of the step that made it is collected (`collect-garbage.ts`). */
+function afterStep<T>(value: T): T {
+  collectBetweenSteps();
+  return value;
+}
+
+/**
+ * `summary` with the progress-sink fault the consolidation could not see:
+ * the sink may first throw in a tail step, after the summary was built.
+ */
+function withLateProgressFault(
+  summary: DreamRunSummary,
+  faults: ReadonlyArray<string>,
+): DreamRunSummary {
+  if (faults.length === 0) return summary;
+  if (summary.warnings.some((w) => w.code === PROGRESS_SINK_FAULT_CODE)) return summary;
+  const warnings: DreamWarning[] = [];
+  noteProgressFaults(warnings, faults);
+  return { ...summary, warnings: [...summary.warnings, ...warnings] };
 }
 
 /** Ladder attempts for a no-vault run id, as many as a snapshot run gets. */
@@ -339,8 +407,11 @@ function dreamRun(
   //    apply-evidence entries up to `now` — we read every day file
   //    referenced by `last_evidence_at` plus today's file. Since the
   //    plan doesn't yet know dates, we scan the entire log/ directory.
-  const evidence = scanApplyEvidence(vault);
-  const refresh = planRefresh(vault, scan, evidence, cfg, now, plan);
+  // The two walks that grow with the history: a pass past its deadline
+  // stops inside them, before it has written anything.
+  const checkpoint = (): void => opts.safeguard?.checkpoint();
+  const evidence = scanApplyEvidence(vault, checkpoint);
+  const refresh = planRefresh(vault, scan, evidence, cfg, now, plan, checkpoint);
 
   // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
   //    preferences get a `retain-pinned` log event instead of a real
@@ -410,10 +481,10 @@ function dreamRun(
 
   if (!hasStateChange(plan, refresh, scan.corrupted.length, rollupPlan)) {
     if (!dryRun) regenerateDigestPages(vault, now);
-    // A run that changed nothing still finished. Reporting it as an
-    // unterminated stream would make an idempotent rerun - the common
-    // case - indistinguishable from a pass that died in planning.
-    progress.finish();
+    // A run that changed nothing still finished (`dream` ends the stream
+    // after the tail steps). Reporting it as an unterminated stream would
+    // make an idempotent rerun - the common case - indistinguishable from
+    // a pass that died in planning.
     noteProgressFaults(warnings, progressFaults);
     return buildNoOpSummary({
       runId,
@@ -588,7 +659,6 @@ function dreamRun(
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
   progress.advance(DREAM_STAGE.finalize);
-  progress.finish();
   noteProgressFaults(warnings, progressFaults);
 
   const summary = buildChangedSummary({

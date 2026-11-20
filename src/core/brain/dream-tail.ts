@@ -12,13 +12,30 @@ import { VIEW_DREAM_BUDGET_MS } from "../view/constants.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
 
 /**
+ * A progress stage a tail step reports as: `start` when the step is known
+ * to run here (the store is in use), `done` when it returns.
+ */
+export interface TailStage {
+  start(): void;
+  done(): void;
+  /** The step stopped at the pass's deadline (or an abort): `error` is the checkpoint's throw. */
+  stopped(error: unknown): void;
+}
+
+/**
  * Plan topics before the render (design D9): on the view writer, route
  * unassigned records and create topics from recurring clusters; any other
  * machine plans nothing and its summary names the writer. Fail-open, and
  * absent when the brain store is not in use here or on a dry run.
  */
-export function withTopicPass(summary: DreamRunSummary, opts: DreamOptions): DreamRunSummary {
+export function withTopicPass(
+  summary: DreamRunSummary,
+  opts: DreamOptions,
+  stage?: TailStage,
+): DreamRunSummary {
   if (opts.dryRun === true) return summary;
+  let started = false;
+  let deadline: unknown;
   // The run's deadline holds here too, where the store is in use: a pass
   // whose deadline passed plans nothing and leaves topics to the next one.
   const safeguard = opts.safeguard;
@@ -29,19 +46,27 @@ export function withTopicPass(summary: DreamRunSummary, opts: DreamOptions): Dre
     // follow the date the run is for.
     ...(runAt !== undefined ? { now: () => runAt.getTime() } : {}),
     ...(opts.topicVerdicts !== undefined ? { topicVerdicts: opts.topicVerdicts } : {}),
-    ...(safeguard !== undefined
-      ? {
-          mayPlan: () => {
-            try {
-              safeguard.checkpoint();
-              return true;
-            } catch {
-              return false;
-            }
-          },
-        }
-      : {}),
+    // Asked once the store is known to be in use, before the read: the
+    // stage opens there, so a machine without a store reports none.
+    mayPlan: () => {
+      if (!started) {
+        started = true;
+        stage?.start();
+      }
+      if (safeguard === undefined) return true;
+      try {
+        safeguard.checkpoint();
+        return true;
+      } catch (error) {
+        // Planning leaves topics to the next pass, and the stream says the
+        // pass stopped here, with the reason, rather than that it finished.
+        deadline = error;
+        return false;
+      }
+    },
   });
+  if (deadline !== undefined) stage?.stopped(deadline);
+  else if (started) stage?.done();
   if (report === null) return summary;
   // Topics created, records routed and model verdict records are writes
   // of this pass. A pass that failed midway counts what it wrote before
@@ -71,13 +96,23 @@ export function withTopicPass(summary: DreamRunSummary, opts: DreamOptions): Dre
  * absent when the brain store is not in use here, so such a summary is
  * byte-identical to before.
  */
-export function withViewPass(summary: DreamRunSummary, opts: DreamOptions): DreamRunSummary {
+export function withViewPass(
+  summary: DreamRunSummary,
+  opts: DreamOptions,
+  stage?: TailStage,
+): DreamRunSummary {
   if (opts.dryRun === true) return summary;
+  let started = false;
   const result = runAutoViewPass({
     trigger: "dream",
+    onStart: () => {
+      started = true;
+      stage?.start();
+    },
     budgetMs: opts.viewBudgetMs ?? VIEW_DREAM_BUDGET_MS,
     ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
   });
+  if (started) stage?.done();
   if (result === null) return summary;
   return {
     ...summary,

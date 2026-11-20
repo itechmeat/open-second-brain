@@ -69,6 +69,23 @@ const HISTORY_VERDICT_KIND = "history-verdict";
 const DECISION_RECORD_EVENT = "decision-record";
 const DECISION_RESOLVED_EVENT = "decision-resolved";
 
+/** The log event types a page shows ({@link viewEntries}). */
+const VIEW_EVENT_TYPES: ReadonlySet<unknown> = new Set([
+  NOTE_EVENT,
+  DECISION_RECORD_EVENT,
+  DECISION_RESOLVED_EVENT,
+]);
+
+/**
+ * Whether the render needs `record`: every record but a log event no page
+ * shows. A migrated store's log is mostly events of other types (evidence,
+ * sessions, injections), and the render's read keeps only these, so it
+ * never holds the whole log.
+ */
+export function isViewInput(record: StoreRecord): boolean {
+  return record.kind !== LOG_EVENT_KIND || VIEW_EVENT_TYPES.has(record.body["event_type"]);
+}
+
 /** The confirmed and retired statuses of a preference. */
 const CONFIRMED = "confirmed";
 const RETIRED = "retired";
