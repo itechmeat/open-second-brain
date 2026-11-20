@@ -617,3 +617,18 @@ export function writerTempOriginals(name: string): string[] {
   if (WRITER_TEMP_TOKEN_RE.test(target)) out.push(target.replace(WRITER_TEMP_TOKEN_RE, ""));
   return out.filter((n) => n !== "");
 }
+
+/** The suffix of the sibling a lock writer creates beside the file it holds (`<target>.lock`). */
+export const LOCK_SIBLING_SUFFIX = ".lock";
+
+/**
+ * The name of the file a `<target>.lock` sibling would be the lock of
+ * (`sync-lockfile.ts`, the self-heal workers' claims, a metrics append),
+ * or null when `name` does not have that form. The name alone does not
+ * say the file is a lock: a person's `notes.md.lock` has it too
+ * (`brain/snapshot-transient.ts` asks for more).
+ */
+export function lockSiblingOriginal(name: string): string | null {
+  if (!name.endsWith(LOCK_SIBLING_SUFFIX) || name.length <= LOCK_SIBLING_SUFFIX.length) return null;
+  return name.slice(0, -LOCK_SIBLING_SUFFIX.length);
+}

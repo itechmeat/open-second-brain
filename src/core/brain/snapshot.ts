@@ -112,6 +112,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { FileAlreadyExistsError, renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
+import { productTransientKind } from "./snapshot-transient.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
@@ -769,11 +770,35 @@ export function tarPathArg(path: string, platform: NodeJS.Platform = process.pla
  * not in the tree any more and is left out; any other error is thrown as a
  * {@link BrainSnapshotError} naming the path.
  */
-export function sortedMembers(vault: string, rel: Buffer, runId: string): Buffer[] {
+export function sortedMembers(
+  vault: string,
+  rel: Buffer,
+  runId: string,
+  emptyLocks?: Set<string>,
+): Buffer[] {
   const abs = Buffer.concat([Buffer.from(vault), SLASH, rel]);
   let entries: Buffer[];
   try {
-    if (!lstatSync(abs).isDirectory()) return [rel];
+    const stat = lstatSync(abs);
+    // A transient of the product itself (`snapshot-transient.ts`: a form no
+    // content has) is never archived, a lock directory included, which is
+    // judged before it is entered.
+    const name = memberName(rel);
+    const dir = Buffer.concat([Buffer.from(vault), SLASH, rel.subarray(0, rel.lastIndexOf(SLASH))]);
+    const beside = (original: string): boolean =>
+      existsSync(Buffer.concat([dir, SLASH, Buffer.from(original)]));
+    // Any answer but content leaves it out, `vanished` included: an entry
+    // gone between this `lstat` and the classifier's read is not in the tree.
+    if (productTransientKind(abs, name, stat, beside) !== null) return [];
+    if (!stat.isDirectory()) {
+      // An empty `<target>.lock` the rule above does not know: archived, and
+      // remembered, because a lock helper's file looks like this between its
+      // create and its stamp (`snapshotVanishedTolerable`).
+      if (emptyLocks !== undefined && stat.isFile() && stat.size === 0 && name.endsWith(".lock")) {
+        emptyLocks.add(rel.toString("hex"));
+      }
+      return [rel];
+    }
     entries = readdirSync(abs, { encoding: "buffer" });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -785,13 +810,51 @@ export function sortedMembers(vault: string, rel: Buffer, runId: string): Buffer
   }
   const out = [rel];
   for (const name of entries.toSorted(Buffer.compare)) {
-    out.push(...sortedMembers(vault, Buffer.concat([rel, SLASH, name]), runId));
+    out.push(...sortedMembers(vault, Buffer.concat([rel, SLASH, name]), runId, emptyLocks));
   }
   return out;
 }
 
 const SLASH = Buffer.from("/");
 const NUL = Buffer.from([0]);
+
+/** The last `/`-separated segment of a member, as a name. */
+function memberName(rel: Buffer): string {
+  return rel.subarray(rel.lastIndexOf(SLASH) + 1).toString("utf8");
+}
+
+/**
+ * Whether the listed members that vanished let a snapshot whose tar failed
+ * list the tree again and retry. Only a member that was, when listed, an
+ * EMPTY `<target>.lock` file qualifies: the form a lock of
+ * `sync-lockfile.ts` has between its exclusive create and its stamp (once
+ * stamped the listing leaves it out), and one that held no byte, so the
+ * new listing loses nothing. Any other vanished member, an unknown
+ * `.lock` with content or a `.tmp` file included, is a vanished content
+ * file and fails the snapshot.
+ */
+function snapshotVanishedTolerable(
+  vanished: ReadonlyArray<Buffer>,
+  emptyLocks: ReadonlySet<string>,
+): boolean {
+  return vanished.length > 0 && vanished.every((m) => emptyLocks.has(m.toString("hex")));
+}
+
+/** How many times a snapshot lists and archives the tree when only transient files vanished. */
+const SNAPSHOT_VANISHED_ATTEMPTS = 3;
+
+/** The members of `members` no longer on disk (`lstat` finds nothing). */
+function vanishedMembers(vault: string, members: ReadonlyArray<Buffer>): Buffer[] {
+  return members.filter((m) => {
+    try {
+      lstatSync(Buffer.concat([Buffer.from(vault), SLASH, m]));
+      return false;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR";
+    }
+  });
+}
 
 /**
  * Make `Brain/.snapshots/` exist, or say what is there instead.
@@ -906,22 +969,23 @@ export function createSnapshot(
   // rather than of a cleanup path that could be forgotten.
   const derivedStore = coverDerivedStore(vault, logVault, runId, tools, opts);
 
-  // List top-level entries of Brain/ that we want to capture. Sort the
-  // result so the resulting archive's contents are deterministic
-  // across filesystems (readdirSync's order is FS-dependent).
-  let topEntries: Buffer[];
-  try {
-    topEntries = readdirSync(dirs.brain, { encoding: "buffer" }).filter(
-      (e) => !isSnapshotExcludedEntry(bufferEntryName(e)),
-    );
-  } catch (err) {
-    discardStoreArchive(derivedStore, vault, runId);
-    throw new BrainSnapshotError(
-      `failed to list Brain/: ${(err as Error).message ?? String(err)}`,
-      runId,
-    );
-  }
-  topEntries.sort(Buffer.compare);
+  // The top-level entries of Brain/ to capture, listed again at every
+  // attempt below (a temp file renamed onto its final name between two
+  // attempts is found under that name). Sorted so the archive's contents
+  // are deterministic across filesystems (readdirSync's order is
+  // FS-dependent).
+  const listTop = (): Buffer[] => {
+    try {
+      return readdirSync(dirs.brain, { encoding: "buffer" })
+        .filter((e) => !isSnapshotExcludedEntry(bufferEntryName(e)))
+        .toSorted(Buffer.compare);
+    } catch (err) {
+      throw new BrainSnapshotError(
+        `failed to list Brain/: ${(err as Error).message ?? String(err)}`,
+        runId,
+      );
+    }
+  };
 
   // Paths inside the archive start at `Brain/` — matching the rollback
   // contract that the archive is "the Brain/ tree". Every member is
@@ -937,27 +1001,37 @@ export function createSnapshot(
   const listPath = join(listDir, "members");
 
   try {
-    const members = topEntries.flatMap((e) =>
-      sortedMembers(vault, Buffer.concat([Buffer.from(`${BRAIN_ROOT_REL}/`), e]), runId),
-    );
-    writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
-    const tarArgs = [
-      "-c",
-      "-f",
-      "-",
-      "-C",
-      tarPathArg(vault),
-      "--no-recursion",
-      "--null",
-      "-T",
-      tarPathArg(listPath),
-    ];
-    // tar writes into a staging file beside the member list rather than
-    // into a captured pipe, and the compressor reads that file: neither
-    // the tar stream nor the compressed archive ever sits in this
-    // process's memory, so the size of `Brain/` sets no ceiling here.
     const tarPath = join(listDir, "brain.tar");
-    runArchiveProducer("tar", tarArgs, tarPath, runId);
+    // A listed member another process removes before tar reads it fails
+    // tar: GNU tar and macOS bsdtar say "<path>: Cannot stat: No such file
+    // or directory", Windows tar.exe (bsdtar) has been seen saying
+    // ": Couldn't visit directory" with no name. Each reads the same NUL
+    // list, so the check below re-reads the disk rather than the tool's
+    // words: when every member that vanished was an empty lock file
+    // (`snapshotVanishedTolerable`), the tree is listed again and archived
+    // again; anything else that vanished fails the snapshot.
+    for (let attempt = 1; ; attempt++) {
+      const emptyLocks = new Set<string>();
+      const members = listTop().flatMap((e) =>
+        sortedMembers(
+          vault,
+          Buffer.concat([Buffer.from(`${BRAIN_ROOT_REL}/`), e]),
+          runId,
+          emptyLocks,
+        ),
+      );
+      writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
+      rmSync(tarPath, { force: true });
+      try {
+        runTar(vault, listPath, tarPath, runId);
+        break;
+      } catch (err) {
+        const vanished = vanishedMembers(vault, members);
+        const retry =
+          attempt < SNAPSHOT_VANISHED_ATTEMPTS && snapshotVanishedTolerable(vanished, emptyLocks);
+        if (!retry) throw err;
+      }
+    }
     compressInto({ kind: "file", path: tarPath }, outPath, tools, runId);
     if (!existsSync(outPath)) {
       throw new BrainSnapshotError(
@@ -975,7 +1049,39 @@ export function createSnapshot(
   } finally {
     rmSync(listDir, { recursive: true, force: true });
   }
+  return finishSnapshot(vault, logVault, runId, dirs, derivedStore, opts, outPath);
+}
 
+/** The tar run of a snapshot: the NUL-separated member list `listPath`, no recursion, into `tarPath`. */
+function runTar(vault: string, listPath: string, tarPath: string, runId: string): void {
+  const tarArgs = [
+    "-c",
+    "-f",
+    "-",
+    "-C",
+    tarPathArg(vault),
+    "--no-recursion",
+    "--null",
+    "-T",
+    tarPathArg(listPath),
+  ];
+  // tar writes into a staging file beside the member list rather than
+  // into a captured pipe, and the compressor reads that file: neither
+  // the tar stream nor the compressed archive ever sits in this
+  // process's memory, so the size of `Brain/` sets no ceiling here.
+  runArchiveProducer("tar", tarArgs, tarPath, runId);
+}
+
+/** The sidecar manifest and the log line of a snapshot whose archive is on disk. */
+function finishSnapshot(
+  vault: string,
+  logVault: string,
+  runId: string,
+  dirs: ReturnType<typeof brainDirsForWrite>,
+  derivedStore: CreateSnapshotResult["derived_store"],
+  opts: CreateSnapshotOptions,
+  outPath: string,
+): CreateSnapshotResult {
   // Sidecar manifest. Failure is non-fatal: the archive is the
   // load-bearing artifact, and a snapshot without a manifest just
   // degrades rollback's drift detection to a silent-overwrite path

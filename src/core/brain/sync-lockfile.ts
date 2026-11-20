@@ -61,6 +61,7 @@
  * `doctor/uncertainty-probes.ts`.
  */
 
+import { LOCK_SIBLING_SUFFIX } from "../fs-atomic.ts";
 import {
   type BigIntStats,
   closeSync,
@@ -91,7 +92,16 @@ export interface LockHandle {
   release(): void;
 }
 
-const LOCK_SUFFIX = ".lock";
+const LOCK_SUFFIX = LOCK_SIBLING_SUFFIX;
+
+/**
+ * The body {@link acquireLockSync} stamps into the lock file it creates:
+ * `<pid>\n<uuid>\n<iso>\n` on POSIX, `null\n<iso>\n` on Windows (no
+ * token). Exported so a reader can recognise a lock this module made (a
+ * snapshot leaves it out) without guessing from the name.
+ */
+export const LOCK_STAMP_BODY_RE =
+  /^(?:\d+\n[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|null)\n\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\n$/;
 
 /**
  * The file a holder created: device and inode as exact bigints. `null` when
