@@ -28,7 +28,9 @@ import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import {
   ensureVaultCurrent,
   AUTO_MIGRATION_SPAWN,
+  rebuildsIntoLegacyFolder,
 } from "../../../src/core/maintenance/ensure-current.ts";
+import { SELF_HEAL_SPAWN } from "../../../src/core/maintenance/self-heal-reindex.ts";
 import {
   collectRuntimeNotices,
   renderRuntimeNotices,
@@ -404,6 +406,22 @@ describe("a start whose PATH has no Bun", () => {
     }
     expect(existsSync(lockPath)).toBe(false);
     expect(listMetrics(vault, { surface: AUTO_MIGRATION_SURFACE }).length).toBeGreaterThan(0);
+    // The worker log says what happened: the start, each step with its
+    // time, and the outcome, also when the run succeeded.
+    const log = readFileSync(autoMigrationWorkerLogPath(vault), "utf8");
+    expect(log).toMatch(
+      /^\d{4}-\d\d-\d\dT[\d:.]+Z the automatic store migration worker \(process \d+\) starts/,
+    );
+    for (const step of [
+      "checking what a migration would move",
+      "running the migration",
+      "the gate is closed",
+      "taking the backups",
+      "switching this machine to the brain store",
+      "outcome applied after",
+    ]) {
+      expect(log).toContain(step);
+    }
   });
 });
 
@@ -529,6 +547,71 @@ describe("the managed-file upgrade and the migration", () => {
 
     expect(run.outcome).toBe(AUTO_MIGRATION_OUTCOME.applied);
     expect(readFileSync(brainManualPath(vault), "utf8")).not.toBe("stale operator copy\n");
+  });
+
+  test("a claim another machine's sync brought here holds nothing: the migration runs", () => {
+    // The lock sits in the vault's own folder before the switch, which a
+    // file sync carries to every machine; its pid is alive here by chance.
+    mkdirSync(dirname(upgradeLockPath), { recursive: true });
+    writeFileSync(
+      upgradeLockPath,
+      JSON.stringify({
+        token: "d".repeat(32),
+        pid: process.pid,
+        host: "another-machine",
+        since: new Date().toISOString(),
+        worker: true,
+      }),
+    );
+
+    const run = runAutoStoreMigration(vault, { configPath });
+
+    expect(run.outcome).toBe(AUTO_MIGRATION_OUTCOME.applied);
+  });
+
+  test("an older release's bare claim does not hold the migration off", () => {
+    mkdirSync(dirname(upgradeLockPath), { recursive: true });
+    writeFileSync(upgradeLockPath, "e".repeat(32));
+    const lines: string[] = [];
+
+    const run = runAutoStoreMigration(vault, { configPath, progress: (l) => lines.push(l) });
+
+    expect(run.outcome).toBe(AUTO_MIGRATION_OUTCOME.applied);
+    // The upgrade is left for a later start, and the progress says why.
+    expect(lines.join("\n")).toContain("the managed-file upgrade is left for later");
+    rmSync(upgradeLockPath, { force: true });
+  });
+
+  test("a live upgrade of this machine: status names it as what the migration waits for", () => {
+    const token = claimSelfHealUpgradeLock(vault, new Date());
+    expect(token).not.toBeNull();
+    try {
+      const report = autoMigrationReport({ vault, configPath });
+
+      expect(report.state).toBe("pending");
+      expect(report.message).toContain("waits for this machine's managed-file upgrade to end");
+      expect(report.message).toContain(`process ${process.pid} of this machine`);
+      expect(report.nextStart).toContain("once that upgrade has ended");
+    } finally {
+      releaseSelfHealUpgradeLock(vault, token!);
+    }
+  });
+
+  test("only an index inside the vault is the legacy folder's", () => {
+    expect(rebuildsIntoLegacyFolder(vault, join(vault, ".open-second-brain", "brain.sqlite"))).toBe(
+      true,
+    );
+    // A switched machine's index in device-local state is rebuilt as before.
+    expect(rebuildsIntoLegacyFolder(vault, join(root, "state", "brain.sqlite"))).toBe(false);
+  });
+
+  test("a start that spawns the migration worker builds no search index into the vault", async () => {
+    const r = await ensureVaultCurrent(vault, { background: true, configPath });
+
+    expect(r.migrationSpawn).toBe(AUTO_MIGRATION_SPAWN.spawned);
+    // The switch moves the index to device-local state, where it is built
+    // anew; one built into the vault's legacy folder would stay behind.
+    expect(r.reindexSpawn).toBe(SELF_HEAL_SPAWN.skippedMigration);
   });
 
   test("a live upgrade worker holds the attempt off without a record", () => {

@@ -16,6 +16,7 @@
  * holds. State checks are cheap reads and also handle interrupted
  * migrations and downgrades correctly.
  */
+import { isPathInsideResolved } from "../store/store-paths.ts";
 import { existsSync } from "node:fs";
 import {
   MigrationInProgressError,
@@ -277,7 +278,8 @@ function startSelfHealUpgrade(
   }
   let token: string | null;
   try {
-    token = claimSelfHealUpgradeLock(vault, now);
+    // Claimed for the worker spawned below, which stamps its own pid.
+    token = claimSelfHealUpgradeLock(vault, now, { handed: true });
   } catch (e) {
     // The gate closed after the check above: nothing claimed, nothing started.
     if (e instanceof MigrationInProgressError) return SELF_HEAL_UPGRADE_SPAWN.skippedMigrationGate;
@@ -392,6 +394,16 @@ export function startDecisionOf(why: GateNone): AutoMigrationSpawnDecision | nul
  * refuses the upgrade's writes). Every other answer starts no worker, so
  * the start runs the upgrade itself.
  */
+/**
+ * Whether an index at `dbPath` would be built into `vault` itself: the
+ * legacy device-local folder, where a machine keeps it until it switches to
+ * the brain store. A switched machine's index lives in device-local state
+ * outside the vault, and is never skipped for this.
+ */
+export function rebuildsIntoLegacyFolder(vault: string, dbPath: string): boolean {
+  return isPathInsideResolved(dbPath, vault, process.platform);
+}
+
 export function migrationOwnsUpgrade(spawn: AutoMigrationSpawnDecision | null): boolean {
   return spawn === AUTO_MIGRATION_SPAWN.spawned || spawn === AUTO_MIGRATION_SPAWN.skippedRunning;
 }
@@ -813,7 +825,19 @@ async function ensureVaultCurrentJudged(
       });
     };
     if (inspectIndex(config) !== "current") {
-      if (background) {
+      if (
+        background &&
+        migrationOwnsUpgrade(migrationSpawn) &&
+        rebuildsIntoLegacyFolder(vault, config.dbPath)
+      ) {
+        // The migration worker this start left the vault to switches this
+        // machine to the brain store, where the index lives in device-local
+        // state and is built anew: a rebuild here would write a whole index
+        // into the vault's legacy folder (hundreds of MB on a large vault)
+        // that nothing reads after the switch and that stays behind in the
+        // vault. The first start after the switch builds the new one.
+        reindexSpawn = SELF_HEAL_SPAWN.skippedMigration;
+      } else if (background) {
         reindexSpawn = startSelfHealReindex(vault, configPath, config.dbPath, errors);
         // A run that declined to spawn started nothing, and saying it did
         // would report a rebuild that is not this run's.

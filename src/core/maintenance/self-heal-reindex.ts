@@ -94,6 +94,12 @@ export const SELF_HEAL_SPAWN = Object.freeze({
   spawned: "spawned",
   /** Another writer already held the index lock, so nothing was started. */
   skippedWriterLock: "skipped_writer_lock",
+  /**
+   * The start left the vault to the store migration worker, which switches
+   * the machine to an index in device-local state: no index is built into
+   * the vault's legacy folder (`ensure-current.ts`).
+   */
+  skippedMigration: "skipped_migration",
 } as const);
 
 /** Closed union over {@link SELF_HEAL_SPAWN}. */

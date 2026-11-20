@@ -69,6 +69,8 @@ import { appendRecord } from "../store/appender.ts";
 import { AUTHORITY_FIELD, STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue } from "./catalogue.ts";
+import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
+import { treeBytes } from "./sizes.ts";
 import { describeUnseen, migrationDir, unseenHeldShards } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
 import { recordMigrationGateProgress } from "../migration-gate.ts";
@@ -131,9 +133,21 @@ export type RemovalResult =
       readonly removed: true;
       readonly archive: string;
       readonly moved: ReadonlyArray<string>;
-      /** Vault-relative files left out of the archive: the index, caches, generated pages. */
+      /**
+       * Vault-relative files left out of the archive and deleted, because a
+       * rebuild recreates them: the index, caches, generated pages.
+       */
       readonly skipped: ReadonlyArray<string>;
+      /** The same files with their sizes, largest first. */
+      readonly skipped_sizes: ReadonlyArray<RemovedRebuildable>;
+      /** Their total size in bytes. */
+      readonly skipped_bytes: number;
       readonly forced: boolean;
+      /**
+       * The legacy `Brain/` tree had already left the vault: only this
+       * machine's device-local files sync never carried were left, and moved.
+       */
+      readonly tree_already_left: boolean;
       /** Devices still on the legacy layout that a forced removal leaves behind. */
       readonly stopped: ReadonlyArray<string>;
       readonly imported: number;
@@ -166,11 +180,11 @@ function dropRebuildable(
   vault: string,
   archive: string,
   catalogue: ReturnType<typeof migrationCatalogue>,
-): string[] {
+): RemovedRebuildable[] {
   const locators = catalogue
     .filter((e) => e.mapping.rebuildable === true)
     .flatMap((e) => e.locators);
-  const skipped: string[] = [];
+  const skipped: RemovedRebuildable[] = [];
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir).toSorted()) {
       const path = join(dir, name);
@@ -179,8 +193,9 @@ function dropRebuildable(
       const stat = lstatSync(path);
       const claimed = locators.some((l) => claims(l, asInVault, name));
       if (claimed) {
+        const bytes = treeBytes(path);
         rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-        skipped.push(rel);
+        skipped.push({ path: rel, bytes });
       } else if (stat.isDirectory()) {
         walk(path);
       }
@@ -188,6 +203,12 @@ function dropRebuildable(
   };
   walk(archive);
   return skipped;
+}
+
+/** A rebuildable file or folder the removal deleted instead of archiving, with its size. */
+export interface RemovedRebuildable {
+  readonly path: string;
+  readonly bytes: number;
 }
 
 /** Move `from` to `to`; across filesystems, copy, verify and remove. */
@@ -407,8 +428,15 @@ function removeUnderGate(
   const silence = silenceReport(cohort);
   const pending = cohort.pending.map((d) => d.device);
   const forced = options.force === true;
+  // The tree already left the vault (another machine removed it and sync
+  // brought the deletion here): what is left are this machine's own files
+  // the sync never carried (the index, caches). No cohort device writes
+  // into them, so the cohort keeps nothing in place.
+  const treeLeft = resumed === null && !roots.includes(BRAIN_ROOT_REL);
+  // The cohort devices a forced removal leaves without a tree: none when it had left already.
+  const stopped = treeLeft ? [] : pending;
   // A resumed removal already moved part of the tree: it finishes.
-  if (resumed === null && pending.length > 0 && !forced) {
+  if (resumed === null && pending.length > 0 && !forced && !treeLeft) {
     return {
       removed: false,
       reason: "cohort-pending",
@@ -477,7 +505,7 @@ function removeUnderGate(
       vault_id: vaultId,
       device: store.device,
       forced,
-      stopped: [...pending],
+      stopped: [...stopped],
       // Why the tree left while these cohort devices had not switched.
       retired_by_silence: silence.retired_by_silence.map((d) => ({ ...d })),
       silence_threshold_days: silence.silence_threshold_days,
@@ -489,7 +517,7 @@ function removeUnderGate(
     at,
     archive,
     forced,
-    stopped: pending,
+    stopped,
     retired_by_silence: silence.retired_by_silence,
   });
   rmSync(journal, { force: true });
@@ -505,9 +533,12 @@ function removeUnderGate(
     removed: true,
     archive,
     moved,
-    skipped,
+    skipped: skipped.map((s) => s.path),
+    skipped_sizes: skipped.toSorted((x, y) => y.bytes - x.bytes || x.path.localeCompare(y.path)),
+    skipped_bytes: skipped.reduce((sum, s) => sum + s.bytes, 0),
     forced,
-    stopped: pending,
+    stopped,
+    tree_already_left: treeLeft,
     imported: transition.imported + final.imported,
     ...silence,
   };

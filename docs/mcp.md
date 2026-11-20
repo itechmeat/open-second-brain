@@ -2276,12 +2276,16 @@ format characters), when it contains NUL, or when it exceeds the cap.
   the run's process is gone or its pid now belongs to another process),
   `gate_fault` (`damaged` or `unreadable` when the gate file is no
   readable gate, the message naming the file and what clears it, else
-  null), `progress` (how far the run is, or null), `retry` (`later`: call
+  null), `progress` (how far the run is, the step status shows, recorded
+  from the moment the run holds the gate; null only for a run of an older
+  release), `retry` (`later`: call
   again once the run has finished; `recover`: the run stopped and nothing
   lifts the gate until it is continued by the next start or by
-  `next_command`) and `next_command` (`o2b brain migrate-store --resume`,
-  `--rollback` or `--remove-legacy`, `--force-release-gate` for a damaged
-  gate, null for an unreadable one). A readable gate gates only the vault it
+  `next_command`) and `next_command` (for a stopped run
+  `o2b brain migrate-store --resume`, `--rollback` or `--remove-legacy`;
+  `--force-release-gate` for a damaged gate; null while the holder's
+  process is alive, `running` or `unknown`, where the remedy is to wait,
+  and for an unreadable gate). A readable gate gates only the vault it
   names: other vaults and other machines are not gated. A gate file that
   is damaged or cannot be read names no vault, so it refuses writes to
   every vault on this machine until it is cleared (`gate_fault` says

@@ -201,11 +201,17 @@ export class MigrationInProgressError extends Error {
       remedy =
         "Try again when it has finished; if no migration is running, " +
         `\`${FORCE_RELEASE_GATE_COMMAND}\` opens the gate`;
+      // Its process is alive: continuing the run is not the remedy, and
+      // forcing the gate open under a live run is not one to suggest.
+      next = null;
     } else {
       what =
         `${RUN_NAME[kind]} is running on this machine (run ${gate.run_id}, since ${since}` +
         `${progress === null ? "" : `, ${progress}`})`;
       remedy = "Try again when it has finished";
+      // A live run: waiting is the remedy. `--resume` is the command of a
+      // stopped run only; beside a live one it is refused.
+      next = null;
     }
     super(`${what}; the write was refused and nothing was written. ${remedy}`);
     this.kind = kind;

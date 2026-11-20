@@ -144,7 +144,9 @@ describe("a write tool called while a store migration of the vault runs here", (
       expect(data["code"]).toBe(MIGRATION_IN_PROGRESS_REFUSAL);
       expect(data["run_id"]).toBe("migrate-test");
       expect(data["tool"]).toBe("brain_create_note");
-      expect(data["next_command"]).toBe("o2b brain migrate-store --resume");
+      // A live run: no command, the way out is to wait (`--resume` is a
+      // stopped run's, and is refused beside a live one).
+      expect(data["next_command"]).toBeNull();
       // The run is alive: the way out is to call again once it finished,
       // which the prose and the data both say; the resume is for a run
       // that stopped.

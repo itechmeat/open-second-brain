@@ -18,6 +18,7 @@ import type { DoctorFindings, StoreSideDoctorCheck } from "./check.ts";
 import { adoptConflictsCheck } from "./adopt-conflicts-check.ts";
 import { laneIdMisfiledCheck } from "./lane-id-check.ts";
 import { deviceStateCheck } from "./device-state-check.ts";
+import { legacyLocalFilesCheck } from "./migration-check.ts";
 import type { RunDoctorOptions, RunDoctorResult } from "./report.ts";
 import { storeCheck } from "./store-check.ts";
 import { viewWriterCheck } from "./view-writer-check.ts";
@@ -29,6 +30,7 @@ export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.fre
   deviceStateCheck,
   adoptConflictsCheck,
   laneIdMisfiledCheck,
+  legacyLocalFilesCheck,
 ]);
 
 /**

@@ -7750,9 +7750,11 @@ var init_migration_gate = __esm(() => {
       } else if (holder === GATE_HOLDER.unknown) {
         what = `${running}; its process ${gate.pid} is alive, but whether it is the run's own ` + "process cannot be told";
         remedy = "Try again when it has finished; if no migration is running, " + `\`${FORCE_RELEASE_GATE_COMMAND}\` opens the gate`;
+        next = null;
       } else {
         what = `${RUN_NAME[kind]} is running on this machine (run ${gate.run_id}, since ${since}` + `${progress === null ? "" : `, ${progress}`})`;
         remedy = "Try again when it has finished";
+        next = null;
       }
       super(`${what}; the write was refused and nothing was written. ${remedy}`);
       this.gate = gate;

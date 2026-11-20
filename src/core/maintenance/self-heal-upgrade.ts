@@ -41,6 +41,7 @@ import {
   recordSelfHealUpgradeFailure,
   releaseSelfHealUpgradeLock,
   selfHealUpgradeBackoffActive,
+  stampSelfHealUpgradeLock,
 } from "./self-heal-upgrade-state.ts";
 
 /** Metrics surface the worker's applied and failed attempts go to. */
@@ -154,6 +155,18 @@ export function runSelfHealUpgrade(
     // part of the run whose end the lock's release announces.
     const held = token;
     process.once("exit", () => releaseSelfHealUpgradeLock(vault, held));
+    // The claimer exits once it spawned this worker: the claim names this
+    // process from now on, so it reads as held while the worker runs. A
+    // claim that cannot be stamped would read as free once the handover
+    // grace has run out, and a second upgrade could start beside this one:
+    // nothing is upgraded, nothing is recorded, and the next start retries.
+    if (!stampSelfHealUpgradeLock(vault, held, now)) {
+      return run(
+        SELF_HEAL_UPGRADE_OUTCOME.running,
+        [],
+        "the worker lock could not be stamped with this worker's process",
+      );
+    }
     return attempt(vault, now, opts.configPath);
   }
   try {

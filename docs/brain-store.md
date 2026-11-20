@@ -404,8 +404,11 @@ falls back to the `scripts/o2b` launcher, which looks Bun up on `PATH`
 and in `~/.bun/bin`. The worker is detached on every platform: it leads a
 session of its own on Linux and macOS and is not ended with its parent on
 Windows, so it outlives the hook process and the terminal that started it.
-Its error output goes to a small device-local log beside its state
-(`<state dir>/open-second-brain/stores/auto-migration/<vault key>.worker.log`,
+Its log goes to a small device-local file beside its state
+(`<state dir>/open-second-brain/stores/auto-migration/<vault key>.worker.log`:
+one timed line when it starts, one per step of the migration (each new
+step at once, the import's counts at most every 30 seconds), its outcome
+with how long it took, and any error output;
 replaced at every start of a worker, and cut to its newest 16 KiB of
 whole lines whenever it passes 64 KiB within one run). When this checkout
 lost its dependency tree while the start was running (a marketplace
@@ -1051,7 +1054,7 @@ until you run it. The removal goes ahead, and its report names the devices
 that switched and, apart from them, each device retired by silence with its
 last evidence (`switched` and `retired_by_silence` under `--json`):
 
-<!-- doc-test: scenario=migration machine=laptop exit=0 expect="nothing was deleted" -->
+<!-- doc-test: scenario=migration machine=laptop exit=0 expect="Everything else was moved into the archive, not deleted" -->
 ```sh
 o2b brain migrate-store --remove-legacy
 ```
@@ -1063,9 +1066,19 @@ them.
 
 The removal first imports any late legacy writes, then moves `Brain/` and
 `.open-second-brain/` out of the vault into a dated archive in this
-machine's device-local state. Nothing is deleted; the archive leaves out
-only what a rebuild recreates (the search index, caches, generated pages),
-and the report lists those. Afterwards the vault holds your notes and, if
+machine's device-local state. The archive leaves out only what a rebuild
+recreates (the search index, caches, generated pages): those are deleted,
+and the report says how many and how large they are and names the first
+few (`skipped`, `skipped_sizes` and `skipped_bytes` under `--json`);
+everything else is moved, not deleted. A long list in the report is its
+count and its first few entries.
+
+On another machine of the vault the removal reaches it by sync, which
+deletes what it carried. What it never carried stays: that machine's own
+search index and caches in `.open-second-brain/` (often hundreds of MB).
+Doctor names them (`legacy-local-files-left`, with their sizes), and
+`o2b brain migrate-store --remove-legacy` run on that machine clears them
+the same way (the cohort no longer matters there: the tree is gone). Afterwards the vault holds your notes and, if
 `view_target` points into it, the view folder. A rollback is no longer
 possible:
 

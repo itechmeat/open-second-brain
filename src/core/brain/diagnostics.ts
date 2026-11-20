@@ -221,6 +221,14 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The legacy tree left the vault, and this machine's own legacy
+        // folder (index, caches the sync never carried) is still in it.
+        code: "legacy-local-files-left",
+        issueClass: "this machine's legacy folder is still in the vault",
+        nextCommand: "o2b brain migrate-store --remove-legacy",
+        autoRepairable: false,
+      },
+      {
         code: "config-invalid",
         issueClass: "invalid Brain config",
         nextCommand: "o2b brain doctor",
