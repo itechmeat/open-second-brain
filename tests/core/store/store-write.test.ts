@@ -128,14 +128,20 @@ describe("the store-only predicate", () => {
     switchDevice(env.storeRoot, "dev-b");
     const read: string[] = [];
     const readShard = reader.readShard;
+    const scanShard = reader.scanShard;
     const spy = spyOn(reader, "readShard").mockImplementation((path, options) => {
       read.push(path);
       return readShard(path, options);
+    });
+    const scanSpy = spyOn(reader, "scanShard").mockImplementation((path, options, onRecord) => {
+      read.push(path);
+      return scanShard(path, options, onRecord);
     });
     try {
       expect(isStoreOnly({ vault: env.vault })).toBe(false);
     } finally {
       spy.mockRestore();
+      scanSpy.mockRestore();
     }
     expect(read.length).toBeGreaterThan(0);
     expect(read.filter((path) => !path.split(sep).includes("settings"))).toEqual([]);

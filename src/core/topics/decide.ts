@@ -26,9 +26,9 @@ import {
   SETTING_TOPIC_QUIET_DAYS,
 } from "../store/constants.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
-import { catchUp, partitionRecords } from "../view/catch-up.ts";
+import { catchUpWhere, partitionRecords } from "../view/catch-up.ts";
 import type { StoreRecord } from "../store/envelope.ts";
-import { topicCandidates } from "./candidates.ts";
+import { isTopicPlanningInput, topicCandidates } from "./candidates.ts";
 import { foldTopics } from "./fold.ts";
 import { planTopics } from "./plan.ts";
 import { writerGate } from "./planning.ts";
@@ -79,8 +79,10 @@ export async function decideTopicPlan(
   });
   if (!gate.ok) return emptyTopicVerdicts();
   // The read happens outside the planning lock; planTopics re-applies
-  // every verdict against the fold read under the lock.
-  const read = catchUp(store, at);
+  // every verdict against the fold read under the lock. It keeps what
+  // planning keeps (`isTopicPlanningInput`), record by record: a migrated
+  // store's log is mostly events no topic is made of.
+  const read = catchUpWhere(store, isTopicPlanningInput, at);
   if (read.unreadable.length > 0) return emptyTopicVerdicts();
   const records = [...read.records.values()].flat();
   const sharedRecords: ReadonlyArray<StoreRecord> = partitionRecords(read, "shared");

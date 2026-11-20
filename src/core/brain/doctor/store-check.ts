@@ -61,18 +61,13 @@ import {
   STORE_PARTITIONS,
   type StorePartition,
 } from "../../store/constants.ts";
-import type { StoreRecord } from "../../store/envelope.ts";
-import { compareHlc, formatHlc, HLC_MAX_DRIFT_MS, parseHlc, type Hlc } from "../../store/hlc.ts";
+import { formatHlc, HLC_MAX_DRIFT_MS, type Hlc } from "../../store/hlc.ts";
 import { compareCodeUnits } from "../../store/compare.ts";
 import { isDualWriteEnabled, readDualWriteStatus } from "../../store/dual-write.ts";
-import { prepareRecords } from "../../store/fold.ts";
 import { checkStateDigests } from "../../store/state-digest-check.ts";
 import type { DigestFinding } from "../../store/state-digest-compare.ts";
-import {
-  readPartition,
-  type PartitionShard,
-  type UnreadableShard,
-} from "../../store/state-digest.ts";
+import type { UnreadableShard } from "../../store/state-digest.ts";
+import { readPartitionView, type PartitionView } from "../../store/partition-view.ts";
 import {
   HeldPartitionLostError,
   inspectStore,
@@ -252,30 +247,11 @@ function failOpenWriteFindings(out: DoctorFindings, atReach: boolean): void {
   );
 }
 
-/** Records more than the drift bound ahead of `nowMs`, per device: count and newest stamp. */
-function clockAheadByDevice(
-  records: ReadonlyArray<StoreRecord>,
-  nowMs: number,
-): Map<string, { count: number; newest: Hlc }> {
-  const out = new Map<string, { count: number; newest: Hlc }>();
-  for (const record of records) {
-    const stamp = parseHlc(record.hlc);
-    if (stamp === null || stamp.physical - nowMs <= HLC_MAX_DRIFT_MS) continue;
-    const seen = out.get(record.device);
-    if (seen === undefined) out.set(record.device, { count: 1, newest: stamp });
-    else {
-      seen.count += 1;
-      if (compareHlc(stamp, seen.newest) > 0) seen.newest = stamp;
-    }
-  }
-  return out;
-}
-
 function clockAheadFinding(
   out: DoctorFindings,
   partition: string,
   path: string,
-  ahead: Map<string, { count: number; newest: Hlc }>,
+  ahead: ReadonlyMap<string, { count: number; newest: Hlc }>,
 ): void {
   if (ahead.size === 0) return;
   const total = [...ahead.values()].reduce((sum, d) => sum + d.count, 0);
@@ -326,13 +302,14 @@ function digestMessage(finding: DigestFinding): string {
  */
 function readHeldPartitions(
   store: StoreInspection,
+  nowMs: number,
   out: DoctorFindings,
 ): {
-  shards: Map<StorePartition, PartitionShard[]>;
+  shards: Map<StorePartition, PartitionView>;
   complete: Set<StorePartition>;
   partial: PartialShard[];
 } {
-  const shards = new Map<StorePartition, PartitionShard[]>();
+  const shards = new Map<StorePartition, PartitionView>();
   const complete = new Set<StorePartition>();
   const partial: PartialShard[] = [];
   for (const partition of STORE_PARTITIONS) {
@@ -348,14 +325,21 @@ function readHeldPartitions(
     try {
       // A shard read only in part is still in the read and its cut, so the
       // digests compare; the gap itself is not this check's finding.
+      // Record by record, keeping only what the checks below need
+      // (`partition-view.ts`): a migrated store held whole took several
+      // times its size in memory.
       shards.set(
         partition,
-        readPartition(dir, {
-          onUnreadable: (s) => {
-            if (s.incomplete !== true) unreadable.push(s);
-            else partial.push({ partition, rel: s.rel });
+        readPartitionView(
+          dir,
+          {
+            onUnreadable: (s) => {
+              if (s.incomplete !== true) unreadable.push(s);
+              else partial.push({ partition, rel: s.rel });
+            },
           },
-        }),
+          nowMs,
+        ),
       );
     } catch (err) {
       warn(
@@ -392,12 +376,12 @@ function readHeldPartitions(
  */
 function heldTailFindings(
   store: StoreInspection,
-  shards: ReadonlyMap<StorePartition, ReadonlyArray<PartitionShard>>,
+  shards: ReadonlyMap<StorePartition, PartitionView>,
   nowMs: number,
   out: DoctorFindings,
 ): void {
   for (const [partition, own] of shards) {
-    for (const shard of own) {
+    for (const shard of own.shards) {
       if (shard.heldTailBytes === 0) continue;
       const path = join(partitionDir(store.root, partition), ...shard.rel.split("/"));
       let mtimeMs: number;
@@ -462,13 +446,13 @@ function storeFindings(
 ): void {
   const nowMs = ctx.now.getTime();
   const store = storeAtReach(held, ctx);
-  const { shards, complete, partial } = readHeldPartitions(store, out);
+  const { shards, complete, partial } = readHeldPartitions(store, nowMs, out);
   storeGapFindings(store, partial, nowMs, out);
   // Digests are compared only over partitions read in full: a cut with a
   // shard missing would read as a divergence that is not there.
   const digestShards = new Map([...shards].filter(([partition]) => complete.has(partition)));
   const retirementsKnown = !store.partitions.has("shared") || complete.has("shared");
-  const report = checkStateDigests(store, { now: () => nowMs, shards: digestShards });
+  const report = checkStateDigests(store, { now: () => nowMs, views: digestShards });
   for (const finding of report.findings) {
     if (finding.kind === "silent" && !retirementsKnown) continue;
     warn(
@@ -487,14 +471,8 @@ function storeFindings(
   out.issues.push(...looseModeIssues(store));
   out.issues.push(...reservedDeviceDirIssues(store));
   for (const [partition, own] of shards) {
-    const records = own.flatMap((s) => s.all);
-    clockAheadFinding(
-      out,
-      partition,
-      partitionDir(store.root, partition),
-      clockAheadByDevice(records, nowMs),
-    );
-    const { conflicts } = prepareRecords(records);
+    clockAheadFinding(out, partition, partitionDir(store.root, partition), own.clockAhead);
+    const { conflicts } = own;
     if (conflicts.length === 0) continue;
     const sample = conflicts
       .slice(0, CONFLICT_SAMPLE)
@@ -522,10 +500,10 @@ function storeFindings(
  */
 function removalBacklogFinding(
   store: StoreInspection,
-  shards: ReadonlyMap<StorePartition, ReadonlyArray<PartitionShard>>,
+  shards: ReadonlyMap<StorePartition, PartitionView>,
   out: DoctorFindings,
 ): void {
-  const records = [...shards.values()].flatMap((own) => own.flatMap((s) => s.all));
+  const records = [...shards.values()].flatMap((own) => own.voiding);
   const backlog = removalBacklog(records);
   if (backlog.total === 0) return;
   warn(

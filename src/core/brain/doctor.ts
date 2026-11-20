@@ -147,7 +147,12 @@ import {
   type VerificationDeltaSummaryCounts,
 } from "./trust/compute-verification-delta.ts";
 import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
-import type { DoctorIssue, InstructionFileCeilingWarning, TrustVerdict } from "./types.ts";
+import {
+  BRAIN_LOG_EVENT_KIND,
+  type DoctorIssue,
+  type InstructionFileCeilingWarning,
+  type TrustVerdict,
+} from "./types.ts";
 
 // ----- Public surface -------------------------------------------------------
 //
@@ -651,6 +656,7 @@ function resolveContext(
         uncertain,
       },
       opts.configPath,
+      DOCTOR_LOG_EVENTS,
     )).records,
     unreadableLogDays: logSnapshot.unreadableDays,
   };
@@ -658,3 +664,14 @@ function resolveContext(
 
 /** Subsystem name the shared context reports an unreadable path under. */
 const CONTEXT_SITE = "brain.doctor.context";
+
+/**
+ * The log events the checks that read `DoctorCheckContext.logs` use: the
+ * evidence lints (`log-checks.ts`) and the orphan sweep's session index
+ * (`orphan-session-check.ts`). A check that reads another type from the
+ * context's log adds it here.
+ */
+const DOCTOR_LOG_EVENTS: ReadonlySet<string> = new Set([
+  BRAIN_LOG_EVENT_KIND.applyEvidence,
+  BRAIN_LOG_EVENT_KIND.sessionLifecycle,
+]);

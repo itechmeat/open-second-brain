@@ -99,6 +99,16 @@ export interface CollectedEvidence {
  *
  * Stops early once both quotas are full.
  */
+/**
+ * The log events the dream pass's evidence readers use (this module and
+ * `dream-refresh.ts` `scanApplyEvidence`): one set, so the pass reads the
+ * store log for them once (`log-days.ts` read pass) and holds only those.
+ */
+export const EVIDENCE_LOG_EVENTS: ReadonlySet<string> = new Set([
+  BRAIN_LOG_EVENT_KIND.applyEvidence,
+  BRAIN_LOG_EVENT_KIND.merge,
+]);
+
 export function collectEvidenceForSlug(
   vault: string | null,
   slug: string,
@@ -118,7 +128,10 @@ export function collectEvidenceForSlug(
   let log: ReturnType<typeof logDayReader>;
   let dates: ReadonlyArray<string>;
   try {
-    log = logDayReader(vault, cutoff !== null ? { from: cutoff.slice(0, 10) } : {});
+    log = logDayReader(vault, {
+      ...(cutoff !== null ? { from: cutoff.slice(0, 10) } : {}),
+      eventTypes: EVIDENCE_LOG_EVENTS,
+    });
     dates = log.dates;
   } catch {
     return { applied, violated };

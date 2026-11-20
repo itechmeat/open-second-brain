@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 
 import { STORE_CATCH_UP_INTERVAL_ENV } from "../../../src/core/search/brain-store/constants.ts";
 import { catchUpBrainStore } from "../../../src/core/search/brain-store/catch-up.ts";
+import * as ingest from "../../../src/core/search/brain-store/ingest.ts";
 import { storeRecordPath } from "../../../src/core/search/brain-store/ingest.ts";
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
@@ -114,6 +115,39 @@ describe("catch-up races", () => {
     fs.rmSync(compacted);
     expect((await catchUpBrainStore(config)).removed).toBe(1);
     expect(await found(config, "stilt colony")).toEqual([]);
+  });
+
+  test("an orphan whose sibling copy fails to ingest is settled on a later pass", async () => {
+    const config = await readyIndex();
+    const a = remoteRecord("Turnstone decision", Date.UTC(2026, 0, 5));
+    const old = remoteShard("2026-01");
+    const compacted = remoteShard("2026-01", "c1");
+    writeShard(old, line(a));
+    writeShard(compacted, line(a));
+    await catchUpBrainStore(config);
+    fs.rmSync(old);
+    // The sibling's copy fails to reach the index once.
+    const real = ingest.ingestRecord;
+    let failed = false;
+    const spy = spyOn(ingest, "ingestRecord").mockImplementation((...args) => {
+      if (!failed && args[2].id === a.id) {
+        failed = true;
+        throw new Error("injected index write failure");
+      }
+      return real(...args);
+    });
+    try {
+      await catchUpBrainStore(config);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failed).toBe(true);
+    await catchUpBrainStore(config);
+    expect(await found(config, "turnstone")).toEqual([storeRecordPath("shared", a.id)]);
+    // Credited to the shard that holds it now: removing that one removes it.
+    fs.rmSync(compacted);
+    await catchUpBrainStore(config);
+    expect(await found(config, "turnstone")).toEqual([]);
   });
 
   test.skipIf(!canDenyRead)(

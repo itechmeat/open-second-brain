@@ -21,9 +21,9 @@ import { isDualWriteEnabled } from "../../store/dual-write.ts";
 import { compareRecords, type StoreRecord } from "../../store/envelope.ts";
 import { parseHlc } from "../../store/hlc.ts";
 import { prepareRecords } from "../../store/fold.ts";
-import { readPartition } from "../../store/state-digest.ts";
+import { readStreamRecords } from "../../store/read/stream-read.ts";
 import { inspectStore } from "../../store/store-open.ts";
-import { partitionDir, resolveConfiguredStoreRoot } from "../../store/store-paths.ts";
+import { resolveConfiguredStoreRoot, shardMonth } from "../../store/store-paths.ts";
 import {
   VIEW_PASS_KIND,
   VIEW_RENDER_KIND,
@@ -31,47 +31,64 @@ import {
   VIEW_WRITER_SILENCE_DAYS,
   VIEW_WRITER_SILENCE_MS,
 } from "../../view/constants.ts";
-import { foldViewWriter } from "../../view/writer-fold.ts";
+import { foldViewWriter, VIEW_WRITER_KINDS } from "../../view/writer-fold.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
 
 /** The view writer has published nothing in the view for the silence window. */
 export const VIEW_WRITER_SILENT_CODE = "view-writer-silent";
 
-function sharedRecords(ctx: StoreSideCheckContext): ReadonlyArray<StoreRecord> | null {
+/**
+ * What the check folds, read as the view reads it: the writer records of
+ * the `settings` stream of `shared` (`catchUpSettings`), then only the
+ * writer's own `log` shards from the month of its claim on, for its
+ * renders and passes. A migrated store's `log` holds its whole history;
+ * none of it but the writer's view records is kept, and no other device's
+ * shard is read. `null` when there is no store to read or a shard the
+ * answer depends on could not be read in full.
+ */
+function writerActivity(
+  ctx: StoreSideCheckContext,
+): { writer: string; since: StoreRecord; published: StoreRecord | undefined } | "none" | null {
   const root = resolveConfiguredStoreRoot(ctx.configPath);
   if (root.origin === "default" && !isDualWriteEnabled(ctx.configPath)) return null;
   const store = inspectStore(root.root);
   if (store === null || !store.partitions.has("shared")) return null;
-  let complete = true;
-  const shards = readPartition(partitionDir(store.root, "shared"), {
-    onUnreadable: () => {
-      complete = false;
-    },
+  const settings = readStreamRecords(store.root, "shared", SETTINGS, {
+    keep: (record) => VIEW_WRITER_KINDS.has(record.kind),
   });
-  return complete ? prepareRecords(shards.flatMap((s) => s.records)).records : null;
+  if (settings.unreadable.length > 0) return null;
+  const state = foldViewWriter(prepareRecords(settings.records).records);
+  if (state.writer === null || state.since === null) return "none";
+  const writer = state.writer;
+  const since = state.since;
+  const fromMonth = shardMonth(parseHlc(since.hlc)!.physical);
+  const log = readStreamRecords(store.root, "shared", LOG, {
+    device: writer,
+    month: (month) => month >= fromMonth,
+    keep: (record) => record.kind === VIEW_RENDER_KIND || record.kind === VIEW_PASS_KIND,
+  });
+  if (log.unreadable.length > 0) return null;
+  const published = prepareRecords(log.records).records.findLast(
+    (r) => r.device === writer && compareRecords(r, since) > 0,
+  );
+  return { writer, since, published };
 }
+
+const SETTINGS = { stream: "settings" } as const;
+const LOG = { stream: "log" } as const;
 
 export const viewWriterCheck: StoreSideDoctorCheck = {
   failSoft: true,
   run(ctx: StoreSideCheckContext, out: DoctorFindings): void {
-    let records: ReadonlyArray<StoreRecord> | null;
+    let activity: ReturnType<typeof writerActivity>;
     try {
-      records = sharedRecords(ctx);
+      activity = writerActivity(ctx);
     } catch {
       return; // the store section reports a root or store it cannot use
     }
-    if (records === null) return;
-    const state = foldViewWriter(records);
-    if (state.writer === null || state.since === null) return;
-    const writer = state.writer;
-    const since = state.since;
-    const published = records.findLast(
-      (r) =>
-        r.device === writer &&
-        (r.kind === VIEW_RENDER_KIND || r.kind === VIEW_PASS_KIND) &&
-        compareRecords(r, since) > 0,
-    );
+    if (activity === null || activity === "none") return;
+    const { writer, since, published } = activity;
     const lastMs = parseHlc((published ?? since).hlc)!.physical;
     if (ctx.now.getTime() - lastMs <= VIEW_WRITER_SILENCE_MS) return;
     out.issues.push({

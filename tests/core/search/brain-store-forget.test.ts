@@ -3,7 +3,7 @@
  * "Removal"): after `signal-removed` is caught up, no query finds the
  * capture or a move of it, while the shards still hold the lines.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { appendFileSync } from "node:fs";
 
 import { STORE_CATCH_UP_INTERVAL_ENV } from "../../../src/core/search/brain-store/constants.ts";
@@ -14,6 +14,7 @@ import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { buildRecord } from "../../../src/core/store/envelope.ts";
+import * as reader from "../../../src/core/store/reader.ts";
 import { shardPath } from "../../../src/core/store/store-paths.ts";
 import {
   LOCAL_DEVICE,
@@ -192,4 +193,67 @@ test("a removed preference and a removed lane entry leave the index too", async 
   await catchUpBrainStore(config);
   expect(await hits(config, "wombat")).toBe(0);
   expect(await hits(config, "kinkajou")).toBe(0);
+});
+
+test("a voided line committed by a read that failed later is still taken out on the retry", async () => {
+  const local = fx.open(LOCAL_DEVICE);
+  const remote = fx.open(REMOTE_DEVICE);
+  const t0 = Date.UTC(2026, 10, 1, 9, 0, 0);
+  appendRecord(
+    remote,
+    { partition: "shared", stream: "events", kind: "note-unrelated", agent: "t", body: {} },
+    { now: () => t0 },
+  );
+  fx.writeNote("notes/a.md", "# A\n\nA note.\n");
+  const config = fx.config();
+  await indexVault(config);
+  appendRecord(
+    local,
+    {
+      partition: "shared",
+      stream: "events",
+      kind: "signal-removed",
+      agent: "t",
+      body: { authority: "human", signal: "sig-y" },
+    },
+    { now: () => t0 + 5000 },
+  );
+  await catchUpBrainStore(config);
+  // The forgotten signal syncs in late, followed by more than one ingest
+  // batch of other records, all appended to the remote shard already read.
+  const line = (body: Record<string, unknown>, kind: string, counter: number): string =>
+    `${JSON.stringify(
+      buildRecord({
+        hlc: { physical: t0 + 2000, counter },
+        device: REMOTE_DEVICE,
+        agent: "t",
+        kind,
+        scope: null,
+        topic: null,
+        body,
+      }),
+    )}\n`;
+  const lines = [line(SIGNAL_Y, "signal", 0)];
+  for (let n = 1; n <= 600; n++) lines.push(line({ n }, "note-unrelated", n));
+  appendFileSync(
+    shardPath(fx.root, "shared", { stream: "events" }, REMOTE_DEVICE, "2026-11"),
+    lines.join(""),
+  );
+  // The read fails after the first batch (the signal in it) committed.
+  const real = reader.scanShard;
+  const spy = spyOn(reader, "scanShard").mockImplementation((path, options, onRecord) => {
+    let seen = 0;
+    return real(path, options, (r) => {
+      seen += 1;
+      if (seen > 520) throw new Error("injected read failure");
+      onRecord(r);
+    });
+  });
+  try {
+    expect((await catchUpBrainStore(config)).skipped).toBe("failed");
+  } finally {
+    spy.mockRestore();
+  }
+  expect((await catchUpBrainStore(config)).skipped).toBeNull();
+  expect(await hits(config, "okapi")).toBe(0);
 });

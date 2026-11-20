@@ -44,10 +44,10 @@ function append(s: StoreHandle, from: number, count: number): string {
 /** Read the stream through `tails`, noting the offset of every shard read. */
 function readCounting(s: StoreHandle, tails: ShardTails): { ns: number[]; offsets: number[] } {
   const offsets: number[] = [];
-  const real = reader.readShard;
-  const spy = spyOn(reader, "readShard").mockImplementation((path, options) => {
+  const real = reader.scanShard;
+  const spy = spyOn(reader, "scanShard").mockImplementation((path, options, onRecord) => {
     offsets.push(options?.offset ?? 0);
-    return real(path, options);
+    return real(path, options, onRecord);
   });
   try {
     const read = readStreamRecords(s.root, "shared", { stream: "events" }, { tails });
@@ -114,14 +114,14 @@ describe("stream reads through kept tails", () => {
       .filter((l) => l !== "");
     const replacement = [original[3], original[2], original[1], original[0], ""].join("\n");
     const offsets: number[] = [];
-    const real = reader.readShard;
-    const spy = spyOn(reader, "readShard").mockImplementation((p, options) => {
+    const real = reader.scanShard;
+    const spy = spyOn(reader, "scanShard").mockImplementation((p, options, onRecord) => {
       offsets.push(options?.offset ?? 0);
       if ((options?.offset ?? 0) > 0) {
         writeFileSync(`${path}.new`, replacement);
         renameSync(`${path}.new`, path);
       }
-      return real(p, options);
+      return real(p, options, onRecord);
     });
     let ns: number[];
     try {
@@ -141,10 +141,10 @@ describe("stream reads through kept tails", () => {
     const s = store();
     append(s, 0, 2);
     const offsets: number[] = [];
-    const real = reader.readShard;
-    const spy = spyOn(reader, "readShard").mockImplementation((path, options) => {
+    const real = reader.scanShard;
+    const spy = spyOn(reader, "scanShard").mockImplementation((path, options, onRecord) => {
       offsets.push(options?.offset ?? 0);
-      return real(path, options);
+      return real(path, options, onRecord);
     });
     try {
       readStreamRecords(s.root, "shared", { stream: "events" });

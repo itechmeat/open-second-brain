@@ -34,6 +34,14 @@ import { observeClock, type WallClock } from "./clock-store.ts";
 import {
   DAY_MS,
   LEDGER_STREAM,
+  PINNED_CLEAR_KIND,
+  PINNED_SET_KIND,
+  PREFERENCE_EVIDENCE_KIND,
+  PREFERENCE_REMOVE_KIND,
+  PREFERENCE_SET_KIND,
+  SETTING_ENTRY_KIND,
+  SETTING_SET_KIND,
+  SETTING_UNSET_KIND,
   STATE_DIGEST_KIND,
   STORE_STREAMS,
   type StateDigestFold,
@@ -45,6 +53,7 @@ import { foldPinned, pinnedFingerprint } from "./fold-pinned.ts";
 import { foldPreferences, preferencesFingerprint } from "./fold-preferences.ts";
 import { foldSettings, settingsFingerprint } from "./fold-settings.ts";
 import { foldTopics, topicsFingerprint } from "../topics/fold.ts";
+import { isTopicRecordKind } from "../topics/records.ts";
 import { parseHlc } from "./hlc.ts";
 import {
   replacedShards,
@@ -438,16 +447,81 @@ export type PublishDigestResult =
   | { readonly published: true; readonly body: DigestBody; readonly append: AppendResult }
   | { readonly published: false; readonly body: DigestBody; readonly reason: "unchanged" };
 
-function latestOwnDigest(
-  shards: ReadonlyArray<PartitionShard>,
+/** Whether a digested fold (`foldHashes`) reads `record` at all. */
+function isDigestFoldInput(record: StoreRecord): boolean {
+  return DIGEST_FOLD_KINDS.has(record.kind) || isTopicRecordKind(record.kind);
+}
+
+const DIGEST_FOLD_KINDS: ReadonlySet<string> = new Set([
+  PREFERENCE_SET_KIND,
+  PREFERENCE_REMOVE_KIND,
+  PREFERENCE_EVIDENCE_KIND,
+  PINNED_SET_KIND,
+  PINNED_CLEAR_KIND,
+  SETTING_SET_KIND,
+  SETTING_UNSET_KIND,
+  SETTING_ENTRY_KIND,
+]);
+
+/**
+ * What a digest of the partition at `partitionRoot` is made of, read
+ * record by record ({@link forEachPartitionRecord}): the cut
+ * ({@link computeCut}), the records the digested folds read of the shards
+ * the cut covers (the same folds as {@link buildDigestBody}, which keeps
+ * every record), `device`'s latest digest, and the newest record read.
+ */
+function readDigestInputs(
+  partitionRoot: string,
   device: string,
-): StoreRecord | null {
-  const own = shards
-    .filter((shard) => shard.stream === DIGEST_STREAM && shard.device === device)
-    .flatMap((shard) => shard.records)
-    .filter((record) => record.kind === STATE_DIGEST_KIND)
-    .toSorted(compareRecords);
-  return own.at(-1) ?? null;
+): {
+  cut: CutEntry[];
+  covered: StoreRecord[];
+  latestOwn: StoreRecord | null;
+  newest: StoreRecord | undefined;
+} {
+  const cut: CutEntry[] = [];
+  const covered: StoreRecord[] = [];
+  let latestOwn: StoreRecord | null = null;
+  let newest: StoreRecord | undefined;
+  let kept: StoreRecord[] = [];
+  let at: string | null = null;
+  forEachPartitionRecord(
+    partitionRoot,
+    {},
+    {
+      record: (head, record, pending) => {
+        if (at !== head.rel) {
+          kept = [];
+          at = head.rel;
+        }
+        if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
+        if (head.stream === DIGEST_STREAM) {
+          const own = head.device === device && !pending && record.kind === STATE_DIGEST_KIND;
+          if (own && (latestOwn === null || compareRecords(record, latestOwn) > 0)) {
+            latestOwn = record;
+          }
+          return;
+        }
+        if (!pending && isDigestFoldInput(record)) kept.push(record);
+      },
+      shard: (totals) => {
+        const mine = at === totals.rel;
+        if (totals.stream !== DIGEST_STREAM && totals.count > 0 && totals.last !== null) {
+          cut.push({
+            shard: totals.rel,
+            count: totals.count,
+            last: totals.last,
+            pending: totals.pending,
+          });
+          if (mine) covered.push(...kept);
+        }
+        kept = [];
+        at = null;
+      },
+    },
+  );
+  cut.sort((a, b) => compareCodeUnits(a.shard, b.shard));
+  return { cut, covered, latestOwn, newest };
 }
 
 /**
@@ -461,9 +535,14 @@ export function publishStateDigest(
   options: PublishDigestOptions,
 ): PublishDigestResult {
   const now = options.now ?? (() => Date.now());
-  const shards = readPartition(partitionDir(store.root, options.partition));
-  const body = buildDigestBody(options.partition, shards);
-  const latest = latestOwnDigest(shards, store.device);
+  const read = readDigestInputs(partitionDir(store.root, options.partition), store.device);
+  const body: DigestBody = {
+    partition: options.partition,
+    cut: read.cut,
+    cut_hash: cutHash(read.cut),
+    folds: foldHashes(read.covered),
+  };
+  const latest = read.latestOwn;
   if (latest !== null) {
     const age = now() - parseHlc(latest.hlc)!.physical;
     const same =
@@ -473,13 +552,7 @@ export function publishStateDigest(
       return { published: false, body, reason: "unchanged" };
     }
   }
-  // The newest record by fold order: one linear scan, no sort.
-  let newest: StoreRecord | undefined;
-  for (const shard of shards) {
-    for (const record of shard.all) {
-      if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
-    }
-  }
+  const newest = read.newest;
   if (newest !== undefined) {
     observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
   }

@@ -32,7 +32,11 @@ import {
 import { operationPrivacy, SIGNAL_OPAQUE_FIELDS } from "../store/operation-privacy.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
-import { readStoreEntities, type StoreSignal } from "../store/read/store-entities.ts";
+import {
+  readStoreEntities,
+  type HeldEntities,
+  type StoreSignal,
+} from "../store/read/store-entities.ts";
 import { protectionStore, StoreUnavailableError } from "../store/read/protection-store.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import type { StoreInspection } from "../store/store-open.ts";
@@ -152,6 +156,99 @@ export function routeSignalState<T>(spec: SignalStateWrite<T>): RoutedWrite<T> {
     spec.after?.(routed);
     return routed;
   });
+}
+
+/** Records a store-only batch of signal moves appends at once. */
+export const SIGNAL_STATE_BATCH = 500;
+
+/** What {@link writeStoreSignalStates} wrote and what it could not. */
+export interface SignalStateBatchResult {
+  /** Ids whose record was appended. */
+  readonly written: ReadonlyArray<string>;
+  /** Ids whose record was not appended, with why. */
+  readonly failed: ReadonlyArray<{ readonly id: string; readonly error: Error }>;
+}
+
+/**
+ * Many lifecycle moves of a store-only machine (the dream pass consuming
+ * and archiving signals) as batched appends: up to {@link SIGNAL_STATE_BATCH}
+ * `signal-state` records per `appendRecords` batch, so a batch costs one
+ * clock write and one synced write per shard instead of two synced writes
+ * per signal (one batch per partition the chunk writes to). Each record is judged and placed exactly as
+ * {@link routeSignalState} places a store-only move with no fields: by the
+ * signal's own privacy in `held` (private when it is unknown), raised to
+ * `private` by a `<private>` region. A signal whose partition this
+ * machine does not hold fails alone, before its batch is written. A batch
+ * that fails fails whole; a crash in one leaves a prefix of each shard's
+ * lines, and the next pass, whose fold shows those signals moved, writes
+ * only the rest. The moves of one batch are of distinct signals, so none
+ * changes the verdict of another.
+ */
+export function writeStoreSignalStates(input: {
+  readonly vault: string | null;
+  readonly moves: ReadonlyArray<{ readonly id: string; readonly state: SignalStateValue }>;
+  readonly authority: Authority;
+  readonly held: HeldEntities;
+  readonly agent?: string;
+  readonly configPath?: string;
+  /** Signals per batch; {@link SIGNAL_STATE_BATCH} when absent. */
+  readonly batchSize?: number;
+}): SignalStateBatchResult {
+  const batch = Math.max(1, input.batchSize ?? SIGNAL_STATE_BATCH);
+  const written: string[] = [];
+  const failed: Array<{ id: string; error: Error }> = [];
+  const context = {
+    vault: input.vault,
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+  };
+  for (let at = 0; at < input.moves.length; at += batch) {
+    const chunk = input.moves.slice(at, at + batch);
+    const entities = input.held.current();
+    // One append per partition of the chunk, each under its verdict as an
+    // operation scope, as routeSignalState writes one record.
+    const groups = new Map<StorePartition, { records: DualWriteRecord[]; ids: string[] }>();
+    for (const move of chunk) {
+      const isPrivate = operationPrivacy(input.vault, {
+        target: () => entities?.signals.get(move.id)?.private ?? true,
+        content: [],
+      })();
+      const partition: StorePartition = isPrivate ? "private" : "shared";
+      if (entities !== null && !entities.store.partitions.has(partition)) {
+        failed.push({
+          id: move.id,
+          error: new Error(
+            `this machine does not hold the ${partition} partition of the brain store`,
+          ),
+        });
+        continue;
+      }
+      const group = groups.get(partition) ?? { records: [], ids: [] };
+      group.records.push(
+        signalStateRecord({
+          id: move.id,
+          state: move.state,
+          authority: input.authority,
+          ...(input.agent !== undefined ? { agent: input.agent } : {}),
+          private: isPrivate,
+        }),
+      );
+      group.ids.push(move.id);
+      groups.set(partition, group);
+    }
+    for (const [partition, group] of groups) {
+      try {
+        withOperationPrivacy(
+          () => partition === "private",
+          () => storeWrite(() => group.records, context),
+        );
+        written.push(...group.ids);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        for (const id of group.ids) failed.push({ id, error });
+      }
+    }
+  }
+  return { written, failed };
 }
 
 /**

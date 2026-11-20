@@ -189,14 +189,22 @@ export interface LogSnapshot {
  * Build a single pre-parsed snapshot of `Brain/log/` so the log-walking
  * lints don't each re-parse the directory, and name every day that could
  * not be read so no caller mistakes a partial snapshot for a whole one.
+ * With `eventTypes`, a store-only machine's snapshot holds only events
+ * of those types (`log-days.ts`), so a long migrated log is not held for
+ * the whole doctor run; the day files of an unswitched machine are read
+ * whole either way, so a reader still filters by type itself.
  */
 export function readLogSnapshot(
   vault: string,
   swept?: SweptPath,
   configPath?: string,
+  eventTypes?: ReadonlySet<string>,
 ): LogSnapshot {
   // Store-only (task 2.10): the log is the store's `log-event` records.
-  const stored = storeLogDays(vault, contextOf(configPath));
+  const stored = storeLogDays(vault, {
+    ...contextOf(configPath),
+    ...(eventTypes !== undefined ? { eventTypes } : {}),
+  });
   if (stored !== null) {
     return {
       records: stored.map((day) => ({ date: day.date, entries: day.entries })),

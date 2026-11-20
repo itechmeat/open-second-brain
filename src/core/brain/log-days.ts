@@ -35,6 +35,14 @@ export interface LogDay {
 /** Where to read: the machine config of the store root and device id. */
 export interface LogDaysContext {
   readonly configPath?: string;
+  /**
+   * Only the events of these types, on a store-only machine: a reader
+   * that walks the log for a few types (the dream pass's evidence) has the
+   * store read keep only those, so a long migrated log is not held whole
+   * for the pass. The day files of an unswitched machine are read whole,
+   * so a reader still filters by type itself. Absent, every event.
+   */
+  readonly eventTypes?: ReadonlySet<string>;
 }
 
 /** Every date a store log can name; the facade reads only the shards of held months. */
@@ -98,12 +106,17 @@ function logFingerprint(store: StoreInspection): string {
   return parts.join("\n");
 }
 
-function readDays(readContext: { vault: string | null; configPath?: string }): LogDay[] {
+function readDays(
+  readContext: { vault: string | null; configPath?: string },
+  eventTypes: ReadonlySet<string> | undefined,
+): LogDay[] {
   stats.storeReads += 1;
   // The store-only facade, never the one that falls back to the day files:
   // a vault that grew a `Brain/` since the caller resolved the source would
   // otherwise walk every date of WHOLE_LOG one day file at a time.
-  const events = readStoreLogEvents(WHOLE_LOG, readContext) ?? [];
+  const events =
+    readStoreLogEvents(WHOLE_LOG, readContext, eventTypes !== undefined ? { eventTypes } : {}) ??
+    [];
   // Frozen: a read pass hands the same days to every reader in it.
   return Object.freeze([...groupByDay(events.map((e) => e.entry)).values()]) as LogDay[];
 }
@@ -120,15 +133,18 @@ export function storeLogDays(vault: string | null, context: LogDaysContext = {})
   };
   const source = readSource(readContext);
   if (source.kind === "legacy") return null;
-  if (passCache === null || source.store === null) return readDays(readContext);
-  const key = `${source.store.root}\u0000${vault}`;
+  const types = context.eventTypes;
+  if (passCache === null || source.store === null) return readDays(readContext, types);
+  // A read of some types is cached apart from the whole read.
+  const typesKey = types === undefined ? "*" : [...types].toSorted().join(",");
+  const key = `${source.store.root}\u0000${vault}\u0000${typesKey}`;
   const fingerprint = logFingerprint(source.store);
   const cached = passCache.get(key);
   if (cached !== undefined && cached.fingerprint === fingerprint) {
     stats.cacheHits += 1;
     return cached.days;
   }
-  const days = readDays(readContext);
+  const days = readDays(readContext, types);
   if (!passCache.has(key) && passCache.size >= PASS_CACHE_LIMIT) {
     const oldest = passCache.keys().next().value;
     if (oldest !== undefined) passCache.delete(oldest);
@@ -193,9 +209,15 @@ export function logDayReader(
   vault: string | null,
   options: LogDayReaderOptions = {},
 ): LogDayReader {
-  const context: LogDaysContext =
-    options.configPath !== undefined ? { configPath: options.configPath } : {};
-  const readContext = { vault, ...context };
+  const readContext = {
+    vault,
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+  };
+  const context: LogDaysContext = {
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+    ...(options.eventTypes !== undefined ? { eventTypes: options.eventTypes } : {}),
+  };
+  const typed = options.eventTypes !== undefined ? { eventTypes: options.eventTypes } : {};
   const inRange = (date: string): boolean =>
     (options.from === undefined || date >= options.from) &&
     (options.to === undefined || date <= options.to);
@@ -219,7 +241,9 @@ export function logDayReader(
     if (windowed && passCache === null) {
       stats.storeReads += 1;
       const range = { from: options.from ?? WHOLE_LOG.from, to: options.to ?? WHOLE_LOG.to };
-      byDate = groupByDay((readStoreLogEvents(range, readContext) ?? []).map((e) => e.entry));
+      byDate = groupByDay(
+        (readStoreLogEvents(range, readContext, typed) ?? []).map((e) => e.entry),
+      );
     } else {
       byDate = new Map((storeLogDays(vault, context) ?? []).map((d) => [d.date, d] as const));
     }
@@ -235,13 +259,13 @@ export function logDayReader(
       // outside it is read on its own, as the legacy reader reads any day.
       // (A read pass caches the whole log, which holds every day.)
       if (windowed && passCache === null && !inRange(date)) {
-        const events = readStoreLogEvents({ from: date, to: date }, readContext) ?? [];
+        const events = readStoreLogEvents({ from: date, to: date }, readContext, typed) ?? [];
         return { entries: events.map((e) => e.entry) };
       }
       if (byDate !== null || passCache !== null || windowed) {
         return load().get(date) ?? { entries: [] };
       }
-      const events = readStoreLogEvents({ from: date, to: date }, readContext) ?? [];
+      const events = readStoreLogEvents({ from: date, to: date }, readContext, typed) ?? [];
       return { entries: events.map((e) => e.entry) };
     },
   };
