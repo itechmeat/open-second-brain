@@ -834,6 +834,16 @@ the legacy shard it came from. A history written on several days by one
 agent therefore still counts as several sessions and forms topics (see
 `docs/topics.md`).
 
+The migration, the import of late legacy writes, the rollback and the
+removal read the store one record at a time, so their memory does not
+grow with the vault. What they must keep for every item or record (the
+journal, the items a pass saw, the store's checksums, the restored tree's
+items) moves into a temporary SQLite file under `scratch/` in the
+device-local migration folder once it passes 20,000 entries. That file is
+scratch only: each run rebuilds it from the journal and the store,
+deletes it when it ends, and removes one a killed run left behind. Give
+the device-local state disk room for it, about the size of the journal.
+
 The legacy tree stays in the vault. If the run is interrupted,
 `o2b brain migrate-store --resume` continues without importing anything
 twice. If verification finds a gap, the legacy tree is left untouched and

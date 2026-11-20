@@ -17,7 +17,7 @@ import { statSync } from "node:fs";
 
 import { sleepSync } from "../fs-atomic.ts";
 import { STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
-import { forEachPartitionShard, type CutEntry } from "../store/state-digest.ts";
+import { forEachPartitionRecord, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import { MIGRATION_DONE_KIND, migrationDoneRecords } from "./migration-records.ts";
@@ -73,19 +73,50 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
   const missing: string[] = [];
   const skipped = new Set<StorePartition>();
   const firstMachines = new Set<string>();
+  // Every cut first: a shard is then read for its count and for only the
+  // ids some cut ends on, never for every id it holds.
+  const cuts: Array<[StorePartition, ReadonlyArray<CutEntry>]> = [];
+  for (const done of migrationDoneRecords(store)) {
+    firstMachines.add(done.device);
+    const parsed = cutsOf(done.body["cuts"]);
+    if (parsed === null) {
+      // A cut this release cannot read is waited on, never skipped: the
+      // marks it stands for may not have arrived, and importing now would
+      // import them twice. The entry names the record to look at.
+      missing.push(`${MIGRATION_DONE_KIND} ${done.id} of ${done.device} (unreadable cut)`);
+      continue;
+    }
+    for (const [partition, cut] of parsed) {
+      if (!store.partitions.has(partition)) {
+        skipped.add(partition);
+        continue;
+      }
+      cuts.push([partition, cut]);
+    }
+  }
+  const wanted = new Map<StorePartition, Set<string>>();
+  for (const [partition, cut] of cuts) {
+    const ids = wanted.get(partition) ?? new Set<string>();
+    for (const entry of cut) ids.add(entry.last);
+    wanted.set(partition, ids);
+  }
   const local = new Map<StorePartition, Map<string, { count: number; ids: Set<string> }>>();
   const shardsOf = (partition: StorePartition) => {
     let shards = local.get(partition);
     if (shards === undefined) {
+      const want = wanted.get(partition) ?? new Set<string>();
+      const wantKey = [...want].toSorted().join(",");
       const held = new Map<string, { count: number; ids: Set<string> }>();
-      // Shard by shard, keeping only each shard's count and ids; a shard
-      // whose file is unchanged since the last poll is not read again.
+      // Record by record, keeping only each shard's count and the wanted
+      // ids it holds; a shard whose file is unchanged since the last poll,
+      // read for the same ids, is not read again.
       const known = cache.get(partition) ?? new Map<string, CachedCutShard>();
       const next = new Map<string, CachedCutShard>();
       // The stamp is taken before the shard is read: a shard that grows
       // while it is read carries a newer stamp and is read again.
       const stamps = new Map<string, string | null>();
-      forEachPartitionShard(
+      const reading = new Map<string, { count: number; ids: Set<string> }>();
+      forEachPartitionRecord(
         partitionDir(store.root, partition),
         {
           onUnreadable: () => {},
@@ -94,19 +125,34 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
             stamps.set(rel, stamp);
             const hit = known.get(rel);
             if (stamp === null || hit === undefined || hit.stamp !== stamp) return false;
+            if (hit.wanted !== wantKey) return false;
             next.set(rel, hit);
             held.set(rel, hit);
             return true;
           },
         },
-        (shard) => {
-          const entry = {
-            stamp: stamps.get(shard.rel) ?? null,
-            count: shard.all.length,
-            ids: new Set(shard.all.map((r) => r.id)),
-          };
-          if (entry.stamp !== null) next.set(shard.rel, entry);
-          held.set(shard.rel, entry);
+        {
+          record: (shard, record) => {
+            let entry = reading.get(shard.rel);
+            if (entry === undefined) {
+              entry = { count: 0, ids: new Set<string>() };
+              reading.set(shard.rel, entry);
+            }
+            entry.count += 1;
+            if (want.has(record.id)) entry.ids.add(record.id);
+          },
+          shard: (totals) => {
+            const read = reading.get(totals.rel) ?? { count: 0, ids: new Set<string>() };
+            reading.delete(totals.rel);
+            const entry = {
+              stamp: stamps.get(totals.rel) ?? null,
+              wanted: wantKey,
+              count: read.count,
+              ids: read.ids,
+            };
+            if (entry.stamp !== null) next.set(totals.rel, entry);
+            held.set(totals.rel, entry);
+          },
         },
       );
       cache.set(partition, next);
@@ -115,27 +161,12 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
     }
     return shards;
   };
-  for (const done of migrationDoneRecords(store)) {
-    firstMachines.add(done.device);
-    const cuts = cutsOf(done.body["cuts"]);
-    if (cuts === null) {
-      // A cut this release cannot read is waited on, never skipped: the
-      // marks it stands for may not have arrived, and importing now would
-      // import them twice. The entry names the record to look at.
-      missing.push(`${MIGRATION_DONE_KIND} ${done.id} of ${done.device} (unreadable cut)`);
-      continue;
-    }
-    for (const [partition, cut] of cuts) {
-      if (!store.partitions.has(partition)) {
-        skipped.add(partition);
-        continue;
-      }
-      const shards = shardsOf(partition);
-      for (const entry of cut) {
-        const held = shards.get(entry.shard);
-        if (held === undefined || held.count < entry.count || !held.ids.has(entry.last)) {
-          missing.push(`${partition}/${entry.shard}`);
-        }
+  for (const [partition, cut] of cuts) {
+    const shards = shardsOf(partition);
+    for (const entry of cut) {
+      const held = shards.get(entry.shard);
+      if (held === undefined || held.count < entry.count || !held.ids.has(entry.last)) {
+        missing.push(`${partition}/${entry.shard}`);
       }
     }
   }
@@ -166,7 +197,10 @@ export function waitForCut(store: StoreHandle, budgetMs: number, intervalMs = 10
 /** What a poll of {@link cutWait} knew of one shard, by the file's stamp. */
 interface CachedCutShard {
   readonly stamp: string | null;
+  /** The ids the read looked for, sorted and joined: another set reads the shard again. */
+  readonly wanted: string;
   readonly count: number;
+  /** The ids looked for that the shard holds. */
   readonly ids: Set<string>;
 }
 

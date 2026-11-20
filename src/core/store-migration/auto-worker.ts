@@ -75,7 +75,7 @@ import {
   type MigrationAvailability,
 } from "../store/migration-availability.ts";
 import { LOG_EVENT_KIND } from "../store/constants.ts";
-import { readPartition } from "../store/state-digest.ts";
+import { forEachPartitionRecord } from "../store/state-digest.ts";
 import { inspectStore } from "../store/store-open.ts";
 import {
   isPathInsideResolved,
@@ -1138,18 +1138,24 @@ function rowWritten(a: Attempt, runId: string): boolean {
 function logLineWritten(a: Attempt, runId: string): boolean {
   try {
     const root = resolveConfiguredStoreRoot(a.opts.configPath).root;
-    return readPartition(join(root, "shared")).some((shard) =>
-      shard.all.some((r) => {
-        if (r.kind !== LOG_EVENT_KIND) return false;
-        if (r.body["event_type"] !== BRAIN_LOG_EVENT_KIND.storeMigrationDone) return false;
-        const body = r.body["body"];
-        return (
-          typeof body === "object" &&
-          body !== null &&
-          (body as Record<string, unknown>)["run_id"] === runId
-        );
-      }),
+    // Record by record: the shared partition holds every migrated record.
+    let found = false;
+    forEachPartitionRecord(
+      join(root, "shared"),
+      {},
+      {
+        record: (_shard, r) => {
+          if (found || r.kind !== LOG_EVENT_KIND) return;
+          if (r.body["event_type"] !== BRAIN_LOG_EVENT_KIND.storeMigrationDone) return;
+          const body = r.body["body"];
+          found =
+            typeof body === "object" &&
+            body !== null &&
+            (body as Record<string, unknown>)["run_id"] === runId;
+        },
+      },
     );
+    return found;
   } catch {
     return false;
   }

@@ -48,17 +48,25 @@ function laterMachineShardReads(rows: number): { reads: number; imported: number
   fleet.syncVaultFile("dev-a", "dev-b", "Brain/vault-id.json");
   b.use();
   let reads = 0;
-  const real = reader.readShard;
-  const spy = spyOn(reader, "readShard").mockImplementation(((...args: Parameters<typeof real>) => {
-    reads += 1;
-    return real(...args);
-  }) as typeof real);
+  // A shard is read whole (`readShard`) or record by record (`scanShard`).
+  const realRead = reader.readShard;
+  const realScan = reader.scanShard;
+  const spies = [
+    spyOn(reader, "readShard").mockImplementation(((...args: Parameters<typeof realRead>) => {
+      reads += 1;
+      return realRead(...args);
+    }) as typeof realRead),
+    spyOn(reader, "scanShard").mockImplementation(((...args: Parameters<typeof realScan>) => {
+      reads += 1;
+      return realScan(...args);
+    }) as typeof realScan),
+  ];
   try {
     const result = runMigration(b.vault, FAST);
     expect(result.ok).toBe(true);
     return { reads, imported: result.imported };
   } finally {
-    spy.mockRestore();
+    for (const spy of spies) spy.mockRestore();
     fleet.cleanup();
     fleet = null;
   }

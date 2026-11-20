@@ -108,13 +108,27 @@ export const EXPORTED_KINDS: ReadonlySet<string> = new Set([
   LANE_ENTRY_REMOVE_KIND,
 ]);
 
-const PREFERENCE_KINDS = new Set([
+export const PREFERENCE_KINDS: ReadonlySet<string> = new Set([
   PREFERENCE_SET_KIND,
   PREFERENCE_REMOVE_KIND,
   PREFERENCE_EVIDENCE_KIND,
 ]);
 const PINNED_KINDS = new Set([PINNED_SET_KIND, PINNED_CLEAR_KIND]);
-const LANE_KINDS = new Set([LANE_ENTRY_KIND, LANE_ENTRY_REMOVE_KIND]);
+export const LANE_KINDS: ReadonlySet<string> = new Set([LANE_ENTRY_KIND, LANE_ENTRY_REMOVE_KIND]);
+
+/**
+ * Whether the exporters' folds read records of `kind`: signals,
+ * preferences, pinned context and lane entries. {@link ExportPlan.all}
+ * needs no other record.
+ */
+export function exportFoldsKind(kind: string): boolean {
+  return (
+    SIGNAL_FAMILY.has(kind) ||
+    PREFERENCE_KINDS.has(kind) ||
+    PINNED_KINDS.has(kind) ||
+    LANE_KINDS.has(kind)
+  );
+}
 
 /** A record the exporters would not write back, and why. */
 export interface RefusedRecord {
@@ -457,9 +471,14 @@ function exportLaneEntries(targets: ReadonlyMap<string, string>, fold: LaneFold)
 }
 
 export interface ExportPlan {
-  /** Records to write back, in fold order. */
-  readonly records: ReadonlyArray<StoreRecord>;
-  /** Every record this machine holds, for the folds. */
+  /** Records to write back, in fold order; read once, so they may come one at a time. */
+  readonly records: Iterable<StoreRecord>;
+  /**
+   * The records the folds read ({@link exportFoldsKind}): every signal and
+   * pinned context record, and every record of each lane entry and
+   * preference that `records` names (each of those folds reads an entry's
+   * own records only); more records change nothing.
+   */
   readonly all: ReadonlyArray<StoreRecord>;
 }
 

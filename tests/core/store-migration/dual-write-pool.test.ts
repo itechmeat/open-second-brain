@@ -10,6 +10,7 @@ import { appendRecord } from "../../../src/core/store/appender.ts";
 import type { StoreRecord } from "../../../src/core/store/envelope.ts";
 import { openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
 import { contentKey, dualWritePool } from "../../../src/core/store-migration/convert.ts";
+import { Journal } from "../../../src/core/store-migration/journal.ts";
 import { journalScope } from "../../../src/core/store-migration/journal-scope.ts";
 import { makeTestStore, type TestStore } from "../../helpers/test-store.ts";
 
@@ -42,7 +43,7 @@ describe("dualWritePool", () => {
     const before = append("pinned-context-set", PIN);
     append("device-switched", { authority: "human", device: "dev-a" });
     append("pinned-context-set", PIN);
-    const pool = dualWritePool(store, new Map(), SCOPE);
+    const pool = dualWritePool(store, new Journal(), SCOPE);
     expect(pool.get(contentKey(before.kind, before.body))?.map((r) => r.id)).toEqual([before.id]);
   });
 
@@ -50,7 +51,7 @@ describe("dualWritePool", () => {
     append("device-switched", { authority: "human", device: "dev-a" });
     append("device-unswitched", { authority: "human", device: "dev-a" });
     const after = append("pinned-context-set", PIN);
-    const pool = dualWritePool(store, new Map(), SCOPE);
+    const pool = dualWritePool(store, new Journal(), SCOPE);
     expect(pool.get(contentKey(after.kind, after.body))?.map((r) => r.id)).toEqual([after.id]);
   });
 });

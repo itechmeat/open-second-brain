@@ -31,6 +31,8 @@ import { acquireDirLock } from "../store/local-lock.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { convertPass, dualWritePool, type ConvertHooks } from "./convert.ts";
 import { loadJournalAndUnmarked, migrationDir } from "./journal.ts";
+import { MigrationScratch } from "./spill-map.ts";
+import { gcHint } from "../store/gc-hint.ts";
 import { journalScopeFor } from "./backup.ts";
 import type { JournalScope } from "./journal-scope.ts";
 import { loadIncrementalReads, saveIncrementalReads } from "./incremental-reads.ts";
@@ -63,6 +65,8 @@ export interface TransitionImportOptions {
    * from an archive, or under a rollback, does not.
    */
   readonly recordWatermark?: boolean;
+  /** Entries a per-item map holds in memory before it moves to disk (`MigrationOptions.spillAt`). */
+  readonly spillAt?: number;
 }
 
 export interface TransitionResult {
@@ -101,7 +105,18 @@ export function importLateLegacyWrites(
     // `vaultId` is the vault's marker id, read by the caller before the
     // removal moved the marker into its archive with the rest of the tree.
     const scope = journalScopeFor(options.identityOf ?? vault, store.device, dir, vaultId);
-    return importUnderLock(vault, store, agent, vaultId, dir, scope, options);
+    // The journal and the items a pass saw have an entry per legacy item:
+    // they move to a temporary file in the migration folder once they grow
+    // (`spill-map.ts`), so one late write costs no memory per item.
+    const scratch = new MigrationScratch(
+      dir,
+      options.spillAt !== undefined ? { spillAt: options.spillAt } : {},
+    );
+    try {
+      return importUnderLock(vault, store, agent, vaultId, dir, scope, options, scratch);
+    } finally {
+      scratch.close();
+    }
   } finally {
     release();
   }
@@ -118,11 +133,12 @@ function importUnderLock(
   dir: string,
   scope: JournalScope,
   options: TransitionImportOptions,
+  scratch: MigrationScratch,
 ): TransitionResult {
   const hooks = options.hooks;
   // One pass over the store, shard by shard, for the journal and the
   // dual-written copies: the import never holds the store's records.
-  const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope);
+  const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope, scratch);
   // What earlier imports of this vault read (`incremental-reads.ts`): an
   // import from the removal's archive reads everything.
   const incremental =
@@ -136,6 +152,7 @@ function importUnderLock(
     journal,
     scope,
     pool: dualWritePool(store, journal, scope, unmarked),
+    scratch,
     ...(hooks !== undefined ? { hooks } : {}),
     ...(incremental !== undefined ? { incremental } : {}),
   };
@@ -152,6 +169,8 @@ function importUnderLock(
   let stamps: Record<string, string> = {};
   for (passes = 1; passes <= TRANSITION_MAX_PASSES; passes++) {
     if (options.recordWatermark === true) stamps = legacyFileStamps(vault);
+    // Each pass reads the whole legacy tree: its garbage goes before the next.
+    gcHint();
     const pass = convertPass(ctx);
     imported += pass.imported;
     unparseable = pass.problems.length;

@@ -55,7 +55,7 @@ export interface ViewWriterState {
   readonly rejected: ReadonlyArray<RejectedRecord>;
 }
 
-const VIEW_WRITER_KINDS: ReadonlySet<string> = new Set([
+export const VIEW_WRITER_KINDS: ReadonlySet<string> = new Set([
   VIEW_WRITER_CLAIM_KIND,
   VIEW_WRITER_REQUEST_KIND,
   VIEW_WRITER_RELEASED_KIND,

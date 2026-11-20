@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { parseShardedName } from "../brain/ledger-shards.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { STORE_PARTITIONS } from "../store/constants.ts";
-import { readPartition } from "../store/state-digest.ts";
+import { forEachPartitionRecord } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import { migrationCatalogue } from "./catalogue.ts";
@@ -239,15 +239,19 @@ export function storeDeviceEvidence(
   const out = new Map<string, number>();
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
-    const shards = readPartition(partitionDir(store.root, partition), { onUnreadable: () => {} });
-    for (const shard of shards) {
-      for (const record of shard.all) {
-        const physical = parseHlc(record.hlc)?.physical;
-        if (physical === undefined) continue;
-        const seen = out.get(record.device);
-        if (seen === undefined || physical > seen) out.set(record.device, physical);
-      }
-    }
+    // Record by record: only each device's newest clock is kept.
+    forEachPartitionRecord(
+      partitionDir(store.root, partition),
+      { onUnreadable: () => {} },
+      {
+        record: (_shard, record) => {
+          const physical = parseHlc(record.hlc)?.physical;
+          if (physical === undefined) return;
+          const seen = out.get(record.device);
+          if (seen === undefined || physical > seen) out.set(record.device, physical);
+        },
+      },
+    );
   }
   return out;
 }

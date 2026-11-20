@@ -32,7 +32,7 @@ import { returnedAfterRetirement } from "../store/device-retirement.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { compareRecords, type StoreRecord } from "../store/envelope.ts";
-import { forEachPartitionShard, readPartition, type CutEntry } from "../store/state-digest.ts";
+import { forEachPartitionRecord, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import { partitionDir } from "../store/store-paths.ts";
@@ -158,12 +158,17 @@ export function unseenSettingsShards(
   if (!store.partitions.has("shared")) return { unreadable: [], partial: [] };
   const unreadable: string[] = [];
   const partial: string[] = [];
-  readPartition(partitionDir(store.root, "shared"), {
-    onUnreadable: ({ rel, incomplete }) => {
-      if (rel.split("/")[0] !== MIGRATION_STREAM) return;
-      (incomplete === true ? partial : unreadable).push(`shared/${rel}`);
+  // Record by record, keeping none: only what cannot be read is named.
+  forEachPartitionRecord(
+    partitionDir(store.root, "shared"),
+    {
+      onUnreadable: ({ rel, incomplete }) => {
+        if (rel.split("/")[0] !== MIGRATION_STREAM) return;
+        (incomplete === true ? partial : unreadable).push(`shared/${rel}`);
+      },
     },
-  });
+    {},
+  );
   return { unreadable: unreadable.toSorted(), partial: partial.toSorted() };
 }
 
@@ -174,21 +179,21 @@ export function unseenSettingsShards(
  * `store/device-retirement.ts`).
  */
 function returnedRetiredDeviceIds(store: Pick<StoreHandle, "root" | "partitions">): Set<string> {
-  // The rule reads each device's last record and the retirements: shard by
-  // shard, only those are kept, never the whole store.
+  // The rule reads each device's last record and the retirements: record
+  // by record, only those are kept, never the store or one of its shards.
   const lastOf = new Map<string, StoreRecord>();
   const retirements: StoreRecord[] = [];
   for (const partition of STORE_PARTITIONS.filter((p) => store.partitions.has(p))) {
-    forEachPartitionShard(
+    forEachPartitionRecord(
       partitionDir(store.root, partition),
       { onUnreadable: () => {} },
-      (shard) => {
-        for (const record of shard.all) {
+      {
+        record: (_shard, record) => {
           if (record.kind === DEVICE_RETIRE_KIND) retirements.push(record);
           const last = lastOf.get(record.device);
           if (last === undefined || compareRecords(record, last) > 0)
             lastOf.set(record.device, record);
-        }
+        },
       },
     );
   }

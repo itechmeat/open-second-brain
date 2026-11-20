@@ -8,7 +8,7 @@
  * the parent cannot land on a chosen item, because the fixture migrates in
  * milliseconds.
  *
- * argv: <migrate|migrate-shard|rollback> <vault> <killAt>
+ * argv: <migrate|migrate-spilled|migrate-shard|rollback> <vault> <killAt>
  * (`migrate-shard` kills after the killAt-th shard of an import batch is
  * written, so the batch's other shards and its journal rows are not.)
  * The environment (store root, state, device id, config) is the parent's.
@@ -26,6 +26,14 @@ if (mode === "migrate") {
   // A batch of four, so the kill lands with part of the small vault imported,
   // in the window a real batch has: its records written, its journal rows not.
   runMigration(vault, { settleMs: 0, importBatchItems: 4, hooks: { afterItemAppended: kill } });
+} else if (mode === "migrate-spilled") {
+  // As `migrate`, with every per-item map of the run on disk.
+  runMigration(vault, {
+    settleMs: 0,
+    importBatchItems: 4,
+    spillAt: 2,
+    hooks: { afterItemAppended: kill },
+  });
 } else if (mode === "migrate-shard") {
   let shards = 0;
   const atShard = (): void => kill(++shards);
