@@ -542,10 +542,15 @@ flowchart LR
   they run whenever a brain store is in use, on every host OpenCode
   included, and the machine-config key `neighbour_updates_enabled` set to
   `false` or `0` (environment `OPEN_SECOND_BRAIN_NEIGHBOUR_UPDATES_ENABLED`)
-  turns them off. Each turn asks the index for the topic records written
-  since the last turn, so a large import of other records in between
-  hides nothing; the session's own topics come from its own newest
-  records. "Own" is the session, not the agent name: another window of
+  turns them off. Each turn reads the records appended to the store's
+  `topics` shards since the session's last turn, straight from the
+  shards past a per-session byte cursor: it takes no lock and does not
+  wait for the search index, so another process writing the index (a
+  catch-up, a reindex, a view render) never empties a turn, and a large
+  import of other records in between hides nothing. A turn the hook
+  cannot finish within its ceiling shows nothing and moves no cursor, so
+  its updates come on the next turn. The session's own topics come from
+  its own records. "Own" is the session, not the agent name: another window of
   the same agent on the same machine is a neighbour. A Claude Code
   session stamps the topic records its MCP server writes with a stamp of
   its session id, and the hook drops only the records stamped with its
