@@ -498,7 +498,12 @@ flowchart LR
   path but resolves it through the weaker containment-only resolver - is
   refused by a named guard that knows this one file (and, since v1.70.0,
   the `Brain/standing-rules/` directory beside it). Nothing generates or
-  rewrites it.
+  rewrites it. On a machine switched to the brain store the file and the
+  scoped rule files are entries of the store's `standing-rule` lane,
+  imported by the migration byte for byte, and every reader reads them
+  there, also while a legacy `Brain/` is still on disk; the operator
+  changes them with `o2b brain standing-rules set|clear` (CLI only, see
+  [`brain-store.md`](brain-store.md)).
 - **SessionStart hook** (`startup | resume | clear | compact`) injects
   the body as `additionalContext` so the agent sees current rules at
   the start of every session and again after `/compact` - the

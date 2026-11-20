@@ -106,6 +106,7 @@ import {
 import { findQuoteSpans } from "../src/core/brain/distill/quote-spans.ts";
 import { resolveAnswerQuoteCheckModes } from "../src/core/brain/quote-check-modes.ts";
 import { compiledDigestPath } from "../src/core/brain/compiled-digest-path.ts";
+import { insideBrain, lanePagesInStore } from "../src/core/store/lane-entry-store.ts";
 import {
   neutralizeUntrustedText,
   untrustedFramingHeader,
@@ -430,11 +431,17 @@ function resolveNotePath(vault: string, relativePath: string): string | null {
       return null;
     }
   }
+  let absolute: string;
   try {
-    return ensureInsideVault(`${vault}/${relativePath}`, vault);
+    absolute = ensureInsideVault(`${vault}/${relativePath}`, vault);
   } catch {
     return null;
   }
+  // Any other `Brain/` page of a switched vault lives in the store, which
+  // the Stop hook does not fold: a legacy file still on disk there is a
+  // stale copy, never evidence of what the context carried.
+  if (insideBrain(vault, absolute) && lanePagesInStore(vault)) return null;
+  return absolute;
 }
 
 /** The ledger paths of the two session-start digests, and which digest each is. */

@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 
+import { listLaneTree, parseLanePage, readLaneText } from "../../store/lane-pages.ts";
 import { memoryFromStore, storeRecordPages } from "../memory-pages.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { storeLogDays } from "../log-days.ts";
 import { brainDirs, vaultRelative } from "../paths.ts";
+import { storeUnreachable } from "./store-unreachable.ts";
 
 export interface ForgetPlanEntry {
   readonly id: string;
@@ -22,6 +24,13 @@ export interface ForgetPlan {
   readonly audit: {
     readonly contentIncluded: false;
     readonly entryCount: number;
+    /**
+     * On a switched machine, the parts of the brain store this plan could
+     * not read (an `events` shard unreadable or gone, or a record whose
+     * body has not arrived): a record there may match and is not listed.
+     * Absent when the plan read everything.
+     */
+    readonly unreachable?: ReadonlyArray<string>;
   };
 }
 
@@ -37,7 +46,7 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
   }
 
   const entries: ForgetPlanEntry[] = [];
-  for (const { path, read, id } of brainMarkdown(vault)) {
+  for (const { path, read, id, idOf } of brainMarkdown(vault)) {
     let text: string;
     try {
       text = read();
@@ -46,7 +55,7 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
     }
     if (!text.includes(source)) continue;
     entries.push({
-      id: id ?? readId(path),
+      id: id ?? idOf?.() ?? readId(path),
       path: vaultRelative(path, vault),
       kind: classify(vault, path),
       action: "would-remove-source-support",
@@ -54,6 +63,7 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
     });
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
+  const unreachable = storeUnreachable(vault);
 
   return Object.freeze({
     mode: "dry-run",
@@ -62,6 +72,7 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
     audit: Object.freeze({
       contentIncluded: false,
       entryCount: entries.length,
+      ...(unreachable.length > 0 ? { unreachable: Object.freeze(unreachable) } : {}),
     }),
   });
 }
@@ -71,6 +82,8 @@ interface BrainMarkdown {
   readonly read: () => string;
   /** The record's id when known without reading the file. */
   readonly id?: string;
+  /** The id read from the page this entry was read from, not the legacy file. */
+  readonly idOf?: () => string;
 }
 
 /**
@@ -89,15 +102,24 @@ function brainMarkdown(vault: string): BrainMarkdown[] {
     }));
   }
   const dirs = brainDirs(vault);
-  // The log is the store's `log-event` records too: one entry per day.
-  const memoryDirs = [dirs.inbox, dirs.preferences, dirs.retired, dirs.log];
-  // `pending/` also stages notes; only its signals are memory records.
-  const isMemory = (path: string): boolean =>
-    memoryDirs.some((dir) => insideDir(path, dir)) ||
-    (insideDir(path, dirs.pending) && basename(path).startsWith("sig-"));
-  const files = walkBrainMarkdown(vault)
-    .filter((path) => !isMemory(path))
-    .map((path) => ({ path, read: () => readFileSync(path, "utf8") }));
+  // Every other page is a lane entry of the store (design D14 item 2), by
+  // the path it had in the legacy tree: the store is the truth on a
+  // switched machine, whether or not a legacy `Brain/` is still on disk,
+  // and the vault may have none. Dot folders are skipped as the walk skips
+  // them.
+  const files = listLaneTree(vault, dirs.brain)
+    .filter(
+      (path) =>
+        !vaultRelative(path, vault)
+          .split("/")
+          .some((seg) => seg.startsWith(".")),
+    )
+    .map((path) => ({
+      path,
+      read: () => readLaneText(vault, path) ?? "",
+      // The store entry's own `id`, never a stale legacy file's.
+      idOf: () => laneEntryId(vault, path),
+    }));
   const records = storeRecordPages(vault, { signalStates: "all" }).map((page) => ({
     path: page.path,
     read: () => page.text,
@@ -152,6 +174,17 @@ function walkBrainMarkdown(vault: string): string[] {
   visit(root);
   out.sort();
   return out;
+}
+
+/** The `id` of the store's lane page at `path`, else its basename. */
+function laneEntryId(vault: string, path: string): string {
+  try {
+    const [meta] = parseLanePage(vault, path);
+    if (typeof meta["id"] === "string" && meta["id"].trim()) return meta["id"];
+  } catch {
+    // Fall back to the basename below.
+  }
+  return basename(path, ".md");
 }
 
 function readId(path: string): string {

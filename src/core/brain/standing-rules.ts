@@ -51,10 +51,17 @@
  * without a word is worse than one that was never written.
  */
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { BRAIN_SCOPED_RULES_DIR, BRAIN_STANDING_RULES_FILE } from "./path-constants.ts";
+import { foldIncomplete, heldInStore, storeEntry } from "../store/lane-entry-store.ts";
+import { laneStoreFold } from "../store/lane-fold-cache.ts";
+import { rawParsesBack, renderLaneText } from "../store/lane-raw.ts";
+import {
+  BRAIN_ROOT_REL,
+  BRAIN_SCOPED_RULES_DIR,
+  BRAIN_STANDING_RULES_FILE,
+} from "./path-constants.ts";
 import { brainDirs, brainStandingRulesPath } from "./paths.ts";
 import { applySectionBudget } from "./text/text-budget.ts";
 
@@ -135,7 +142,7 @@ export function readStandingRules(
   // read itself IS the absence the probe was looking for.
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readOperatorRuleFile(vault, path);
   } catch (err) {
     if (isFileAbsent(err)) return null;
     throw new Error(`standing rules at ${path} could not be read: ${describeError(err)}`, {
@@ -168,6 +175,53 @@ export function readStandingRules(
   );
   const text = capped.body;
   return freeze(path, text, true, countLines(text), text.length, totalLines, totalChars);
+}
+
+/**
+ * The text of one operator rule file at `path` (the constitution or a
+ * scoped rule), as `readFileSync(path, "utf8")` reads it: a missing file
+ * throws an `ENOENT` error, any other failure throws as it is.
+ *
+ * On a switched machine the store holds the rules, as entries of the
+ * `standing-rule` lane (design D14 item 4), and the store is the truth
+ * there whether or not a legacy `Brain/` tree is still on disk. The entry
+ * reads back as the file said: its kept `raw` text when it has one, its
+ * bare text when the file had no frontmatter (no `---` block is invented
+ * in front of the operator's words), the rendering of its fields and text
+ * otherwise. An entry that is not there while the store could not be read
+ * whole is a failure, never "no rules": the missing records may hold them.
+ */
+export function readOperatorRuleFile(vault: string, path: string): string {
+  if (!heldInStore(vault, path)) return readFileSync(path, "utf8");
+  // A vault the process cannot traverse also shows no `Brain/` folder,
+  // which reads as a store-only machine: that is a failure to read, never
+  // "no rules", so the error of the probe itself is thrown.
+  try {
+    statSync(join(vault, BRAIN_ROOT_REL));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== ENOENT && code !== "ENOTDIR") throw err;
+  }
+  const value = storeEntry(vault, path);
+  if (value === null) {
+    if (foldIncomplete()) {
+      const missing = laneStoreFold().unreadable;
+      throw new Error(
+        "the brain store could not be read whole" +
+          (missing.length > 0 ? ` (${missing.join(", ")})` : " (a record's body has not arrived)"),
+      );
+    }
+    const absent = new Error(
+      `ENOENT: no standing rule entry for '${path}'`,
+    ) as NodeJS.ErrnoException;
+    absent.code = ENOENT;
+    throw absent;
+  }
+  if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
+    return value.raw;
+  }
+  if (Object.keys(value.fields).length === 0) return value.text;
+  return renderLaneText(path, value.fields, value.text);
 }
 
 /** Refusal raised by {@link assertStandingRulesNotTargeted}. */

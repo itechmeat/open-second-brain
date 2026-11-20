@@ -31,6 +31,8 @@ import {
   type CachedDirEntry,
   type CachedFileEntry,
 } from "./dedup-index-cache.ts";
+import { readSignals } from "../store/read/signals.ts";
+import { memoryFolderRel, memoryFromStore } from "./memory-pages.ts";
 import { brainDirs } from "./paths.ts";
 import type { Safeguard } from "./safeguard.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
@@ -101,6 +103,7 @@ export function buildDedupIndex(
   vault: string,
   opts: DedupIndexOptions = {},
 ): Map<string, DedupIndexEntry> {
+  if (memoryFromStore(vault)) return storeDedupIndex(vault, opts);
   const started = Date.now();
   const plan = planWalk(vault, opts);
   for (const file of plan.toStat) {
@@ -125,6 +128,7 @@ export async function loadDedupIndex(
   vault: string,
   opts: LoadDedupIndexOptions = {},
 ): Promise<Map<string, DedupIndexEntry>> {
+  if (memoryFromStore(vault)) return storeDedupIndex(vault, opts);
   const started = Date.now();
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   const plan = planWalk(vault, opts);
@@ -148,6 +152,50 @@ export async function loadDedupIndex(
     parseOne(file, () => text!, opts.onError);
   });
   return finishWalk(vault, plan, started);
+}
+
+/** The folders the index reads, in the order a hash's first holder wins. */
+const INDEXED_FOLDERS = ["inbox", "processed", "archived"] as const;
+
+/**
+ * The index of a switched vault (design D14), which may have no `Brain/`
+ * folder at all: the store's signals in the three indexed folders (where
+ * their pages would be), first holder winning in the same order as the
+ * walk (folder order, then page name). Read from the signal fold, which
+ * is one streamed read of the store's `events` stream per process; no
+ * page is rebuilt and no file cache is kept.
+ */
+function storeDedupIndex(vault: string, opts: DedupIndexOptions): Map<string, DedupIndexEntry> {
+  const { safeguard } = opts;
+  safeguard?.checkpoint();
+  const byFolder = new Map<string, Array<{ path: string; entry: DedupIndexEntry; hash: string }>>(
+    INDEXED_FOLDERS.map((folder) => [memoryFolderRel(folder), []]),
+  );
+  // The hook deadline holds inside the fold too, at its record boundaries,
+  // as the legacy walk checkpoints per file.
+  const signals = readSignals(
+    { vault },
+    {
+      states: "all",
+      ...(safeguard !== undefined ? { checkpoint: () => safeguard.checkpoint() } : {}),
+    },
+  );
+  for (const signal of signals) {
+    safeguard?.checkpoint();
+    const folder = byFolder.get(signal.path.slice(0, signal.path.lastIndexOf("/")));
+    if (folder === undefined) continue;
+    const hash = signal.frontmatter["dedup_hash"];
+    if (typeof hash !== "string" || hash.length === 0) continue;
+    const path = join(vault, ...signal.path.split("/"));
+    folder.push({ path: signal.path, entry: { id: signal.id, path }, hash });
+  }
+  const out = new Map<string, DedupIndexEntry>();
+  for (const pages of byFolder.values()) {
+    for (const page of pages.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+      if (!out.has(page.hash)) out.set(page.hash, page.entry);
+    }
+  }
+  return out;
 }
 
 // ----- walk internals ------------------------------------------------------

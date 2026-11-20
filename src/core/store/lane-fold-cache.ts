@@ -95,6 +95,11 @@ const EMPTY_FOLD: LaneFolded = {
 
 const cache = new Map<string, LaneFolded>();
 
+/** The records a lane fold reads: lane entries and their tombstones. */
+function isLaneRecord(record: StoreRecord): boolean {
+  return record.kind === LANE_ENTRY_KIND || record.kind === LANE_ENTRY_REMOVE_KIND;
+}
+
 /**
  * A stamp of every `events` shard of `store` and the quarantine ledger:
  * the shard-and-quarantine part of a stored fold's fingerprint. The
@@ -152,7 +157,17 @@ export function laneStoreFold(): LaneFolded {
   const pendingBlobs: string[] = [];
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
-    const read = readStreamRecords(store.root, partition, { stream: "events" });
+    // Only the lane records are held: the rest of `events` (signals, the
+    // log, preferences) is parsed and dropped as it streams by, so a hook
+    // that reads one lane entry never holds the whole stream. A record of
+    // another kind waiting for its blob opens no gap in a lane entry, so
+    // it is not counted among the skipped blobs either.
+    const read = readStreamRecords(
+      store.root,
+      partition,
+      { stream: "events" },
+      { keep: isLaneRecord },
+    );
     for (const rel of read.unreadable) unreadable.push(`${partition}/${rel}`);
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
     for (const record of read.records) {

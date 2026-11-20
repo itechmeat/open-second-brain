@@ -51,7 +51,9 @@ export function heldInStore(vault: string, path: string): boolean {
 /** Whether `path` lies under `<vault>/Brain/` (or is it). */
 export function insideBrain(vault: string, path: string): boolean {
   const rel = relative(join(vault, BRAIN_ROOT_REL), path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  // A parent step is the component `..`, not any name that starts with it
+  // (`Brain/..rules.md` is a page inside `Brain/`).
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 export function brainRelOf(vault: string, path: string): string {

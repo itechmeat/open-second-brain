@@ -417,6 +417,14 @@ const seedThresholdEntry = async (
   resetThresholdsStoreCache();
 };
 
+/**
+ * A hook sub-budget that a slow CI runner (Windows) cannot spend on the
+ * preparation alone: the default 700 ms runs from the start of the call,
+ * so a slow cost-gate read and state build left no request time and the
+ * shadow run sent nothing.
+ */
+const ROOMY_HOOK_BUDGET = { OPEN_SECOND_BRAIN_DECISION_MODEL_HOOK_BUDGET_MS: "3000" };
+
 describe("head_select at hook level", () => {
   test("off and shadow keep the fallback order; enforce reorders and drops below the threshold", async () => {
     writeActive("Memory body line.\n");
@@ -429,7 +437,8 @@ describe("head_select at hook level", () => {
     expect(offOrder).toHaveLength(3);
     server = await startFakeSystemOne();
     const shadow = injected(
-      (await runHook(hookPayload(), decisionEnv("shadow", server.url))).stdout,
+      (await runHook(hookPayload(), { ...decisionEnv("shadow", server.url), ...ROOMY_HOOK_BUDGET }))
+        .stdout,
     );
     const shadowOrder = shadow
       .split("\n")
@@ -453,7 +462,12 @@ describe("head_select at hook level", () => {
       };
     });
     const enforce = injected(
-      (await runHook(hookPayload(), decisionEnv("enforce", server.url))).stdout,
+      (
+        await runHook(hookPayload(), {
+          ...decisionEnv("enforce", server.url),
+          ...ROOMY_HOOK_BUDGET,
+        })
+      ).stdout,
     );
     const enforceOrder = enforce
       .split("\n")

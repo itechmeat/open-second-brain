@@ -28,11 +28,11 @@
  * lazy writes the stores it reads are allowed to fire.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { listContinuityRecords } from "./continuity/store.ts";
 import { deriveUsageSignals, type SourceUsage } from "./continuity/usage-signal.ts";
+import { listLaneDirs } from "../store/lane-pages.ts";
 import { brainDirs } from "./paths.ts";
 import {
   listRecallTelemetry,
@@ -237,7 +237,8 @@ function writtenPerDay(
 /**
  * The latest valid snapshot date per surface. While the feature is off
  * the section is the "disabled" state statement and nothing is read;
- * once on, each `Brain/reports/<surface>/` directory names a surface
+ * once on, each `Brain/reports/<surface>/` folder (a store lane on a
+ * switched machine) names a surface
  * and the fail-soft reader answers its latest date (a torn file is
  * skipped there, never reported).
  */
@@ -247,13 +248,9 @@ function reportSnapshots(
   configPath?: string,
 ): ExplorerConsoleReportSnapshots {
   if (!reportSnapshotsEnabled(configPath)) return Object.freeze({ status: "disabled" });
-  const reportsDir = join(brainDirs(vault).brain, "reports");
-  const surfaces = existsSync(reportsDir)
-    ? readdirSync(reportsDir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .toSorted()
-    : [];
+  // The folders on an unswitched machine, the `reports` lane's entries on a
+  // switched one, where the vault may have no `Brain/` at all.
+  const surfaces = listLaneDirs(vault, join(brainDirs(vault).brain, "reports"));
   // Strictly before the day after `now`, matching the delta callers:
   // a snapshot dated today is the latest one the next run can diff against.
   const beforeDate = new Date(now.getTime() + DAY_MS).toISOString().slice(0, 10);

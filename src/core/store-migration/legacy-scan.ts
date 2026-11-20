@@ -19,7 +19,7 @@ import { checksum, fileStamp, stampInode, type IncrementalReads } from "./increm
 
 import { isSyncConflictName, parseShardedName } from "../brain/ledger-shards.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
-import { parseFrontmatterWithNotices } from "../vault.ts";
+import { parseFrontmatterTextWithNotices, parseFrontmatterWithNotices } from "../vault.ts";
 import {
   entryOfPath,
   laneNameRefusal,
@@ -389,11 +389,20 @@ function entryItem(
 ): LegacyItem {
   const place = entryPlace(locator, path);
   if (path.endsWith(PAGE_EXT)) {
-    const [frontmatter, body, notices] = parseFrontmatterWithNotices(readPath);
+    // Read once: the page's text is kept beside its parts, so the record
+    // can carry the file byte for byte (`raw`) when its fields and text do
+    // not reproduce it (a page with no frontmatter, a quoted value, CRLF).
+    let raw: string;
+    try {
+      raw = readFileSync(readPath, "utf8");
+    } catch {
+      throw new Error("unreadable page");
+    }
+    const [frontmatter, body, notices] = parseFrontmatterTextWithNotices(raw, { path: readPath });
     if (notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable)) {
       throw new Error("unreadable page");
     }
-    return { shape: "entry", path, ...place, fields: frontmatter, text: body };
+    return { shape: "entry", path, ...place, fields: frontmatter, text: body, raw };
   }
   let text: string;
   try {
@@ -411,7 +420,14 @@ function entryItem(
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       return { shape: "entry", path, ...place, fields: { value }, text: "" };
     }
-    return { shape: "entry", path, ...place, fields: value as Record<string, unknown>, text: "" };
+    return {
+      shape: "entry",
+      path,
+      ...place,
+      fields: value as Record<string, unknown>,
+      text: "",
+      raw: text,
+    };
   }
   return { shape: "entry", path, ...place, fields: {}, text };
 }

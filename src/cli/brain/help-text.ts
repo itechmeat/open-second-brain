@@ -70,6 +70,7 @@ Brain verbs (observing memory):
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
+  standing-rules   The operator's standing rules: show, set, clear (--project|--harness|--host)
   set-primary      Declare or clear primary_agent in the brain settings (--clear)
   settings         Shared brain settings: get, set, unset, list (<block>.<field>)
   migrate-store    Move the legacy brain into the brain store
@@ -543,6 +544,14 @@ export const VERB_HELP: Record<string, string> = {
   state:
     "usage: o2b brain state <set|get|list|clear> [--aspect <slug>] [--value <text>] [--vault <path>] [--json]\n" +
     "Overwrite-only exact-state lane keyed by aspect (Brain/state/). Each set replaces the aspect's canonical value with no history. The lane is excluded from the search index so a stale value never resurfaces through recall.\n",
+  "standing-rules":
+    "usage: o2b brain standing-rules <show|set|clear> [--project <name> | --harness <id> | --host <device id>]\n" +
+    "                                [--file <path> | --stdin] [--vault <path>] [--json]\n" +
+    "The operator's standing rules: the vault-wide rules, or with --project, --harness or --host one scoped rule file.\n" +
+    "show prints them as stored, set replaces them with the text of --file or stdin byte for byte, clear removes them.\n" +
+    "On a machine switched to the brain store the rules live in the store, and the vault may have no Brain/ folder:\n" +
+    "this verb is how to change them there. Elsewhere it writes Brain/standing-rules.md or the scoped file.\n" +
+    "No agent tool writes the standing rules.\n",
   rollback:
     "usage: o2b brain rollback <run_id> [--vault <path>] [--yes]\n" +
     "                          [--force-rollback] [--json]\n" +

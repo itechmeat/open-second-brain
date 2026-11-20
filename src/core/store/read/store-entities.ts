@@ -281,7 +281,7 @@ function signalIsPrivate(record: StoreRecord, partition: StorePartition): boolea
   );
 }
 
-function build(store: StoreInspection): StoreEntities {
+function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
   const all: Array<{ record: StoreRecord; partition: StorePartition }> = [];
   const unreadable: string[] = [];
   const pinned = new Map<StorePartition, PinnedFold>();
@@ -291,6 +291,7 @@ function build(store: StoreInspection): StoreEntities {
     const read = readStreamRecords(store.root, partition, EVENTS, {
       tails: tailsOf(store, partition),
       keep: isEntityRecord,
+      ...(checkpoint !== undefined ? { checkpoint } : {}),
     });
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
@@ -376,7 +377,10 @@ function build(store: StoreInspection): StoreEntities {
 }
 
 /** The entities of the store at `store.root`, cached until an `events` shard changes. */
-export function readEntitiesOf(store: StoreInspection): StoreEntities {
+export function readEntitiesOf(
+  store: StoreInspection,
+  options: { readonly checkpoint?: () => void } = {},
+): StoreEntities {
   const cached = cache.get(store.root);
   // The stamp a stored read must still match: the shard part plus the
   // availability of the blobs that read skipped (one stat each, no shard
@@ -386,7 +390,8 @@ export function readEntitiesOf(store: StoreInspection): StoreEntities {
   const shardStamp = fingerprintOf(store);
   const fingerprint = cachedLines === null ? null : `${shardStamp}\n${cachedLines}`;
   if (cached !== undefined && cached.fingerprint === fingerprint) return cached.entities;
-  const entities = build(store);
+  // A checkpoint that throws (a hook deadline) leaves nothing cached.
+  const entities = build(store, options.checkpoint);
   // A shard unreadable for a moment (a Windows sharing violation) keeps its
   // size and mtime, so a cached incomplete read would never be retried, and
   // an incomplete read is never cached. The read is cached against the

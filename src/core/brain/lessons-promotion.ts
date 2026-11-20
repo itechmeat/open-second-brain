@@ -45,8 +45,7 @@
  * lock through the shared atomic writer, sorted-key serialization.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 
 import { discoverConfig, LESSONS_PROMOTION_SCOPES_ENV_KEY } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -55,8 +54,9 @@ import { computeContentHash } from "./content-hash.ts";
 import { listDeadEnds } from "./dead-ends.ts";
 import { LESSON_TIER, computeLessons, type LessonEntry, type LessonTier } from "./lessons.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { brainDirs, preferencePath } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
+import { brainDirs } from "./paths.ts";
+import { loadPreference } from "./preference.ts";
+import { collectPreferences } from "./preferences-collect.ts";
 import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
   LESSONS_HALF_LIFE_DAYS_DEFAULT,
@@ -819,20 +819,14 @@ export function gatherLessonsPromotionInputs(
   return { preferences, lessons, scopes };
 }
 
-/** The active preferences, parsed; a corrupted file is omitted, not fatal. */
+/**
+ * The active preferences, parsed; a corrupted file is omitted, not fatal
+ * (doctor flags it; promotion reads the rest). The pages of
+ * `Brain/preferences/` on an unswitched machine, the store's fold once
+ * switched.
+ */
 function readActivePreferencesForPromotion(vault: string): BrainPreference[] {
-  const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return [];
-  const out: BrainPreference[] = [];
-  for (const name of readdirSync(dirs.preferences)) {
-    if (!name.endsWith(".md")) continue;
-    try {
-      out.push(parsePreference(join(dirs.preferences, name)));
-    } catch {
-      // Corrupted frontmatter - doctor flags it; promotion reads the rest.
-    }
-  }
-  return out;
+  return collectPreferences(brainDirs(vault).preferences).entries.map(({ pref }) => pref);
 }
 
 // ----- Managed-block plan and status counts (C3) ------------------------------
@@ -959,8 +953,11 @@ export function lessonApprovalCounts(vault: string): LessonApprovalCounts {
     }
     approved += 1;
     try {
-      const pref = parsePreference(preferencePath(vault, row.prefId.replace(/^pref-/, "")));
-      if (computeContentHash(pref.principle, pref.scope) !== row.approvedContentHash) stale += 1;
+      const pref = loadPreference(vault, row.prefId.replace(/^pref-/, ""));
+      if (pref === null) stale += 1;
+      else if (computeContentHash(pref.principle, pref.scope) !== row.approvedContentHash) {
+        stale += 1;
+      }
     } catch {
       stale += 1;
     }

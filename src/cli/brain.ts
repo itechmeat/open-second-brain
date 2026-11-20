@@ -37,6 +37,7 @@ import {
   cmdBrainAttest,
   cmdBrainUnpin,
   cmdBrainState,
+  cmdBrainStandingRules,
   cmdBrainSetPrimary,
   cmdBrainProtect,
   cmdBrainUnprotect,
@@ -291,6 +292,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainLessons(rest);
       case "state":
         return await cmdBrainState(rest);
+      case "standing-rules":
+        return await cmdBrainStandingRules(rest);
       case "set-primary":
         return await cmdBrainSetPrimary(rest);
       case "protect":

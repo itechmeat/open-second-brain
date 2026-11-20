@@ -6668,6 +6668,13 @@ var init_record_path = __esm(() => {
 // src/core/store/read/stream-read.ts
 import { createHash as createHash5 } from "node:crypto";
 import { closeSync as closeSync8, lstatSync as lstatSync4, readSync as readSync5 } from "node:fs";
+
+class StreamReadInterrupted {
+  cause;
+  constructor(cause) {
+    this.cause = cause;
+  }
+}
 function hashRange(path, partitionRoot, hash, from, to) {
   let fd;
   try {
@@ -6698,10 +6705,17 @@ function sameStamp(a, b) {
 function appendStampOf(stat) {
   return { size: Number(stat.size), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
 }
-function scanKeeping(path, partitionRoot, offset, keep) {
+function scanKeeping(path, partitionRoot, offset, keep, checkpoint) {
   const records = [];
   let anyPending = 0;
   const scan = scanShard(path, { partitionRoot, ...offset > 0 ? { offset } : {} }, (r) => {
+    if (checkpoint !== undefined) {
+      try {
+        checkpoint();
+      } catch (err) {
+        throw new StreamReadInterrupted(err);
+      }
+    }
     gcHintTick();
     if (r.bodyState === "pending")
       anyPending += 1;
@@ -6728,7 +6742,7 @@ function gapOf(pass) {
 function isCleanPass(pass) {
   return pass.diagnostics.length === 0 && pass.pendingTailBytes === 0 && pass.anyPending === 0;
 }
-function readShardWithTails(path, rel, partitionRoot, tails, keep) {
+function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
   const kept = tails.get(rel);
   let base = null;
   const now = lstatSync4(path, { bigint: true });
@@ -6757,11 +6771,11 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep) {
       }
     }
   }
-  const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep);
+  const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep, checkpoint);
   tails.delete(rel);
   const after = lstatSync4(path, { bigint: true });
   if (base !== null && !sameDevIno(after, now)) {
-    return scanKeeping(path, partitionRoot, 0, keep);
+    return scanKeeping(path, partitionRoot, 0, keep, checkpoint);
   }
   const pass = base === null ? fresh : {
     ...fresh,
@@ -6822,10 +6836,13 @@ function readStreamRecords(root, partition, ref, options = {}) {
       continue;
     if (options.month !== undefined && !options.month(monthOf2(shard.rel)))
       continue;
+    options.checkpoint?.();
     let read;
     try {
-      read = options.tails === undefined ? scanKeeping(shard.path, partitionRoot, 0, options.keep) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep);
-    } catch {
+      read = options.tails === undefined ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep, options.checkpoint);
+    } catch (err) {
+      if (err instanceof StreamReadInterrupted)
+        throw err.cause;
       options.tails?.delete(shard.rel);
       unreadable.push(shard.rel);
       continue;
@@ -8825,7 +8842,7 @@ function signalIsPrivate(record, partition) {
   const frontmatter = record.body["frontmatter"];
   return typeof frontmatter === "object" && frontmatter !== null && !Array.isArray(frontmatter) && isPrivateFrontmatter(frontmatter);
 }
-function build(store) {
+function build(store, checkpoint) {
   const all = [];
   const unreadable = [];
   const pinned = new Map;
@@ -8834,7 +8851,8 @@ function build(store) {
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS, {
       tails: tailsOf(store, partition),
-      keep: isEntityRecord
+      keep: isEntityRecord,
+      ...checkpoint !== undefined ? { checkpoint } : {}
     });
     if (read.skippedPending)
       skippedPending = true;
@@ -8885,7 +8903,7 @@ function build(store) {
     pendingBlobs
   };
 }
-function readEntitiesOf(store) {
+function readEntitiesOf(store, options = {}) {
   const cached = cache.get(store.root);
   const cachedLines = cached === undefined ? null : pendingBlobStampLines(store.root, cached.entities.pendingBlobs);
   const shardStamp = fingerprintOf(store);
@@ -8893,7 +8911,7 @@ function readEntitiesOf(store) {
 ${cachedLines}`;
   if (cached !== undefined && cached.fingerprint === fingerprint)
     return cached.entities;
-  const entities = build(store);
+  const entities = build(store, options.checkpoint);
   const blobLines = pendingBlobStampLines(store.root, entities.pendingBlobs);
   if (entities.unreadable.length === 0 && blobLines !== null)
     cache.set(store.root, { fingerprint: `${shardStamp}

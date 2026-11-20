@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 
 import { parseFrontmatter } from "../../vault.ts";
 import { computeActiveBudgetPressure } from "../active-budget-pressure.ts";
-import { brainActivePath } from "../paths.ts";
+import { compiledDigestPath } from "../compiled-digest-path.ts";
 import { INJECT_BUDGET_CHARS_DEFAULT } from "../policy.ts";
 import type { DoctorCheck } from "./check.ts";
 
@@ -30,7 +30,14 @@ import type { DoctorCheck } from "./check.ts";
 export const activeBudgetPressureCheck: DoctorCheck = {
   failSoft: true,
   run({ vault, config }, { issues }) {
-    const path = brainActivePath(vault);
+    // The vault file on an unswitched machine, the device-local digest
+    // cache the session start reads on a switched one.
+    let path: string;
+    try {
+      path = compiledDigestPath(vault, "active");
+    } catch {
+      return;
+    }
     if (!existsSync(path)) return;
     let body: string;
     try {

@@ -12,14 +12,15 @@
  * module owns the vocabularies, the key normaliser and the reader.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
+
+import { listLaneFiles } from "../store/lane-pages.ts";
 
 import { BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR } from "./path-constants.ts";
 import { scopedRuleKey } from "./scoped-rule-key.ts";
 import { SCOPED_RULE_AXES, SCOPED_RULE_AXIS, type ScopedRuleAxis } from "./scoped-rule-axis.ts";
 import { brainScopedRulePath, brainScopedRulesDir } from "./paths.ts";
-import { STANDING_RULES_MAX_CHARS_MAX } from "./standing-rules.ts";
+import { readOperatorRuleFile, STANDING_RULES_MAX_CHARS_MAX } from "./standing-rules.ts";
 import {
   applySectionBudget,
   type BudgetSection,
@@ -213,7 +214,7 @@ export function readScopedRules(
     const key = value === null ? null : scopedRuleKey(value);
     if (key === null) return;
     const path = posix.join(BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR, axis, `${key}.md`);
-    const body = readRuleBody(() => brainScopedRulePath(vault, axis, key), path);
+    const body = readRuleBody(vault, () => brainScopedRulePath(vault, axis, key), path);
     if (body === null) return;
     const heading = `### ${SCOPED_RULE_AXIS_LABEL[axis]}: ${key}`;
     matched.push({
@@ -288,10 +289,11 @@ function isTruncated(
  * (with the absolute path in its message) for a file or axis folder that
  * is a symlink leaving the vault, and that is one more per-file failure.
  */
-function readRuleBody(absPath: () => string, relPath: string): string | null {
+function readRuleBody(vault: string, absPath: () => string, relPath: string): string | null {
   let raw: string;
   try {
-    raw = readFileSync(absPath(), "utf8");
+    // The store's entry on a switched machine (`readOperatorRuleFile`).
+    raw = readOperatorRuleFile(vault, absPath());
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT") return null;
@@ -308,12 +310,13 @@ function errorCode(err: unknown): string {
   return typeof name === "string" ? name : "Error";
 }
 
-/** Whether `Brain/standing-rules/host/` holds at least one `.md` file. */
+/**
+ * Whether `Brain/standing-rules/host/` holds at least one `.md` file: the
+ * folder on an unswitched machine, the lane's entries on a switched one.
+ */
 function hostDirHoldsRules(vault: string): boolean {
   try {
-    return readdirSync(join(brainScopedRulesDir(vault), SCOPED_RULE_AXIS.host), {
-      withFileTypes: true,
-    }).some((entry) => entry.isFile() && entry.name.endsWith(".md"));
+    return listLaneFiles(vault, join(brainScopedRulesDir(vault), SCOPED_RULE_AXIS.host)).length > 0;
   } catch {
     return false;
   }

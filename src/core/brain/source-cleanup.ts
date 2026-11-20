@@ -87,6 +87,7 @@ import {
   type RecoverabilityVerdict,
 } from "./gates/recoverability.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
+import { storeUnreachable } from "./governance/store-unreachable.ts";
 import { stringArrayField, wikilinkTarget } from "./source-links.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
@@ -186,6 +187,14 @@ export interface SourceCleanupPlan {
    * sides honestly.
    */
   readonly failed: ReadonlyArray<SourceCleanupFailure>;
+  /**
+   * On a switched machine, the parts of the brain store the trace could
+   * not read (`<partition>/<shard>` of an unreadable `events` shard, or a
+   * record whose body has not arrived). A record there may derive from the
+   * source too, so a run that carries this field is not a complete
+   * forget, whatever `failed` says. Absent when the trace read everything.
+   */
+  readonly unreachable?: ReadonlyArray<string>;
   readonly manifestEntryRemoved: boolean;
   /** Id of the audit continuity record, when one was written. */
   readonly auditRecordId: string | null;
@@ -797,8 +806,15 @@ function removeStorePage(vault: string, relPath: string, abs: string): boolean {
   }
   if (memory.kind === "signal") {
     // A request to forget: the signal's tombstone, after which the fold
-    // drops it and its content from every read (FORMAT.md, Removal).
-    return removeStoreSignal(vault, memory.id);
+    // drops it and its content from every read (FORMAT.md, Removal). The
+    // store keys a signal by the id it carries, which is not its page
+    // name for a page the migration imported (`2026-11-10-x.md` holding
+    // `id: sig-x`): forgetting by the page name removed nothing.
+    const recordId = memory.meta["id"];
+    const signalId =
+      typeof recordId === "string" && recordId.trim() !== "" ? recordId.trim() : memory.id;
+    removeStoreSignal(vault, signalId);
+    return goneFromStore(vault, relPath);
   }
   // The fold keys a preference by `pref-<slug>` in both lives: a retired
   // page's id (`ret-<slug>`) names no record of its own.
@@ -815,8 +831,18 @@ function removeStorePage(vault: string, relPath: string, abs: string): boolean {
       { vault },
     ),
   );
-  // Removed only when the fold no longer shows the page.
-  return storeMemoryPageAt(vault, relPath) === null;
+  return goneFromStore(vault, relPath);
+}
+
+/**
+ * `true` once the store no longer shows the memory page at `relPath`. A
+ * page its removal record did not take away is a failure the caller
+ * reports (it lands in `failed` with this message), never a silent
+ * "nothing to remove": this is a request to forget.
+ */
+function goneFromStore(vault: string, relPath: string): boolean {
+  if (storeMemoryPageAt(vault, relPath) === null) return true;
+  throw new Error(`${relPath} is still in the brain store after its removal was written`);
 }
 
 /**
@@ -857,6 +883,10 @@ export function deleteBySource(
   // learn of a reserved summary page nor delete it.
   const included = (rel: string): boolean => opts.include?.(rel) !== false;
   const traced = traceReferences(vault, identity);
+  // Read after the trace, from the folds the trace read.
+  const unreachable = storeUnreachable(vault);
+  const unreachableField =
+    unreachable.length > 0 ? { unreachable: Object.freeze(unreachable) } : {};
   const derived = traced.derived.filter((entry) => included(entry.path));
   const mentions = traced.mentions.filter((entry) => included(entry.path));
   const originals = findOriginals(vault, canonical, opts.include);
@@ -894,6 +924,7 @@ export function deleteBySource(
       manifestEntry: manifestKey,
       deleted: Object.freeze([]),
       failed: NO_FAILURES,
+      ...unreachableField,
       manifestEntryRemoved: false,
       auditRecordId: null,
       snapshotRunId: null,
@@ -950,7 +981,8 @@ export function deleteBySource(
       `${includeOriginals ? " (originals included)" : ""}` +
       (failed.length > 0
         ? `; failed to remove ${failed.length}: ${failed.map((f) => f.path).join(", ")}`
-        : "");
+        : "") +
+      (unreachable.length > 0 ? `; incomplete: could not read ${unreachable.join(", ")}` : "");
     const record = appendContinuitySourceInvalidation(vault, {
       createdAt: isoSecond(opts.now ?? new Date()),
       source: { id: canonical, path: canonical, kind: "source" },
@@ -1048,6 +1080,7 @@ export function deleteBySource(
     manifestEntry: manifestKey,
     deleted: Object.freeze(deleted),
     failed: Object.freeze(failed),
+    ...unreachableField,
     manifestEntryRemoved,
     auditRecordId,
     snapshotRunId,
