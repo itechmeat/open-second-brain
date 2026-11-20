@@ -104,6 +104,12 @@ export interface AutoMigrationReport {
    * unrecognised value, an unreadable machine config), or `null`.
    */
   readonly settingProblem: string | null;
+  /**
+   * What the pending migration waits for, as one clause ("this machine's
+   * managed-file upgrade to end: process N of this machine holds ..."), or
+   * null: the one text status and the doctor both show.
+   */
+  readonly waitsFor: string | null;
 }
 
 export interface AutoMigrationReportSource {
@@ -130,6 +136,7 @@ function report(
     firstMachines: [],
     progress: null,
     settingProblem: null,
+    waitsFor: null,
     ...fields,
   });
 }
@@ -507,11 +514,11 @@ function decisionReport(d: GateDecision, f: ReportFacts): AutoMigrationReport {
       if (f.failure !== null) return failedReport(f, f.failure, true, "tries again");
       if (f.lostWorker != null) return lostWorkerReport(f.lostWorker);
       if (f.upgradeLock != null) {
+        const waitsFor = `this machine's managed-file upgrade to end: ${reportableText(f.upgradeLock)}`;
         return report(AUTO_MIGRATION_STATE.pending, {
           automatic: true,
-          message:
-            "a migration into the brain store is available on this machine, and waits for " +
-            `this machine's managed-file upgrade to end: ${reportableText(f.upgradeLock)}`,
+          waitsFor,
+          message: `a migration into the brain store is available on this machine, and waits for ${waitsFor}`,
           nextStart:
             "runs the migration in the background once that upgrade has ended (a claim older " +
             "than an hour is taken over)",

@@ -11,7 +11,7 @@
  * Node builtins only, and never throws: a log that cannot be read or cut
  * is left as it is.
  */
-import { closeSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 
 /** The size past which the log is cut. */
 export const WORKER_LOG_CAP_BYTES = 64 * 1024;
@@ -71,4 +71,69 @@ export function boundStderrToLog(
   return () => {
     (stream as { write: unknown }).write = original;
   };
+}
+
+// ----- Attempts ---------------------------------------------------------
+
+/**
+ * How many attempts the log keeps: the new one and the ones before it. A
+ * start that spawns a worker after a killed one (kill -9, a crash) keeps
+ * what the killed run wrote instead of truncating it.
+ */
+export const WORKER_LOG_ATTEMPTS_KEPT = 3;
+
+/** The start of the line that opens one attempt's part of the log. */
+export const WORKER_LOG_ATTEMPT_PREFIX = "===== attempt ";
+
+/** The line that opens a new attempt's part of the log. */
+export function workerLogAttemptHeader(now: Date, detail: string): string {
+  return `${WORKER_LOG_ATTEMPT_PREFIX}${now.toISOString()} ${detail} =====`;
+}
+
+/** The text of the log split into attempts: each part starts at its header (the first may have none). */
+function attempts(text: string): string[] {
+  const parts: string[] = [];
+  let current: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith(WORKER_LOG_ATTEMPT_PREFIX) && current.length > 0) {
+      parts.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.some((l) => l !== "")) parts.push(current.join("\n"));
+  return parts.filter((p) => p.trim() !== "");
+}
+
+/**
+ * Open a new attempt in the log at `path`: what is there is cut to its
+ * tail when it passed the cap, only the last
+ * `WORKER_LOG_ATTEMPTS_KEPT - 1` attempts are kept, and `header` is
+ * appended. Never throws: a log that cannot be read is started anew, one
+ * that cannot be written is left to the spawn's own open.
+ */
+export function beginWorkerLogAttempt(path: string, header: string): void {
+  try {
+    trimLogToTail(path);
+    let text = "";
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      text = "";
+    }
+    const kept = attempts(text).slice(-(WORKER_LOG_ATTEMPTS_KEPT - 1));
+    const body = kept.map((p) => (p.endsWith("\n") ? p : `${p}\n`)).join("");
+    writeFileSync(path, `${body}${header}\n`);
+  } catch {
+    // left to the spawn's own open
+  }
+}
+
+/** The part of the log the latest attempt wrote: everything after its header line. */
+export function latestWorkerLogAttempt(text: string): string {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.startsWith(WORKER_LOG_ATTEMPT_PREFIX)) return lines.slice(i + 1).join("\n");
+  }
+  return text;
 }

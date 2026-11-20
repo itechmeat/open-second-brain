@@ -20,6 +20,7 @@ import {
 } from "../../../src/core/brain/doctor/migration-check.ts";
 import type { DoctorCheckContext, DoctorFindings } from "../../../src/core/brain/doctor/check.ts";
 import { planMigrationDryRun } from "../../../src/core/store-migration/dry-run.ts";
+import { renderSyncCopies } from "../../../src/cli/brain/verbs/migrate-store.ts";
 import { migrationDir } from "../../../src/core/store-migration/journal.ts";
 import { MigrationRefusedError, runMigration } from "../../../src/core/store-migration/migrate.ts";
 import { rollback } from "../../../src/core/store-migration/outcome.ts";
@@ -153,6 +154,47 @@ describe("the dry run", () => {
     });
     expect(plan.sync_copies.temps_ignored).toBe(1);
     expect(plan.sync_copies.temps).toEqual([L.temp]);
+  });
+
+  test("a copy inside a folder taken whole is counted and named with its folder's rule", () => {
+    bench = plantedBench();
+    // The real vault's one copy the section did not count: in the hook
+    // state folder, which the migration moves whole into device-local state.
+    const copy =
+      ".open-second-brain/hook-state/session-a.sync-conflict-20261105-220819-QFQZVF3.json";
+    bench.fx.write(".open-second-brain/hook-state/session-a.json", "{}\n");
+    bench.fx.write(copy, '{"other":true}\n');
+
+    const plan = planMigrationDryRun(bench.vault);
+
+    expect(plan.ok).toBe(true);
+    expect(plan.sync_copies.in_folders).toContainEqual({
+      path: copy,
+      surface: "hook_session_state",
+      goes: "device-local",
+    });
+    const text = renderSyncCopies(plan.sync_copies, null).join("\n");
+    expect(text).toContain(
+      `hook_session_state: ${copy} is in a folder taken whole, not imported: moved into ` +
+        "device-local state with its folder",
+    );
+  });
+
+  test("a copy inside the skills folder goes with it into the vault's skills/ folder", () => {
+    bench = plantedBench();
+    const copy = "Brain/skills/tidy/SKILL.sync-conflict-20261105-220819-QFQZVF3.md";
+    bench.fx.write("Brain/skills/tidy/SKILL.md", "# tidy\n");
+    bench.fx.write(copy, "# tidy, other version\n");
+
+    const plan = planMigrationDryRun(bench.vault);
+
+    const entry = plan.sync_copies.in_folders?.find((c) => c.path === copy);
+    expect(entry?.goes).toBe("vault-files");
+    const text = renderSyncCopies(plan.sync_copies, null).join("\n");
+    expect(text).toContain(
+      `${copy} is in a folder taken whole, not imported: moved with its folder`,
+    );
+    expect(text).not.toContain(`${copy} is in a folder taken whole, not imported: dropped`);
   });
 
   test("a genuinely unknown file still stops the run, a copy of one too", () => {

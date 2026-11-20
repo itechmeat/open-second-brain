@@ -141,6 +141,11 @@ describe("a machine whose tree left by sync", () => {
     expect(removed.skipped).toContain(".open-second-brain/brain.sqlite");
     expect(existsSync(join(b.vault, ".open-second-brain"))).toBe(false);
     expect(removedLines(removed)[0]).toContain("The legacy tree had already left the vault");
+    // The cohort as it stands, on this machine too: both switched, the
+    // one retired by hand named as such (it used to read "switched: dev-a").
+    const text = removedLines(removed).join("\n");
+    expect(text).toContain("switched: dev-a, dev-b");
+    expect(text).toContain("retired by hand: dev-c");
     expect((runDoctor(b.vault).uncertain ?? []).map((u) => u.code)).not.toContain(
       LEGACY_LOCAL_FILES_LEFT_CODE,
     );

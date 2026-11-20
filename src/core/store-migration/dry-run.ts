@@ -188,7 +188,7 @@ function planSyncCopies(
   families: ReadonlyMap<string, Set<string>>,
   onProblem: (surface: string, problem: ScanTally["problems"][number]) => void,
 ): SyncCopyReport {
-  const copies = new SyncCopyTally(leftovers.temps);
+  const copies = new SyncCopyTally(leftovers.temps, leftovers.inFolders);
   const fileVerdicts = fileCopyVerdicts(leftovers.copies);
   for (const copy of leftovers.copies) {
     copies.copy(copy);

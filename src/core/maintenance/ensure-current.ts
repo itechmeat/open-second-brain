@@ -17,7 +17,9 @@
  * migrations and downgrades correctly.
  */
 import { isPathInsideResolved } from "../store/store-paths.ts";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { beginWorkerLogAttempt, workerLogAttemptHeader } from "../store-migration/worker-log.ts";
+import { dirname } from "node:path";
 import {
   MigrationInProgressError,
   migrationGateRefuses,
@@ -562,7 +564,19 @@ function spawnWorker(
 ): ReturnType<typeof Bun.spawn> {
   // The live environment (`spawnSelfDetached`); the config path travels
   // the way every brain verb reads it. The worker's error output goes to a
-  // small device-local log (truncated at every spawn) that a failure names.
+  // small device-local log that a failure names. Each spawn opens a new
+  // attempt in it and keeps the last few before it (`worker-log.ts`): a
+  // worker started after a killed one keeps what the killed run wrote.
+  const log = autoMigrationWorkerLogPath(vault);
+  try {
+    mkdirSync(dirname(log), { recursive: true });
+  } catch {
+    // the spawn's own open says so
+  }
+  beginWorkerLogAttempt(
+    log,
+    workerLogAttemptHeader(new Date(), `started by process ${process.pid}`),
+  );
   return spawnSelfDetached(
     [...o2bCommand(), "brain", "migrate-store", "--vault", vault, AUTO_MIGRATION_FLAG, token],
     {
@@ -570,7 +584,8 @@ function spawnWorker(
         ...process.env,
         ...(configPath !== undefined ? { OPEN_SECOND_BRAIN_CONFIG: configPath } : {}),
       },
-      stderrLog: autoMigrationWorkerLogPath(vault),
+      stderrLog: log,
+      appendStderrLog: true,
     },
   );
 }

@@ -10,6 +10,12 @@
  * one of them makes a clean report mean less than it says.
  */
 
+import { resolve } from "node:path";
+import {
+  readSelfHealUpgradeLock,
+  selfHealUpgradeLockAdvice,
+  selfHealUpgradeLockPath,
+} from "../../maintenance/self-heal-upgrade-state.ts";
 import { existsSync } from "node:fs";
 
 import type { DegradationNotice } from "../../integrity/degradation.ts";
@@ -145,7 +151,29 @@ const STALE_LOCK_CODE = "stale-lock";
 export const staleLockProbe: DoctorCheck = {
   failSoft: true,
   run({ vault }, { uncertain }) {
+    // On a store-only machine this path resolves under the device-local
+    // state root, which the scan does not walk, and that is deliberate: no
+    // writer of this release claims the upgrade lock there. The upgrade
+    // and its claim run only before the switch (ensure-current's step 1 on
+    // an unswitched machine, the migration worker's legacy branch, the
+    // worker those spawn), and they write the vault's own folder. The
+    // migration does not carry the lock over (a rebuildable surface), and
+    // the one-time seed of a bare vault's folder (`machine-state.ts`) can
+    // only copy a dead claim of a vault that never ran the upgrade. So
+    // nothing at the relocated path can hold or block anything.
+    const upgradeLock = selfHealUpgradeLockPath(vault);
     for (const lockPath of scanStaleLocks(vault)) {
+      // The automatic upgrade's own claim names its machine and process:
+      // the doctor says who holds it, in the words the migration's status
+      // uses, rather than the line for a lock nobody can attribute.
+      if (resolve(lockPath) === resolve(upgradeLock)) {
+        pushUncertain(uncertain, {
+          code: STALE_LOCK_CODE,
+          path: lockPath,
+          message: selfHealUpgradeLockAdvice(readSelfHealUpgradeLock(vault, new Date())),
+        });
+        continue;
+      }
       pushUncertain(uncertain, {
         code: STALE_LOCK_CODE,
         path: lockPath,

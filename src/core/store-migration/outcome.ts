@@ -71,6 +71,8 @@ export interface TransitionSettings {
    */
   readonly pending_evidence: ReadonlyArray<DeviceEvidenceDate>;
   readonly switched: ReadonlyArray<string>;
+  /** Cohort devices retired by hand (a human `device-retire` record). */
+  readonly retired: ReadonlyArray<string>;
   readonly retired_by_silence: ReadonlyArray<DeviceEvidenceDate>;
   readonly silence_threshold_days: number;
   readonly as_of: string | null;
@@ -186,6 +188,7 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
       legacy_devices: cohort.pending.map((d) => d.device),
       pending_evidence: cohort.pending,
       switched: cohort.switched,
+      retired: cohort.retired,
       retired_by_silence: cohort.retired_by_silence,
       silence_threshold_days: cohort.threshold_days,
       as_of: cohort.as_of,

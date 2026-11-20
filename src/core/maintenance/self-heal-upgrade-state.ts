@@ -445,6 +445,53 @@ export function describeSelfHealUpgradeLock(holder: SelfHealUpgradeLockHolder): 
 }
 
 /**
+ * What the doctor says about `vault`'s upgrade lock: who holds it
+ * ({@link describeSelfHealUpgradeLock}, the text the migration's status
+ * shows) and what that means, in place of the generic stale-lock line.
+ */
+export function selfHealUpgradeLockAdvice(holder: SelfHealUpgradeLockHolder): string {
+  const who = describeSelfHealUpgradeLock(holder);
+  switch (holder.kind) {
+    case "here":
+      return (
+        `the automatic Brain upgrade's lock: ${who}. The upgrade is running; a store migration ` +
+        "of this vault that is due waits for it to end. Nothing to do"
+      );
+    case "unknown":
+      if (holder.ageMs === null) {
+        // The stat itself failed: no age, so no expiry either, and the
+        // claim stays held for as long as the error lasts.
+        return (
+          `the automatic Brain upgrade's lock: ${holder.path} is there but cannot be looked at, ` +
+          "so its age, and when it would expire, cannot be told. While it cannot be read no " +
+          "claim takes it over: check this user's access to the file and its folder " +
+          "(permissions, a mount that answers with an error); a store migration does not wait for it"
+        );
+      }
+      return (
+        `the automatic Brain upgrade's lock: ${who}. It holds the upgrade off until an hour after ` +
+        "it was written, then the next claim takes it over; a store migration does not wait for it"
+      );
+    case "none":
+      return `the automatic Brain upgrade's lock: ${who}`;
+    case "stale":
+      // Its process still runs: never an invitation to remove a live lock.
+      return (
+        `the automatic Brain upgrade's lock: process ${holder.pid} of this machine still runs and ` +
+        `holds ${holder.path}, but its claim is older than the one-hour ceiling, so the next start ` +
+        "takes the lock over and runs the upgrade again. Check with your process list whether " +
+        `process ${holder.pid} is an Open Second Brain upgrade that hangs; do not remove the file ` +
+        "while it runs. A store migration does not wait for it"
+      );
+    default:
+      return (
+        `the automatic Brain upgrade's lock: ${who}. It holds nothing: the next claim takes it ` +
+        "over, and a store migration does not wait for it"
+      );
+  }
+}
+
+/**
  * Claim `vault`'s worker lock without waiting: an exclusive create
  * (`O_EXCL`) of a file holding a fresh random token, this process and this
  * machine. Returns the token, or null when the lock is held
