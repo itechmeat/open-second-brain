@@ -28,7 +28,7 @@ import { sortedReplacer } from "./helpers.ts";
 
 const USAGE = [
   "usage: o2b topic list [--scope <scope>]",
-  "       o2b topic show <topic>",
+  "       o2b topic show <topic> [--held]",
   "       o2b topic review",
   "       o2b topic create <title> [--scope project:<p>|personal] [--goal <goal>] [--description <text>] [--private|--shared]",
   "       o2b topic rename <topic> [--title <title>] [--description <text>]",
@@ -49,6 +49,7 @@ const EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
 const FLAGS = {
   config: { type: "string" },
   json: { type: "boolean" },
+  held: { type: "boolean" },
   scope: { type: "string" },
   goal: { type: "string" },
   description: { type: "string" },
@@ -127,6 +128,11 @@ function inputOf(verb: string, positional: ReadonlyArray<string>, flags: Flags):
     case "review":
       return { action: verb };
     case "show":
+      return {
+        action: verb,
+        topic: arg(positional, 0, "topic"),
+        ...(flags["held"] === true ? { held: true } : {}),
+      };
     case "archive":
       return { action: verb, topic: arg(positional, 0, "topic") };
     case "create": {
@@ -207,6 +213,21 @@ function inputOf(verb: string, positional: ReadonlyArray<string>, flags: Flags):
   }
 }
 
+/**
+ * The warning a held listing carries when a shard could not be read: the
+ * shard paths at local reach (`records_unreadable`), only how many below it
+ * (`records_unreadable_count`); nothing for a complete listing.
+ */
+function unreadableWarning(answer: Record<string, unknown>): string[] {
+  const paths = answer["records_unreadable"] as string[] | undefined;
+  const count = paths?.length ?? Number(answer["records_unreadable_count"] ?? 0);
+  if (count === 0) return [];
+  const named = paths !== undefined ? ` (${paths.join(", ")})` : "";
+  return [
+    `warning: ${count} store shard(s) could not be read in full${named}, so the listing may be incomplete; run \`o2b brain doctor\`\n`,
+  ];
+}
+
 function render(answer: Record<string, unknown>): string {
   switch (answer["action"]) {
     case "list": {
@@ -216,8 +237,25 @@ function render(answer: Record<string, unknown>): string {
         .map((t) => `${t["id"]}  ${t["status"]}  ${t["scope"]}  ${t["title"]}\n`)
         .join("");
     }
-    case "show":
-      return String(answer["page"]);
+    case "show": {
+      const held = answer["records"] as Array<Record<string, unknown>> | undefined;
+      if (held === undefined) return String(answer["page"]);
+      const lines = held.map(
+        (r) =>
+          `- ${String(r["at"]).slice(0, 10)} ${r["kind"]} ${r["id"]}: ${r["text"] ?? `(text withheld: ${r["withheld"]})`}\n`,
+      );
+      const missing = Number(answer["records_missing"] ?? 0);
+      return [
+        String(answer["page"]),
+        `\nHeld records (${held.length}):\n`,
+        ...lines,
+        ...(missing > 0 ? [`${missing} held record(s) not found on this machine\n`] : []),
+        ...unreadableWarning(answer),
+        ...((answer["records_withheld"] as Array<Record<string, unknown>> | undefined) ?? []).map(
+          (w) => `${w["count"]} signal(s) withheld: ${w["message"]}\n`,
+        ),
+      ].join("");
+    }
     case "review": {
       if (answer["incomplete"] === true) {
         return "review incomplete: the topics stream could not be read in full; run `o2b brain doctor`\n";

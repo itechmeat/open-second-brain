@@ -17,8 +17,9 @@
  * written (no fabricated empty summary).
  *
  * Project scope. A digest may carry the `project` axis of the composite
- * scope vocabulary (`src/core/scope-key.ts`), normalized by the SAME slug
- * rule as the session axis and folded into the dedupe key through the
+ * scope vocabulary (`src/core/scope-key.ts`), normalized by the SAME rule as
+ * the session axis and the project a record is stamped with (the
+ * scoped-rule key, letters and digits of every script) and folded into the dedupe key through the
  * canonical {@link compositeScopeKey}, so the same content under two
  * projects is two digests. With the axis absent the key is byte-identical
  * to the pre-project world - `compositeScopeKey` contributes the empty
@@ -37,6 +38,7 @@ import { compositeScopeKey } from "../scope-key.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
 import { sessionIdOf } from "./session-recall.ts";
+import { scopedRuleKey } from "./scoped-rule-key.ts";
 import { resolveSessionScope, SessionScopeError } from "./session-scope.ts";
 
 export class SessionSummaryError extends Error {
@@ -92,8 +94,10 @@ const KIND = "session_summary_digest";
 const PROJECT_FIELD = "project";
 
 /**
- * Normalize a raw project value through the shared session-scope slug
- * rule. Deliberately STRICT where {@link scopeFromFrontmatter} is
+ * Normalize a raw project value through the scoped-rule key, the rule the
+ * writer stamps a record's project with (`record-origin.ts`), so the
+ * project a checkpoint is given from its linked directory, in any script,
+ * is accepted as it is. Deliberately STRICT where {@link scopeFromFrontmatter} is
  * tolerant: frontmatter is untrusted bulk input where an unusable value
  * may contribute no scope, but this is an explicit caller argument, and
  * silently normalizing it to "unscoped" would file the digest somewhere
@@ -101,16 +105,42 @@ const PROJECT_FIELD = "project";
  */
 function normalizeProject(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
+  const key = scopedRuleKey(raw);
+  if (key === null) {
+    throw new SessionSummaryError(
+      `session summary ${PROJECT_FIELD} requires at least one letter or digit: ${JSON.stringify(raw)}`,
+    );
+  }
+  return key;
+}
+
+/**
+ * The slug an earlier release stored for `raw` (the ASCII-only session-scope
+ * rule: `Café` was stored as `caf`) when it differs from the key this
+ * release stores, else `undefined`. It is derived from the raw name of a
+ * query or a write, never aliased from a stored key: a record stored under
+ * `caf` answers `Café` (and any other name the old rule also turned into
+ * `caf`, which that rule could not tell apart), never `cafe`. A name with
+ * no ASCII letter or digit was refused before, so it has none.
+ */
+function legacyProjectSlug(raw: string | undefined, key: string | undefined): string | undefined {
+  if (raw === undefined || key === undefined) return undefined;
   try {
-    return resolveSessionScope(raw);
+    const slug = resolveSessionScope(raw);
+    return slug === key ? undefined : slug;
   } catch (error) {
-    if (error instanceof SessionScopeError) {
-      throw new SessionSummaryError(
-        `session summary ${PROJECT_FIELD} requires at least one alphanumeric: ${JSON.stringify(raw)}`,
-      );
-    }
+    if (error instanceof SessionScopeError) return undefined;
     throw error;
   }
+}
+
+function dedupeKeyOf(sessionId: string, contentHash: string, project: string | undefined): string {
+  // Canonical scope contribution: the empty string when the axis is
+  // absent, so an unscoped digest keys byte-identically to every digest
+  // written before the axis existed. A changed key would silently stop
+  // deduplicating the whole existing store.
+  const scopeKey = compositeScopeKey({ owner: null, session: null, project: project ?? null });
+  return [KIND, sessionId, contentHash, ...(scopeKey.length > 0 ? [scopeKey] : [])].join(":");
 }
 
 /**
@@ -145,16 +175,16 @@ export function appendSessionSummary(
   const host = input.host?.trim();
   const project = normalizeProject(input.project);
   const contentHash = hash(JSON.stringify([request ?? "", decisions, learnings, nextSteps]));
-  // Canonical scope contribution: the empty string when the axis is
-  // absent, so an unscoped digest keys byte-identically to every digest
-  // written before the axis existed. A changed key would silently stop
-  // deduplicating the whole existing store.
-  const scopeKey = compositeScopeKey({ owner: null, session: null, project: project ?? null });
-  const dedupeKey = [KIND, sessionId, contentHash, ...(scopeKey.length > 0 ? [scopeKey] : [])].join(
-    ":",
-  );
+  const dedupeKey = dedupeKeyOf(sessionId, contentHash, project);
 
-  const existing = findByDedupeKey(vault, dedupeKey);
+  // A digest an earlier release stored under its ASCII-only slug of the
+  // same raw name is the same digest: the retry dedupes against it.
+  const legacy = legacyProjectSlug(input.project, project);
+  const existing =
+    findByDedupeKey(vault, dedupeKey) ??
+    (legacy !== undefined
+      ? findByDedupeKey(vault, dedupeKeyOf(sessionId, contentHash, legacy))
+      : null);
   if (existing !== null) return toDigest(existing);
 
   const createdAt = input.createdAt ?? new Date().toISOString();
@@ -344,13 +374,18 @@ export function listSessionSummaries(
 ): ReadonlyArray<SessionSummaryDigest> {
   const scope = opts.sessionId?.trim();
   const project = normalizeProject(opts.project);
+  // A digest an earlier release stored under its ASCII-only slug of the
+  // same raw name is in that project too (`legacyProjectSlug`).
+  const legacy = legacyProjectSlug(opts.project, project);
+  const inProject = (stored: string | undefined): boolean =>
+    project === undefined || stored === project || (legacy !== undefined && stored === legacy);
   return Object.freeze(
     sessionDigestRecords(vault)
       // Same skip-not-match rule as the single-session read: a record
       // naming no session is not in the asked-for session, and a coerced
       // "" must never make it look like it is.
       .filter((record) => scope === undefined || sessionIdOf(record.payload) === scope)
-      .filter((record) => project === undefined || readProject(record.payload) === project)
+      .filter((record) => inProject(readProject(record.payload)))
       .map(toDigest),
   );
 }

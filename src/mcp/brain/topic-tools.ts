@@ -95,7 +95,7 @@ function inputOf(args: Record<string, unknown>, action: string): TopicActionInpu
     const value = optList(args, key);
     if (value !== undefined) input[key] = value;
   }
-  for (const key of ["removed", "private"]) {
+  for (const key of ["removed", "private", "held"]) {
     const value = optBool(args, key);
     if (value !== undefined) input[key] = value;
   }
@@ -181,6 +181,11 @@ export const TOPIC_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
             "create: `project:<project>` or `personal` (default). A personal topic is private unless private is false.",
         },
         list_scope: { type: "string", description: "list: only topics of this scope." },
+        held: {
+          type: "boolean",
+          description:
+            "show: also list the notes, signals and decisions the topic holds (reads the store; slower on a large one).",
+        },
         status: {
           type: "string",
           enum: [...TOPIC_STATUSES],

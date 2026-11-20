@@ -42,6 +42,13 @@ import type { TopicFold, TopicState } from "./fold.ts";
 import { reviewTopics } from "./plan.ts";
 import { readTopics, type TopicRead } from "./read.ts";
 import { canonicalTopicScope } from "./records.ts";
+import {
+  HELD_WITHHELD_MESSAGE,
+  type HeldWithheldReason,
+  heldRecordIds,
+  readHeldRecords,
+} from "./held-records.ts";
+import { configuredStore } from "../store/read/store-entities.ts";
 import { createTopicEvent, writeTopicEvents, type TopicEvent } from "./write.ts";
 import { privateWithheld } from "../store/caller-reach.ts";
 import { SESSION_FIELD } from "../agent-context/session-identity.ts";
@@ -108,6 +115,8 @@ export interface TopicActionInput {
   readonly fields?: Readonly<Record<string, unknown>>;
   /** `list`: the scope to list (default: every topic). */
   readonly listScope?: string;
+  /** `show`: also list the records the topic holds (`held-records.ts`). */
+  readonly held?: boolean;
 }
 
 export interface TopicActionContext {
@@ -318,9 +327,10 @@ export function topicHead(topic: TopicState): Record<string, unknown> {
   };
 }
 
-function topicDetail(topic: TopicState): Record<string, unknown> {
+function topicDetail(topic: TopicState, held: number): Record<string, unknown> {
   return {
     ...topicHead(topic),
+    held_records: held,
     links: topic.links,
     goal_proposals: topic.goalProposals.map((p) => ({
       agent: p.agent,
@@ -342,6 +352,47 @@ function topicDetail(topic: TopicState): Record<string, unknown> {
       ...(i.doneProposed !== undefined ? { looks_done: true } : {}),
       ...(i.resolved !== undefined ? { resolved: new Date(i.resolved.at).toISOString() } : {}),
     })),
+  };
+}
+
+/** The records `topic` holds, read from the store (`show` with `held`). */
+function heldListing(
+  read: TopicRead,
+  topic: TopicState,
+  configPath: string | undefined,
+): Record<string, unknown> {
+  const store = configuredStore(configPath);
+  const ids = heldRecordIds(read.fold, topic.id);
+  if (store === null) return { records: [], records_missing: ids.length };
+  const held = readHeldRecords(store, ids);
+  return {
+    records: held.records.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      ...(r.text !== undefined ? { text: delivered(r.text) } : {}),
+      at: r.at,
+      project: r.project,
+      ...(r.private ? { private: true } : {}),
+      ...(r.withheld !== undefined ? { withheld: r.withheld } : {}),
+    })),
+    ...(held.missing > 0 ? { records_missing: held.missing } : {}),
+    // Signals listed without their text: how many, and why.
+    ...(Object.keys(held.withheld).length > 0
+      ? {
+          records_withheld: Object.entries(held.withheld).map(([reason, count]) => ({
+            reason,
+            count,
+            message: HELD_WITHHELD_MESSAGE[reason as HeldWithheldReason],
+          })),
+        }
+      : {}),
+    // Below local reach the shards are not named, as every topic reader
+    // withholds them (they may be private ones): only how many.
+    ...(held.unreadable.length > 0
+      ? privateWithheld()
+        ? { records_unreadable_count: held.unreadable.length }
+        : { records_unreadable: held.unreadable }
+      : {}),
   };
 }
 
@@ -515,7 +566,8 @@ export function runTopicAction(
       const topic = visibleTopic(read, need(input, "topic"));
       return {
         action: "show",
-        topic: topicDetail(topic),
+        topic: topicDetail(topic, heldRecordIds(read.fold, topic.id).length),
+        ...(input.held === true ? heldListing(read, topic, context.configPath) : {}),
         page: shownMarkdown(read, topic, context.configPath),
       };
     }

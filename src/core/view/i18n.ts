@@ -55,6 +55,8 @@ export interface ViewStrings {
   readonly scopeProject: (project: string) => string;
   readonly mergedFrom: (title: string) => string;
   readonly archiveLink: string;
+  /** The related line naming how many records a topic holds and the command that lists them. */
+  readonly heldRecords: (count: number, command: string) => string;
   readonly archiveTitle: (title: string) => string;
   readonly archiveIntro: string;
   readonly archiveBack: string;
@@ -118,6 +120,8 @@ const EN: ViewStrings = {
   scopeProject: (project) => `Project: ${project}`,
   mergedFrom: (title) => `Merged from: ${title}`,
   archiveLink: "Older entries",
+  heldRecords: (count, command) =>
+    `Holds ${count} record(s) (notes, signals, decisions): \`${command}\` lists them`,
   archiveTitle: (title) => `${title}: archive`,
   archiveIntro: "Entries that moved off the topic page, newest first.",
   archiveBack: "Back to the topic",
@@ -181,6 +185,8 @@ const RU: ViewStrings = {
   scopeProject: (project) => `Проект: ${project}`,
   mergedFrom: (title) => `Объединена из: ${title}`,
   archiveLink: "Старые записи",
+  heldRecords: (count, command) =>
+    `Записей в теме: ${count} (заметки, сигналы, решения): их список выводит \`${command}\``,
   archiveTitle: (title) => `${title}: архив`,
   archiveIntro: "Записи, ушедшие со страницы темы, сначала новые.",
   archiveBack: "Назад к теме",

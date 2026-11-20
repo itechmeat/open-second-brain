@@ -34,6 +34,7 @@
  * what it shows, so an edit maps back to a topic record (`topic-edits.ts`).
  */
 
+import { heldRecordCounts } from "../topics/held-records.ts";
 import { compareCodeUnits } from "../store/compare.ts";
 import {
   TOPIC_EARNED_LOG_CLASSES,
@@ -173,6 +174,8 @@ interface LineContext {
   readonly topic: TopicState;
   readonly strings: ViewStrings;
   readonly key: (rest: string) => string;
+  /** How many records the topic holds (`heldRecordCounts`, built once per render). */
+  readonly held: number;
 }
 
 /**
@@ -270,6 +273,16 @@ function relatedLines(
       text: `- ${strings.mergedFrom(plainText(merged.title))}`,
     });
   }
+  // The notes, signals and decisions the topic holds are not page items
+  // (routine unless earned, spec "Log entries are earned", design D10
+  // `event_kind`); the line says how many there are and how to list them.
+  const held = c.held;
+  if (held > 0) {
+    out.push({
+      key: c.key("held"),
+      text: `- ${strings.heldRecords(held, `o2b topic show ${topic.id} --held`)}`,
+    });
+  }
   if (archive) {
     out.push({
       key: c.key("archive"),
@@ -286,10 +299,17 @@ function topicPage(
   folders: ReadonlyMap<string, string>,
   strings: ViewStrings,
   includePrivate: boolean,
+  held: ReadonlyMap<string, number>,
 ): PageModel[] {
   const folder = folders.get(topic.id)!;
   const page = `${folder}/${VIEW_TOPIC_PAGE}`;
-  const c: LineContext = { includePrivate, topic, strings, key: (rest) => `t:${topic.id}:${rest}` };
+  const c: LineContext = {
+    includePrivate,
+    topic,
+    strings,
+    key: (rest) => `t:${topic.id}:${rest}`,
+    held: held.get(topic.id) ?? 0,
+  };
   const s = sections(topic, includePrivate);
   const archive = hasArchive(s);
   const lines: PageLine[] = [topicIdLine(storeId, page, topic.id), BLANK];
@@ -385,7 +405,8 @@ export function topicPages(
 ): PageModel[] {
   const folders = topicFolders(fold, options);
   const includePrivate = options.includePrivate === true;
+  const held = heldRecordCounts(fold);
   return renderedTopics(fold, options).flatMap((topic) =>
-    topicPage(storeId, fold, topic, folders, strings, includePrivate),
+    topicPage(storeId, fold, topic, folders, strings, includePrivate, held),
   );
 }

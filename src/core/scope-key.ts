@@ -15,11 +15,15 @@
  * Language-agnostic: every axis is an opaque identifier normalized purely
  * structurally (NFC / case / slug), never matched against any word list. The
  * owner axis reuses the v1.6 agent-scope normalization; session and project
- * reuse the session-scope slug rule.
+ * use the scoped-rule key (`brain/scoped-rule-key.ts`), the rule a record's
+ * project is stamped with: letters, marks and digits of every script are
+ * kept, so a key the writer stamps reads back unchanged and a name in
+ * another script or with an accent is its own scope. ASCII values key
+ * exactly as the older session-scope slug rule keyed them.
  */
 
 import { normalizeAgentScope, pageOwner } from "./graph/agent-scope.ts";
-import { resolveSessionScope } from "./brain/session-scope.ts";
+import { scopedRuleKey } from "./brain/scoped-rule-key.ts";
 import type { FrontmatterMap } from "./types.ts";
 
 /** The ordered scope axes. Owner is the pre-existing v1.6 isolation axis. */
@@ -39,14 +43,7 @@ export interface CompositeScope {
  * an unusable value contributes no scope rather than throwing.
  */
 function normalizeSlugAxis(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    return resolveSessionScope(trimmed);
-  } catch {
-    return null;
-  }
+  return typeof value === "string" ? scopedRuleKey(value) : null;
 }
 
 /** The composite scope a page declares in its frontmatter. */

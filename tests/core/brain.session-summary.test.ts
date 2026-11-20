@@ -416,6 +416,31 @@ describe("project scope (Task 18)", () => {
     expect(listSessionSummaries(vault, { project: "nope" }).length).toBe(0);
   });
 
+  test("a digest an earlier release stored under its ASCII-only slug stays in its project", () => {
+    const base = {
+      sessionId: "sess-old",
+      decisions: ["kept"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    };
+    // Exactly what an earlier release wrote for project "Café": the slug
+    // "caf" in the payload and in the dedupe key.
+    const old = appendSessionSummary(vault, { ...base, project: "caf" });
+    expect(old.project).toBe("caf");
+    // The same checkpoint again, now keyed "café": no second digest.
+    expect(appendSessionSummary(vault, { ...base, project: "Café" }).id).toBe(old.id);
+    expect(listSessionSummaries(vault, { sessionId: "sess-old" })).toHaveLength(1);
+    // The filter spelled as the name finds it; another name does not.
+    expect(listSessionSummaries(vault, { project: "Café" }).map((d) => d.id)).toEqual([old.id]);
+    expect(listSessionSummaries(vault, { project: "cafe" })).toEqual([]);
+    // New content under the name is stored under its new key and found too.
+    const fresh = appendSessionSummary(vault, { ...base, decisions: ["new"], project: "Café" });
+    expect(fresh.project).toBe("café");
+    expect(listSessionSummaries(vault, { project: "Café" }).map((d) => d.id)).toEqual([
+      old.id,
+      fresh.id,
+    ]);
+  });
+
   test("a malformed project filter is rejected by name, not silently ignored", () => {
     appendSessionSummary(vault, {
       sessionId: "s-a",
