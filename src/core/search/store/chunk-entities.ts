@@ -6,6 +6,7 @@
 
 import { Database } from "bun:sqlite";
 
+import { atomically } from "./atomic.ts";
 import { sqlPlaceholders } from "./sql.ts";
 
 /**
@@ -18,8 +19,7 @@ export function replaceEntities(
   chunkId: number,
   entities: ReadonlyArray<string>,
 ): void {
-  db.exec("BEGIN");
-  try {
+  atomically(db, () => {
     db.run("DELETE FROM chunk_entities WHERE chunk_id = ?", [chunkId]);
     if (entities.length > 0) {
       const insert = db.prepare<undefined, [number, string]>(
@@ -27,11 +27,7 @@ export function replaceEntities(
       );
       for (const e of entities) insert.run(chunkId, e);
     }
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+  });
 }
 
 /**

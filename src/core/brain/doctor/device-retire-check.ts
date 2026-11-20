@@ -10,7 +10,7 @@
 
 import type { StorePartition } from "../../store/constants.ts";
 import { returnedRetiredDevices } from "../../store/device-roster.ts";
-import type { PartitionShard } from "../../store/state-digest.ts";
+import type { PartitionView } from "../../store/partition-view.ts";
 import type { DoctorIssue } from "../types.ts";
 
 /** A retired device wrote a record after its retirement. */
@@ -22,11 +22,15 @@ export const STORE_DEVICE_RETIRED_RETURNED_CODE = "store-device-retired-returned
  * is reported).
  */
 export function returnedRetiredIssues(
-  shards: ReadonlyMap<StorePartition, ReadonlyArray<PartitionShard>>,
+  shards: ReadonlyMap<StorePartition, PartitionView>,
   sharedRoot: string,
 ): DoctorIssue[] {
   if (!shards.has("shared")) return [];
-  const records = [...shards.values()].flatMap((own) => own.flatMap((s) => s.all));
+  // Each device's last record and every retirement: all the rule reads.
+  const records = [...shards.values()].flatMap((own) => [
+    ...own.allRetireRecords,
+    ...own.lastByDevice.values(),
+  ]);
   return returnedRetiredDevices(records).map(({ device, retire, lastRecordMs }) => ({
     severity: "warning",
     code: STORE_DEVICE_RETIRED_RETURNED_CODE,

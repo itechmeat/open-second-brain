@@ -3935,6 +3935,54 @@ function compareCodeUnits(a, b) {
     return 0;
   return a < b ? -1 : 1;
 }
+
+// src/core/store/gc-hint.ts
+function gcHint() {
+  const runtime = globalThis.Bun;
+  runtime?.gc(true);
+}
+function gcHintTick() {
+  counted += 1;
+  if (counted % GC_HINT_EVERY === 0)
+    gcHint();
+}
+var GC_HINT_EVERY = 32768, counted = 0;
+
+// src/core/store/own-appends.ts
+import { resolve as resolve5 } from "node:path";
+function same(a, b) {
+  return a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+}
+function noteOwnAppend(path, before, after) {
+  const key = resolve5(path);
+  const list = ownAppends.get(key) ?? [];
+  list.push({ before, after });
+  if (list.length > OWN_APPENDS_MAX)
+    list.shift();
+  ownAppends.set(key, list);
+}
+function appendedByThisProcess(path, from, to) {
+  const list = ownAppends.get(resolve5(path));
+  if (list === undefined)
+    return false;
+  let at = list.findIndex((a) => from === null ? a.before.size === 0 : same(a.before, from));
+  if (at === -1)
+    return false;
+  for (;at < list.length; at++) {
+    const append = list[at];
+    if (same(append.after, to))
+      return true;
+    const next = list[at + 1];
+    if (next === undefined || !same(next.before, append.after))
+      return false;
+  }
+  return false;
+}
+var ownAppends, OWN_APPENDS_MAX = 64;
+var init_own_appends = __esm(() => {
+  ownAppends = new Map;
+});
+
 // src/core/store/hlc.ts
 function formatHlc(clock) {
   return `${clock.physical}.${clock.counter}`;
@@ -3981,15 +4029,15 @@ var init_hlc = __esm(() => {
 });
 
 // src/core/store/clock-floor.ts
-import { resolve as resolve5 } from "node:path";
+import { resolve as resolve6 } from "node:path";
 function noteObservedClock(storeRoot, clock) {
-  const key = resolve5(storeRoot);
+  const key = resolve6(storeRoot);
   const seen = floors.get(key);
   if (seen === undefined || maxHlc(seen, clock) !== seen)
     floors.set(key, clock);
 }
 function observedClockFloor(storeRoot) {
-  return floors.get(resolve5(storeRoot)) ?? null;
+  return floors.get(resolve6(storeRoot)) ?? null;
 }
 var floors;
 var init_clock_floor = __esm(() => {
@@ -3998,6 +4046,9 @@ var init_clock_floor = __esm(() => {
 });
 
 // src/core/fs-identity.ts
+function identityOfStats(stat) {
+  return stat.ino === 0n ? null : { dev: stat.dev, ino: stat.ino };
+}
 function sameDevIno(a, b) {
   return a.dev === b.dev && a.ino === b.ino;
 }
@@ -4909,7 +4960,8 @@ function appendLine(partitionRoot, path, bytes) {
   const fd = openShardForAppend(path);
   let created = false;
   try {
-    const size = fstatSync4(fd).size;
+    const pre = fstatSync4(fd, { bigint: true });
+    const size = Number(pre.size);
     created = size === 0;
     let payload = bytes;
     if (size > 0) {
@@ -4923,6 +4975,8 @@ function appendLine(partitionRoot, path, bytes) {
       written += writeSync4(fd, payload, written, payload.length - written);
     }
     fsyncSync3(fd);
+    const post = fstatSync4(fd, { bigint: true });
+    noteOwnAppend(path, { size, mtimeNs: pre.mtimeNs, ctimeNs: pre.ctimeNs }, { size: Number(post.size), mtimeNs: post.mtimeNs, ctimeNs: post.ctimeNs });
   } finally {
     closeSync5(fd);
   }
@@ -4989,6 +5043,7 @@ function appendRecords(store, inputs, options = {}) {
 }
 var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10;
 var init_appender = __esm(() => {
+  init_own_appends();
   init_clock_floor();
   init_clock_store();
   init_constants();
@@ -5540,9 +5595,9 @@ var init_fold2 = __esm(() => {
 // src/core/store/shard-quarantine.ts
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync as closeSync6, readFileSync as readFileSync8, readSync as readSync3, statSync as statSync6 } from "node:fs";
-import { join as join12, resolve as resolve6 } from "node:path";
+import { join as join12, resolve as resolve7 } from "node:path";
 function ledgerPath(root) {
-  const key = createHash2("sha256").update(resolve6(root)).digest("hex").slice(0, 32);
+  const key = createHash2("sha256").update(resolve7(root)).digest("hex").slice(0, 32);
   return join12(storesStateDir(), SHARD_QUARANTINE_DIR, `${key}.json`);
 }
 function stampOf(path) {
@@ -5572,7 +5627,7 @@ function load2(root) {
   try {
     stamp = stampOf(path);
   } catch {
-    return { root: resolve6(root), lines: [] };
+    return { root: resolve7(root), lines: [] };
   }
   const hit = loaded.get(path);
   if (hit !== undefined && hit.stamp === stamp)
@@ -5585,7 +5640,7 @@ function load2(root) {
       lines = [];
     }
   }
-  const ledger = { root: resolve6(root), lines };
+  const ledger = { root: resolve7(root), lines };
   loaded.set(path, { stamp, ledger });
   return ledger;
 }
@@ -5597,11 +5652,11 @@ function quarantineStamp(root) {
   }
 }
 function quarantinedLines(partitionRoot, rel) {
-  const partition = resolve6(partitionRoot).split(/[\\/]/).pop();
+  const partition = resolve7(partitionRoot).split(/[\\/]/).pop();
   if (!isPartition(partition))
     return new Map;
   const out = new Map;
-  for (const line of load2(resolve6(partitionRoot, "..")).lines) {
+  for (const line of load2(resolve7(partitionRoot, "..")).lines) {
     if (line.partition === partition && line.shard === rel) {
       out.set(line.offset, { sha256: line.sha256, kind: line.kind });
     }
@@ -6113,8 +6168,8 @@ function scanShard(path, options, onRecord) {
     closeSync7(fd);
   }
 }
-function shardReadGap(read) {
-  return gapText(read.records.filter((r) => r.bodyState === "pending" && r.quarantined !== true).length, read.diagnostics);
+function shardScanGap(scan) {
+  return gapText(scan.pending, scan.diagnostics);
 }
 function gapText(pending, diagnostics) {
   const reasons = [];
@@ -6209,12 +6264,12 @@ var init_format_doc = __esm(() => {
 // src/core/store/held-ledger.ts
 import { createHash as createHash3 } from "node:crypto";
 import { existsSync as existsSync5, mkdirSync as mkdirSync9, rmSync as rmSync2 } from "node:fs";
-import { join as join15, resolve as resolve7 } from "node:path";
+import { join as join15, resolve as resolve8 } from "node:path";
 function ledgerDir(dirs = processDirsEnv()) {
   return join15(storesStateDir(dirs), HELD_LEDGER_DIR);
 }
 function markerPath(dir, root, partition) {
-  const key = createHash3("sha256").update(resolve7(root)).digest("hex").slice(0, 32);
+  const key = createHash3("sha256").update(resolve8(root)).digest("hex").slice(0, 32);
   return join15(dir, `${key}.${partition}`);
 }
 function recordHeldPartitions(root, partitions, dirs) {
@@ -6225,7 +6280,7 @@ function recordHeldPartitions(root, partitions, dirs) {
       continue;
     try {
       mkdirSync9(dir, { recursive: true });
-      atomicWriteFileSync(marker, `${resolve7(root)}
+      atomicWriteFileSync(marker, `${resolve8(root)}
 `);
     } catch {}
   }
@@ -6358,7 +6413,7 @@ var init_store_open = __esm(() => {
 // src/core/store/seen-shards.ts
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, statSync as statSync8 } from "node:fs";
 import { createHash as createHash4 } from "node:crypto";
-import { basename as basename6, dirname as dirname11, join as join17, resolve as resolve8 } from "node:path";
+import { basename as basename6, dirname as dirname11, join as join17, resolve as resolve9 } from "node:path";
 function withLocalLock2(lockTarget, fn, budgetMs) {
   const lock = (init_local_lock(), {});
   return withLocalLock(lockTarget, fn, budgetMs);
@@ -6466,7 +6521,7 @@ function lockHolderStamp(path) {
   }
 }
 function seenLedgerFile(storeRoot, storeId) {
-  const rootKey = createHash4("sha256").update(resolve8(storeRoot)).digest("hex").slice(0, 16);
+  const rootKey = createHash4("sha256").update(resolve9(storeRoot)).digest("hex").slice(0, 16);
   const name = SEEN_SHARDS_FILE.replace(/\.json$/, `-${rootKey}.json`);
   return join17(deviceStateDirFor(storeId, processDirsEnv()), name);
 }
@@ -6557,6 +6612,7 @@ var init_seen_shards = __esm(() => {
 });
 
 // src/core/store/state-digest.ts
+var DIGEST_FOLD_KINDS;
 var init_state_digest = __esm(() => {
   init_digest();
   init_appender();
@@ -6567,11 +6623,22 @@ var init_state_digest = __esm(() => {
   init_fold_preferences();
   init_fold_settings();
   init_fold2();
+  init_records();
   init_hlc();
   init_reader();
   init_seen_shards();
   init_shard_list();
   init_store_paths();
+  DIGEST_FOLD_KINDS = new Set([
+    PREFERENCE_SET_KIND,
+    PREFERENCE_REMOVE_KIND,
+    PREFERENCE_EVIDENCE_KIND,
+    PINNED_SET_KIND,
+    PINNED_CLEAR_KIND,
+    SETTING_SET_KIND,
+    SETTING_UNSET_KIND,
+    SETTING_ENTRY_KIND
+  ]);
 });
 
 // src/core/record-path.ts
@@ -6582,8 +6649,7 @@ var init_record_path = __esm(() => {
 // src/core/store/read/stream-read.ts
 import { createHash as createHash5 } from "node:crypto";
 import { closeSync as closeSync8, lstatSync as lstatSync4, readSync as readSync5 } from "node:fs";
-function prefixSha(path, bytes, partitionRoot) {
-  const hash = createHash5("sha256");
+function hashRange(path, partitionRoot, hash, from, to) {
   let fd;
   try {
     fd = openRegularFileForRead(path, partitionRoot);
@@ -6593,10 +6659,10 @@ function prefixSha(path, bytes, partitionRoot) {
   if (fd === null)
     return null;
   try {
-    const chunk = Buffer.alloc(Math.min(PREFIX_CHUNK_BYTES, Math.max(bytes, 1)));
-    let position = 0;
-    while (position < bytes) {
-      const n = readSync5(fd, chunk, 0, Math.min(chunk.length, bytes - position), position);
+    const chunk = Buffer.alloc(Math.min(PREFIX_CHUNK_BYTES, Math.max(to - from, 1)));
+    let position = from;
+    while (position < to) {
+      const n = readSync5(fd, chunk, 0, Math.min(chunk.length, to - position), position);
       if (n === 0)
         return null;
       hash.update(chunk.subarray(0, n));
@@ -6605,60 +6671,103 @@ function prefixSha(path, bytes, partitionRoot) {
   } finally {
     closeSync8(fd);
   }
-  return hash.digest("hex");
+  return hash;
 }
 function sameStamp(a, b) {
   return sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
-function isCleanRead(read) {
-  return read.diagnostics.length === 0 && read.pendingTailBytes === 0 && read.records.every((r) => r.bodyState !== "pending");
+function appendStampOf(stat) {
+  return { size: Number(stat.size), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
 }
-function readShardWithTails(path, rel, partitionRoot, tails) {
+function scanKeeping(path, partitionRoot, offset, keep) {
+  const records = [];
+  let anyPending = 0;
+  const scan = scanShard(path, { partitionRoot, ...offset > 0 ? { offset } : {} }, (r) => {
+    gcHintTick();
+    if (r.bodyState === "pending")
+      anyPending += 1;
+    if (keep === undefined || keep(r.record))
+      records.push(r);
+  });
+  return {
+    records,
+    compactions: scan.compactions,
+    diagnostics: scan.diagnostics,
+    gapPending: scan.pending,
+    anyPending,
+    nextOffset: scan.nextOffset,
+    pendingTailBytes: scan.pendingTailBytes
+  };
+}
+function gapOf(pass) {
+  const scan = {
+    diagnostics: pass.diagnostics,
+    pending: pass.gapPending
+  };
+  return shardScanGap(scan);
+}
+function isCleanPass(pass) {
+  return pass.diagnostics.length === 0 && pass.pendingTailBytes === 0 && pass.anyPending === 0;
+}
+function readShardWithTails(path, rel, partitionRoot, tails, keep) {
   const kept = tails.get(rel);
   let base = null;
   const now = lstatSync4(path, { bigint: true });
+  let hash = null;
   if (kept !== undefined) {
     const size = Number(now.size);
     if (sameDevIno(now, kept) && size >= kept.size) {
       if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs) {
-        return kept.read;
+        return {
+          records: kept.records,
+          compactions: kept.compactions,
+          diagnostics: [],
+          gapPending: 0,
+          anyPending: 0,
+          nextOffset: kept.size,
+          pendingTailBytes: 0
+        };
       }
-      if (prefixSha(path, kept.size, partitionRoot) === kept.sha)
+      if (appendedByThisProcess(path, { size: kept.size, mtimeNs: kept.mtimeNs, ctimeNs: kept.ctimeNs }, appendStampOf(now))) {
         base = kept;
+      } else {
+        const check = hashRange(path, partitionRoot, createHash5("sha256"), 0, kept.size);
+        if (check !== null && check.copy().digest("hex") === kept.hash.copy().digest("hex")) {
+          base = kept;
+        }
+      }
     }
   }
-  const fresh = readShard(path, {
-    partitionRoot,
-    ...base !== null ? { offset: base.size } : {}
-  });
+  const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep);
   tails.delete(rel);
   const after = lstatSync4(path, { bigint: true });
   if (base !== null && !sameDevIno(after, now)) {
-    return readShard(path, { partitionRoot });
+    return scanKeeping(path, partitionRoot, 0, keep);
   }
-  const read = base === null ? fresh : {
+  const pass = base === null ? fresh : {
     ...fresh,
-    records: [...base.read.records, ...fresh.records],
-    compactions: [...base.read.compactions, ...fresh.compactions]
+    records: [...base.records, ...fresh.records],
+    compactions: [...base.compactions, ...fresh.compactions]
   };
-  if (!isCleanRead(read))
-    return read;
-  if (after.ino === 0n || Number(after.size) !== read.nextOffset || !sameStamp(now, after)) {
-    return read;
+  if (!isCleanPass(pass))
+    return pass;
+  if (after.ino === 0n || Number(after.size) !== pass.nextOffset || !sameStamp(now, after)) {
+    return pass;
   }
-  const sha = prefixSha(path, read.nextOffset, partitionRoot);
-  if (sha === null || !sameStamp(after, lstatSync4(path, { bigint: true })))
-    return read;
+  hash = base === null ? hashRange(path, partitionRoot, createHash5("sha256"), 0, pass.nextOffset) : hashRange(path, partitionRoot, base.hash.copy(), base.size, pass.nextOffset);
+  if (hash === null || !sameStamp(after, lstatSync4(path, { bigint: true })))
+    return pass;
   tails.set(rel, {
     ino: after.ino,
     dev: after.dev,
-    size: read.nextOffset,
+    size: pass.nextOffset,
     mtimeNs: after.mtimeNs,
     ctimeNs: after.ctimeNs,
-    sha,
-    read
+    hash,
+    records: pass.records,
+    compactions: pass.compactions
   });
-  return read;
+  return pass;
 }
 function monthOf2(rel) {
   const name = rel.slice(rel.lastIndexOf("/") + 1);
@@ -6696,7 +6805,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
       continue;
     let read;
     try {
-      read = options.tails === undefined ? readShard(shard.path, { partitionRoot }) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails);
+      read = options.tails === undefined ? scanKeeping(shard.path, partitionRoot, 0, options.keep) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep);
     } catch {
       options.tails?.delete(shard.rel);
       unreadable.push(shard.rel);
@@ -6706,7 +6815,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
       unreadable.push(shard.rel);
       continue;
     }
-    if (shardReadGap(read) !== null)
+    if (gapOf(read) !== null)
       unreadable.push(shard.rel);
     compactions.push(...read.compactions);
     for (const entry of read.records) {
@@ -6745,6 +6854,7 @@ var init_stream_read = __esm(() => {
   init_fs_identity();
   init_constants();
   init_reader();
+  init_own_appends();
   init_seen_shards();
   init_safe_fs();
   init_shard_list();
@@ -7051,7 +7161,7 @@ var init_store_only = __esm(() => {
 
 // src/core/brain/secrets/owner-acl.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { resolve as resolve9, win32 as win323 } from "node:path";
+import { resolve as resolve10, win32 as win323 } from "node:path";
 function system32Tool(name, env = process.env) {
   const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
   return win323.join(root, "System32", name);
@@ -7082,7 +7192,7 @@ function ownerOnlyAclArgv(path, sid, kind) {
 function restrictToOwner(path, kind, platform = process.platform, force = false) {
   if (platform !== "win32")
     return true;
-  const key = `${kind}:${resolve9(path).toLowerCase()}`;
+  const key = `${kind}:${resolve10(path).toLowerCase()}`;
   if (!force && restricted.has(key))
     return true;
   let detail;
@@ -7304,7 +7414,7 @@ var init_state_moves = __esm(() => {
 // src/core/state/machine-state.ts
 import { createHash as createHash6 } from "node:crypto";
 import { cpSync, existsSync as existsSync8, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname14, join as join20, relative as relative5, resolve as resolve10, sep as sep5 } from "node:path";
+import { dirname as dirname14, join as join20, relative as relative5, resolve as resolve11, sep as sep5 } from "node:path";
 function storeIdAt(root) {
   const known = STORE_IDS.get(root);
   if (known !== undefined)
@@ -7331,7 +7441,7 @@ function deviceStateDir(storeId) {
   return storeId === null ? storesStateDir(source) : deviceStateDirFor(storeId, source);
 }
 function vaultKey(vault) {
-  return createHash6("sha256").update(resolve10(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
+  return createHash6("sha256").update(resolve11(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
 }
 function freshVaultRel(vault) {
   return join20(FRESH_STATE_DIR, vaultKey(vault));
@@ -7543,7 +7653,7 @@ var init_stamp = __esm(() => {
 
 // src/core/brain/freeze-marker.ts
 import { existsSync as existsSync9, readFileSync as readFileSync15, statSync as statSync10 } from "node:fs";
-import { resolve as resolve11 } from "node:path";
+import { resolve as resolve12 } from "node:path";
 function markerPathIn(root) {
   return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
 }
@@ -7568,7 +7678,7 @@ function parseMarker(path) {
   });
 }
 function readFreezeMarker(vault) {
-  const root = resolve11(vault);
+  const root = resolve12(vault);
   let path = MARKER_PATHS.get(root);
   if (path === undefined) {
     const location = machineStateLocation(root);
@@ -7604,7 +7714,7 @@ function vaultFrozenNotice(vault, marker) {
   return degradationNotice({
     code: DEGRADATION_CODE.vaultFrozen,
     site: SITE,
-    path: resolve11(vault),
+    path: resolve12(vault),
     detail: `refusing to write: this vault was frozen at ${marker.frozen_at} by ` + `${marker.by === "" ? "an unnamed agent" : marker.by} (${why}). ` + `Run \`${FREEZE_NEXT_COMMAND}\` to lift it`
   });
 }
@@ -7653,7 +7763,7 @@ var init_freeze_marker = __esm(() => {
 // src/core/migration-gate.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync as mkdirSync13, readFileSync as readFileSync16, realpathSync as realpathSync3, statSync as statSync11, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename8, dirname as dirname15, isAbsolute as isAbsolute3, join as join21, relative as relative6, resolve as resolve12, sep as sep6 } from "node:path";
+import { basename as basename8, dirname as dirname15, isAbsolute as isAbsolute3, join as join21, relative as relative6, resolve as resolve13, sep as sep6 } from "node:path";
 function gateRunKind(gate) {
   if (gate.run_id.startsWith("migrate-"))
     return GATE_RUN_KIND.migration;
@@ -7672,7 +7782,7 @@ function canonicalVault(vault) {
   try {
     path = realpathSync3(vault);
   } catch {
-    path = resolve12(vault);
+    path = resolve13(vault);
   }
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
@@ -7925,7 +8035,7 @@ var init_migration_gate = __esm(() => {
 
 // src/core/brain/vault-identity.ts
 import { existsSync as existsSync10, readFileSync as readFileSync17, statSync as statSync12 } from "node:fs";
-import { join as join22, resolve as resolve13 } from "node:path";
+import { join as join22, resolve as resolve14 } from "node:path";
 function vaultIdentityPath(vault) {
   return ensureInsideVault(join22(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
 }
@@ -7980,7 +8090,7 @@ function currentVaultId(root) {
   return identity.vault_id;
 }
 function vaultMarkerAbsentNotice(vault) {
-  const root = resolve13(vault);
+  const root = resolve14(vault);
   if (currentVaultId(root) !== null)
     return null;
   return degradationNotice({
@@ -7991,7 +8101,7 @@ function vaultMarkerAbsentNotice(vault) {
   });
 }
 function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
-  const root = resolve13(vault);
+  const root = resolve14(vault);
   assertNoMigrationInProgress(root);
   if (lane === WRITE_LANE.content)
     assertVaultNotFrozen(root);
@@ -8629,7 +8739,7 @@ var init_caller_reach = __esm(() => {
 });
 
 // src/core/store/read/store-entities.ts
-import { statSync as statSync13 } from "node:fs";
+import { lstatSync as lstatSync6, statSync as statSync13 } from "node:fs";
 function sharedCountersOf(history, privateIds) {
   const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
   for (const record of history) {
@@ -8656,8 +8766,15 @@ function tailsOf(store, partition) {
   }
   return tails;
 }
+function isEntityRecord(record) {
+  return ENTITY_KINDS.has(record.kind);
+}
 function fingerprintOf(store) {
-  const parts = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
+  const parts = [
+    store.storeId,
+    `partitions=${[...store.partitions].toSorted().join(",")}`,
+    `quarantine=${quarantineStamp(store.root)}`
+  ];
   for (const partition of [...store.partitions].toSorted()) {
     let shards;
     try {
@@ -8669,14 +8786,19 @@ function fingerprintOf(store) {
     for (const shard of shards) {
       let stamp = "missing";
       try {
-        const stat = statSync13(shard.path);
-        stamp = `${stat.size}:${stat.mtimeMs}`;
+        stamp = shardFileStamp(shard.path);
       } catch {}
       parts.push(`${partition}/${shard.rel}=${stamp}`);
     }
   }
   return parts.join(`
 `);
+}
+function shardFileStamp(path) {
+  const s = statSync13(path, { bigint: true });
+  const id = identityOfStats(s);
+  const identity = id === null ? "no-identity" : `${id.dev}:${id.ino}`;
+  return `${identity}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
 }
 function signalIsPrivate(record, partition) {
   if (partition === "private")
@@ -8692,7 +8814,8 @@ function build(store) {
   const pendingBlobs = [];
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS, {
-      tails: tailsOf(store, partition)
+      tails: tailsOf(store, partition),
+      keep: isEntityRecord
     });
     if (read.skippedPending)
       skippedPending = true;
@@ -8771,8 +8894,9 @@ function readStoreEntities(configPath) {
   const store = configuredStore(configPath);
   return store === null ? null : readEntitiesOf(store);
 }
-var cache, tailsByRoot, EVENTS;
+var cache, tailsByRoot, EVENTS, ENTITY_KINDS;
 var init_store_entities = __esm(() => {
+  init_fs_identity();
   init_constants();
   init_private_page();
   init_fold_pinned();
@@ -8783,10 +8907,21 @@ var init_store_entities = __esm(() => {
   init_store_open();
   init_store_paths();
   init_stream_read();
+  init_own_appends();
   init_shard_quarantine();
   cache = new Map;
   tailsByRoot = new Map;
   EVENTS = { stream: "events" };
+  ENTITY_KINDS = new Set([
+    PREFERENCE_SET_KIND,
+    PREFERENCE_REMOVE_KIND,
+    PREFERENCE_EVIDENCE_KIND,
+    SIGNAL_KIND,
+    SIGNAL_STATE_KIND,
+    SIGNAL_REMOVED_KIND,
+    PINNED_SET_KIND,
+    PINNED_CLEAR_KIND
+  ]);
 });
 
 // src/core/store/store-privacy.ts
@@ -9087,7 +9222,7 @@ var init_private_region = __esm(() => {
 
 // src/core/store/reference-privacy.ts
 import { existsSync as existsSync12, statSync as statSync15 } from "node:fs";
-import { resolve as resolve14 } from "node:path";
+import { resolve as resolve15 } from "node:path";
 function namesAPage(ref) {
   const trimmed = ref.trim();
   return ANCHORED_WIKILINK_RE.test(trimmed) || trimmed.endsWith(PAGE_EXTENSION);
@@ -9177,7 +9312,7 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
     const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore));
     if (rel === null)
       continue;
-    const abs = resolve14(vault, rel);
+    const abs = resolve15(vault, rel);
     if (!pathIsInside(abs, vault) || existsSync12(abs) && isPrivatePageFile(abs))
       return true;
   }
@@ -9863,7 +9998,7 @@ import {
   unlinkSync as unlinkSync6,
   writeSync as writeSync6
 } from "node:fs";
-import { dirname as dirname19, resolve as resolve15 } from "node:path";
+import { dirname as dirname19, resolve as resolve16 } from "node:path";
 function kdfCostCurveRefusal(kdf) {
   if (kdf.n > SCRYPT_N_MAX) {
     return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
@@ -9884,7 +10019,7 @@ function kdfCostCurveRefusal(kdf) {
   return null;
 }
 function holderSlot(keyPath) {
-  const resolved = resolve15(keyPath);
+  const resolved = resolve16(keyPath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function heldUnlockedKey(keyPath) {
@@ -10243,7 +10378,7 @@ var init_crypto = __esm(() => {
 
 // src/core/store-migration/owner-only-copy.ts
 import { chmodSync as chmodSync4, copyFileSync as copyFileSync2, mkdirSync as mkdirSync19 } from "node:fs";
-import { dirname as dirname21, relative as relative8, resolve as resolve16, sep as sep7 } from "node:path";
+import { dirname as dirname21, relative as relative8, resolve as resolve17, sep as sep7 } from "node:path";
 function ensureOwnerOnlyRoot(root) {
   mkdirSync19(root, { recursive: true, mode: DIR_MODE });
   if (process.platform === "win32")
@@ -10252,10 +10387,10 @@ function ensureOwnerOnlyRoot(root) {
     chmodSync4(root, DIR_MODE);
 }
 function foldersFrom(root, dir) {
-  const rel = relative8(resolve16(root), resolve16(dir));
+  const rel = relative8(resolve17(root), resolve17(dir));
   if (rel === "" || rel.startsWith(".."))
-    return [resolve16(root)];
-  const out = [resolve16(root)];
+    return [resolve17(root)];
+  const out = [resolve17(root)];
   for (const segment of rel.split(sep7))
     out.push(`${out.at(-1)}${sep7}${segment}`);
   return out;
@@ -10921,7 +11056,7 @@ import { dirname as dirname23, join as join32 } from "node:path";
 init_config();
 init_fs_utils();
 import { existsSync as existsSync16, readdirSync as readdirSync7, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname22, join as join31, resolve as resolve17 } from "node:path";
+import { dirname as dirname22, join as join31, resolve as resolve18 } from "node:path";
 
 // src/core/project-manifests.ts
 var MANIFEST_ECOSYSTEM = Object.freeze({
@@ -11041,7 +11176,7 @@ function findCodeProjects(opts) {
   const consider = (raw) => {
     if (scanned >= limit)
       return;
-    const path = resolve17(raw);
+    const path = resolve18(raw);
     if (seen.has(path))
       return;
     seen.add(path);
@@ -11052,7 +11187,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname22(resolve17(opts.vault));
+  const vaultParent = dirname22(resolve18(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -11615,9 +11750,9 @@ function doctor(opts) {
 
 // src/core/identity-reminder.ts
 import { readFileSync as readFileSync26 } from "node:fs";
-import { dirname as dirname24, resolve as resolve18 } from "node:path";
+import { dirname as dirname24, resolve as resolve19 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var TEMPLATE_PATH = resolve18(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve19(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var RUNTIME_TARGET = Object.freeze({
   hermes: "hermes",
   openclaw: "openclaw"
@@ -11643,8 +11778,8 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve18(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve18(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
+var TEMPLATES_DIR = resolve19(dirname24(fileURLToPath2(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve19(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);

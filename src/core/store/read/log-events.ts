@@ -107,7 +107,11 @@ export interface LogEventsRead {
  * a locked or corrupt store shard makes the read shorter, never a throw,
  * and `unreadable` names it.
  */
-export function readLogEventsReport(range: LogDateRange, context: ReadContext = {}): LogEventsRead {
+export function readLogEventsReport(
+  range: LogDateRange,
+  context: ReadContext = {},
+  options: StoreLogReadOptions = {},
+): LogEventsRead {
   assertRange(range);
   if (range.from > range.to) return { entries: [], unreadable: [] };
   const source = readSource(context);
@@ -116,7 +120,7 @@ export function readLogEventsReport(range: LogDateRange, context: ReadContext = 
     const entries = dates.flatMap((date) => [...readLogDay(source.vault, date, shards).entries]);
     return { entries, unreadable: [] };
   }
-  const read = storeLogEvents(range, source.store);
+  const read = storeLogEvents(range, source.store, options.eventTypes);
   return { entries: read.dated.map((d) => d.entry), unreadable: read.unreadable };
 }
 
@@ -143,12 +147,13 @@ export interface StoreLogEvent {
 export function readStoreLogEventsReport(
   range: LogDateRange,
   context: ReadContext = {},
+  options: StoreLogReadOptions = {},
 ): { events: StoreLogEvent[]; unreadable: ReadonlyArray<string> } | null {
   assertRange(range);
   const source = readSource(context);
   if (source.kind === "legacy") return null;
   if (range.from > range.to) return { events: [], unreadable: [] };
-  const read = storeLogEvents(range, source.store);
+  const read = storeLogEvents(range, source.store, options.eventTypes);
   return {
     events: read.dated.map((d) => ({
       entry: d.entry,
@@ -168,13 +173,25 @@ export function readStoreLogEventsReport(
 export function readStoreLogEvents(
   range: LogDateRange,
   context: ReadContext = {},
+  options: StoreLogReadOptions = {},
 ): StoreLogEvent[] | null {
-  return readStoreLogEventsReport(range, context)?.events ?? null;
+  return readStoreLogEventsReport(range, context, options)?.events ?? null;
+}
+
+/** What a store log read keeps. */
+export interface StoreLogReadOptions {
+  /**
+   * Only the events of these types, judged as each record is read: a
+   * reader that needs a few types (the dream pass's evidence) never holds
+   * the rest of a long migrated log. Absent, every event.
+   */
+  readonly eventTypes?: ReadonlySet<string>;
 }
 
 function storeLogEvents(
   range: LogDateRange,
   store: Extract<ReturnType<typeof readSource>, { kind: "store" }>["store"],
+  eventTypes?: ReadonlySet<string>,
 ): {
   dated: Array<{ entry: BrainLogEntry; record: StoreRecord; partition: StorePartition }>;
   unreadable: string[];
@@ -194,6 +211,9 @@ function storeLogEvents(
       { stream: "log" },
       {
         month: (m) => m >= first,
+        keep: (record) =>
+          record.kind === LOG_EVENT_KIND &&
+          (eventTypes === undefined || eventTypes.has(String(record.body["event_type"]))),
       },
     );
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));

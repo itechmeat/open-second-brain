@@ -19,7 +19,7 @@ import { readShard, shardReadGap } from "../store/reader.ts";
 import { trackSeenShards } from "../store/seen-shards.ts";
 import { listShards } from "../store/shard-list.ts";
 import {
-  forEachPartitionShard,
+  forEachPartitionRecord,
   readPartition,
   type UnreadableShard,
 } from "../store/state-digest.ts";
@@ -57,10 +57,11 @@ export function catchUp(store: StoreHandle, now?: () => number): ViewCatchUp {
 }
 
 /**
- * {@link catchUp} keeping only the records `keep` passes, judged shard by
- * shard as each is read: for a pass that folds a few kinds out of a large
- * store (topic planning reads signals, notes and topic records, not the
- * whole migrated log), so the records it drops are never all held at once.
+ * {@link catchUp} keeping only the records `keep` passes, judged record by
+ * record as each is read (`forEachPartitionRecord`): for a pass that folds
+ * a few kinds out of a large store (topic planning reads signals, notes
+ * and topic records, the view its page inputs, not the whole migrated
+ * log), so a record it drops is never held, not even with its shard.
  * The clock is raised past the newest record read, kept or not, exactly as
  * {@link catchUp} raises it, and an unreadable shard is reported the same
  * way.
@@ -75,14 +76,15 @@ export function catchUpWhere(
   let newest: StoreRecord | undefined;
   for (const partition of store.partitions) {
     const kept: StoreRecord[] = [];
-    forEachPartitionShard(
+    forEachPartitionRecord(
       partitionDir(store.root, partition),
       { onUnreadable: (shard) => unreadable.push({ ...shard, partition }) },
-      (shard) => {
-        for (const record of shard.records) {
+      {
+        record: (shard, record, pending) => {
+          if (pending) return;
           if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
           if (keep(record, shard.stream)) kept.push(record);
-        }
+        },
       },
     );
     records.set(partition, prepareRecords(kept).records);

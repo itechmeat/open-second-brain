@@ -13,7 +13,7 @@
 
 import { posix } from "node:path";
 
-import { readShard } from "../../store/reader.ts";
+import { scanShard } from "../../store/reader.ts";
 import { partitionDir } from "../../store/store-paths.ts";
 import type { Store } from "../store.ts";
 import { getRecord } from "../store/brain-records.ts";
@@ -76,19 +76,23 @@ export function settleOrphans(
     if (orphans.size === 0) break;
     const group = shardGroup(sibling.key);
     if (readInFull.has(sibling.key) || !groups.has(group)) continue;
-    let read: ReturnType<typeof readShard>;
+    // Record by record: a sibling can hold every record the store has.
     try {
-      read = readShard(sibling.path, {
-        partitionRoot: partitionDir(store.root, sibling.partition),
-      });
+      scanShard(
+        sibling.path,
+        { partitionRoot: partitionDir(store.root, sibling.partition) },
+        (r) => {
+          if (!orphans.has(r.record.id)) return;
+          ingestRecord(index, config, r.record, sibling, r.bodyState === "pending");
+          // Only once the sibling's copy is in the index: an ingest that
+          // throws leaves the orphan, so its shard stays in `retry` and the
+          // next pass settles it.
+          orphans.delete(r.record.id);
+        },
+      );
     } catch {
       unsettled.add(group);
       continue;
-    }
-    for (const r of read.records) {
-      if (!orphans.has(r.record.id)) continue;
-      orphans.delete(r.record.id);
-      ingestRecord(index, config, r.record, sibling, r.bodyState === "pending");
     }
   }
   const db = index.brainRecordsConnection();

@@ -76,6 +76,11 @@ export interface DoctorCheckContext {
    */
   readonly idIndex: Map<string, string[]>;
   readonly preferences: ReadonlyArray<PreferenceRecord>;
+  /**
+   * The log days, for the lints that walk the log: on a store-only
+   * machine only the event types those lints read (`DOCTOR_LOG_EVENTS`),
+   * on an unswitched one every event of the day files.
+   */
   readonly logs: ReadonlyArray<LogRecord>;
   /**
    * Log days the snapshot above could not read. Optional so a context

@@ -9,7 +9,12 @@
  */
 
 import { canonicalJson } from "../integrity/digest.ts";
-import { PREFERENCE_REMOVE_KIND, SIGNAL_KIND } from "./constants.ts";
+import {
+  PREFERENCE_EVIDENCE_KIND,
+  PREFERENCE_REMOVE_KIND,
+  PREFERENCE_SET_KIND,
+  SIGNAL_KIND,
+} from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
 import { foldPreferences } from "./fold-preferences.ts";
 import { foldSignals, SIGNAL_REMOVED_KIND, SIGNAL_STATE_KIND } from "./fold-signals.ts";
@@ -76,6 +81,21 @@ export const TOMBSTONE_KINDS: ReadonlySet<string> = new Set([
   PREFERENCE_REMOVE_KIND,
   LANE_ENTRY_REMOVE_KIND,
 ]);
+
+/**
+ * Whether {@link voidedRecordIds} reads `record` at all: a signal's, a
+ * preference's or a lane entry's record. A caller that reads the store
+ * record by record keeps only these.
+ */
+export function isVoidingFoldInput(record: StoreRecord): boolean {
+  return (
+    SIGNAL_KINDS.has(record.kind) ||
+    LANE_KINDS.has(record.kind) ||
+    record.kind === PREFERENCE_SET_KIND ||
+    record.kind === PREFERENCE_REMOVE_KIND ||
+    record.kind === PREFERENCE_EVIDENCE_KIND
+  );
+}
 
 /**
  * Ids of the records the tombstones among `records` made void: a forgotten

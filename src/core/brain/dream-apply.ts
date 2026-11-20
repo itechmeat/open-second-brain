@@ -55,10 +55,12 @@ import {
 } from "./types.ts";
 import { renameWithRetry } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { routeSignalState, signalsStoreOnly } from "./signal-state.ts";
+import { routeSignalState, signalsStoreOnly, writeStoreSignalStates } from "./signal-state.ts";
 import {
   configuredStore,
+  holdStoreEntities,
   readStoreEntities,
+  type HeldEntities,
   type StorePreference,
 } from "../store/read/store-entities.ts";
 import { readShard, shardReadGap } from "../store/reader.ts";
@@ -626,15 +628,26 @@ function preferenceTouchedSince(mark: EventsMark, id: string): boolean | null {
 function moveConsumedSignals(vault: string | null, plan: PlanState): string[] {
   const moved: string[] = [];
   const storeOnly = signalsStoreOnly(vault);
-  // Read once: recording one signal's move does not change whether another
-  // is live, and each append would otherwise invalidate the fold cache.
-  const live = storeOnly ? liveStoreSignals() : null;
+  // Held across the moves: recording one signal's move does not change
+  // whether another is live or private, and each append would otherwise
+  // rebuild the fold to judge the next one. Another writer's change reads
+  // the store again (`holdStoreEntities`).
+  const held = storeOnly ? holdStoreEntities() : null;
+  if (held !== null) {
+    return storeSignalMoves(
+      vault,
+      plan.signalsToMove.values(),
+      held,
+      "consumed",
+      "move signal",
+      "to processed/",
+    );
+  }
   for (const sig of plan.signalsToMove.values()) {
     // The legacy destination, resolved only by the legacy move.
     const dest = (): string =>
       processedSignalPath(legacyVaultOf(vault, "moveConsumedSignals"), sig.date, sig.slug);
     try {
-      if (live !== null && !live.has(sig.id)) continue;
       // Judged before the move, from the page the scan read.
       const meta = storeOnly ? undefined : readFrontmatterOf(sig.path);
       routeSignalState({
@@ -677,7 +690,17 @@ function archiveStaleSignals(vault: string | null, plan: PlanState): string[] {
   const archived: string[] = [];
   if (plan.signalsToArchive.size === 0) return archived;
   const storeOnly = signalsStoreOnly(vault);
-  const live = storeOnly ? liveStoreSignals() : null;
+  const held = storeOnly ? holdStoreEntities() : null;
+  if (held !== null) {
+    return storeSignalMoves(
+      vault,
+      plan.signalsToArchive.values(),
+      held,
+      "archived",
+      "archive signal",
+      "to inbox/archived/",
+    );
+  }
   // The legacy destination, resolved only off the store-only path.
   const archivedPath = (path: string): string =>
     archivedSignalPath(legacyVaultOf(vault, "archiveStaleSignals"), basename(path));
@@ -688,17 +711,13 @@ function archiveStaleSignals(vault: string | null, plan: PlanState): string[] {
   }
   for (const sig of plan.signalsToArchive.values()) {
     try {
-      if (live !== null) {
-        if (!live.has(sig.id)) continue;
-      } else {
-        const dest = archivedPath(sig.path);
-        if (existsSync(dest)) {
-          process.stderr.write(
-            `warning: archive signal ${sig.id}: ${basename(dest)} already exists in ` +
-              `inbox/archived/; left in the inbox\n`,
-          );
-          continue;
-        }
+      const dest = archivedPath(sig.path);
+      if (existsSync(dest)) {
+        process.stderr.write(
+          `warning: archive signal ${sig.id}: ${basename(dest)} already exists in ` +
+            `inbox/archived/; left in the inbox\n`,
+        );
+        continue;
       }
       routeSignalState({
         vault,
@@ -718,13 +737,46 @@ function archiveStaleSignals(vault: string | null, plan: PlanState): string[] {
   return archived;
 }
 
-/** The ids the store's signal fold holds in the inbox (store-only moves). */
-function liveStoreSignals(): ReadonlySet<string> {
-  const live = new Set<string>();
-  for (const [id, signal] of readStoreEntities()?.signals ?? []) {
-    if (signal.state === "active") live.add(id);
+/**
+ * The store-only moves of steps 4 and 4b: the live signals' records in
+ * batches (`writeStoreSignalStates`), one clock write and one synced
+ * write per shard per batch instead of two synced writes per signal. A
+ * signal no longer live (a pass that stopped part way already moved it)
+ * is skipped, so a rerun completes the moves without duplicates. A move
+ * that fails is reported, and the signal stays where it was.
+ */
+function storeSignalMoves(
+  vault: string | null,
+  signals: Iterable<{ readonly id: string }>,
+  held: HeldEntities,
+  state: "consumed" | "archived",
+  verb: string,
+  where: string,
+): string[] {
+  const moves: Array<{ id: string; state: "consumed" | "archived" }> = [];
+  for (const sig of signals) {
+    try {
+      if (isLiveStoreSignal(held, sig.id)) moves.push({ id: sig.id, state });
+    } catch (err) {
+      process.stderr.write(
+        `warning: ${verb} ${sig.id} ${where} failed: ${(err as Error).message}\n`,
+      );
+    }
   }
-  return live;
+  const result = writeStoreSignalStates({ vault, moves, authority: DREAM_AUTHORITY, held });
+  for (const { id, error } of result.failed) {
+    process.stderr.write(`warning: ${verb} ${id} ${where} failed: ${error.message}\n`);
+  }
+  return [...result.written];
+}
+
+/**
+ * Whether the store's signal fold holds `id` in the inbox (store-only
+ * moves). The held read misses only this pass's own moves, each of one
+ * other signal, so it still answers for `id`.
+ */
+function isLiveStoreSignal(held: HeldEntities, id: string): boolean {
+  return held.current()?.signals.get(id)?.state === "active";
 }
 
 /**

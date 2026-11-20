@@ -10,7 +10,7 @@
 
 import { BAND_RANK, computeConfidence, rebandConfidence } from "./confidence.ts";
 import type { PlanState, ScanResult } from "./dream-plan.ts";
-import { collectEvidenceForSlug, privateEvidenceCounts } from "./evidence.ts";
+import { collectEvidenceForSlug, EVIDENCE_LOG_EVENTS, privateEvidenceCounts } from "./evidence.ts";
 import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
 import { countersForShared } from "../store/read/store-entities.ts";
 import { logDayReader } from "./log-days.ts";
@@ -150,7 +150,7 @@ export function scanApplyEvidence(
   const out: ApplyEvidenceEntry[] = [];
   const mergeAliases = new Map<string, string>();
   // Shard-aware (Memory Integrity Suite): merged per-day reads.
-  const log = logDayReader(vault);
+  const log = logDayReader(vault, { eventTypes: EVIDENCE_LOG_EVENTS });
   for (const date of log.dates) {
     checkpoint();
     const { entries } = log.day(date);

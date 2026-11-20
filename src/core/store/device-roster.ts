@@ -31,16 +31,11 @@ import {
   STORE_PARTITIONS,
 } from "./constants.ts";
 import { appendRecord } from "./appender.ts";
-import {
-  lastRecords,
-  latestRetirements,
-  returnedAfterRetirement,
-  wroteAfter,
-} from "./device-retirement.ts";
-import type { StoreRecord } from "./envelope.ts";
+import { latestRetirements, returnedAfterRetirement, wroteAfter } from "./device-retirement.ts";
+import { compareRecords, type StoreRecord } from "./envelope.ts";
 import { parseHlc } from "./hlc.ts";
 import { callerInput, opaqueFields, operationPrivacy } from "./operation-privacy.ts";
-import { readPartition } from "./state-digest.ts";
+import { forEachPartitionRecord } from "./state-digest.ts";
 import type { StoreHandle } from "./store-open.ts";
 import { partitionDir } from "./store-paths.ts";
 
@@ -79,19 +74,48 @@ export class DeviceRetireRefusal extends Error {
 
 const physical = (record: StoreRecord): number => parseHlc(record.hlc)!.physical;
 
-/** Every shard of every partition this machine holds; an unreadable shard is skipped. */
-function heldShards(store: Pick<StoreHandle, "root" | "partitions">) {
-  return STORE_PARTITIONS.filter((p) => store.partitions.has(p)).flatMap((partition) =>
-    readPartition(partitionDir(store.root, partition), { onUnreadable: () => {} }).map((shard) => ({
-      partition,
-      shard,
-    })),
-  );
+/** What the roster needs of the partitions this machine holds. */
+interface HeldFacts {
+  /** The last record of each device, in fold order (`lastRecords`). */
+  readonly last: Map<string, StoreRecord>;
+  /** Every `device-retire` record, wherever it was written. */
+  readonly retirements: StoreRecord[];
+  /** The records of the `settings` stream of `shared` whose body is known. */
+  readonly sharedSettings: StoreRecord[];
 }
 
-/** Every record of every partition this machine holds; an unreadable shard is skipped. */
-function heldRecords(store: Pick<StoreHandle, "root" | "partitions">): StoreRecord[] {
-  return heldShards(store).flatMap(({ shard }) => shard.all);
+/**
+ * Read the partitions this machine holds record by record and keep only
+ * what the roster needs: a device's newest record, the retirements and
+ * the shared settings. A store's busiest shard can hold every record a
+ * migration imported; the read holds none of them past its visit. A
+ * shard that cannot be read is skipped, as before; one that fails part
+ * way counts the records read before the failure.
+ */
+function heldFacts(store: Pick<StoreHandle, "root" | "partitions">): HeldFacts {
+  const last = new Map<string, StoreRecord>();
+  const retirements: StoreRecord[] = [];
+  const sharedSettings: StoreRecord[] = [];
+  for (const partition of STORE_PARTITIONS) {
+    if (!store.partitions.has(partition)) continue;
+    forEachPartitionRecord(
+      partitionDir(store.root, partition),
+      { onUnreadable: () => {} },
+      {
+        record: (shard, record, pending) => {
+          const prior = last.get(record.device);
+          if (prior === undefined || compareRecords(record, prior) >= 0) {
+            last.set(record.device, record);
+          }
+          if (record.kind === DEVICE_RETIRE_KIND) retirements.push(record);
+          if (partition === "shared" && shard.stream === "settings" && !pending) {
+            sharedSettings.push(record);
+          }
+        },
+      },
+    );
+  }
+  return { last, retirements, sharedSettings };
 }
 
 /**
@@ -115,10 +139,9 @@ export function listDevices(
   options: { readonly nowMs?: number } = {},
 ): DeviceEntry[] {
   const nowMs = options.nowMs ?? Date.now();
-  const shards = heldShards(store);
-  const records = shards.flatMap(({ shard }) => shard.all);
-  const last = lastRecords(records);
-  const retirements = latestRetirements(records);
+  const facts = heldFacts(store);
+  const last = facts.last;
+  const retirements = latestRetirements(facts.retirements);
   const devices = new Set<string>([...last.keys(), ...retirements.keys()]);
   // The cohort devices still on the legacy layout, store records or not.
   for (const device of legacyDevices(store, [])) devices.add(device);
@@ -126,11 +149,7 @@ export function listDevices(
   // over the shared settings stream alone, the source the store-only write
   // path and the removal gate read (`isDeviceSwitched`), so a switch record
   // that landed anywhere else counts in neither.
-  const switched = switchedDevices(
-    shards
-      .filter(({ partition, shard }) => partition === "shared" && shard.stream === "settings")
-      .flatMap(({ shard }) => shard.records),
-  );
+  const switched = switchedDevices(facts.sharedSettings);
   const since = nowMs - DIGEST_ROSTER_WINDOW_DAYS * DAY_MS;
   return [...devices].toSorted().map((device): DeviceEntry => {
     const own = last.get(device);
@@ -207,9 +226,9 @@ export function retireDevice(store: StoreHandle, input: RetireDeviceInput): Reti
         "by every machine, so give a reason without them",
     );
   }
-  const records = heldRecords(store);
-  const own = lastRecords(records).get(device);
-  const retire = latestRetirements(records).get(device);
+  const facts = heldFacts(store);
+  const own = facts.last.get(device);
+  const retire = latestRetirements(facts.retirements).get(device);
   if (retire !== undefined && !wroteAfter(own, retire)) {
     return { status: "already-retired", record: retire };
   }

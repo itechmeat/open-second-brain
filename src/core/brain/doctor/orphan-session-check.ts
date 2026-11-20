@@ -231,10 +231,18 @@ export function collectKnownSessionIds(
   return { ids, complete, uncertain };
 }
 
-/** Every log event of the store, for a store-only machine; a failed read is reported, not silent. */
+const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([BRAIN_LOG_EVENT_KIND.sessionLifecycle]);
+
+/** Every lifecycle event of the store, for a store-only machine; a failed read is reported, not silent. */
 function readStoreLifecycleEvents(vault: string, swept: SweptPath): ReadonlyArray<BrainLogEntry> {
   try {
-    const read = readLogEventsReport({ from: STORE_LOG_EPOCH, to: isoDate(new Date()) }, { vault });
+    // Only the lifecycle events, the one type the sweep reads: a store
+    // log holds every event the store ever recorded.
+    const read = readLogEventsReport(
+      { from: STORE_LOG_EPOCH, to: isoDate(new Date()) },
+      { vault },
+      { eventTypes: LIFECYCLE_EVENTS },
+    );
     // A shard that could not be read may hold the lifecycle event that
     // closes a session: report the gap rather than call a live one orphaned.
     if (read.unreadable.length > 0) {

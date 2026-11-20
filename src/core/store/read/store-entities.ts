@@ -29,7 +29,9 @@
  * Nothing is written.
  */
 
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
+
+import { identityOfStats, sameDevIno } from "../../fs-identity.ts";
 
 import {
   PINNED_CLEAR_KIND,
@@ -37,6 +39,7 @@ import {
   EVIDENCE_RESULTS,
   PREFERENCE_COUNTER_FIELDS,
   PREFERENCE_EVIDENCE_KIND,
+  PREFERENCE_REMOVE_KIND,
   PREFERENCE_SET_KIND,
   SIGNAL_KIND,
   type StorePartition,
@@ -60,6 +63,7 @@ import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
 import { partitionDir, pendingBlobStampLines, resolveConfiguredStoreRoot } from "../store-paths.ts";
 import { readStreamRecords, type ShardTails } from "./stream-read.ts";
+import { appendedByThisProcess, type AppendStamp } from "../own-appends.ts";
 import { quarantineStamp } from "../shard-quarantine.ts";
 
 /** One preference of the fold, with its privacy. */
@@ -191,6 +195,27 @@ function tailsOf(store: StoreInspection, partition: StorePartition): ShardTails 
 const EVENTS = { stream: "events" } as const;
 
 /**
+ * The kinds the entity folds read (preferences, signals, the pinned
+ * context). The `events` stream also holds lane entries, corrections and
+ * attestations, which other folds read; the read keeps only these, so the
+ * fold and its kept tails hold no record they do not use.
+ */
+const ENTITY_KINDS: ReadonlySet<string> = new Set([
+  PREFERENCE_SET_KIND,
+  PREFERENCE_REMOVE_KIND,
+  PREFERENCE_EVIDENCE_KIND,
+  SIGNAL_KIND,
+  SIGNAL_STATE_KIND,
+  SIGNAL_REMOVED_KIND,
+  PINNED_SET_KIND,
+  PINNED_CLEAR_KIND,
+]);
+
+function isEntityRecord(record: StoreRecord): boolean {
+  return ENTITY_KINDS.has(record.kind);
+}
+
+/**
  * What a read depends on: every `events` shard and the quarantine ledger,
  * which decides whether a shard reads whole without changing its bytes.
  * The availability of the blobs a read skipped is stamped when the read is
@@ -198,7 +223,14 @@ const EVENTS = { stream: "events" } as const;
  * one is delivered and stays put while it is absent.
  */
 function fingerprintOf(store: StoreInspection): string {
-  const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
+  // The held partitions too: one whose identity file appears with no
+  // `events` shard yet changes no shard stamp, and the entities name the
+  // partitions they were read from (`store.partitions`).
+  const parts: string[] = [
+    store.storeId,
+    `partitions=${[...store.partitions].toSorted().join(",")}`,
+    `quarantine=${quarantineStamp(store.root)}`,
+  ];
   for (const partition of [...store.partitions].toSorted()) {
     let shards: ReturnType<typeof listShards>;
     try {
@@ -212,8 +244,7 @@ function fingerprintOf(store: StoreInspection): string {
     for (const shard of shards) {
       let stamp = "missing";
       try {
-        const stat = statSync(shard.path);
-        stamp = `${stat.size}:${stat.mtimeMs}`;
+        stamp = shardFileStamp(shard.path);
       } catch {
         // a shard removed between the listing and the stat reads as changed
       }
@@ -221,6 +252,22 @@ function fingerprintOf(store: StoreInspection): string {
     }
   }
   return parts.join("\n");
+}
+
+/**
+ * A shard file's identity and contents stamp: device, inode, size, and the
+ * modification and change times, all at full precision. A shard replaced
+ * by a file of the same size and modification time (a sync tool that
+ * keeps the mtime) has another inode, and its change time cannot be set
+ * back, so the stamp moves and the cache is rebuilt. The identity is the
+ * one `fs-identity.ts` gives; a filesystem that reports no inode stamps
+ * none, and the change time still moves on a replacement.
+ */
+function shardFileStamp(path: string): string {
+  const s = statSync(path, { bigint: true });
+  const id = identityOfStats(s);
+  const identity = id === null ? "no-identity" : `${id.dev}:${id.ino}`;
+  return `${identity}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
 }
 
 function signalIsPrivate(record: StoreRecord, partition: StorePartition): boolean {
@@ -243,6 +290,7 @@ function build(store: StoreInspection): StoreEntities {
   for (const partition of store.partitions) {
     const read = readStreamRecords(store.root, partition, EVENTS, {
       tails: tailsOf(store, partition),
+      keep: isEntityRecord,
     });
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
@@ -371,4 +419,115 @@ export function configuredStore(configPath?: string): StoreInspection | null {
 export function readStoreEntities(configPath?: string): StoreEntities | null {
   const store = configuredStore(configPath);
   return store === null ? null : readEntitiesOf(store);
+}
+
+/**
+ * The entities of the configured store, held across a run of this
+ * process's own writes (a dream pass recording thousands of signal moves,
+ * each of which would otherwise rebuild the fold to judge the next one).
+ * `current()` answers from the held read while every `events` shard is
+ * the one it read, or grown only by this process's own appends since
+ * (`own-appends.ts`), and the quarantine ledger is unchanged; anything
+ * else (another writer's append, a synced shard, a removed or replaced
+ * file) reads the store again. What the held read misses is then only
+ * this process's own records, which the caller knows it wrote: a caller
+ * that needs to see those reads `readStoreEntities` instead.
+ */
+export interface HeldEntities {
+  /** The held entities, read again first when another writer changed the store; null without a store. */
+  current(): StoreEntities | null;
+}
+
+export function holdStoreEntities(configPath?: string): HeldEntities {
+  let held: {
+    entities: StoreEntities;
+    root: string;
+    quarantine: string;
+    stamps: Map<string, ShardStamp>;
+  } | null = null;
+  const take = (): StoreEntities | null => {
+    const store = configuredStore(configPath);
+    if (store === null) {
+      held = null;
+      return null;
+    }
+    const stamps = eventsStamps(store);
+    const entities = readEntitiesOf(store);
+    held = { entities, root: store.root, quarantine: quarantineStamp(store.root), stamps };
+    return entities;
+  };
+  const stillHolds = (): boolean => {
+    if (held === null) return false;
+    // A read with a gap or a skipped pending body may change without a
+    // shard changing (a blob delivered, a shard readable again): not held.
+    if (held.entities.unreadable.length > 0 || held.entities.pendingBlobs.length > 0) return false;
+    const store = configuredStore(configPath);
+    if (store === null || store.root !== held.root) return false;
+    // A partition this machine came to hold (or stopped holding) since the
+    // read: the held entities name the partitions they were read from.
+    if (partitionKey(store) !== partitionKey(held.entities.store)) return false;
+    if (quarantineStamp(store.root) !== held.quarantine) return false;
+    const now = eventsStamps(store);
+    for (const path of held.stamps.keys()) if (!now.has(path)) return false;
+    for (const [path, stamp] of now) {
+      const before = held.stamps.get(path);
+      if (before !== undefined && sameShardStamp(before, stamp)) continue;
+      if (before !== undefined && !sameDevIno(before, stamp)) return false;
+      if (!appendedByThisProcess(path, before ?? null, stamp)) return false;
+      held.stamps.set(path, stamp);
+    }
+    return true;
+  };
+  return {
+    current: () => (stillHolds() ? held!.entities : take()),
+  };
+}
+
+/** An events shard as a held read saw it: its identity and its append stamp. */
+type ShardStamp = AppendStamp & { readonly ino: bigint; readonly dev: bigint };
+
+function partitionKey(store: StoreInspection): string {
+  return [...store.partitions].toSorted().join(",");
+}
+
+function sameShardStamp(a: ShardStamp, b: ShardStamp): boolean {
+  return (
+    sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
+  );
+}
+
+/** Every `events` shard of `store` by path, with its stamp; an unlistable or unstatable one is left out, and so differs from any held read. */
+function eventsStamps(store: StoreInspection): Map<string, ShardStamp> {
+  const stamps = new Map<string, ShardStamp>();
+  for (const partition of store.partitions) {
+    let shards: ReturnType<typeof listShards>;
+    try {
+      shards = listShards(partitionDir(store.root, partition), EVENTS);
+    } catch {
+      stamps.set(`${partition}:unlisted:${Math.random()}`, {
+        ino: -1n,
+        dev: -1n,
+        size: -1,
+        mtimeNs: -1n,
+        ctimeNs: -1n,
+      });
+      continue;
+    }
+    for (const shard of shards) {
+      try {
+        const s = lstatSync(shard.path, { bigint: true });
+        stamps.set(shard.path, {
+          ino: s.ino,
+          dev: s.dev,
+          size: Number(s.size),
+          mtimeNs: s.mtimeNs,
+          ctimeNs: s.ctimeNs,
+        });
+      } catch {
+        // removed between the listing and the stat: absent, so a held read
+        // that saw it no longer holds
+      }
+    }
+  }
+  return stamps;
 }

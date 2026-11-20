@@ -33,6 +33,8 @@
 import { closeSync, fstatSync, fsyncSync, openSync, readSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { noteOwnAppend } from "./own-appends.ts";
+
 import { observedClockFloor } from "./clock-floor.ts";
 import { tickClockMany, type WallClock } from "./clock-store.ts";
 import type { Hlc } from "./hlc.ts";
@@ -143,7 +145,8 @@ function appendLine(partitionRoot: string, path: string, bytes: Buffer): void {
   const fd = openShardForAppend(path);
   let created = false;
   try {
-    const size = fstatSync(fd).size;
+    const pre = fstatSync(fd, { bigint: true });
+    const size = Number(pre.size);
     created = size === 0;
     let payload = bytes;
     if (size > 0) {
@@ -156,6 +159,12 @@ function appendLine(partitionRoot: string, path: string, bytes: Buffer): void {
       written += writeSync(fd, payload, written, payload.length - written);
     }
     fsyncSync(fd);
+    const post = fstatSync(fd, { bigint: true });
+    noteOwnAppend(
+      path,
+      { size, mtimeNs: pre.mtimeNs, ctimeNs: pre.ctimeNs },
+      { size: Number(post.size), mtimeNs: post.mtimeNs, ctimeNs: post.ctimeNs },
+    );
   } finally {
     closeSync(fd);
   }

@@ -30,12 +30,17 @@ import { readDeviceId } from "../../config.ts";
 import { closeDatabase } from "../../sqlite-close.ts";
 import { observeClock } from "../../store/clock-store.ts";
 import { compareHlc, parseHlc } from "../../store/hlc.ts";
-import { readBlobBody, readShard } from "../../store/reader.ts";
+import { readBlobBody, scanShard, type ShardScan } from "../../store/reader.ts";
 import { blobPath, partitionDir } from "../../store/store-paths.ts";
 import { SIGNAL_KIND, type StorePartition } from "../../store/constants.ts";
 import { SIGNAL_STATE_KIND } from "../../store/fold-signals.ts";
 import { LANE_ENTRY_KIND } from "../../store/lane-records.ts";
-import { TOMBSTONE_KINDS, voidedRecordIds } from "../../store/removal-backlog.ts";
+import {
+  isVoidingFoldInput,
+  TOMBSTONE_KINDS,
+  voidedRecordIds,
+} from "../../store/removal-backlog.ts";
+import type { StoreRecord } from "../../store/envelope.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../schema.ts";
 import { Store } from "../store.ts";
 import {
@@ -219,8 +224,8 @@ interface SyncTotals {
   /** Tombstones (`signal-removed`, `preference-remove`, `lane-entry-remove`) ingested this pass. */
   tombstones: number;
   added: number;
-  /** Records added this pass of a kind a tombstone can void (a signal, a preference, a lane entry). */
-  voidableAdded: number;
+  /** Records read this pass (added, refreshed or already indexed) of a kind a tombstone can void (a signal, a preference, a lane entry). */
+  voidableRead: number;
   removed: number;
   completed: number;
   /** Largest clock ingested from another device. */
@@ -257,34 +262,47 @@ function readOneShard(
     shard.size >= mark.offset &&
     prefixHash(shard.path, mark.offset) === mark.prefixHash;
   const from = resume ? mark.offset : 0;
-  const read = readShard(shard.path, {
-    offset: from,
-    partitionRoot: partitionDir(store.root, shard.partition),
-  });
-  totals.shardsRead++;
   const seen = new Set<string>();
-  for (const r of read.records) {
-    // A shard read from its start can hold every record the store has; the
-    // writer lock this pass runs under beats as it goes.
-    writerLeaseCheckIn();
-    const outcome = ingestRecord(index, config, r.record, shard, r.bodyState === "pending");
-    // A copy refused for sitting in the other partition does not hold the
-    // record: it must not keep an orphaned row alive.
-    if (outcome === "refused") continue;
-    if (TOMBSTONE_KINDS.has(r.record.kind)) totals.tombstones++;
-    seen.add(r.record.id);
-    orphans.delete(r.record.id);
-    if (outcome === "added") {
-      totals.added++;
-      if (isVoidableKind(r.record.kind)) totals.voidableAdded++;
-    }
-    if (r.record.device !== device) {
-      const hlc = parseHlc(r.record.hlc);
-      const best = totals.remoteHlc === null ? null : parseHlc(totals.remoteHlc);
-      if (hlc !== null && (best === null || compareHlc(hlc, best) > 0))
-        totals.remoteHlc = r.record.hlc;
-    }
+  // Read record by record (a shard read from its start can hold every
+  // record the store has, and none is kept past its ingest), and ingested
+  // in batches of one transaction each: a commit per record synced the
+  // index once per record, minutes for a migrated store.
+  const batch = new IngestBatch(db);
+  let read: ShardScan;
+  try {
+    read = scanShard(
+      shard.path,
+      { offset: from, partitionRoot: partitionDir(store.root, shard.partition) },
+      (r) => {
+        // The writer lock this pass runs under beats as it goes.
+        writerLeaseCheckIn();
+        batch.tick();
+        const outcome = ingestRecord(index, config, r.record, shard, r.bodyState === "pending");
+        // A copy refused for sitting in the other partition does not hold
+        // the record: it must not keep an orphaned row alive.
+        if (outcome === "refused") return;
+        if (TOMBSTONE_KINDS.has(r.record.kind)) totals.tombstones++;
+        seen.add(r.record.id);
+        orphans.delete(r.record.id);
+        if (outcome === "added") totals.added++;
+        // Counted whatever the outcome: a record a read that failed later
+        // already committed reads as unchanged on the retry, and the
+        // tombstone cleanup it needs must still run then.
+        if (isVoidableKind(r.record.kind)) totals.voidableRead++;
+        if (r.record.device !== device) {
+          const hlc = parseHlc(r.record.hlc);
+          const best = totals.remoteHlc === null ? null : parseHlc(totals.remoteHlc);
+          if (hlc !== null && (best === null || compareHlc(hlc, best) > 0))
+            totals.remoteHlc = r.record.hlc;
+        }
+      },
+    );
+    batch.end();
+  } catch (e) {
+    batch.abandon();
+    throw e;
   }
+  totals.shardsRead++;
   if (!resume && mark !== undefined) {
     for (const id of recordIdsOfShard(db, shard.key)) if (!seen.has(id)) orphans.set(id, shard.key);
   }
@@ -315,6 +333,51 @@ function readOneShard(
   return { watermark, fromStart: !resume };
 }
 
+/** Records ingested per transaction of a catch-up. */
+const INGEST_BATCH_RECORDS = 500;
+
+/**
+ * The transactions a shard's ingest runs in: one per
+ * {@link INGEST_BATCH_RECORDS} records. A batch that fails is rolled back
+ * whole; its shard's watermark has not moved, so the next pass reads those
+ * records again (ingest is idempotent by record id). Inside a transaction
+ * the caller holds already, it opens none.
+ */
+class IngestBatch {
+  private open = false;
+  private count = 0;
+  private readonly owned: boolean;
+
+  constructor(private readonly db: Database) {
+    this.owned = !db.inTransaction;
+  }
+
+  /** Before each record: open the batch, or commit a full one and open the next. */
+  tick(): void {
+    if (!this.owned) return;
+    if (this.open && this.count >= INGEST_BATCH_RECORDS) {
+      this.db.exec("COMMIT");
+      this.open = false;
+    }
+    if (!this.open) {
+      this.db.exec("BEGIN");
+      this.open = true;
+      this.count = 0;
+    }
+    this.count += 1;
+  }
+
+  end(): void {
+    if (this.open) this.db.exec("COMMIT");
+    this.open = false;
+  }
+
+  abandon(): void {
+    if (this.open && this.db.inTransaction) this.db.exec("ROLLBACK");
+    this.open = false;
+  }
+}
+
 /** Every preference record kind starts with it (`preference-set`, `preference-evidence`, ...). */
 const PREFERENCE_KIND_PREFIX = "preference-";
 
@@ -339,13 +402,15 @@ function dropVoidedRecords(
   store: IndexedStore,
   shards: ReadonlyArray<ShardStat>,
 ): number {
-  const records = shards
-    .filter((shard) => shard.stream === "events")
-    .flatMap((shard) =>
-      readShard(shard.path, {
-        partitionRoot: partitionDir(store.root, shard.partition),
-      }).records.map((r) => r.record),
-    );
+  // Record by record, keeping only what the voiding folds read: the
+  // `events` stream also holds every other kind of the store's history.
+  const records: StoreRecord[] = [];
+  for (const shard of shards) {
+    if (shard.stream !== "events") continue;
+    scanShard(shard.path, { partitionRoot: partitionDir(store.root, shard.partition) }, (r) => {
+      if (isVoidingFoldInput(r.record)) records.push(r.record);
+    });
+  }
   const db = index.brainRecordsConnection();
   let removed = 0;
   for (const id of voidedRecordIds(records)) {
@@ -388,7 +453,7 @@ function syncShardsInPass(
     shardsRead: 0,
     tombstones: 0,
     added: 0,
-    voidableAdded: 0,
+    voidableRead: 0,
     removed: 0,
     completed: 0,
     remoteHlc: null,
@@ -430,7 +495,7 @@ function syncShardsInPass(
     // shard already read), every record the tombstones voided is taken out.
     if (
       totals.tombstones > 0 ||
-      ((eventsReadInFull.size > 0 || totals.voidableAdded > 0) &&
+      ((eventsReadInFull.size > 0 || totals.voidableRead > 0) &&
         [...TOMBSTONE_KINDS].some((kind) => holdsRecordKind(db, kind)))
     ) {
       totals.removed += dropVoidedRecords(index, store, shards);

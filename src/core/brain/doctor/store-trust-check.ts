@@ -30,7 +30,7 @@ import {
   STORE_STREAMS,
   type StorePartition,
 } from "../../store/constants.ts";
-import type { PartitionShard } from "../../store/state-digest.ts";
+import type { PartitionView } from "../../store/partition-view.ts";
 import type { StoreInspection } from "../../store/store-open.ts";
 import { partitionDir } from "../../store/store-paths.ts";
 import type { DoctorIssue } from "../types.ts";
@@ -57,15 +57,12 @@ function sampled(items: ReadonlyArray<string>): string {
 /** Record ids present in more than one partition this machine read. */
 export function crossPartitionIdIssues(
   store: StoreInspection,
-  shards: ReadonlyMap<StorePartition, ReadonlyArray<PartitionShard>>,
+  shards: ReadonlyMap<StorePartition, Pick<PartitionView, "ids">>,
 ): DoctorIssue[] {
   const seen = new Map<string, StorePartition>();
   const twice: string[] = [];
   for (const partition of STORE_PARTITIONS) {
-    const own = new Set<string>();
-    for (const shard of shards.get(partition) ?? []) {
-      for (const record of shard.all) own.add(record.id);
-    }
+    const own = shards.get(partition)?.ids ?? new Set<string>();
     for (const id of own) {
       const first = seen.get(id);
       if (first === undefined) seen.set(id, partition);
