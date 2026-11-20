@@ -6,6 +6,7 @@
  * extracted structure or reads existing edges, and never calls an LLM.
  */
 
+import { contextRecordOrigin } from "./shared.ts";
 import {
   appendSessionSummary,
   getSessionSummaryReport,
@@ -268,6 +269,7 @@ async function toolBrainSessionCheckpoint(
       ...(sourceTurnIds !== undefined ? { sourceTurnIds } : {}),
       ...(host !== undefined ? { host } : {}),
       ...(diary !== undefined ? { diary } : {}),
+      origin: contextRecordOrigin(ctx, sessionIdRaw.trim()),
     });
     return serializeCheckpoint(result);
   } catch (error) {

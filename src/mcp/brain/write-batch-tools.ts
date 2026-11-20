@@ -15,6 +15,7 @@
  * brain_append_note tools.
  */
 
+import { contextRecordOrigin } from "./shared.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
@@ -259,6 +260,7 @@ async function toolBrainWriteBatch(
   // update and append ops.
   const baseOpts = {
     readable: readableAtContextReach(ctx),
+    origin: contextRecordOrigin(ctx),
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
   };

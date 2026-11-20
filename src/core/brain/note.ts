@@ -6,6 +6,7 @@
  * idiom (MCP `INVALID_PARAMS` envelope, CLI exit code).
  */
 
+import { originFields, type RecordOrigin } from "./record-origin.ts";
 import { resolve } from "node:path";
 
 import { normalizeAgentArgument } from "../agent-identity.ts";
@@ -48,6 +49,12 @@ export interface AppendBrainNoteInput {
    * the event's store record inherits. See `AppendLogEventOptions.storePrivate`.
    */
   readonly storePrivate?: PrivacyVerdict;
+  /**
+   * The project and session the note was written in (`record-origin.ts`),
+   * resolved by the caller from launch or host facts, never from a tool
+   * argument. Stamped into the event body so topic planning can group it.
+   */
+  readonly origin?: RecordOrigin;
 }
 
 export interface AppendBrainNoteResult {
@@ -92,6 +99,7 @@ const NOTE_INPUT_OPAQUE: ReadonlySet<string> = opaqueFields(
   "now",
   "configPath",
   "storePrivate",
+  "origin",
 );
 
 /**
@@ -151,7 +159,7 @@ function appendJudgedNote(
   const entry = {
     timestamp,
     eventType: BRAIN_LOG_EVENT_KIND.note,
-    body: { text: sanitised, agent },
+    body: { text: sanitised, agent, ...originFields(input.origin) },
   } as const;
   // The routing (store-only or not) and the store root follow the same
   // machine config the agent name came from.

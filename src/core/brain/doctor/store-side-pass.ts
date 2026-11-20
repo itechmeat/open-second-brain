@@ -22,6 +22,7 @@ import { legacyLocalFilesCheck } from "./migration-check.ts";
 import type { RunDoctorOptions, RunDoctorResult } from "./report.ts";
 import { storeCheck } from "./store-check.ts";
 import { viewWriterCheck } from "./view-writer-check.ts";
+import { topicPlanCheck } from "./topic-plan-check.ts";
 
 /** The store-side checks, in the order the vault pass runs them. */
 export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.freeze([
@@ -31,6 +32,7 @@ export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.fre
   adoptConflictsCheck,
   laneIdMisfiledCheck,
   legacyLocalFilesCheck,
+  topicPlanCheck,
 ]);
 
 /**

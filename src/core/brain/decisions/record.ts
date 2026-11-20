@@ -22,6 +22,7 @@
  * similarity / vault helpers, never the reverse.
  */
 
+import { originFields, type RecordOrigin } from "../record-origin.ts";
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
@@ -149,6 +150,11 @@ export interface RecordDecisionInput {
   readonly agent: string;
   readonly now?: Date;
   readonly configPath?: string;
+  /**
+   * The project and session the decision was made in (`record-origin.ts`),
+   * stamped into its log event so topic planning can group it.
+   */
+  readonly origin?: RecordOrigin;
 }
 
 export interface RecordDecisionResult {
@@ -453,6 +459,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
       review_date: reviewDate,
       obligation: review.created ? review.slug : `${review.slug} (existing)`,
       agent,
+      ...originFields(input.origin),
     },
   });
 

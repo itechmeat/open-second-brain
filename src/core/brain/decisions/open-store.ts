@@ -36,6 +36,7 @@
  * brief and the transitions down with it.
  */
 
+import { originFields, type RecordOrigin } from "../record-origin.ts";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -248,6 +249,11 @@ export interface ResolveOpenDecisionInput {
   readonly rationale?: string;
   readonly now?: Date;
   readonly configPath?: string;
+  /**
+   * The project and session the decision was made in (`record-origin.ts`),
+   * stamped into its log event so topic planning can group it.
+   */
+  readonly origin?: RecordOrigin;
 }
 
 export interface DiscardOpenDecisionInput {
@@ -897,6 +903,7 @@ export function resolveOpenDecision(
         agent: actor,
         now,
         ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+        ...(input.origin !== undefined ? { origin: input.origin } : {}),
       });
       decisionId = minted.record.id;
     }
@@ -922,6 +929,7 @@ export function resolveOpenDecision(
             decision: `[[${decisionId}]]`,
             choice,
             agent: actor,
+            ...originFields(input.origin),
           },
         },
         { failOpen: true },

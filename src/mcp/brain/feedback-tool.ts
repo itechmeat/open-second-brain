@@ -6,6 +6,7 @@
  * registry, which preserves the public FEEDBACK_TOOLS surface.
  */
 
+import { contextRecordOrigin } from "./shared.ts";
 import { resolve } from "node:path";
 import { loadPermissionsDocumentFor } from "../../core/brain/permissions/document-source.ts";
 import { resolveAgentName } from "../../core/config.ts";
@@ -316,6 +317,7 @@ export async function toolBrainFeedback(
     ...(eventTime ? { valid_from: signalCreatedAt, recorded_at: signalCreatedAt } : {}),
     ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     ...(expires !== undefined ? { expiration_date: expires } : {}),
+    origin: contextRecordOrigin(ctx),
   };
   let sigResult;
   try {

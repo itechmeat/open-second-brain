@@ -4,6 +4,7 @@
  * view dispatcher used by brain_brief / brain_analytics.
  */
 
+import { recordOriginOf, type RecordOrigin } from "../../core/brain/record-origin.ts";
 import { isAbsolute, relative, resolve } from "node:path";
 import { toPosix } from "../../core/path-safety.ts";
 import { resolveTimezone } from "../../core/config.ts";
@@ -11,7 +12,8 @@ import { RECALL_CHANNEL, type RecallTelemetryOptions } from "../../core/brain/re
 import { isoSecond } from "../../core/brain/time.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext } from "../tool-contract.ts";
+import { contextReach, contextVault, type ServerContext } from "../tool-contract.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { coerceBool } from "../coerce.ts";
 import {
   CountGuardError,
@@ -349,3 +351,22 @@ export function vaultRelativeSafe(vault: string, target: string): string {
 }
 
 // ----- Tool registration ---------------------------------------------------
+
+/**
+ * The project (and, when the caller names its session, the session) a
+ * candidate record this server writes carries (`record-origin.ts`): the
+ * project of the directory the server was launched in, against the vault
+ * it serves. A server started outside a linked project, or with no vault,
+ * writes no project. No tool argument names it.
+ *
+ * A caller below local reach (a remote transport: an HTTP bind that is not
+ * loopback) gets no project: the server's directory is where the server
+ * was started, not where that caller works, so stamping it would file
+ * another machine's work into this machine's project. A loopback caller
+ * is local, as every other reach decision reads it (`httpBindReach`).
+ */
+export function contextRecordOrigin(ctx: ServerContext, session?: string | null): RecordOrigin {
+  const workspaceDir =
+    contextReach(ctx) === TRANSPORT_REACH.local ? (ctx.ruleScope?.workspaceDir ?? null) : null;
+  return recordOriginOf(workspaceDir, contextVault(ctx), session);
+}

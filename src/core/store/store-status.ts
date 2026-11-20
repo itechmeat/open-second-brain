@@ -18,6 +18,12 @@ import { ConfigReadError, readDeviceId } from "../config.ts";
 import { readStoreIndexSummary } from "../search/brain-store/index-summary.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { isDualWriteEnabled } from "./dual-write.ts";
+import {
+  readTopicPlanOutcome,
+  topicPlanOutcomeAtReach,
+  unscopedTopicsAdvice,
+} from "../topics/plan-outcome.ts";
+import { privateWithheld } from "./caller-reach.ts";
 import { migrationAvailability } from "./migration-availability.ts";
 import { autoMigrationReport, autoMigrationReportJson } from "../store-migration/auto-report.ts";
 import { cohortStatusHere } from "../store-migration/cohort-here.ts";
@@ -89,6 +95,28 @@ function migrationBlock(source: StoreStatusSource): Record<string, unknown> {
   };
 }
 
+/**
+ * What this machine's last topic planning pass found (`topics/plan-outcome.ts`),
+ * with the advice when it made no topic because the records no topic holds
+ * name no project; `null` before the first pass on this machine. A caller
+ * below local reach (`privateWithheld`, `caller-reach.ts`) reads the
+ * counts a machine that holds only `shared` would compute.
+ */
+function topicsBlock(source: StoreStatusSource): Record<string, unknown> | null {
+  const outcome = topicPlanOutcomeAtReach(
+    readTopicPlanOutcome(source.configPath ?? undefined),
+    privateWithheld(),
+  );
+  if (outcome === null) return null;
+  return {
+    last_plan_at: outcome.at,
+    created: outcome.created,
+    unassigned: outcome.unassigned,
+    without_project: outcome.withoutProject,
+    advice: unscopedTopicsAdvice(outcome),
+  };
+}
+
 function deviceId(configPath: string | null): string | null | { error: string } {
   try {
     return readDeviceId(configPath);
@@ -120,6 +148,7 @@ export function buildStoreStatusBlock(source: StoreStatusSource): Record<string,
     dual_write_enabled: isDualWriteEnabled(source.configPath ?? undefined),
     index: indexBlock(source),
     migration: migrationBlock(source),
+    topics: topicsBlock(source),
     error: location.error,
   };
 }

@@ -26,10 +26,11 @@ export const HEAD_GOAL_MAX_CHARS = 160;
 
 /**
  * Whether a topic scope names this session's project (section 3.7 item
- * 2): the topic's scope key was slug-normalised when the record was
- * written (`scopeFromFrontmatter`), the session's project is the
- * scoped-rule key of the workspace directory. Both sides go through one
- * normalisation here, so the two rules cannot drift apart.
+ * 2): the topic's scope is keyed by the fold (`canonicalTopicScope`), and
+ * a planned topic's by the project its records were stamped with; the
+ * session's project is the scoped-rule key of the workspace directory.
+ * All of them are `scopedRuleKey`, and both sides go through it once
+ * more here, so the rules cannot drift apart.
  */
 export function topicScopeMatchesProject(scope: string, project: string): boolean {
   if (!scope.startsWith(TOPIC_PROJECT_SCOPE_PREFIX)) return false;

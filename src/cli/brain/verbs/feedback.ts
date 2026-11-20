@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { recordOriginOf } from "../../../core/brain/record-origin.ts";
 import { relative } from "node:path";
 
 import { canonicalNotePath } from "../../../core/path-safety.ts";
@@ -118,6 +119,8 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     ...(flags["source"] ? { source: flags["source"] as string[] } : {}),
     ...(raw !== undefined ? { raw } : {}),
     ...(expires !== undefined ? { expiration_date: expires } : {}),
+    // The project of the directory the command runs in (`record-origin.ts`).
+    origin: recordOriginOf(process.cwd(), vault),
   };
   let sigResult;
   try {

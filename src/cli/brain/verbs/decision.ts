@@ -25,6 +25,7 @@
  * decision module so the on-disk shape cannot drift.
  */
 
+import { recordOriginOf } from "../../../core/brain/record-origin.ts";
 import { defaultConfigPath } from "../../../core/config.ts";
 import {
   backfillOutcome,
@@ -135,6 +136,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           ...(commitment ? { commitment: commitment as BrainCommitmentTier } : {}),
           agent: explicitAgent ?? "",
           configPath: config,
+          origin: recordOriginOf(process.cwd(), vault),
         });
         if (wantsJson) {
           okJson({
@@ -499,6 +501,7 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           ...(rationale ? { rationale } : {}),
           ...(explicitAgent ? { actor: explicitAgent } : {}),
           configPath: config,
+          origin: recordOriginOf(process.cwd(), vault),
         });
         if (wantsJson) {
           okJson({ id, decision: res.decision });
