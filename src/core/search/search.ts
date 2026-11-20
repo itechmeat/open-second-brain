@@ -56,6 +56,7 @@ import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
 import type { SemanticEmbedTiming } from "./semantic-phase.ts";
 import { closeServedStore, indexBuildServed, openReadOrSelfHeal } from "./pipeline/store-open.ts";
+import { precomputedAnswerAdmitted } from "./brain-store/entity-filter.ts";
 import { describeIndexBuild } from "./build-progress.ts";
 import { catchUpBrainStore, type CatchUpResult } from "./brain-store/catch-up.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
@@ -570,9 +571,21 @@ export async function search(
       // above already arbitrates replays.
       const cachedMarker = cache.hit.iterative;
       const cachedToken = cachedMarker?.phase === "needs-llm-step" ? cachedMarker.token : undefined;
+      // The row was cached before the store may have forgotten, marked or
+      // staged one of its records, and the store changes no index
+      // revision until a catch-up ingests it: a hit is served only while
+      // the store entity rule still admits every row, else it is
+      // recomputed (`brain-store/entity-filter.ts`). Every shape the row can
+      // hold is read: the walk covers every field, and a plan's pool ids.
+      const stillAdmitted = precomputedAnswerAdmitted(
+        cache.hit,
+        store,
+        cachedMarker?.phase === "needs-llm-step" ? cachedMarker.poolIds : [],
+      );
       if (
-        cachedToken === undefined ||
-        !iterativeTokenSpent(store, effectiveConfig, cachedToken, nowMs)
+        stillAdmitted &&
+        (cachedToken === undefined ||
+          !iterativeTokenSpent(store, effectiveConfig, cachedToken, nowMs))
       ) {
         return served(cache.hit);
       }

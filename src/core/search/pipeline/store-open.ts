@@ -8,6 +8,8 @@ import { existsSync } from "node:fs";
 import {
   enterStagingRead,
   IndexBuildingError,
+  IndexBuildStartFailedError,
+  IndexBuildStartingError,
   readIndexBuild,
   stagingIndexPath,
   stagingReadable,
@@ -78,6 +80,139 @@ async function awaitPrepared(dbPath: string): Promise<IndexBuildProgress | null>
   return build;
 }
 
+/**
+ * Longest a search that started the first build itself waits for it to
+ * answer: the child's start and its preparation, and, on a small vault,
+ * the whole build.
+ */
+const STARTED_BUILD_WAIT_MS = 10_000;
+
+/**
+ * How long such a search waits for the finished index before it answers
+ * from the staging file: a small vault is built well within it, so its
+ * first search answers from the whole index, as when the search built it.
+ */
+const STARTED_BUILD_GRACE_MS = 3_000;
+
+/**
+ * Whether a missing index of `config` is built by a detached background
+ * rebuild rather than by the search that found it missing, and the vault
+ * and machine config that rebuild is started for. That is a store-aware
+ * index (the first build after the switch to the brain store reads the
+ * whole store, minutes on a large one) that the child the session start
+ * spawns would build itself: `o2b search reindex --vault <vault> --config
+ * <config>` resolves the very same index path. A config the child would
+ * not resolve the same way (a caller's own overrides) keeps the build in
+ * the search, as before.
+ */
+async function backgroundBuildTarget(
+  config: ResolvedSearchConfig,
+): Promise<{ readonly vault: string; readonly configPath: string } | null> {
+  if (config.vault === null || config.brainStore === null || config.brainStore === undefined) {
+    return null;
+  }
+  const { defaultConfigPath } = await import("../../config.ts");
+  const { resolveSearchConfig } = await import("../index.ts");
+  const configPath = config.configPath ?? defaultConfigPath();
+  try {
+    const child = resolveSearchConfig({ vault: config.vault, configPath });
+    return indexShape(child) === indexShape(config) ? { vault: config.vault, configPath } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Everything of `config` that decides what a build writes into the index:
+ * where it lives, which vault and store it reads, which notes it walks
+ * and how it cuts and tokenises them. Two configs with the same shape
+ * build the same index; a caller whose own overrides change any of it
+ * builds in the search instead of handing the build to a child that
+ * reads the config file.
+ */
+function indexShape(config: ResolvedSearchConfig): string {
+  return JSON.stringify([
+    config.dbPath,
+    config.vault,
+    config.brainStore?.root ?? null,
+    config.brainStore?.partitions ?? null,
+    config.scopeRules,
+    config.chunkSize,
+    config.chunkOverlap,
+    config.chunkMinSize,
+    config.ftsTokenize,
+  ]);
+}
+
+/**
+ * Start the background rebuild a session start would start for a missing
+ * index (`ensure-current.ts`, the same writer-lock probe and the same
+ * `self_heal_reindex` rows), then wait for it: until the index is swapped
+ * in (a small vault), or until the build answers from its staging file
+ * and {@link STARTED_BUILD_GRACE_MS} passed, at most
+ * {@link STARTED_BUILD_WAIT_MS}. Returns whether the index exists now.
+ * Null when the search should build the index itself (no target).
+ */
+async function startBackgroundBuild(config: ResolvedSearchConfig): Promise<boolean | null> {
+  // Eligibility first: a search whose own settings would not build the
+  // child's index never joins a start, it builds in the search.
+  const target = await backgroundBuildTarget(config);
+  if (target === null) return null;
+  // Concurrent searches of one process (an MCP server) share one start,
+  // only when they would build the same index.
+  const key = indexShape(config);
+  const inFlight = startingBuilds.get(key);
+  if (inFlight !== undefined) return await inFlight;
+  const start = startAndAwaitBuild(config, target);
+  startingBuilds.set(key, start);
+  try {
+    return await start;
+  } finally {
+    startingBuilds.delete(key);
+  }
+}
+
+/** The background build starts this process is waiting on, by index shape ({@link indexShape}). */
+const startingBuilds = new Map<string, Promise<boolean>>();
+
+async function startAndAwaitBuild(
+  config: ResolvedSearchConfig,
+  target: { readonly vault: string; readonly configPath: string },
+): Promise<boolean> {
+  const { startSelfHealReindex } = await import("../../maintenance/ensure-current.ts");
+  const errors: string[] = [];
+  try {
+    startSelfHealReindex(target.vault, target.configPath, config.dbPath, errors);
+  } catch (e) {
+    // The spawn itself failed (its metrics row is fail-soft and never
+    // throws, so a started child is never started twice): no build runs,
+    // and saying one does would send every search into the same wait.
+    throw new IndexBuildStartFailedError(config.dbPath, e instanceof Error ? e.message : String(e));
+  }
+  const startedMs = Date.now();
+  const deadline = startedMs + STARTED_BUILD_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (existsSync(config.dbPath)) return true;
+    const build = readIndexBuild(config.dbPath);
+    if (build?.phase === "finishing") {
+      // Within what is left of this wait, never the full swap budget.
+      // eslint-disable-next-line no-await-in-loop
+      await awaitSwap(config.dbPath, deadline - Date.now());
+      return existsSync(config.dbPath);
+    }
+    if (
+      build !== null &&
+      stagingReadable(build.phase) &&
+      Date.now() - startedMs >= STARTED_BUILD_GRACE_MS
+    ) {
+      return false;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await Bun.sleep(FINISHING_POLL_MS);
+  }
+  return existsSync(config.dbPath);
+}
+
 /** Longest a read waits for a finishing rebuild to swap its index in. */
 const FINISHING_WAIT_MS = 20_000;
 
@@ -88,8 +223,8 @@ const FINISHING_POLL_MS = 50;
  * Wait for a rebuild that is swapping its index in: the index appears, or
  * the build ends without one, or {@link FINISHING_WAIT_MS} passes.
  */
-async function awaitSwap(dbPath: string): Promise<void> {
-  const deadline = Date.now() + FINISHING_WAIT_MS;
+async function awaitSwap(dbPath: string, budgetMs: number = FINISHING_WAIT_MS): Promise<void> {
+  const deadline = Date.now() + Math.max(0, Math.min(budgetMs, FINISHING_WAIT_MS));
   while (Date.now() < deadline && !existsSync(dbPath)) {
     if (readIndexBuild(dbPath)?.phase !== "finishing") return;
     // eslint-disable-next-line no-await-in-loop
@@ -181,10 +316,32 @@ export async function openReadOrSelfHeal(
   if (openFailure.code === "INDEX_MISSING") {
     // A staging file is never read before the rebuild accepted or
     // recreated it: a search waits out the preparation first.
-    const build =
+    let build =
       opts.serveBuilding === true
         ? await awaitPrepared(config.dbPath)
         : readIndexBuild(config.dbPath);
+    // No build runs yet (the first search after the switch, before any
+    // session start began one): a search starts the background build a
+    // session start would start, instead of building the whole store in
+    // its own process, and answers from what it has indexed so far.
+    let backgrounded = false;
+    if (build === null && opts.serveBuilding === true) {
+      const built = await startBackgroundBuild(config);
+      backgrounded = built !== null;
+      if (built === true) {
+        // What the store gained since the build read it (this start's own
+        // spawn row, a sync) is caught up before the read opens: a write
+        // open beside an open read cannot fold its log on close.
+        const { catchUpBrainStore } = await import("../brain-store/catch-up.ts");
+        await catchUpBrainStore(config, { force: true });
+        return await Store.open(config, { mode: "read" });
+      }
+      if (built === false) {
+        build = await awaitPrepared(config.dbPath);
+        // Nothing to answer from yet: say so instead of building here.
+        if (build === null) throw new IndexBuildStartingError(config.dbPath);
+      }
+    }
     if (build !== null) {
       if (opts.serveBuilding === true && stagingReadable(build.phase)) {
         const staging = await openStagingIndex(config, build);
@@ -204,6 +361,11 @@ export async function openReadOrSelfHeal(
       if (now !== null) throw new IndexBuildingError(config.dbPath, now);
       // The build ended without an index: the self-heal below decides.
     }
+    // A build this search started in the background is never replaced by
+    // one in the search, also when it ended without an index: the next
+    // start or search starts it again.
+    if (backgrounded && !existsSync(config.dbPath))
+      throw new IndexBuildStartingError(config.dbPath);
   }
 
   // Imported lazily so the hot path never pulls in the indexer and there

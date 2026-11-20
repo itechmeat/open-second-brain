@@ -22,7 +22,10 @@ export function replaceEntities(
   atomically(db, () => {
     db.run("DELETE FROM chunk_entities WHERE chunk_id = ?", [chunkId]);
     if (entities.length > 0) {
-      const insert = db.prepare<undefined, [number, string]>(
+      // `query` caches the statement on the connection: a statement
+      // prepared per chunk is finalized only when the collector runs, so
+      // a build of a large store held hundreds of MB of them.
+      const insert = db.query<undefined, [number, string]>(
         "INSERT OR IGNORE INTO chunk_entities(chunk_id, entity) VALUES (?, ?)",
       );
       for (const e of entities) insert.run(chunkId, e);

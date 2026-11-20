@@ -28,6 +28,7 @@ import {
 } from "../result-filters.ts";
 import type { Store } from "../store.ts";
 import { documentSourceFor, type DocumentSource } from "../brain-store/constants.ts";
+import { applyStoreEntityFilter } from "../brain-store/entity-filter.ts";
 import { documentSources } from "../store/brain-records.ts";
 import type { DegreePredicate } from "../property-filter.ts";
 import type { BrainSearchResult, SearchOptions } from "../types.ts";
@@ -193,7 +194,16 @@ export function applyPoolFilters(
   // Source (design D5) first: it reads only the index, and a row it drops
   // costs no frontmatter read in the stages after it.
   const sourced = filters.source !== null ? applySourceFilter(ranked, filters.source, ctx) : ranked;
-  const statusFiltered = applyStatusFilter(sourced, ctx.vault, ctx.frontmatterCache);
+  // A store record is no page with frontmatter: whether the index may
+  // show it is the ingest's own rule over the store as it is now, asked
+  // here, fail-closed (`brain-store/entity-filter.ts`).
+  const pageStatusFiltered = applyStatusFilter(sourced, ctx.vault, ctx.frontmatterCache);
+  const statusFiltered = applyStoreEntityFilter(pageStatusFiltered, ctx.store);
+  // Store records the rule withheld (stale rows of an index that has not
+  // caught up yet) are counted for the backfill below, never for the
+  // trail: like the reserved-token rule, the count would tell the caller
+  // the index holds records it may not see.
+  const entityWithheld = pageStatusFiltered.length - statusFiltered.length;
   const propFiltered =
     filters.properties !== null
       ? applyPropertyFilter(statusFiltered, filters.properties, ctx.vault, ctx.frontmatterCache)
@@ -273,7 +283,7 @@ export function applyPoolFilters(
   // rank cap still widens the window rather than emptying it.
   return {
     preVisibility: reachable.length,
-    prePoolFilters: degreeFiltered.length,
+    prePoolFilters: degreeFiltered.length + entityWithheld,
     visible: compositeScoped,
   };
 }

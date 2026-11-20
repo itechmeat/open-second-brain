@@ -7,6 +7,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { Database } from "bun:sqlite";
+
 import { STORE_CATCH_UP_INTERVAL_ENV } from "../../../src/core/search/brain-store/constants.ts";
 import {
   catchUpBrainStore,
@@ -124,6 +126,40 @@ test("a forgotten signal is never in the staging index, at any point of the buil
   }
   expect(calls).toBeGreaterThan(40);
   expect(keptSeen).toBe(true);
+});
+
+test("a rebuild indexes the brain store before the vault's notes", async () => {
+  const local = fx.open(LOCAL_DEVICE);
+  const { record } = appendRecord(
+    local,
+    {
+      partition: "shared",
+      stream: "events",
+      kind: "signal",
+      agent: "t",
+      body: signalBody("sig-first", "Early godwit rule"),
+    },
+    { now: () => T0 },
+  );
+  for (let i = 0; i < 3; i++) fx.writeNote(`notes/n${i}.md`, `# N${i}\n\nA note.\n`);
+  const config = fx.config();
+  const seen: boolean[] = [];
+  await reindexVault(config, {
+    onFile: () => {
+      // The staging file as a search reads it while the build runs.
+      const staging = new Database(`${config.dbPath}.new`, { readonly: true });
+      try {
+        seen.push(
+          staging
+            .query<{ n: number }, [string]>("SELECT count(*) AS n FROM documents WHERE path = ?")
+            .get(storeRecordPath("shared", record.id))!.n > 0,
+        );
+      } finally {
+        staging.close();
+      }
+    },
+  });
+  expect(seen).toEqual([true, true, true]);
 });
 
 test("a record id held in both partitions is indexed from the copy a catch-up indexes", async () => {

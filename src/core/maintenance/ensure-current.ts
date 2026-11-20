@@ -638,7 +638,7 @@ function spawnWorker(
  * function records on the spawn row, so the two rows pair without a pid;
  * see `self-heal-reindex.ts` for why the parent cannot record the outcome.
  */
-function startSelfHealReindex(
+export function startSelfHealReindex(
   vault: string,
   configPath: string,
   dbPath: string,

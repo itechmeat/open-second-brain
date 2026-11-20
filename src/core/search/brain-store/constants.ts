@@ -84,6 +84,23 @@ export function documentSourceFor(source: SearchSource): DocumentSource {
   return source === "notes" ? DOCUMENT_SOURCE.note : DOCUMENT_SOURCE.brain;
 }
 
+/**
+ * `index_state` key set once the index has read a record that sets or
+ * clears an entity's lifecycle status (`forgotten.ts`): from then on a
+ * catch-up that adds a record of an entity fold looks for marked entities
+ * again, as it does once the index holds a tombstone.
+ */
+export const STORE_LIFECYCLE_MARKS_KEY = "store_lifecycle_marks_seen";
+
+/**
+ * `index_state` key set before a catch-up completes the pending body of a
+ * fold record (a late tombstone, mark or approval) and cleared only once
+ * the forgetting fold that follows has run: a pass that throws in between
+ * leaves it set, and every later catch-up runs that fold before it may
+ * take its no-change early return.
+ */
+export const STORE_FOLD_CLEANUP_KEY = "store_fold_cleanup_owed";
+
 /** `index_state` key of the index generation the change probe's watermarks are bound to. */
 export const STORE_INDEX_GENERATION_KEY = "store_index_generation";
 

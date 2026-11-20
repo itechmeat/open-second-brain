@@ -219,13 +219,19 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
       // opposite until no-dead-ends (task 3) corrected it; what the
       // command buys is paying that build now rather than on the first
       // query.
+      // An index of the brain store is never built inside a recall: the
+      // first one starts the background build a session start starts
+      // (`pipeline/store-open.ts`).
       notices.push(
         notice(
           "search_index_missing",
           "info",
-          "Search index is not built yet: a recall while a background build runs answers " +
-            "from what it has indexed so far, and one with no build running builds it " +
-            "before returning (that call pays the full index build).",
+          config.brainStore !== null && config.brainStore !== undefined
+            ? "Search index is not built yet: the first recall starts a background build and " +
+                "answers from what it has indexed so far (a small vault is built within seconds)."
+            : "Search index is not built yet: a recall while a background build runs answers " +
+                "from what it has indexed so far, and one with no build running builds it " +
+                "before returning (that call pays the full index build).",
         ),
       );
     } else if (reindexInProgress(dbPath)) {

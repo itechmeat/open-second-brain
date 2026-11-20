@@ -6,6 +6,7 @@
  * primary ranking never returned.
  */
 
+import { storeRecordJudge } from "./brain-store/entity-filter.ts";
 import {
   buildCoverageReport,
   significantTerms,
@@ -114,6 +115,9 @@ export function buildEvidenceVerification(
   coverage: CoverageReport,
 ): EvidenceVerification {
   const unionRecords: EvidenceUnionRecord[] = [];
+  // Straight from the keyword lane, past every pool filter: a store record
+  // the store rule hides is never named here (`brain-store/entity-filter.ts`).
+  const shown = storeRecordJudge(store);
   for (const t of coverage.terms) {
     if (t.covered || t.df === 0) continue; // nothing in the corpus covers a df=0 term
     if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
@@ -126,7 +130,7 @@ export function buildEvidenceVerification(
     for (const hit of outcome.hits) {
       if (unionRecords.length >= UNION_RECORDS_TOTAL) break;
       const h = hydrated.get(hit.chunkId);
-      if (!h) continue;
+      if (!h || !shown(h.path)) continue;
       unionRecords.push(
         Object.freeze({
           term: t.term,

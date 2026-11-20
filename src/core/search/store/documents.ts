@@ -312,7 +312,8 @@ export function replaceDocumentAttributes(
   try {
     db.run(`DELETE FROM ${DOCUMENT_ATTRIBUTES_TABLE} WHERE document_id = ?`, [documentId]);
     if (attrs.length > 0) {
-      const insert = db.prepare<undefined, [number, string, string]>(
+      // Cached on the connection (`query`), not prepared per document.
+      const insert = db.query<undefined, [number, string, string]>(
         `INSERT OR IGNORE INTO ${DOCUMENT_ATTRIBUTES_TABLE}(document_id, key, value) VALUES (?, ?, ?)`,
       );
       for (const attr of attrs) insert.run(documentId, attr.key, attr.value);
