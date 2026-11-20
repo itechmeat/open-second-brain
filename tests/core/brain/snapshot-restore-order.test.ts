@@ -1351,10 +1351,13 @@ describe("the store family kept out of the tree swap is a closed list", () => {
       "index.sqlite.old",
       "index.sqlite.restore-4242-0a1b2c3d",
       "index.sqlite.restore-4242-0a1b2c3d-wal",
+      "index.sqlite.building.json",
+      "index.sqlite.building.reader-4242-0a1b2c3d",
     ];
     for (const name of family)
       expect(isStoreFamilyEntry(name, "index.sqlite", false, "linux")).toBe(true);
     expect(isStoreFamilyEntry("index.sqlite.lock", "index.sqlite", true, "linux")).toBe(true);
+    expect(isStoreFamilyEntry("index.sqlite.new.lock", "index.sqlite", true, "linux")).toBe(true);
 
     const content = [
       "index.sqlite-notes.md",
@@ -1365,6 +1368,7 @@ describe("the store family kept out of the tree swap is a closed list", () => {
       "index.sqlite.lock",
       "index.sqlite.takeover",
       "index.sqlite.1234.tmp",
+      "index.sqlite.building.json-wal",
     ];
     for (const name of content) {
       expect(isStoreFamilyEntry(name, "index.sqlite", false, "linux")).toBe(false);

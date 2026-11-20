@@ -87,6 +87,7 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
     }
     ok(`topic: ${report.topic} (checked: ${report.checked.join(", ")})`);
     ok(`notes: ${report.notes.length}`);
+    for (const w of report.warnings ?? []) ok(`warning: ${w}`);
     for (const a of report.agreements) ok(`[agreement] ${a.path} ${a.relation} ${a.target}`);
     for (const c of report.contradictions) ok(`[contradiction] ${c.path} contradicts ${c.target}`);
     for (const cont of report.contaminated) {

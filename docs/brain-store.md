@@ -748,7 +748,7 @@ copies" section says what the sync tool's leftovers in the legacy tree
 would become; they never stop the run. Nor do the files Open Second Brain itself keeps
 beside a legacy file: the search index's parked previous index (`.bak`,
 `.old`), its `.new` staging and a restore's staged index, each with its
-SQLite journals, go by the index's rule (rebuilt on this machine: never
+SQLite journals, and a running rebuild's progress file (`.building.json`) with the claims of the searches reading its staging file (`.building.reader-*`), go by the index's rule (rebuilt on this machine: never
 read, imported or archived), and a writer's temp file or lock goes with
 the file it belongs to. The search freshen claim (`freshen.claim`, which a
 start whose process died can leave behind) and its pending marker go with

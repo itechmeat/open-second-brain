@@ -217,6 +217,12 @@ export interface DeepSynthesisReport {
   readonly excludedFindings: ReadonlyArray<SynthesisExcludedFinding>;
   /** Count of {@link excludedFindings} (mirrors the array length). */
   readonly excludedFindingCount: number;
+  /**
+   * The search's warnings, present only when it had any: a dossier built
+   * while the search index is still being built reads a partial index,
+   * so its thin-evidence verdict may only reflect notes not indexed yet.
+   */
+  readonly warnings?: ReadonlyArray<string>;
 }
 
 export interface DeepSynthesisOptions {
@@ -651,6 +657,7 @@ export async function deepSynthesis(
     findings: Object.freeze(findings),
     excludedFindings: Object.freeze(excludedFindings),
     excludedFindingCount: excludedFindings.length,
+    ...(outcome.warnings.length > 0 ? { warnings: Object.freeze([...outcome.warnings]) } : {}),
   });
 }
 
@@ -692,6 +699,7 @@ export function synthesisFindingsJson(report: DeepSynthesisReport): {
     })),
     excluded_findings: report.excludedFindings,
     excluded_finding_count: report.excludedFindingCount,
+    ...(report.warnings !== undefined ? { warnings: report.warnings } : {}),
   };
 }
 

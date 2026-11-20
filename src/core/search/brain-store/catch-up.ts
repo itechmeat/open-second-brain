@@ -24,6 +24,8 @@
  * store into the staging file before the swap ({@link ingestStoreInto}).
  */
 
+import { posix } from "node:path";
+
 import { Database } from "bun:sqlite";
 
 import { readDeviceId } from "../../config.ts";
@@ -237,6 +239,13 @@ interface SyncTotals {
    * is read again instead of being taken as already looked at.
    */
   pendingBlobs: Map<string, FileStat | null>;
+  /** The pass's progress callback, called after each record read. */
+  readonly progress?: ShardProgress;
+  /**
+   * Record ids this pass must not index: a rebuild's ids its store's
+   * tombstones already voided ({@link ingestStoreInto}).
+   */
+  readonly skip?: ReadonlySet<string>;
 }
 
 /**
@@ -276,6 +285,10 @@ function readOneShard(
       (r) => {
         // The writer lock this pass runs under beats as it goes.
         writerLeaseCheckIn();
+        if (totals.skip?.has(r.record.id) === true) {
+          totals.progress?.(shard, r.offset + r.length, totals.added);
+          return;
+        }
         batch.tick();
         const outcome = ingestRecord(index, config, r.record, shard, r.bodyState === "pending");
         // A copy refused for sitting in the other partition does not hold
@@ -295,6 +308,7 @@ function readOneShard(
           if (hlc !== null && (best === null || compareHlc(hlc, best) > 0))
             totals.remoteHlc = r.record.hlc;
         }
+        totals.progress?.(shard, r.offset + r.length, totals.added);
       },
     );
     batch.end();
@@ -392,6 +406,25 @@ function isVoidableKind(kind: string): boolean {
 }
 
 /**
+ * The ids the tombstones of the `events` shards among `shards` void.
+ * Read record by record, keeping only what the voiding folds read: the
+ * `events` stream also holds every other kind of the store's history.
+ */
+function voidedInShards(
+  store: IndexedStore,
+  shards: ReadonlyArray<ShardStat>,
+): ReadonlySet<string> {
+  const records: StoreRecord[] = [];
+  for (const shard of shards) {
+    if (shard.stream !== "events") continue;
+    scanShard(shard.path, { partitionRoot: partitionDir(store.root, shard.partition) }, (r) => {
+      if (isVoidingFoldInput(r.record)) records.push(r.record);
+    });
+  }
+  return voidedRecordIds(records);
+}
+
+/**
  * Take out of `index` every record a tombstone voided (a forgotten
  * signal, a removed preference, a removed lane entry), over all `events`
  * shards. Returns how many rows
@@ -402,23 +435,30 @@ function dropVoidedRecords(
   store: IndexedStore,
   shards: ReadonlyArray<ShardStat>,
 ): number {
-  // Record by record, keeping only what the voiding folds read: the
-  // `events` stream also holds every other kind of the store's history.
-  const records: StoreRecord[] = [];
-  for (const shard of shards) {
-    if (shard.stream !== "events") continue;
-    scanShard(shard.path, { partitionRoot: partitionDir(store.root, shard.partition) }, (r) => {
-      if (isVoidingFoldInput(r.record)) records.push(r.record);
-    });
-  }
   const db = index.brainRecordsConnection();
   let removed = 0;
-  for (const id of voidedRecordIds(records)) {
+  for (const id of voidedInShards(store, shards)) {
     const row = getRecord(db, id);
     if (row === null) continue;
     removeRecord(index, row);
     removed++;
   }
+  return removed;
+}
+
+/**
+ * Take out of `index`, open for writing, every record its store's
+ * tombstones voided: for a staging index a rebuild resumes, which an
+ * earlier run built before records it holds may have been forgotten.
+ * Returns how many rows left the index; 0 without a store.
+ */
+export function dropForgottenRecords(index: Store, config: ResolvedSearchConfig): number {
+  const store = config.brainStore;
+  if (store === null || store === undefined) return 0;
+  const removed = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+    dropVoidedRecords(index, store, new ShardScanner(store).scan()),
+  );
+  if (removed > 0) index.bumpIndexRevision();
   return removed;
 }
 
@@ -434,17 +474,27 @@ function syncShards(
   config: ResolvedSearchConfig,
   store: IndexedStore,
   shards: ReadonlyArray<ShardStat>,
+  onShard?: ShardProgress,
+  skip?: ReadonlySet<string>,
 ): SyncTotals {
   return keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
-    syncShardsInPass(index, config, store, shards),
+    syncShardsInPass(index, config, store, shards, onShard, skip),
   );
 }
+
+/**
+ * Progress of a pass: called after each record and at the end of each
+ * shard with the bytes of that shard read so far and the records added.
+ */
+type ShardProgress = (shard: ShardStat, bytesRead: number, added: number) => void;
 
 function syncShardsInPass(
   index: Store,
   config: ResolvedSearchConfig,
   store: IndexedStore,
   shards: ReadonlyArray<ShardStat>,
+  onShard?: ShardProgress,
+  skip?: ReadonlySet<string>,
 ): SyncTotals {
   const db = index.brainRecordsConnection();
   const marks = readWatermarks(db);
@@ -458,6 +508,8 @@ function syncShardsInPass(
     completed: 0,
     remoteHlc: null,
     pendingBlobs: new Map(),
+    ...(onShard !== undefined ? { progress: onShard } : {}),
+    ...(skip !== undefined ? { skip } : {}),
   };
   try {
     const orphans: Orphans = new Map();
@@ -479,6 +531,7 @@ function syncShardsInPass(
         if (shard.stream === "events") eventsReadInFull.add(shard.key);
       }
       next.push(read.watermark);
+      onShard?.(shard, shard.size, totals.added);
     }
     const vanished = [...marks.keys()].filter((key) => !present.has(key));
     for (const key of vanished) {
@@ -543,10 +596,76 @@ function syncShardsInPass(
  * shard is read from offset 0 there, so records an older binary skipped
  * for an unknown format version are picked up.
  */
-export function ingestStoreInto(index: Store, config: ResolvedSearchConfig): void {
+export function ingestStoreInto(
+  index: Store,
+  config: ResolvedSearchConfig,
+  onProgress?: (bytesDone: number, bytesTotal: number, records: number) => void,
+): void {
   const store = config.brainStore;
   if (store === null || store === undefined) return;
-  syncShards(index, config, store, new ShardScanner(store).scan());
+  const shards = buildOrder(new ShardScanner(store).scan());
+  const bytesTotal = shards.reduce((sum, s) => sum + s.size, 0);
+  // A search can read the staging index while it is built, so a record
+  // the store has already forgotten (a removed signal, preference or lane
+  // entry) is never written into it: the tombstones are folded before the
+  // first document. One that arrives while the build runs is taken out at
+  // the end of the pass, as a catch-up takes it out of a live index.
+  const voided = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+    voidedInShards(store, shards),
+  );
+  // The shards finished before the current one, and the current one.
+  let finished = 0;
+  let current: ShardStat | null = null;
+  syncShards(
+    index,
+    config,
+    store,
+    shards,
+    (shard, bytesRead, added) => {
+      if (shard !== current) {
+        if (current !== null) finished += current.size;
+        current = shard;
+      }
+      onProgress?.(finished + Math.min(bytesRead, shard.size), bytesTotal, added);
+    },
+    voided,
+  );
+}
+
+/** Shards of the `log` stream go last in a rebuild ({@link buildOrder}). */
+function buildRank(shard: ShardStat): number {
+  return shard.stream === "log" ? 1 : 0;
+}
+
+/** `private` shards go first in a rebuild ({@link buildOrder}). */
+function partitionRank(shard: ShardStat): number {
+  return shard.partition === "private" ? 0 : 1;
+}
+
+/**
+ * The order a rebuild ingests shards in. A search can answer from the
+ * staging index while it is built, so what recall needs most goes first:
+ * every stream but `log` (signals, preferences, decisions, topics), then
+ * the log, newest month first.
+ *
+ * The first copy of a record id indexed wins (`ingestRecord` refuses a
+ * copy from the other partition), so every `private` shard goes before
+ * every `shared` one: an id found in both (an anomaly doctor reports; the
+ * two copies are one envelope, so only the partition and with it the
+ * visibility differ) is indexed from its private copy, as every catch-up
+ * does (it reads the shards in key order, `private/` first) and as every
+ * rebuild did before this order. Within one partition a record id has one
+ * text (records are immutable), so the order there changes nothing in the
+ * finished index.
+ */
+function buildOrder(shards: ReadonlyArray<ShardStat>): ShardStat[] {
+  return shards.toSorted(
+    (a, b) =>
+      partitionRank(a) - partitionRank(b) ||
+      buildRank(a) - buildRank(b) ||
+      posix.basename(b.rel).localeCompare(posix.basename(a.rel)) ||
+      a.key.localeCompare(b.key),
+  );
 }
 
 /** Catch the index of `config` up with its brain store; never throws. */

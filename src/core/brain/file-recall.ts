@@ -19,6 +19,7 @@ import { statSync } from "node:fs";
 import { search } from "../search/search.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
+import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 
 const DEFAULT_LIMIT = 5;
 const DEFAULT_MIN_BYTES = 1500;
@@ -58,6 +59,14 @@ export interface FileContextResult {
   /** The query terms derived from the path. */
   readonly query: string;
   readonly results: ReadonlyArray<BrainSearchResult>;
+  /**
+   * The search's warnings (an index still being built, a failed catch-up):
+   * a file with no results may only not be indexed yet. Empty when the
+   * search did not run or had none.
+   */
+  readonly warnings: ReadonlyArray<string>;
+  /** The search's degradation codes (`retrieval-trail.ts`); empty when none. */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 /**
@@ -114,7 +123,15 @@ export async function fileContextRecall(
     ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
     ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
   });
-  return frozenResult(opts.filePath, false, null, query, outcome.results);
+  return frozenResult(
+    opts.filePath,
+    false,
+    null,
+    query,
+    outcome.results,
+    outcome.warnings,
+    (outcome.retrievalTrail?.degraded ?? []).map((d) => d.code),
+  );
 }
 
 function fileSize(filePath: string): number | null {
@@ -132,6 +149,8 @@ function frozenResult(
   reason: string | null,
   query: string,
   results: ReadonlyArray<BrainSearchResult>,
+  warnings: ReadonlyArray<string> = [],
+  degraded: ReadonlyArray<RetrievalDegradationCode> = [],
 ): FileContextResult {
   return Object.freeze({
     filePath,
@@ -139,5 +158,7 @@ function frozenResult(
     reason,
     query,
     results: Object.freeze([...results]),
+    warnings: Object.freeze([...warnings]),
+    degraded: Object.freeze([...degraded]),
   });
 }

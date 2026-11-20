@@ -10,6 +10,8 @@ import {
   renderRuntimeNotices,
 } from "../../../src/core/brain/runtime-notices.ts";
 import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
+import { IndexBuildRecorder } from "../../../src/core/search/build-progress.ts";
+import { acquireWriterLease } from "../../../src/core/search/store/writer-lock.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
@@ -224,8 +226,9 @@ test("the index notice describes the self-healing read path, not a dead end", ()
   // `openReadOrSelfHeal` builds the index and retries, so the old claim
   // that recall returns nothing describes a world self-heal removed.
   expect(missing.message).toBe(
-    "Search index is not built yet, so the first recall builds it before returning " +
-      "(that call pays the full index build).",
+    "Search index is not built yet: a recall while a background build runs answers " +
+      "from what it has indexed so far, and one with no build running builds it " +
+      "before returning (that call pays the full index build).",
   );
   expect(renderRuntimeNotices(notices)).toContain("Run: o2b search index");
 });
@@ -238,4 +241,33 @@ test("a readable _brain.yaml yields no config notice", () => {
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n", "utf8");
   const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
   expect(codes).not.toContain("brain_config_unreadable");
+});
+
+test("an index the first build is still building names the build and how far it is", async () => {
+  writeConfig("");
+  const dbPath = join(vault, ".open-second-brain", "brain.sqlite");
+  mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+  const lease = await acquireWriterLease(dbPath);
+  try {
+    const recorder = new IndexBuildRecorder(dbPath);
+    recorder.ready();
+    recorder.store(500, 1000, 1234);
+    const notices = collectRuntimeNotices(vault, { configPath, env: {} });
+    expect(notices.map((n) => n.code)).toEqual(["search_index_building"]);
+    const [building] = notices;
+    expect(building!.message).toBe(
+      "Search index is being built (started less than a minute ago; " +
+        "50% of the brain store read, 1,234 records indexed); " +
+        "until it finishes, recall answers from what it has indexed so far.",
+    );
+    // It clears itself: no command to run.
+    expect(NEXT_COMMAND_KEY in building!).toBe(false);
+    recorder.end();
+  } finally {
+    lease.release();
+  }
+  // With the build gone the old notice is back.
+  expect(collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code)).toEqual([
+    "search_index_missing",
+  ]);
 });

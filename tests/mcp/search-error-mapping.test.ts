@@ -15,6 +15,7 @@ import {
   SEARCH_ERROR_CODES,
   SearchError,
 } from "../../src/core/search/types.ts";
+import { IndexBuildingError } from "../../src/core/search/build-progress.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -28,6 +29,25 @@ test("EMBEDDING_QUOTA_EXHAUSTED maps to the actionable billing message", () => {
 test("a generic provider HTTP error keeps its own message", () => {
   const mcp = searchErrorToMcp(new SearchError("EMBEDDING_PROVIDER_HTTP", "embedding HTTP 500"));
   expect(mcp.message).toContain("embedding HTTP 500");
+});
+
+test("an index being built says so, not to run the command that would queue behind it", () => {
+  const err = new IndexBuildingError("/state/index/brain.sqlite", {
+    pid: process.pid,
+    token: "t0",
+    startedAt: new Date().toISOString(),
+    phase: "notes",
+    storeStartedAt: null,
+    storeBytesDone: 0,
+    storeBytesTotal: 0,
+    storeRecords: 0,
+  });
+  const mcp = searchErrorToMcp(err);
+  expect(mcp.code).toBe(INTERNAL_ERROR);
+  expect(mcp.message).toBe(err.message);
+  expect(mcp.message).toStartWith("the search index is being built (started");
+  expect(mcp.message).not.toContain("Run: o2b search index");
+  expect(mcp.data).toEqual({ code: "INDEX_MISSING" });
 });
 
 // ----- the SearchError code reaches the wire ---------------------------------

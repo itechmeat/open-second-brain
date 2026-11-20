@@ -113,7 +113,7 @@ function withWindowsSharingRetry(op: () => void, seams: RenameRetrySeams): void 
   }
   const sleep = seams.sleep ?? sleepSync;
   const now = seams.now ?? Date.now;
-  const deadline = now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  const deadline = now() + (seams.budgetMs ?? WINDOWS_RENAME_RETRY_BUDGET_MS);
   let delay = 10;
   for (;;) {
     try {
@@ -136,6 +136,12 @@ export interface RenameRetrySeams {
   readonly unlink?: (path: string) => void;
   readonly sleep?: (ms: number) => void;
   readonly now?: () => number;
+  /**
+   * How long to keep retrying on Windows, instead of the default two
+   * seconds: for a rename that must not fail over a reader that holds the
+   * file for one query (the search index swap).
+   */
+  readonly budgetMs?: number;
 }
 
 /**

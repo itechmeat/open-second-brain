@@ -27,7 +27,7 @@ import {
   type SurfacingKeyDecision,
 } from "../search/surfacing-key.ts";
 import { RECALL_CHANNEL } from "./recall-telemetry.ts";
-import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
+import { RETRIEVAL_DEGRADATION, type RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
 import { fenceUntrustedContent, neutralizeSingleLine } from "./untrusted-source.ts";
@@ -607,7 +607,14 @@ async function decideOverRetrieval(
   const chosen = fresh.slice(0, maxNotes);
   // Every fresh candidate the brief does not show is counted, the ones
   // past `maxNotes` included.
-  const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars, fresh.length);
+  const partial = isPartial(resultSet);
+  const { brief, noteCount } = renderRecallBrief(
+    chosen,
+    resultSet.total,
+    maxChars,
+    fresh.length,
+    partial,
+  );
   const today: Extract<RecallInjectDecision, { kind: "inject" }> = Object.freeze({
     kind: "inject",
     brief,
@@ -629,6 +636,7 @@ async function decideOverRetrieval(
         resultSet.total,
         maxChars,
         kept.length + fresh.length - noteCount,
+        partial,
       );
       return { ...out, injectedNotes: injectedNotesOf(kept.slice(0, out.noteCount)) };
     },
@@ -731,6 +739,7 @@ async function decideSliced(
     return retrievalError(exc);
   }
   const total = sets.reduce((sum, set) => sum + set.total, 0);
+  const partial = sets.some(isPartial);
   const groups = verdicts.map((v) =>
     v.outcome === "inject" ? withoutDelivered(v.ranked, options) : [],
   );
@@ -738,7 +747,7 @@ async function decideSliced(
   const shownBefore = verdicts.map((v, i) => v.outcome === "inject" && groups[i]!.length === 0);
 
   const layout = (pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>, omittedBefore = 0) => {
-    const out = renderSlicedBrief(verdicts, pools, total, caps, omittedBefore);
+    const out = renderSlicedBrief(verdicts, pools, total, caps, omittedBefore, partial);
     const outcomes = verdicts.map((v, i): RecallSliceOutcome => {
       const placed = out.placed[i]!.length;
       if (v.outcome !== "inject") return { name: v.spec.name, outcome: v.outcome, notes: 0 };
@@ -996,6 +1005,8 @@ function renderRecallBrief(
   maxChars: number,
   /** How many candidates were on offer (the cut line counts the rest); `chosen.length` by default. */
   offered: number = chosen.length,
+  /** The index is still being built: the brief says so ({@link RECALL_INDEX_BUILDING_LINE}). */
+  partial = false,
 ): { readonly brief: string; readonly noteCount: number } {
   const safe = chosen.map((c) => ({ ...c, title: neutralizeTitle(c.title) }));
   // Charge the fence delimiter overhead against the cap so the FENCED brief
@@ -1005,6 +1016,7 @@ function renderRecallBrief(
   // tiny `maxChars` must never be exceeded just to carry the header.
   const header = RECALL_BRIEF_HEADER;
   const lines: string[] = header.length <= innerBudget ? [header] : [];
+  withPartialLine(lines, partial, innerBudget);
   let noteCount = 0;
   for (const note of safe) {
     const line = renderNoteLine(note);
@@ -1044,7 +1056,7 @@ function renderRecallBrief(
   }));
   const hint = deriveRecallHint(hintInputs, total);
   if (hint !== null) {
-    const at = lines[0] === header ? 1 : 0;
+    const at = (lines[0] === header ? 1 : 0) + (lines.includes(RECALL_INDEX_BUILDING_LINE) ? 1 : 0);
     const withHint = lines.toSpliced(at, 0, hint);
     if (withHint.join("\n").length <= innerBudget) lines.splice(at, 0, hint);
   }
@@ -1052,6 +1064,31 @@ function renderRecallBrief(
 }
 
 const RECALL_BRIEF_HEADER = "Recalled vault context (relevance-matched to this prompt):";
+
+/**
+ * The line a brief carries while the search index is still being built
+ * (`index-building`): an agent must not read a note or rule missing
+ * from the brief as absent from the vault.
+ */
+export const RECALL_INDEX_BUILDING_LINE =
+  "(The search index is still being built: notes not indexed yet are missing from this recall.)";
+
+/**
+ * Put {@link RECALL_INDEX_BUILDING_LINE} right after the header when
+ * `partial`, ahead of the notes, so it is charged against the budget
+ * first; a budget too small for it carries none.
+ */
+function withPartialLine(lines: string[], partial: boolean, innerBudget: number): void {
+  if (!partial) return;
+  if ([...lines, RECALL_INDEX_BUILDING_LINE].join("\n").length <= innerBudget) {
+    lines.push(RECALL_INDEX_BUILDING_LINE);
+  }
+}
+
+/** Whether a retrieval answered from an index still being built. */
+function isPartial(set: RecallResultSet): boolean {
+  return set.degraded?.includes(RETRIEVAL_DEGRADATION.indexBuilding) === true;
+}
 
 /**
  * The sectioned variant of {@link renderRecallBrief}: the same header,
@@ -1071,6 +1108,8 @@ function renderSlicedBrief(
   caps: Pick<ResolvedCaps, "maxNotes" | "maxChars">,
   /** Notes an earlier layout's budget left out of `pools`: still counted in the cut line. */
   omittedBefore = 0,
+  /** The index is still being built: the brief says so ({@link RECALL_INDEX_BUILDING_LINE}). */
+  partial = false,
 ): {
   readonly brief: string;
   readonly placed: ReadonlyArray<ReadonlyArray<RecallCandidate>>;
@@ -1079,6 +1118,7 @@ function renderSlicedBrief(
 } {
   const innerBudget = Math.max(0, caps.maxChars - fenceOverhead());
   const lines: string[] = RECALL_BRIEF_HEADER.length <= innerBudget ? [RECALL_BRIEF_HEADER] : [];
+  withPartialLine(lines, partial, innerBudget);
   const seen = new Set<string>();
   const placed: RecallCandidate[][] = [];
   const onlyRepeats: boolean[] = [];
@@ -1139,7 +1179,9 @@ function renderSlicedBrief(
     })),
     total,
   );
-  const at = lines[0] === RECALL_BRIEF_HEADER ? 1 : 0;
+  const at =
+    (lines[0] === RECALL_BRIEF_HEADER ? 1 : 0) +
+    (lines.includes(RECALL_INDEX_BUILDING_LINE) ? 1 : 0);
   if (hint !== null) {
     const withHint = lines.toSpliced(at, 0, hint);
     if (withHint.join("\n").length <= innerBudget) lines.splice(at, 0, hint);
