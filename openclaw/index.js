@@ -3935,7 +3935,6 @@ function compareCodeUnits(a, b) {
     return 0;
   return a < b ? -1 : 1;
 }
-
 // src/core/store/hlc.ts
 function formatHlc(clock) {
   return `${clock.physical}.${clock.counter}`;
@@ -5826,16 +5825,6 @@ var init_torn_line = __esm(() => {
 // src/core/store/reader.ts
 import { basename as basename5, dirname as dirname10, relative as relative3 } from "node:path";
 import { closeSync as closeSync7, fstatSync as fstatSync5, readSync as readSync4 } from "node:fs";
-function observeRead(partitionRoot, records) {
-  let newest = null;
-  for (const { record } of records) {
-    const clock = parseHlc(record.hlc);
-    if (clock !== null && (newest === null || compareHlc(clock, newest) > 0))
-      newest = clock;
-  }
-  if (newest !== null)
-    noteObservedClock(dirname10(partitionRoot), newest);
-}
 function isPaths(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
 }
@@ -5938,26 +5927,45 @@ function readLine(text, lineOffset, length, isLast, shardDevice, partitionRoot) 
   const compaction = record.kind === COMPACTED_KIND && bodyState !== "pending" ? asCompaction(record) : null;
   return { kind: "record", record: { record, bodyState, offset: lineOffset, length }, compaction };
 }
-function markQuarantined(fd, path, partitionRoot, records, diagnostics) {
+function quarantineMarks(fd, path, partitionRoot) {
+  const none = { record: (r) => r, diagnostics: (all) => all };
+  if (partitionRoot === undefined)
+    return none;
   const rel = relative3(partitionRoot, path).split("\\").join("/");
   const ledger = quarantinedLines(partitionRoot, rel);
   if (ledger.size === 0)
-    return { records, diagnostics };
+    return none;
   const settings = rel.split("/")[0] === "settings";
   const matches = (offset, kind) => {
     const entry = ledger.get(offset);
     return entry !== undefined && entry.kind === kind && lineSha256AtFd(fd, offset) === entry.sha256;
   };
   return {
-    records: records.map((r) => r.bodyState === "pending" && !settings && matches(r.offset, "blob-pending") ? { ...r, quarantined: true } : r),
-    diagnostics: diagnostics.map((d) => d.kind === "corrupt-line" && d.torn !== true && matches(d.offset, "corrupt-line") ? { ...d, quarantined: true } : d)
+    record: (r) => r.bodyState === "pending" && !settings && matches(r.offset, "blob-pending") ? { ...r, quarantined: true } : r,
+    diagnostics: (all) => all.map((d) => d.kind === "corrupt-line" && d.torn !== true && matches(d.offset, "corrupt-line") ? { ...d, quarantined: true } : d)
   };
 }
 function readShard(path, options = {}) {
-  const start = options.offset ?? 0;
   const records = [];
+  const scan = scanShard(path, options, (record) => {
+    records.push(record);
+  });
+  return {
+    records,
+    diagnostics: scan.diagnostics,
+    compactions: scan.compactions,
+    nextOffset: scan.nextOffset,
+    pendingTailBytes: scan.pendingTailBytes,
+    size: scan.size
+  };
+}
+function scanShard(path, options, onRecord) {
+  const start = options.offset ?? 0;
   const diagnostics = [];
   const compactions = [];
+  let handed = 0;
+  let pending = 0;
+  let newest = null;
   const shardDevice = shardDeviceOf(path);
   const fd = openRegularFileForRead(path, options.partitionRoot);
   if (fd === null) {
@@ -5967,12 +5975,13 @@ function readShard(path, options = {}) {
       reason: "the shard is not a regular file (a symbolic link or a special file) or is reached " + "through a linked folder inside the partition; it is not read"
     });
     return {
-      records,
       diagnostics,
       compactions,
       nextOffset: start,
       pendingTailBytes: 0,
-      size: start
+      size: start,
+      records: 0,
+      pending: 0
     };
   }
   try {
@@ -5983,8 +5992,18 @@ function readShard(path, options = {}) {
         offset: start,
         reason: `offset ${start} is past the end of the shard (${size} bytes); the shard was truncated or replaced`
       });
-      return { records, diagnostics, compactions, nextOffset: start, pendingTailBytes: 0, size };
+      return {
+        diagnostics,
+        compactions,
+        nextOffset: start,
+        pendingTailBytes: 0,
+        size,
+        records: 0,
+        pending: 0
+      };
     }
+    const marks = quarantineMarks(fd, path, options.partitionRoot);
+    const storeRoot = options.partitionRoot === undefined ? null : dirname10(options.partitionRoot);
     const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, Math.max(size - start, 1)));
     let consumed = start;
     let position = start;
@@ -6037,9 +6056,19 @@ function readShard(path, options = {}) {
           if (outcome.kind === "diagnostic")
             diagnostics.push(outcome.diagnostic);
           if (outcome.kind === "record") {
-            records.push(outcome.record);
             if (outcome.compaction !== null)
               compactions.push(outcome.compaction);
+            const record = marks.record(outcome.record);
+            const clock = parseHlc(record.record.hlc);
+            if (clock !== null && (newest === null || compareHlc(clock, newest) > 0)) {
+              newest = clock;
+              if (storeRoot !== null)
+                noteObservedClock(storeRoot, clock);
+            }
+            handed += 1;
+            if (record.bodyState === "pending" && record.quarantined !== true)
+              pending += 1;
+            onRecord(record);
           }
         }
         carry = [];
@@ -6052,28 +6081,28 @@ function readShard(path, options = {}) {
       overlong();
       consumed = position;
     }
-    if (options.partitionRoot !== undefined)
-      observeRead(options.partitionRoot, records);
-    const marked = options.partitionRoot === undefined ? { records, diagnostics } : markQuarantined(fd, path, options.partitionRoot, records, diagnostics);
     return {
-      records: marked.records,
-      diagnostics: marked.diagnostics,
+      diagnostics: marks.diagnostics(diagnostics),
       compactions,
       nextOffset: consumed,
       pendingTailBytes: size - consumed,
-      size
+      size,
+      records: handed,
+      pending
     };
   } finally {
     closeSync7(fd);
   }
 }
 function shardReadGap(read) {
+  return gapText(read.records.filter((r) => r.bodyState === "pending" && r.quarantined !== true).length, read.diagnostics);
+}
+function gapText(pending, diagnostics) {
   const reasons = [];
-  const pending = read.records.filter((r) => r.bodyState === "pending" && r.quarantined !== true).length;
   if (pending > 0) {
     reasons.push(pending === 1 ? "a record whose body is a blob that has not arrived yet" : `${pending} records whose bodies are blobs that have not arrived yet`);
   }
-  for (const d of read.diagnostics) {
+  for (const d of diagnostics) {
     if (d.torn === true || d.quarantined === true)
       continue;
     reasons.push(`${d.kind} at byte ${d.offset}: ${d.reason}`);
@@ -6667,19 +6696,121 @@ var init_journal_scope = __esm(() => {
   init_digest();
   init_migration_records();
 });
+// src/core/store-migration/process-identity.ts
+import { spawnSync } from "node:child_process";
+import { readFileSync as readFileSync12 } from "node:fs";
+function linuxIdentity(pid) {
+  const stat = readFileSync12(`/proc/${pid}/stat`, "utf8");
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const ticks = fields[STAT_STARTTIME_INDEX];
+  if (ticks === undefined || !/^\d+$/.test(ticks))
+    return null;
+  let boot = "";
+  try {
+    boot = readFileSync12("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {}
+  return `linux:${boot}:${ticks}`;
+}
+function query(command, args, env) {
+  const out = spawnSync(command, args, {
+    encoding: "utf8",
+    timeout: QUERY_TIMEOUT_MS,
+    windowsHide: true,
+    env: env ?? process.env
+  });
+  return out.status === 0 && typeof out.stdout === "string" ? out.stdout.trim() : "";
+}
+function windowsIdentity(pid) {
+  const out = query("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`
+  ]);
+  return /^\d+$/.test(out) ? `win32:${out}` : null;
+}
+function psIdentity(pid) {
+  const out = query("ps", ["-o", "lstart=", "-p", String(pid)], {
+    ...process.env,
+    LC_ALL: "C",
+    TZ: "UTC"
+  });
+  return out === "" ? null : `ps:${out.replace(/\s+/g, " ")}`;
+}
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return null;
+  if (pid === process.pid && own !== undefined)
+    return own;
+  let identity;
+  try {
+    if (process.platform === "linux")
+      identity = linuxIdentity(pid);
+    else if (process.platform === "win32")
+      identity = windowsIdentity(pid);
+    else
+      identity = psIdentity(pid);
+  } catch {
+    identity = null;
+  }
+  if (pid === process.pid)
+    own = identity;
+  return identity;
+}
+var QUERY_TIMEOUT_MS = 15000, STAT_STARTTIME_INDEX = 19, own;
+var init_process_identity = () => {};
+
+// src/core/store-migration/holder-liveness.ts
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return false;
+  if (pid === process.pid)
+    return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+function holderLiveness(pid, started) {
+  if (!processAlive(pid))
+    return "dead";
+  if (started === undefined || started === null)
+    return "unknown";
+  const now = processStartIdentity(pid);
+  if (now === null)
+    return "unknown";
+  return now === started ? "alive" : "dead";
+}
+function gateHolderLiveness(gate, judge) {
+  if (judge === "cheap")
+    return processAlive(gate.pid) ? "unknown" : "dead";
+  return holderLiveness(gate.pid, gate.started);
+}
+var init_holder_liveness = __esm(() => {
+  init_process_identity();
+});
+
+// src/core/store-migration/spill-map.ts
+var init_spill_map = __esm(() => {
+  init_holder_liveness();
+});
 
 // src/core/store-migration/journal.ts
-var MIGRATION_STATE_DIR = "migration";
+var MIGRATION_STATE_DIR = "migration", JOURNAL_READ_CHUNK;
 var init_journal = __esm(() => {
   init_fs_atomic();
   init_state_digest();
   init_store_paths();
   init_journal_scope();
   init_migration_records();
+  init_spill_map();
+  JOURNAL_READ_CHUNK = 1024 * 1024;
 });
 
 // src/core/store/store-only.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync11, readFileSync as readFileSync12 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync11, readFileSync as readFileSync13 } from "node:fs";
 import { dirname as dirname12, join as join18 } from "node:path";
 function hasLegacyTree(vault) {
   if (vault === null || vault.trim() === "")
@@ -6694,7 +6825,7 @@ function markerKey(root, device) {
 }
 function readMarker() {
   try {
-    const parsed = JSON.parse(readFileSync12(markerPath2(), "utf8"));
+    const parsed = JSON.parse(readFileSync13(markerPath2(), "utf8"));
     if (!Array.isArray(parsed.switched))
       return new Set;
     return new Set(parsed.switched.filter((e) => typeof e === "object" && e !== null && typeof e.root === "string" && typeof e.device === "string").map((e) => markerKey(e.root, e.device)));
@@ -6809,7 +6940,7 @@ var init_store_only = __esm(() => {
 });
 
 // src/core/brain/secrets/owner-acl.ts
-import { spawnSync } from "node:child_process";
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { resolve as resolve9, win32 as win323 } from "node:path";
 function system32Tool(name, env = process.env) {
   const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
@@ -6823,7 +6954,7 @@ function currentWindowsIdentity() {
   if (cachedIdentity !== undefined)
     return cachedIdentity;
   try {
-    const proc = spawnSync(system32Tool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
+    const proc = spawnSync2(system32Tool("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: TOOL_TIMEOUT_MS
@@ -6850,13 +6981,13 @@ function restrictToOwner(path, kind, platform = process.platform, force = false)
     if (identity === null) {
       detail = "the current user's SID could not be read (whoami /user)";
     } else {
-      let proc = spawnSync(system32Tool("icacls.exe"), [path, "/reset"], {
+      let proc = spawnSync2(system32Tool("icacls.exe"), [path, "/reset"], {
         encoding: "utf8",
         windowsHide: true,
         timeout: TOOL_TIMEOUT_MS
       });
       if (proc.error === undefined && proc.status === 0) {
-        proc = spawnSync(system32Tool("icacls.exe"), [...ownerOnlyAclArgv(path, identity.sid, kind)], { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS });
+        proc = spawnSync2(system32Tool("icacls.exe"), [...ownerOnlyAclArgv(path, identity.sid, kind)], { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS });
       }
       if (proc.error === undefined && proc.status === 0) {
         restricted.add(key);
@@ -6890,7 +7021,7 @@ import {
   lstatSync as lstatSync4,
   mkdirSync as mkdirSync12,
   readdirSync as readdirSync3,
-  readFileSync as readFileSync13,
+  readFileSync as readFileSync14,
   rmdirSync,
   statSync as statSync9,
   unlinkSync as unlinkSync4,
@@ -6916,7 +7047,7 @@ function sameBytes(a, b) {
   try {
     if (statSync9(a).size !== statSync9(b).size)
       return false;
-    return readFileSync13(a).equals(readFileSync13(b));
+    return readFileSync14(a).equals(readFileSync14(b));
   } catch {
     return false;
   }
@@ -6962,7 +7093,7 @@ function copyNoClobber(file, target) {
         return false;
     }
     try {
-      writeExclusive(target, readFileSync13(temp));
+      writeExclusive(target, readFileSync14(temp));
     } catch (err) {
       if (err.code === "EEXIST")
         return false;
@@ -7301,7 +7432,7 @@ var init_stamp = __esm(() => {
 });
 
 // src/core/brain/freeze-marker.ts
-import { existsSync as existsSync9, readFileSync as readFileSync14, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync9, readFileSync as readFileSync15, statSync as statSync10 } from "node:fs";
 import { resolve as resolve11 } from "node:path";
 function markerPathIn(root) {
   return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
@@ -7310,7 +7441,7 @@ function parseMarker(path) {
   reloadCount += 1;
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync14(path, "utf8"));
+    parsed = JSON.parse(readFileSync15(path, "utf8"));
   } catch {
     return UNREADABLE_MARKER;
   }
@@ -7407,102 +7538,6 @@ var init_freeze_marker = __esm(() => {
   });
   MARKER_STAMPS = new Map;
   MARKER_PATHS = new Map;
-});
-
-// src/core/store-migration/process-identity.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { readFileSync as readFileSync15 } from "node:fs";
-function linuxIdentity(pid) {
-  const stat = readFileSync15(`/proc/${pid}/stat`, "utf8");
-  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-  const ticks = fields[STAT_STARTTIME_INDEX];
-  if (ticks === undefined || !/^\d+$/.test(ticks))
-    return null;
-  let boot = "";
-  try {
-    boot = readFileSync15("/proc/sys/kernel/random/boot_id", "utf8").trim();
-  } catch {}
-  return `linux:${boot}:${ticks}`;
-}
-function query(command, args, env) {
-  const out = spawnSync2(command, args, {
-    encoding: "utf8",
-    timeout: QUERY_TIMEOUT_MS,
-    windowsHide: true,
-    env: env ?? process.env
-  });
-  return out.status === 0 && typeof out.stdout === "string" ? out.stdout.trim() : "";
-}
-function windowsIdentity(pid) {
-  const out = query("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`
-  ]);
-  return /^\d+$/.test(out) ? `win32:${out}` : null;
-}
-function psIdentity(pid) {
-  const out = query("ps", ["-o", "lstart=", "-p", String(pid)], {
-    ...process.env,
-    LC_ALL: "C",
-    TZ: "UTC"
-  });
-  return out === "" ? null : `ps:${out.replace(/\s+/g, " ")}`;
-}
-function processStartIdentity(pid) {
-  if (!Number.isInteger(pid) || pid <= 0)
-    return null;
-  if (pid === process.pid && own !== undefined)
-    return own;
-  let identity;
-  try {
-    if (process.platform === "linux")
-      identity = linuxIdentity(pid);
-    else if (process.platform === "win32")
-      identity = windowsIdentity(pid);
-    else
-      identity = psIdentity(pid);
-  } catch {
-    identity = null;
-  }
-  if (pid === process.pid)
-    own = identity;
-  return identity;
-}
-var QUERY_TIMEOUT_MS = 15000, STAT_STARTTIME_INDEX = 19, own;
-var init_process_identity = () => {};
-
-// src/core/store-migration/holder-liveness.ts
-function processAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0)
-    return false;
-  if (pid === process.pid)
-    return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-function holderLiveness(pid, started) {
-  if (!processAlive(pid))
-    return "dead";
-  if (started === undefined || started === null)
-    return "unknown";
-  const now = processStartIdentity(pid);
-  if (now === null)
-    return "unknown";
-  return now === started ? "alive" : "dead";
-}
-function gateHolderLiveness(gate, judge) {
-  if (judge === "cheap")
-    return processAlive(gate.pid) ? "unknown" : "dead";
-  return holderLiveness(gate.pid, gate.started);
-}
-var init_holder_liveness = __esm(() => {
-  init_process_identity();
 });
 
 // src/core/migration-gate.ts

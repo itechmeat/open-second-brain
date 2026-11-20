@@ -56,15 +56,17 @@ import type { UnparseableItem } from "./backup.ts";
 import { itemPartition, itemRecords, migrationCatalogue, recordDestination } from "./catalogue.ts";
 import type { LegacyItem } from "./destinations.ts";
 import {
-  forEachHeldShard,
+  forEachHeldRecord,
+  journalClaimedAmong,
   journalGet,
-  journalIds,
   rowComplete,
   storeRecordSums,
   type Journal,
+  type RecordSums,
 } from "./journal.ts";
 import { dualWriteFromVault, type JournalScope } from "./journal-scope.ts";
 import { IMPORT_BATCH_ITEMS, ImportBatch } from "./import-batch.ts";
+import { SpillMap, type MigrationScratch, type ReadonlySpillMap } from "./spill-map.ts";
 import type { IncrementalReads } from "./incremental-reads.ts";
 import { emptyTally, readFileItem, ScanAbort, scanCopyLines, scanLocator } from "./legacy-scan.ts";
 import {
@@ -125,12 +127,17 @@ export interface ConvertContext {
    * file is read whole.
    */
   readonly incremental?: IncrementalReads;
+  /**
+   * Where the maps with an entry per legacy item (the items a pass saw)
+   * move once they grow (`spill-map.ts`); in memory when absent.
+   */
+  readonly scratch?: MigrationScratch;
 }
 
 export interface PassResult {
   readonly imported: number;
   /** Every legacy item this pass saw: key to content checksum. */
-  readonly seen: ReadonlyMap<string, string>;
+  readonly seen: ReadonlySpillMap;
   readonly problems: ReadonlyArray<UnparseableItem>;
   /** Device ids found in the legacy shard names this pass read. */
   readonly devices: ReadonlySet<string>;
@@ -176,25 +183,29 @@ export function dualWritePool(
   scope: JournalScope,
   held?: Iterable<StoreRecord>,
 ): DualWritePool {
-  const claimed = journalIds(journal);
   const native = writtenWhileSwitched(store);
-  const pool: DualWritePool = new Map();
+  const copies: StoreRecord[] = [];
   const take = (record: StoreRecord): void => {
     if (migratedMark(record) !== null) return;
-    if (claimed.has(record.id)) return;
     if (native(record)) return;
     if (!dualWriteFromVault(scope, record)) return;
+    copies.push(record);
+  };
+  if (held !== undefined) for (const record of held) take(record);
+  else {
+    // Record by record: only the unmarked copies are kept.
+    forEachHeldRecord(store, (_partition, record) => take(record));
+  }
+  // The journal is walked once for the copies' ids, never held as a set
+  // of every id it names.
+  const claimed = journalClaimedAmong(journal, new Set(copies.map((record) => record.id)));
+  const pool: DualWritePool = new Map();
+  for (const record of copies) {
+    if (claimed.has(record.id)) continue;
     const key = contentKey(record.kind, record.body);
     const same = pool.get(key);
     if (same === undefined) pool.set(key, [record]);
     else same.push(record);
-  };
-  if (held !== undefined) for (const record of held) take(record);
-  else {
-    // Shard by shard: only the unmarked copies are kept.
-    forEachHeldShard(store, (_partition, shard) => {
-      for (const record of shard.all) take(record);
-    });
   }
   return pool;
 }
@@ -351,7 +362,7 @@ export function convertPass(ctx: ConvertContext): PassResult {
 }
 
 function runPass(ctx: ConvertContext): PassResult {
-  const seen = new Map<string, string>();
+  const seen = ctx.scratch !== undefined ? ctx.scratch.map() : new SpillMap();
   const problems: UnparseableItem[] = [];
   const devices = new Set<string>();
   let imported = 0;
@@ -558,11 +569,11 @@ export interface VerificationGap {
 /** Check the last pass's items against the journal and the store. */
 export function verifyImport(
   ctx: ConvertContext,
-  seen: ReadonlyMap<string, string>,
-  inStore: ReadonlyMap<string, string> = storeRecordSums(ctx.store),
+  seen: ReadonlySpillMap,
+  inStore: RecordSums = storeRecordSums(ctx.store),
 ): VerificationGap[] {
   const gaps: VerificationGap[] = [];
-  for (const [key, sum] of seen) {
+  for (const [key, sum] of seen.entries()) {
     const row = journalGet(ctx.journal, key, sum);
     if (row === undefined || !rowComplete(row)) {
       gaps.push({ key, reason: "not imported with its current content" });

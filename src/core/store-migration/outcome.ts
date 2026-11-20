@@ -143,6 +143,7 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
     const result = importLateLegacyWrites(vault, store, agent, vaultId, {
       recordWatermark: true,
       ...(options.hooks !== undefined ? { hooks: options.hooks } : {}),
+      ...(options.spillAt !== undefined ? { spillAt: options.spillAt } : {}),
     });
     // Everything of the vault is in the store only when the import settled
     // and held nothing back for a partition this machine lacks, as the
@@ -239,6 +240,8 @@ export function rollback(
     readonly configPath?: string;
     readonly agent?: string;
     readonly hooks?: RollbackHooks;
+    /** Entries a per-item map holds in memory before it moves to disk (`MigrationOptions.spillAt`). */
+    readonly spillAt?: number;
   } = {},
 ): RollbackResult {
   const store = openMigrationStore(vault, options.configPath);
@@ -246,5 +249,6 @@ export function rollback(
   return rollbackMigration(vault, store, {
     agent,
     ...(options.hooks ? { hooks: options.hooks } : {}),
+    ...(options.spillAt !== undefined ? { spillAt: options.spillAt } : {}),
   });
 }

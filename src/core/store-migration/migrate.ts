@@ -43,7 +43,7 @@ import { readMigrationGate, recordMigrationGateProgress } from "../migration-gat
 import { appendRecord } from "../store/appender.ts";
 import { bindVaultToStore } from "../vault-adapter/vault-binding.ts";
 import { claimViewWriter, readViewWriter } from "../view/writer.ts";
-import { computeCut, cutHash, readPartition } from "../store/state-digest.ts";
+import { cutHash, readPartitionCut } from "../store/state-digest.ts";
 import { deviceSwitchedHere, recordSwitchMarker } from "../store/store-only.ts";
 import { openStore, type StoreHandle } from "../store/store-open.ts";
 import {
@@ -125,6 +125,8 @@ import {
   releaseStoppedRunGate,
 } from "./quiesce.ts";
 import { sameVaultPath } from "./removal-marker.ts";
+import { MigrationScratch } from "./spill-map.ts";
+import { gcHint } from "../store/gc-hint.ts";
 
 /** The most passes the final delta pass may take before the run gives up. */
 export const MIGRATION_MAX_PASSES = 20;
@@ -246,6 +248,14 @@ export interface MigrationOptions {
    * use a small batch so a kill lands with part of a small vault imported.
    */
   readonly importBatchItems?: number;
+  /**
+   * How many entries a map with one entry per legacy item or store record
+   * (the journal, the items a pass saw, the store's checksums) holds in
+   * memory before it moves to the run's scratch file (default
+   * `SPILL_AT_ENTRIES` in `spill-map.ts`). The CLI keeps the default; tests
+   * set it low so a small vault runs the on-disk maps.
+   */
+  readonly spillAt?: number;
   readonly hooks?: MigrationHooks;
   /** How long a later machine waits for the first machine's cut, in ms (default 0). */
   readonly waitMs?: number;
@@ -316,9 +326,7 @@ export interface MigrationResult {
 
 /** Items a journal holds, each version once. */
 function journaledItems(journal: Journal): number {
-  let n = 0;
-  for (const versions of journal.values()) n += versions.size;
-  return n;
+  return journal.size;
 }
 
 /** Items the dry run found on the surfaces that become records. */
@@ -384,7 +392,8 @@ function settingsRecord(
 function partitionCuts(store: StoreHandle): Partial<Record<StorePartition, PartitionCut>> {
   const cuts: Partial<Record<StorePartition, PartitionCut>> = {};
   for (const partition of store.partitions) {
-    const cut = computeCut(readPartition(partitionDir(store.root, partition)));
+    // Record by record: only each shard's count, last id and pending count.
+    const cut = readPartitionCut(partitionDir(store.root, partition));
     cuts[partition] = { cut, cut_hash: cutHash(cut) };
   }
   return cuts;
@@ -746,6 +755,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       // a report of the progress never stops the run
     }
   };
+  let scratch: MigrationScratch | null = null;
   options.hooks?.beforeGate?.();
   try {
     // Only once the gate is this run's: the progress file is one per
@@ -801,9 +811,17 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     }
 
     const scope = journalScopeFor(vault, store.device, dir);
+    // The maps with an entry per legacy item or store record (the journal,
+    // the items a pass saw, the store's checksums) move to a temporary file
+    // in the migration folder once they grow, so the run's memory does not
+    // grow with the vault (`spill-map.ts`).
+    scratch = new MigrationScratch(
+      dir,
+      options.spillAt !== undefined ? { spillAt: options.spillAt } : {},
+    );
     // One pass over the store, shard by shard, for the journal and the
     // dual-written copies: the run never holds the store's records.
-    const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope);
+    const { journal, unmarked } = loadJournalAndUnmarked(dir, store, scope, scratch);
     const recordReads = new IncrementalReads(new Map(), false);
     // How far the import is: rewritten after every batch it writes.
     counts = { journaled: journaledItems(journal), planned: plannedRecordItems(plan) };
@@ -822,6 +840,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
       // Recorded, never used to skip: the first import after the switch
       // starts from what this migration's final pass read.
       incremental: recordReads,
+      scratch,
       onJournaled: (items: number): void => {
         counts = { journaled: counts!.journaled + items, planned: counts!.planned };
         progress();
@@ -832,6 +851,9 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // The legacy-file stamps taken before each pass: those of the final
     // (delta) pass become the automatic import's watermark at the switch.
     let stamps = legacyFileStamps(vault);
+    // Each pass reads the whole legacy tree: its garbage goes before the
+    // next phase (`gc-hint.ts`).
+    gcHint();
     let last = convertPass(ctx);
     for (passes = 1; ; passes++) {
       imported += last.imported;
@@ -843,6 +865,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
         );
       }
       stamps = legacyFileStamps(vault);
+      gcHint();
       last = convertPass(ctx);
     }
     if (options.refuseUnparseable === true && last.unparseable.length > 0) {
@@ -864,7 +887,8 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     options.hooks?.beforeVerify?.();
     // One read of the store for the verification and the switch's check
     // of unseen shards; the settings import reads its own stream later.
-    const final = readFinalStoreView(store);
+    gcHint();
+    const final = readFinalStoreView(store, scratch);
     const gaps = verifyImport(ctx, last.seen, final.sums);
     const base = {
       run_id: state.run_id,
@@ -985,6 +1009,7 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     failure = { error };
     throw error;
   } finally {
+    scratch?.close();
     if (held) releaseGateAfter(vault, state.run_id, failure);
   }
 }

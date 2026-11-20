@@ -26,21 +26,33 @@
  * can tell an interrupted migration from a fresh one.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import type { StorePartition } from "../store/constants.ts";
 import {
   DIGEST_STREAM,
+  forEachPartitionRecord,
   forEachPartitionShard,
   readPartition,
   type PartitionShard,
+  type PartitionShardHead,
+  type ReadPartitionOptions,
 } from "../store/state-digest.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import {
+  dualWriteFromVault,
   markVault,
   parseJournalVault,
   rowVault,
@@ -48,7 +60,8 @@ import {
   type JournalScope,
   type JournalVault,
 } from "./journal-scope.ts";
-import { migratedMark } from "./migration-records.ts";
+import { migratedMark, writtenWhileSwitched } from "./migration-records.ts";
+import { SpillMap, type MigrationScratch, type ReadonlySpillMap } from "./spill-map.ts";
 
 /** The device-local folder of the migration, inside the store's device state. */
 export const MIGRATION_STATE_DIR = "migration";
@@ -71,12 +84,58 @@ export interface JournalRow {
   readonly vault?: JournalVault | null;
 }
 
+/** Where a journal entry came from: the store's marks, or the journal file. */
+const FROM_STORE = "S";
+const FROM_DISK = "D";
+
 /**
- * Every journaled version, by key, then by checksum. The key is the item
- * key for a row of the vault the run imports, {@link foreignKey} for a row
- * of another vault.
+ * Every journaled version, by key and checksum. The key is the item key
+ * for a row of the vault the run imports, {@link foreignKey} for a row of
+ * another vault. A journal built with a {@link MigrationScratch} moves to
+ * the scratch's file once it grows (`spill-map.ts`): a real vault's
+ * journal holds a row per legacy item, several hundred thousand of them,
+ * and held in memory it set the run's peak.
  */
-export type Journal = Map<string, Map<string, JournalRow>>;
+export class Journal {
+  private readonly entries: SpillMap;
+
+  constructor(scratch: MigrationScratch | null = null) {
+    this.entries = scratch === null ? new SpillMap() : scratch.map();
+  }
+
+  /** How many item versions it holds. */
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get(at: string, sum: string): JournalRow | undefined {
+    return this.entry(at, sum)?.row;
+  }
+
+  /** The entry at (at, sum), and whether it came from the journal file. */
+  entry(at: string, sum: string): { readonly row: JournalRow; readonly disk: boolean } | undefined {
+    const value = this.entries.get(entryKey(at, sum));
+    if (value === undefined) return undefined;
+    return { row: JSON.parse(value.slice(1)) as JournalRow, disk: value[0] === FROM_DISK };
+  }
+
+  set(at: string, row: JournalRow, from: "store" | "disk" = "store"): void {
+    this.entries.set(
+      entryKey(at, row.sum),
+      (from === "disk" ? FROM_DISK : FROM_STORE) + JSON.stringify(row),
+    );
+  }
+
+  /** Every row, in no promised order. */
+  *rows(): IterableIterator<JournalRow> {
+    for (const [, value] of this.entries.entries()) yield JSON.parse(value.slice(1)) as JournalRow;
+  }
+}
+
+/** The map key of a journal entry: the checksum holds no separator, the key may. */
+function entryKey(at: string, sum: string): string {
+  return `${sum}\u0001${at}`;
+}
 
 /** The journal key of a row of a vault other than the one a run imports. */
 function foreignKey(vault: JournalVault, key: string): string {
@@ -89,18 +148,12 @@ function scopedKey(scope: JournalScope, vault: JournalVault, key: string): strin
 }
 
 export function journalGet(journal: Journal, key: string, sum: string): JournalRow | undefined {
-  return journal.get(key)?.get(sum);
+  return journal.get(key, sum);
 }
 
 /** Record `row` under its item key: a row of the vault the run imports. */
 export function journalSet(journal: Journal, row: JournalRow): void {
-  journalSetAt(journal, row.key, row);
-}
-
-function journalSetAt(journal: Journal, at: string, row: JournalRow): void {
-  const versions = journal.get(at) ?? new Map<string, JournalRow>();
-  versions.set(row.sum, row);
-  journal.set(at, versions);
+  journal.set(row.key, row);
 }
 
 /** Whether every part of a row was written. */
@@ -108,12 +161,14 @@ export function rowComplete(row: JournalRow): boolean {
   return row.ids.length > 0 && row.ids.every((id) => id !== "");
 }
 
-/** Every id a journal names. */
-export function journalIds(journal: Journal): Set<string> {
+/**
+ * The ids among `ids` that a journal row names: one pass over the
+ * journal, keeping only those ids.
+ */
+export function journalClaimedAmong(journal: Journal, ids: ReadonlySet<string>): Set<string> {
   const out = new Set<string>();
-  for (const versions of journal.values()) {
-    for (const row of versions.values()) for (const id of row.ids) if (id !== "") out.add(id);
-  }
+  if (ids.size === 0) return out;
+  for (const row of journal.rows()) for (const id of row.ids) if (ids.has(id)) out.add(id);
   return out;
 }
 
@@ -217,23 +272,75 @@ export function writeMigrationState(dir: string, state: MigrationState): void {
   atomicWriteFileSync(join(dir, STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
 }
 
-/** The journal rows on disk, as the run of `scope` reads them. */
-export function readJournal(dir: string, scope: JournalScope): Journal {
-  const out: Journal = new Map();
+/** Bytes of the journal file read per call. */
+const JOURNAL_READ_CHUNK = 1024 * 1024;
+
+/**
+ * Every parseable row of the journal file, in file order, read in chunks:
+ * a real vault's journal holds a row per legacy item, and read whole it
+ * is one string of every row.
+ */
+function forEachJournalFileRow(dir: string, onRow: (row: JournalRow) => void): void {
   const path = join(dir, JOURNAL_FILE);
-  if (!existsSync(path)) return out;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const take = (line: string): void => {
+    if (line.trim() === "") return;
+    let row: JournalRow;
     try {
-      const row = JSON.parse(line) as JournalRow;
-      if (typeof row.key === "string" && typeof row.sum === "string" && Array.isArray(row.ids)) {
-        const vault = rowVault(scope, parseJournalVault(row.vault));
-        journalSetAt(out, scopedKey(scope, vault, row.key), row);
-      }
+      row = JSON.parse(line) as JournalRow;
     } catch {
       // a torn last row: its records are recovered from the store
+      return;
     }
+    if (row === null || typeof row !== "object") return;
+    // Outside the parse: a row the consumer cannot keep (a scratch write
+    // that fails) ends the read instead of passing for a torn row.
+    if (typeof row.key === "string" && typeof row.sum === "string" && Array.isArray(row.ids)) {
+      onRow(row);
+    }
+  };
+  try {
+    const chunk = Buffer.alloc(JOURNAL_READ_CHUNK);
+    let carry: Buffer[] = [];
+    for (;;) {
+      const n = readSync(fd, chunk, 0, chunk.length, null);
+      if (n === 0) break;
+      let cursor = 0;
+      for (;;) {
+        const end = chunk.subarray(0, n).indexOf(0x0a, cursor);
+        if (end === -1) {
+          carry.push(Buffer.from(chunk.subarray(cursor, n)));
+          break;
+        }
+        carry.push(chunk.subarray(cursor, end));
+        take(Buffer.concat(carry).toString("utf8"));
+        carry = [];
+        cursor = end + 1;
+      }
+    }
+    if (carry.length > 0) take(Buffer.concat(carry).toString("utf8"));
+  } finally {
+    closeSync(fd);
   }
+}
+
+/** The journal rows on disk, as the run of `scope` reads them. */
+export function readJournal(
+  dir: string,
+  scope: JournalScope,
+  scratch: MigrationScratch | null = null,
+): Journal {
+  const out = new Journal(scratch);
+  forEachJournalFileRow(dir, (row) => {
+    const vault = rowVault(scope, parseJournalVault(row.vault));
+    out.set(scopedKey(scope, vault, row.key), row, "disk");
+  });
   return out;
 }
 
@@ -259,28 +366,32 @@ export function journalFromStore(
   store: StoreHandle,
   scope: JournalScope,
   held?: ReadonlyMap<StorePartition, ReadonlyArray<StoreRecord>>,
+  scratch: MigrationScratch | null = null,
 ): Journal {
-  const folder = markFolder(scope);
+  const folder = markFolder(scope, scratch);
   if (held !== undefined) {
     for (const [partition, records] of held)
       for (const record of records) folder.fold(partition, record);
   } else {
-    // Shard by shard: only the journal (ids and checksums per item key)
+    // Record by record: only the journal (ids and checksums per item key)
     // is kept, never the store's records.
-    forEachHeldShard(store, (partition, shard) => {
-      for (const record of shard.all) folder.fold(partition, record);
+    forEachHeldRecord(store, (partition, record) => {
+      folder.fold(partition, record);
     });
   }
   return folder.journal;
 }
 
 /** Folds records carrying a `migrated` mark into a journal, as {@link journalFromStore} reads them. */
-function markFolder(scope: JournalScope): {
+function markFolder(
+  scope: JournalScope,
+  scratch: MigrationScratch | null,
+): {
   readonly journal: Journal;
   /** Fold one record; false when it carries no mark. */
   fold(partition: StorePartition, record: StoreRecord): boolean;
 } {
-  const out: Journal = new Map();
+  const out = new Journal(scratch);
   return {
     journal: out,
     fold: (partition, record) => {
@@ -288,35 +399,48 @@ function markFolder(scope: JournalScope): {
       if (mark === null) return false;
       const vault = markVault(scope, mark.vault, record);
       const at = scopedKey(scope, vault, mark.key);
-      const found = out.get(at)?.get(mark.sum);
+      const found = out.get(at, mark.sum);
       const ids = found ? [...found.ids] : Array.from({ length: mark.parts }, () => "");
       const sums = found ? [...found.sums] : Array.from({ length: mark.parts }, () => "");
       if (ids[mark.part] !== undefined && ids[mark.part] !== "") return true; // first copy wins
       ids[mark.part] = record.id;
       sums[mark.part] = record.sum;
-      journalSetAt(out, at, { key: mark.key, sum: mark.sum, ids, sums, partition, vault });
+      out.set(at, { key: mark.key, sum: mark.sum, ids, sums, partition, vault });
       return true;
     },
   };
 }
 
 /**
- * {@link loadJournal} and the store's records that carry no `migrated`
- * mark (the dual-written copies `dualWritePool` matches items against),
- * in one pass over the store, shard by shard: the run keeps the journal
- * and the unmarked records, never the whole store.
+ * {@link loadJournal} and the dual-written copies `dualWritePool` matches
+ * items against, in one pass over the store, record by record: the run
+ * keeps the journal and the copies, never the whole store. Only a record
+ * that can be such a copy is kept: no `migrated` mark, not written while
+ * its device was switched (a native store record, which most records of a
+ * store in use are), and dual-written from this vault. With a scratch, the
+ * journal moves to its file once it grows. The shards the pass could not
+ * see in full are passed on; a throw of the fold (a scratch write that
+ * failed) ends the pass.
  */
 export function loadJournalAndUnmarked(
   dir: string,
   store: StoreHandle,
   scope: JournalScope,
-): { readonly journal: Journal; readonly unmarked: StoreRecord[] } {
+  scratch: MigrationScratch | null = null,
+): {
+  readonly journal: Journal;
+  readonly unmarked: StoreRecord[];
+  readonly unseen: UnseenShards;
+} {
   const unmarked: StoreRecord[] = [];
-  const folder = markFolder(scope);
-  forEachHeldShard(store, (partition, shard) => {
-    for (const record of shard.all) if (!folder.fold(partition, record)) unmarked.push(record);
+  const folder = markFolder(scope, scratch);
+  const native = writtenWhileSwitched(store);
+  const unseen = forEachHeldRecord(store, (partition, record) => {
+    if (folder.fold(partition, record)) return;
+    if (native(record) || !dualWriteFromVault(scope, record)) return;
+    unmarked.push(record);
   });
-  return { journal: withDiskRows(folder.journal, dir, scope), unmarked };
+  return { journal: withDiskRows(folder.journal, dir, scope), unmarked, unseen };
 }
 
 /**
@@ -329,18 +453,24 @@ export function loadJournal(
   store: StoreHandle,
   scope: JournalScope,
   held?: ReadonlyMap<StorePartition, ReadonlyArray<StoreRecord>>,
+  scratch: MigrationScratch | null = null,
 ): Journal {
-  return withDiskRows(journalFromStore(store, scope, held), dir, scope);
+  return withDiskRows(journalFromStore(store, scope, held, scratch), dir, scope);
 }
 
-/** `journal` with the rows on disk that complete it (see {@link loadJournal}). */
+/**
+ * `journal` with the rows on disk that complete it (see {@link loadJournal}):
+ * a version the store's marks hold whole stays the store's; any other
+ * takes the last row the file holds for it. The file is read row by row.
+ */
 function withDiskRows(journal: Journal, dir: string, scope: JournalScope): Journal {
-  for (const [at, versions] of readJournal(dir, scope)) {
-    for (const row of versions.values()) {
-      const known = journal.get(at)?.get(row.sum);
-      if (known === undefined || !rowComplete(known)) journalSetAt(journal, at, row);
-    }
-  }
+  forEachJournalFileRow(dir, (row) => {
+    const vault = rowVault(scope, parseJournalVault(row.vault));
+    const at = scopedKey(scope, vault, row.key);
+    const known = journal.entry(at, row.sum);
+    if (known !== undefined && !known.disk && rowComplete(known.row)) return;
+    journal.set(at, row, "disk");
+  });
   return journal;
 }
 
@@ -367,31 +497,37 @@ export function heldRecordsByPartition(
   return out;
 }
 
+/** What verification looks a record's checksum up in. */
+export interface RecordSums {
+  get(id: string): string | undefined;
+}
+
 /**
- * What the end of a migration reads of the store, in one pass, shard by
- * shard: every held record's checksum by id (what verification checks
+ * What the end of a migration reads of the store, in one pass, record by
+ * record: every held record's checksum by id (what verification checks
  * against) and the shards it could not all see (what the switch refuses
- * on).
+ * on). With a scratch, the checksums move to its file once they grow.
  */
-export function readFinalStoreView(store: StoreHandle): {
-  readonly sums: Map<string, string>;
+export function readFinalStoreView(
+  store: StoreHandle,
+  scratch: MigrationScratch | null = null,
+): {
+  readonly sums: ReadonlySpillMap;
   readonly unseen: UnseenShards;
 } {
-  const sums = new Map<string, string>();
-  const unseen = forEachHeldShard(store, (_partition, shard) => {
-    for (const record of shard.all) sums.set(record.id, record.sum);
+  const sums = scratch === null ? new SpillMap() : scratch.map();
+  const unseen = forEachHeldRecord(store, (_partition, record) => {
+    sums.set(record.id, record.sum);
   });
   return { sums, unseen };
 }
 
 /** Every record this machine holds, by id: what verification checks against. */
-export function storeRecordSums(store: StoreHandle): Map<string, string> {
-  const out = new Map<string, string>();
-  // Shard by shard: the ids and checksums are kept, never the records.
-  forEachHeldShard(store, (_partition, shard) => {
-    for (const record of shard.all) out.set(record.id, record.sum);
-  });
-  return out;
+export function storeRecordSums(
+  store: StoreHandle,
+  scratch: MigrationScratch | null = null,
+): ReadonlySpillMap {
+  return readFinalStoreView(store, scratch).sums;
 }
 
 /** Every verified record this machine holds, with the shard's device. */
@@ -420,10 +556,52 @@ export function forEachHeldShard(
   store: Pick<StoreHandle, "root" | "partitions">,
   onShard: (partition: StorePartition, shard: PartitionShard) => void,
 ): UnseenShards {
+  return walkHeld(store, (partition, root, options, onTotals) =>
+    forEachPartitionShard(root, options, (shard) => {
+      onShard(partition, shard);
+      onTotals({ rel: shard.rel, pending: shard.pending.length });
+    }),
+  );
+}
+
+/**
+ * Every held record, one at a time, with its partition, and the shards
+ * whose records this machine could not all see: {@link forEachHeldShard}
+ * without even one shard's records held. A store's busiest shard can hold
+ * every record a migration imported.
+ */
+export function forEachHeldRecord(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  onRecord: (
+    partition: StorePartition,
+    record: StoreRecord,
+    pending: boolean,
+    shard: PartitionShardHead,
+  ) => void,
+): UnseenShards {
+  return walkHeld(store, (partition, root, options, onTotals) =>
+    forEachPartitionRecord(root, options, {
+      record: (shard, record, pending) => onRecord(partition, record, pending, shard),
+      shard: (totals) => onTotals({ rel: totals.rel, pending: totals.pending }),
+    }),
+  );
+}
+
+/** The partition walk both held reads share, and the unseen shards it names. */
+function walkHeld(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  read: (
+    partition: StorePartition,
+    root: string,
+    options: ReadPartitionOptions,
+    onTotals: (shard: { readonly rel: string; readonly pending: number }) => void,
+  ) => void,
+): UnseenShards {
   const unreadable: string[] = [];
   const partial: string[] = [];
   for (const partition of store.partitions) {
-    forEachPartitionShard(
+    read(
+      partition,
       partitionDir(store.root, partition),
       {
         onUnreadable: ({ rel, incomplete }) => {
@@ -432,13 +610,12 @@ export function forEachHeldShard(
         },
       },
       (shard) => {
-        onShard(partition, shard);
         // A pending blob is a gap here even when this machine quarantined its
         // line: rollback, the late import, the preflight and the legacy
         // removal refuse on it, and none of them waits for it.
         const rel = `${partition}/${shard.rel}`;
         if (
-          shard.pending.length > 0 &&
+          shard.pending > 0 &&
           shard.rel.split("/")[0] !== DIGEST_STREAM &&
           !partial.includes(rel)
         ) {
@@ -456,16 +633,14 @@ export function readHeldRecords(store: Pick<StoreHandle, "root" | "partitions">)
   readonly unseen: UnseenShards;
 } {
   const records: StoreRecord[] = [];
-  const unseen = forEachHeldShard(store, (_partition, shard) => {
-    // Appended one by one: spreading a shard of several hundred thousand
-    // records into one call overflows the call stack.
-    for (const record of shard.all) records.push(record);
+  const unseen = forEachHeldRecord(store, (_partition, record) => {
+    records.push(record);
   });
   return { records, unseen };
 }
 
 export function unseenHeldShards(store: Pick<StoreHandle, "root" | "partitions">): UnseenShards {
-  return forEachHeldShard(store, () => {});
+  return forEachHeldRecord(store, () => {});
 }
 
 /** Whether any shard is unseen, and how a refusal names them (the first five). */

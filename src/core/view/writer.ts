@@ -31,7 +31,11 @@ import { appendRecord, type AppendResult } from "../store/appender.ts";
 import { AUTHORITY_FIELD } from "../store/constants.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { withLocalLock } from "../store/local-lock.ts";
-import { catchUp, partitionRecords } from "./catch-up.ts";
+import { compareRecords, type StoreRecord } from "../store/envelope.ts";
+import { observeClock } from "../store/clock-store.ts";
+import { parseHlc } from "../store/hlc.ts";
+import { forEachPartitionRecord } from "../store/state-digest.ts";
+import { partitionDir } from "../store/store-paths.ts";
 import {
   VIEW_CLAIM_SEEN_FILE,
   VIEW_RENDER_LOCK,
@@ -40,7 +44,12 @@ import {
   VIEW_WRITER_RELEASED_KIND,
   VIEW_WRITER_REQUEST_KIND,
 } from "./constants.ts";
-import { foldViewWriter, pendingTarget, type ViewWriterState } from "./writer-fold.ts";
+import {
+  foldViewWriter,
+  pendingTarget,
+  VIEW_WRITER_KINDS,
+  type ViewWriterState,
+} from "./writer-fold.ts";
 
 export interface ViewWriterWriteOptions {
   /** Agent identity written on the record. */
@@ -48,9 +57,34 @@ export interface ViewWriterWriteOptions {
   readonly now?: () => number;
 }
 
-/** The view writer as this machine sees it after a catch-up. */
+/**
+ * The view writer as this machine sees it after a catch-up. The held
+ * partitions are read as a catch-up reads them, record by record: only
+ * the view writer records of `shared` are kept (the fold reads no
+ * other), and every record still raises the local clock (the receive
+ * rule), so the store a migration just filled is never held whole.
+ */
 export function readViewWriter(store: StoreHandle, now?: () => number): ViewWriterState {
-  return foldViewWriter(partitionRecords(catchUp(store, now), "shared"));
+  const kept: StoreRecord[] = [];
+  let newest: StoreRecord | undefined;
+  for (const partition of store.partitions) {
+    forEachPartitionRecord(
+      partitionDir(store.root, partition),
+      { onUnreadable: () => {} },
+      {
+        record: (_shard, record, pending) => {
+          // A catch-up holds pending bodies out of the fold and the clock.
+          if (pending) return;
+          if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
+          if (partition === "shared" && VIEW_WRITER_KINDS.has(record.kind)) kept.push(record);
+        },
+      },
+    );
+  }
+  if (newest !== undefined) {
+    observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
+  }
+  return foldViewWriter(kept);
 }
 
 function appendSetting(

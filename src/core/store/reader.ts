@@ -132,20 +132,6 @@ export interface ReadShardOptions {
 
 const NEWLINE = 0x0a;
 
-/**
- * Reading is receiving (`clock-floor.ts`): the newest stamp among `records`
- * raises this process's clock floor for the store the partition belongs
- * to, so a write that replaces or removes one of them orders after it.
- */
-function observeRead(partitionRoot: string, records: ReadonlyArray<ReadRecord>): void {
-  let newest: Hlc | null = null;
-  for (const { record } of records) {
-    const clock = parseHlc(record.hlc);
-    if (clock !== null && (newest === null || compareHlc(clock, newest) > 0)) newest = clock;
-  }
-  if (newest !== null) noteObservedClock(dirname(partitionRoot), newest);
-}
-
 /** Bytes read from a shard per call. */
 const READ_CHUNK_BYTES = 1024 * 1024;
 
@@ -294,25 +280,28 @@ function readLine(
 }
 
 /**
- * Mark the diagnostics and pending records this machine quarantined: only
- * on a match of both the offset and the hash of the line's bytes with one
+ * The quarantine marks of one shard read (`shard-quarantine.ts`): only on
+ * a match of both the offset and the hash of the line's bytes with one
  * ledger entry of the matching kind, never on the shard or the offset
- * alone. A `corrupt-line` entry marks only a corrupt line, a `blob-pending`
- * entry only a pending record, and a pending record of a `settings` shard
- * is never marked. The hash is taken from `fd`, the descriptor the read
- * parsed, so the bytes hashed are the bytes judged. A torn line needs no
- * mark and a newer-format line is never marked.
+ * alone. A `corrupt-line` entry marks only a corrupt line, a
+ * `blob-pending` entry only a pending record, and a pending record of a
+ * `settings` shard is never marked. The hash is taken from `fd`, the
+ * descriptor the read parsed, so the bytes hashed are the bytes judged. A
+ * torn line needs no mark and a newer-format line is never marked.
  */
-function markQuarantined(
+function quarantineMarks(
   fd: number,
   path: string,
-  partitionRoot: string,
-  records: ReadRecord[],
-  diagnostics: ShardDiagnostic[],
-): { records: ReadRecord[]; diagnostics: ShardDiagnostic[] } {
+  partitionRoot: string | undefined,
+): {
+  readonly record: (r: ReadRecord) => ReadRecord;
+  readonly diagnostics: (all: ShardDiagnostic[]) => ShardDiagnostic[];
+} {
+  const none = { record: (r: ReadRecord) => r, diagnostics: (all: ShardDiagnostic[]) => all };
+  if (partitionRoot === undefined) return none;
   const rel = relative(partitionRoot, path).split("\\").join("/");
   const ledger = quarantinedLines(partitionRoot, rel);
-  if (ledger.size === 0) return { records, diagnostics };
+  if (ledger.size === 0) return none;
   const settings = rel.split("/")[0] === "settings";
   const matches = (offset: number, kind: QuarantineKind): boolean => {
     const entry = ledger.get(offset);
@@ -321,25 +310,69 @@ function markQuarantined(
     );
   };
   return {
-    records: records.map((r) =>
+    record: (r) =>
       r.bodyState === "pending" && !settings && matches(r.offset, "blob-pending")
         ? { ...r, quarantined: true }
         : r,
-    ),
-    diagnostics: diagnostics.map((d) =>
-      d.kind === "corrupt-line" && d.torn !== true && matches(d.offset, "corrupt-line")
-        ? { ...d, quarantined: true }
-        : d,
-    ),
+    diagnostics: (all) =>
+      all.map((d) =>
+        d.kind === "corrupt-line" && d.torn !== true && matches(d.offset, "corrupt-line")
+          ? { ...d, quarantined: true }
+          : d,
+      ),
   };
+}
+
+/** What a streamed read of one shard ({@link scanShard}) saw, without its records. */
+export interface ShardScan {
+  readonly diagnostics: ReadonlyArray<ShardDiagnostic>;
+  readonly compactions: ReadonlyArray<Compaction>;
+  /** First byte not consumed: where the next read of this shard resumes. */
+  readonly nextOffset: number;
+  /** Bytes after `nextOffset` held back for a retry (an incomplete or unverified last line). */
+  readonly pendingTailBytes: number;
+  /** Size of the shard when it was read. */
+  readonly size: number;
+  /** Records handed on, pending ones included. */
+  readonly records: number;
+  /** Records handed on whose body is a blob not arrived, and whose line is not quarantined. */
+  readonly pending: number;
 }
 
 /** Read and verify the shard at `path` from `options.offset`. */
 export function readShard(path: string, options: ReadShardOptions = {}): ShardRead {
-  const start = options.offset ?? 0;
   const records: ReadRecord[] = [];
+  const scan = scanShard(path, options, (record) => {
+    records.push(record);
+  });
+  return {
+    records,
+    diagnostics: scan.diagnostics,
+    compactions: scan.compactions,
+    nextOffset: scan.nextOffset,
+    pendingTailBytes: scan.pendingTailBytes,
+    size: scan.size,
+  };
+}
+
+/**
+ * {@link readShard} one record at a time: `onRecord` gets each verified
+ * record, in file order, as its line is read, and the read keeps none of
+ * them. A caller that needs only part of each record (its id and
+ * checksum, its mark) never holds the whole shard: a store's busiest
+ * shard can hold every record a migration imported.
+ */
+export function scanShard(
+  path: string,
+  options: ReadShardOptions,
+  onRecord: (record: ReadRecord) => void,
+): ShardScan {
+  const start = options.offset ?? 0;
   const diagnostics: ShardDiagnostic[] = [];
   const compactions: Compaction[] = [];
+  let handed = 0;
+  let pending = 0;
+  let newest: Hlc | null = null;
   const shardDevice = shardDeviceOf(path);
   // The same guard as a blob read: a symlink or a FIFO a sync peer swaps
   // in under the name after the listing is never followed or blocked on.
@@ -356,12 +389,13 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
     });
     // Nothing was read past `start`, so the size says the same as the offset.
     return {
-      records,
       diagnostics,
       compactions,
       nextOffset: start,
       pendingTailBytes: 0,
       size: start,
+      records: 0,
+      pending: 0,
     };
   }
   try {
@@ -372,8 +406,18 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
         offset: start,
         reason: `offset ${start} is past the end of the shard (${size} bytes); the shard was truncated or replaced`,
       });
-      return { records, diagnostics, compactions, nextOffset: start, pendingTailBytes: 0, size };
+      return {
+        diagnostics,
+        compactions,
+        nextOffset: start,
+        pendingTailBytes: 0,
+        size,
+        records: 0,
+        pending: 0,
+      };
     }
+    const marks = quarantineMarks(fd, path, options.partitionRoot);
+    const storeRoot = options.partitionRoot === undefined ? null : dirname(options.partitionRoot);
     const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, Math.max(size - start, 1)));
     /** First byte not consumed. */
     let consumed = start;
@@ -435,8 +479,20 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
           }
           if (outcome.kind === "diagnostic") diagnostics.push(outcome.diagnostic);
           if (outcome.kind === "record") {
-            records.push(outcome.record);
             if (outcome.compaction !== null) compactions.push(outcome.compaction);
+            const record = marks.record(outcome.record);
+            const clock = parseHlc(record.record.hlc);
+            if (clock !== null && (newest === null || compareHlc(clock, newest) > 0)) {
+              newest = clock;
+              // Reading is receiving (`clock-floor.ts`): the stamp raises
+              // this process's clock floor for the store the partition
+              // belongs to before the record is handed on, so a write the
+              // caller makes for it (or after a throw) orders after it.
+              if (storeRoot !== null) noteObservedClock(storeRoot, clock);
+            }
+            handed += 1;
+            if (record.bodyState === "pending" && record.quarantined !== true) pending += 1;
+            onRecord(record);
           }
         }
         carry = [];
@@ -451,18 +507,14 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
       overlong();
       consumed = position;
     }
-    if (options.partitionRoot !== undefined) observeRead(options.partitionRoot, records);
-    const marked =
-      options.partitionRoot === undefined
-        ? { records, diagnostics }
-        : markQuarantined(fd, path, options.partitionRoot, records, diagnostics);
     return {
-      records: marked.records,
-      diagnostics: marked.diagnostics,
+      diagnostics: marks.diagnostics(diagnostics),
       compactions,
       nextOffset: consumed,
       pendingTailBytes: size - consumed,
       size,
+      records: handed,
+      pending,
     };
   } finally {
     closeSync(fd);
@@ -479,10 +531,19 @@ export function readShard(path: string, options: ReadShardOptions = {}): ShardRe
  * answer decides a protection treats a shard with a gap as unseen.
  */
 export function shardReadGap(read: ShardRead): string | null {
+  return gapText(
+    read.records.filter((r) => r.bodyState === "pending" && r.quarantined !== true).length,
+    read.diagnostics,
+  );
+}
+
+/** {@link shardReadGap} of a streamed read ({@link scanShard}). */
+export function shardScanGap(scan: ShardScan): string | null {
+  return gapText(scan.pending, scan.diagnostics);
+}
+
+function gapText(pending: number, diagnostics: ReadonlyArray<ShardDiagnostic>): string | null {
   const reasons: string[] = [];
-  const pending = read.records.filter(
-    (r) => r.bodyState === "pending" && r.quarantined !== true,
-  ).length;
   if (pending > 0) {
     reasons.push(
       pending === 1
@@ -490,7 +551,7 @@ export function shardReadGap(read: ShardRead): string | null {
         : `${pending} records whose bodies are blobs that have not arrived yet`,
     );
   }
-  for (const d of read.diagnostics) {
+  for (const d of diagnostics) {
     if (d.torn === true || d.quarantined === true) continue;
     reasons.push(`${d.kind} at byte ${d.offset}: ${d.reason}`);
   }
