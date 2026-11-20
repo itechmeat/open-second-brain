@@ -32,6 +32,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
 import { resolveSearchConfig } from "../search/index.ts";
+import { indexBuildDetails, readIndexBuild } from "../search/build-progress.ts";
 import { checkVaultWriteable } from "../doctor.ts";
 import { NEXT_COMMAND_KEY, nextCommandField, type NextCommandField } from "./next-step.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
@@ -198,7 +199,20 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
     const dbPath = config.dbPath;
     const indexExists = existsSync(dbPath);
 
-    if (!indexExists) {
+    const build = readIndexBuild(dbPath);
+    if (!indexExists && build !== null) {
+      // A rebuild is building the first index (the first start after the
+      // brain moved into the brain store): a search answers from what it
+      // has indexed so far and says so. No registered command: the build
+      // finishes on its own, and a second one would queue behind it.
+      notices.push(
+        notice(
+          "search_index_building",
+          "info",
+          `Search index is being built (${indexBuildDetails(build)}); until it finishes, recall answers from what it has indexed so far.`,
+        ),
+      );
+    } else if (!indexExists) {
       // The read path self-heals: `openReadOrSelfHeal` catches
       // INDEX_MISSING, builds the index and retries, so recall does not
       // come back empty - it comes back late. The notice said the
@@ -209,8 +223,9 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
         notice(
           "search_index_missing",
           "info",
-          "Search index is not built yet, so the first recall builds it before returning " +
-            "(that call pays the full index build).",
+          "Search index is not built yet: a recall while a background build runs answers " +
+            "from what it has indexed so far, and one with no build running builds it " +
+            "before returning (that call pays the full index build).",
         ),
       );
     } else if (reindexInProgress(dbPath)) {
@@ -221,7 +236,9 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
         notice(
           "reindex_in_progress",
           "info",
-          "Search index is rebuilding; recent recall results may lag until it completes.",
+          build === null
+            ? "Search index is rebuilding; recent recall results may lag until it completes."
+            : `Search index is rebuilding (${indexBuildDetails(build)}); recent recall results may lag until it completes.`,
         ),
       );
     }

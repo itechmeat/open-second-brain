@@ -95,6 +95,7 @@ import { pathCovers } from "../vault-scope/defaults.ts";
 
 import {
   acquireWriterLease,
+  type WriterLease,
   keepWriterLeasesFresh,
   WRITER_LEASE_BLOCKING_BUDGET_MS,
   writerLeaseCheckIn,
@@ -120,7 +121,17 @@ import {
 import { LATEST_SCHEMA_VERSION, documentAttributesFromFrontmatter } from "./schema.ts";
 import { chunkWindowDiagnosticCode, CHUNK_HOLD_REASON, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
-import { forgetCatchUpState, ingestStoreInto } from "./brain-store/catch-up.ts";
+import {
+  dropForgottenRecords,
+  forgetCatchUpState,
+  ingestStoreInto,
+} from "./brain-store/catch-up.ts";
+import {
+  IndexBuildRecorder,
+  stagingIndexPath,
+  sweepStagingClaims,
+  waitForStagingReaders,
+} from "./build-progress.ts";
 import { purgeStoreRecords } from "./brain-store/ingest.ts";
 import { STORE_RECORD_PATH_PREFIX } from "./brain-store/constants.ts";
 import {
@@ -147,7 +158,7 @@ import type { ValidityWindow } from "./validity.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { closeDatabase } from "../sqlite-close.ts";
-import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
+import { renameWithRetry, unlinkWithRetry, type RenameRetrySeams } from "../fs-atomic.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1511,7 +1522,7 @@ async function reindexInto(
   stillCurrent: (() => boolean) | null,
   opts?: IndexVaultOptions,
 ): Promise<IndexStats | null> {
-  const newPath = config.dbPath + ".new";
+  const newPath = stagingIndexPath(config.dbPath);
   const bakPath = config.dbPath + ".bak";
 
   assertVaultDirectory(config.vault);
@@ -1533,8 +1544,13 @@ async function reindexInto(
   // below lock a different path (`.new`), so there is no self-deadlock.
   const lease = await acquireWriterLease(config.dbPath);
   progress.advance(INDEX_STAGE.lock);
+  // What a search answering from the staging file, the session notice and
+  // the error text read while this rebuild runs (`build-progress.ts`).
+  let recorder: IndexBuildRecorder | null = null;
   try {
     if (stillCurrent !== null && stillCurrent()) return null;
+    recorder = new IndexBuildRecorder(config.dbPath, Date.now, () => leaseStillHeld(lease));
+    sweepStagingClaims(config.dbPath);
     // Build into the temp file with an override config.
     const tempConfig: ResolvedSearchConfig = Object.freeze({
       ...config,
@@ -1556,7 +1572,7 @@ async function reindexInto(
       if (existsSync(newPath)) {
         resume = await stagingSignatureMatches(tempConfig, signature);
       }
-      if (!resume) tryUnlink(newPath);
+      if (!resume) discardStaging(newPath);
       // Stamp the signature so an interruption leaves a build a later run
       // can recognise and resume. An unknown-identity signature is stamped
       // too: it documents the identity, and the comparison above never
@@ -1565,8 +1581,17 @@ async function reindexInto(
         store.setState(REINDEX_SIGNATURE_KEY, JSON.stringify(signature)),
       );
     } else {
-      tryUnlink(newPath);
+      discardStaging(newPath);
     }
+    // A staging file resumed from an earlier run was built before this
+    // one began: whatever the store has forgotten since (a removed signal,
+    // preference or lane entry) leaves it before any search may read it.
+    if (resume && config.brainStore) {
+      await withStagingStore(tempConfig, (store) => dropForgottenRecords(store, tempConfig));
+    }
+    // The staging file is this build's now, accepted or recreated: searches
+    // may read it from here on (until here the record said `preparing`).
+    recorder.ready();
 
     // `force: false` on resume lets the fastpath skip the files the
     // partial build already committed; a fresh build forces every file.
@@ -1589,7 +1614,11 @@ async function reindexInto(
     // reported among the run's errors.
     if (config.brainStore) {
       try {
-        await withStagingStore(tempConfig, (store) => ingestStoreInto(store, tempConfig));
+        await withStagingStore(tempConfig, (store) =>
+          ingestStoreInto(store, tempConfig, (done, total, records) =>
+            recorder?.store(done, total, records),
+          ),
+        );
       } catch (e) {
         stats = {
           ...stats,
@@ -1609,6 +1638,31 @@ async function reindexInto(
     if (config.resumeReindex) {
       await withStagingStore(tempConfig, (store) => store.deleteState(REINDEX_SIGNATURE_KEY));
     }
+
+    // A search may be reading the staging file (`build-progress.ts`). From
+    // here on no new one opens it, and the ones holding it (one query each)
+    // are waited for, so the WAL below folds completely and, on Windows,
+    // the rename meets no open handle. A reader that outstays the wait (a
+    // process stuck mid-query) does not fail the build: the fold and the
+    // rename each retry for a bounded time. The barrier itself must hold:
+    // a build that cannot publish it never swaps.
+    if (recorder !== null && !recorder.finish()) {
+      throw new SearchError(
+        "INDEX_LOCKED",
+        `the rebuild of ${config.dbPath} could not keep searches off its staging file for the swap: the progress file could not be written or removed`,
+      );
+    }
+    // Readers still in flight after the wait do not stop the swap: the
+    // fold and the renames retry. A claim list that could not be read at
+    // all is not a drained one, so the swap stops.
+    const drain = await waitForStagingReaders(config.dbPath, STAGING_SWAP_BUDGET_MS);
+    if (drain === "unknown") {
+      throw new SearchError(
+        "INDEX_LOCKED",
+        `the rebuild of ${config.dbPath} could not list the searches reading its staging file, so it does not swap it in`,
+      );
+    }
+    await foldStagingWal(newPath);
 
     // Same-directory rename swap. The two renames are each atomic on
     // POSIX; the gap between them is the only crash window. A read that
@@ -1646,18 +1700,30 @@ async function reindexInto(
     // this run's staging build.
     lease.assertHeld();
     const parkPath = keepBak ? config.dbPath + ".old" : bakPath;
-    tryUnlink(parkPath);
-    tryRename(config.dbPath, parkPath); // no-op (ENOENT) on fresh reindex
-    try {
-      renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
-    } catch (swapError) {
-      restoreLiveFromBak(parkPath, config.dbPath);
-      throw swapError;
-    }
+    // On Windows each rename may retry for STAGING_SWAP_BUDGET_MS, blocking
+    // this thread: the lease is kept fresh off it for both, and ownership
+    // is checked again once they are done.
+    keepWriterLeasesFresh(SWAP_LEASE_BUDGET_MS, () => {
+      tryUnlink(parkPath);
+      tryRename(config.dbPath, parkPath, SWAP_RENAME_SEAMS); // no-op (ENOENT) on fresh reindex
+      try {
+        // must succeed — `newPath` was just built
+        renameWithRetry(newPath, config.dbPath, SWAP_RENAME_SEAMS);
+      } catch (swapError) {
+        restoreLiveFromBak(parkPath, config.dbPath);
+        throw swapError;
+      }
+    });
+    lease.assertHeld();
+    // The staging file's journal siblings stay behind when a reader kept
+    // the journal mode from switching back; they belong to no file now.
+    discardQuietly(newPath + "-wal");
+    discardQuietly(newPath + "-shm");
     if (keepBak) tryUnlink(parkPath);
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
+    recorder?.end();
     lease.release();
   }
 }
@@ -1830,10 +1896,91 @@ function tryUnlink(p: string): void {
   }
 }
 
-/** `renameSync` that tolerates ENOENT on the source. */
-function tryRename(from: string, to: string): void {
+/**
+ * How long the swap waits for searches reading the staging file, and how
+ * long each of its renames and its WAL fold retry: a search holds the file
+ * for one query, which takes seconds at most.
+ */
+const STAGING_SWAP_BUDGET_MS = 30_000;
+
+/** How long the lease is kept fresh through the swap's renames: both retry budgets and a margin. */
+const SWAP_LEASE_BUDGET_MS = 2 * STAGING_SWAP_BUDGET_MS + 10_000;
+
+/** The retry seams of the swap's renames: {@link STAGING_SWAP_BUDGET_MS} on Windows. */
+const SWAP_RENAME_SEAMS = Object.freeze({ budgetMs: STAGING_SWAP_BUDGET_MS });
+
+/**
+ * Whether `lease` is still this rebuild's, for its progress record: a
+ * lease taken over (or one that cannot be confirmed) is not.
+ */
+function leaseStillHeld(lease: WriterLease): boolean {
+  if (lease.lost) return false;
   try {
-    renameWithRetry(from, to);
+    lease.assertHeld();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A fresh build's staging file and its journal siblings, discarded. */
+function discardStaging(newPath: string): void {
+  tryUnlink(newPath);
+  tryUnlink(newPath + "-wal");
+  tryUnlink(newPath + "-shm");
+}
+
+/** Best-effort unlink of a file nothing reads any more. */
+function discardQuietly(path: string): void {
+  try {
+    unlinkWithRetry(path);
+  } catch {
+    // absent, or still held: the next fresh build discards it
+  }
+}
+
+/**
+ * Fold the staging file's WAL into the file before it is renamed: a frame
+ * left in `<staging>-wal` would not follow the rename. A checkpoint that
+ * a reader keeps from completing is retried for
+ * {@link STAGING_SWAP_BUDGET_MS}; one that never completes fails the swap
+ * rather than swap in an index missing its last writes.
+ */
+async function foldStagingWal(newPath: string): Promise<void> {
+  const db = new Database(newPath);
+  try {
+    db.exec("PRAGMA busy_timeout = 1000");
+    const deadline = Date.now() + STAGING_SWAP_BUDGET_MS;
+    for (;;) {
+      const row = db
+        .query<{ busy: number; log: number; checkpointed: number }, []>(
+          "PRAGMA wal_checkpoint(TRUNCATE)",
+        )
+        .get();
+      if (row === null || (row.busy === 0 && row.log === row.checkpointed)) break;
+      if (Date.now() >= deadline) {
+        throw new SearchError(
+          "INDEX_LOCKED",
+          `the staging index ${newPath} could not be checkpointed before the swap: a reader kept it busy`,
+        );
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await Bun.sleep(50);
+    }
+    try {
+      db.exec("PRAGMA journal_mode = DELETE");
+    } catch {
+      // another connection still has it open: the WAL is empty, which is all the rename needs
+    }
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `renameSync` that tolerates ENOENT on the source. */
+function tryRename(from: string, to: string, seams?: RenameRetrySeams): void {
+  try {
+    renameWithRetry(from, to, seams);
   } catch (e) {
     if (!isEnoent(e)) throw e;
   }

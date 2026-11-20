@@ -55,7 +55,8 @@ import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
 import type { SemanticEmbedTiming } from "./semantic-phase.ts";
-import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
+import { closeServedStore, indexBuildServed, openReadOrSelfHeal } from "./pipeline/store-open.ts";
+import { describeIndexBuild } from "./build-progress.ts";
 import { catchUpBrainStore, type CatchUpResult } from "./brain-store/catch-up.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
 import { detectHybridDegrade } from "./enrich.ts";
@@ -432,7 +433,10 @@ export async function search(
   const store =
     opts.selfHeal === false
       ? await Store.open(effectiveConfig, { mode: "read" })
-      : await openReadOrSelfHeal(effectiveConfig);
+      : await openReadOrSelfHeal(effectiveConfig, { serveBuilding: true });
+  // The first index is still being built: this answer comes from what it
+  // has indexed so far, and says so.
+  const servedBuild = indexBuildServed(store);
   if (catchUps[0]?.skipped === "no-index" || catchUps[0]?.skipped === "not-current") {
     catchUps.push(await catchUpBrainStore(effectiveConfig, { force: true }));
   }
@@ -443,6 +447,18 @@ export async function search(
     // caller can tell an exhausted corpus from a broken embedder without
     // matching on prose.
     const degraded: RetrievalDegradationSink = [];
+    if (servedBuild !== null) {
+      warnings.push(
+        `${describeIndexBuild(servedBuild, nowMs)}; these results come from what it has indexed so far`,
+      );
+      noteDegradation(degraded, RETRIEVAL_DEGRADATION.indexBuilding, {
+        records: servedBuild.storeRecords,
+        percent:
+          servedBuild.storeBytesTotal > 0
+            ? Math.floor((100 * servedBuild.storeBytesDone) / servedBuild.storeBytesTotal)
+            : 0,
+      });
+    }
     const failedCatchUp = catchUps.findLast((c) => c.skipped === "failed");
     if (failedCatchUp !== undefined) {
       warnings.push(`brain store catch-up failed, records may be missing: ${failedCatchUp.error}`);
@@ -456,7 +472,8 @@ export async function search(
     const lastIndexedAt = store.getState(LAST_INDEXED_AT_STATE_KEY);
     maybeFreshenIndex(effectiveConfig, {
       lastIndexedAt,
-      readOnly: opts.selfHeal === false,
+      // A staging file is the rebuild's to finish, never freshened.
+      readOnly: opts.selfHeal === false || servedBuild !== null,
       nowMs,
       ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
     });
@@ -1163,7 +1180,7 @@ export async function search(
     });
     return served(emit(built));
   } finally {
-    await store.close();
+    await closeServedStore(store);
   }
 }
 

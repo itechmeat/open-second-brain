@@ -895,6 +895,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "swaps a freshly built sqlite index into place under the index lock, keeping the " +
       "previous file as `.bak`. A database is not text and has no shared-writer form.",
   },
+  "src/core/search/build-progress.ts": {
+    categories: [C.machineArtifact, C.lockPrimitive, C.retentionDelete],
+    calls: ["unlinkSync", "writeFileSync"],
+    reason:
+      "a running rebuild's progress file beside the index (written through " +
+      "`atomicWriteFileSync`), unlinked when the rebuild ends, and the claim a search " +
+      "reading the staging file takes: an exclusive create (`wx`) of a small file, " +
+      "unlinked after its one query, which the atomic writer would lose the exclusivity " +
+      "of. Machine state beside the index, never a note.",
+  },
   "src/core/search/link-ratchet.ts": {
     categories: [C.archiveTransfer],
     calls: ["cpSync", "rmSync"],
@@ -1403,8 +1413,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 81 -> 82: the search index writer lock is taken, refreshed and released by its own module instead of `proper-lockfile`, to check ownership.
  * 82 -> 83: `src/core/store-migration/auto-state.ts` claims and releases the automatic store migration worker lock (an exclusive create) and removes its state and notice files once moot.
  * 83 -> 82: that module keeps its files in the device-local folder of all stores, never in a vault, so it leaves the in-vault census.
+ * 82 -> 83: `src/core/search/build-progress.ts` removes a running rebuild's progress file beside the search index when the rebuild ends.
  */
-const DIRECT_WRITE_ROWS = 82;
+const DIRECT_WRITE_ROWS = 83;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1665,8 +1676,10 @@ const DIRECT_WRITE_ROWS = 82;
  * writes the list of the sync conflict copies it keeps
  * (`backup/sync-conflict-copies.json`, device-local migration folder) with
  * the shared atomic writer (change migration-sync-conflict-copies).
+ * 116 -> 117: `src/core/search/build-progress.ts` writes a running rebuild's
+ * progress file beside the search index with the shared atomic writer.
  */
-const SHARED_HELPER_ROWS = 116;
+const SHARED_HELPER_ROWS = 117;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1792,8 +1805,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 80 -> 81: the search index writer lock's own module (lock directory metadata only, no stamped bytes).
  * 81 -> 82: the automatic store migration worker lock and state removal (machine state, no note).
  * 82 -> 81: those files left the vault for the device-local folder of all stores.
+ * 81 -> 82: a running rebuild's progress file beside the search index (machine state, no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 81;
+const UNSTAMPED_DIRECT_ROWS = 82;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1939,8 +1953,10 @@ const UNSTAMPED_DIRECT_ROWS = 81;
  * all stores.
  * 111 -> 112: the migration backup's list of the sync conflict copies it
  * keeps, machine state in the device-local migration folder and no note.
+ * 112 -> 113: a running rebuild's progress file beside the search index,
+ * written through the shared atomic writer, machine state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 112;
+const UNSTAMPED_SHARED_ROWS = 113;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

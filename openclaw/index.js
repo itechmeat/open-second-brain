@@ -1625,7 +1625,7 @@ function withWindowsSharingRetry(op, seams) {
   }
   const sleep = seams.sleep ?? sleepSync;
   const now = seams.now ?? Date.now;
-  const deadline = now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  const deadline = now() + (seams.budgetMs ?? WINDOWS_RENAME_RETRY_BUDGET_MS);
   let delay = 10;
   for (;; ) {
     try {

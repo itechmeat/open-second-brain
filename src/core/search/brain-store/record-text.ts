@@ -12,9 +12,20 @@
  * Values are agent and model text and often hold markdown of their own. A
  * value line that would open a heading or a code fence is escaped, so a
  * body can never fake a heading path or swallow the lines after it.
+ *
+ * Bookkeeping that no query recalls is left out: the `migrated` mark an
+ * imported record carries (the legacy item, its checksum and its vault),
+ * and the digests the product itself writes into a body, each by its
+ * field name and exact length ({@link PRODUCT_DIGESTS}). Any other hex
+ * value (a git commit id in a decision, a checksum a note quotes) stays
+ * searchable.
+ * On a migrated store those were most of each record's text: every digest
+ * was cut into dozens of entity rows and filled the full-text and trigram
+ * tables, four times the size of the legacy index of the same content.
  */
 
 import type { StoreRecord } from "../../store/envelope.ts";
+import { MIGRATED_FIELD } from "../../store-migration/migration-records.ts";
 
 /** Body fields tried, in order, for the record's title. */
 const TITLE_FIELDS = ["title", "summary", "principle", "decision", "text", "message"] as const;
@@ -48,6 +59,30 @@ function titleOf(record: StoreRecord, pending: boolean): string {
     }
   }
   return record.kind;
+}
+
+/**
+ * The digests the product writes into record bodies, by field name (the
+ * last segment of the flattened key) and the exact number of hex
+ * characters it writes there:
+ *  - `h` and `prev`: the Brain log's hash chain (`LOG_CHAIN_FIELDS` in
+ *    `brain/log.ts`), sha256, 64;
+ *  - `vault_id`: the vault identity marker's id (`brain/vault-identity.ts`,
+ *    16 random bytes), 32.
+ * A value of another length, or under another name, is not one of them.
+ */
+export const PRODUCT_DIGESTS: ReadonlyMap<string, number> = new Map([
+  ["h", 64],
+  ["prev", 64],
+  ["vault_id", 32],
+]);
+
+const HEX_RE = /^[0-9a-f]+$/;
+
+/** Whether `value` under the flattened `key` is one of {@link PRODUCT_DIGESTS}. */
+function isProductDigest(key: string, value: string): boolean {
+  const field = key.slice(key.lastIndexOf(".") + 1);
+  return PRODUCT_DIGESTS.get(field) === value.length && HEX_RE.test(value);
 }
 
 function scalarText(value: unknown): string | null {
@@ -84,6 +119,7 @@ function flatten(value: unknown, key: string, depth: number, sink: Sink): void {
   if (sink.left <= 0) return;
   const scalar = scalarText(value);
   if (scalar !== null) {
+    if (typeof value === "string" && isProductDigest(key, value)) return;
     emit(sink, inert(`${key}: ${scalar}`));
     return;
   }
@@ -99,8 +135,10 @@ function flatten(value: unknown, key: string, depth: number, sink: Sink): void {
     return;
   }
   if (typeof value === "object" && value !== null && depth < MAX_DEPTH) {
-    for (const [k, v] of Object.entries(value))
+    for (const [k, v] of Object.entries(value)) {
+      if (depth === 0 && k === MIGRATED_FIELD) continue;
       flatten(v, key === "" ? k : `${key}.${k}`, depth + 1, sink);
+    }
   }
 }
 

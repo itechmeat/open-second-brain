@@ -34,6 +34,7 @@ import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibilit
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
+import { IndexBuildingError } from "../core/search/build-progress.ts";
 import {
   defaultConfigPath,
   resolveRecallAdequacyThresholds,
@@ -818,6 +819,9 @@ export function searchErrorToMcp(e: SearchError): MCPError {
   if (e.code === "EMBEDDING_QUOTA_EXHAUSTED") {
     return new MCPError(INTERNAL_ERROR, EMBEDDING_QUOTA_MESSAGE, data);
   }
+  // A missing index that a running rebuild is building: its own message
+  // says how far it is, and the command below would only queue behind it.
+  if (e instanceof IndexBuildingError) return new MCPError(INTERNAL_ERROR, e.message, data);
   if (e.code === "INDEX_MISSING") {
     return new MCPError(
       INTERNAL_ERROR,
@@ -1828,6 +1832,10 @@ async function toolBrainFileContext(
         title: r.title,
         score: r.score,
       })),
+      // Present only when the search reported any: a partial index (still
+      // being built) must not read as "this file has no prior work".
+      ...(outcome.warnings.length > 0 ? { warnings: outcome.warnings } : {}),
+      ...(outcome.degraded.length > 0 ? { retrieval_degraded: outcome.degraded } : {}),
     };
   } catch (e) {
     if (e instanceof SearchError) throw searchErrorToMcp(e);

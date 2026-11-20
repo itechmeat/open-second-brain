@@ -80,6 +80,13 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   indexStale: "index-stale",
   /**
+   * There is no search index yet and a rebuild is building it, so this
+   * answer comes from what the rebuild has indexed so far: a record or a
+   * note not found may only not be indexed yet. Detail: `records` (brain
+   * store records indexed so far) and `percent` (of the brain store read).
+   */
+  indexBuilding: "index-building",
+  /**
    * The brain store catch-up before this read failed, so store records
    * appended since the last good catch-up may be missing from the answer.
    * The failure's own message rides the warning sentence, not the code.
@@ -238,6 +245,7 @@ export type RetrievalDegradationCode =
 /** Membership list, ordered lane by lane along the pipeline. */
 export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode> = Object.freeze([
   RETRIEVAL_DEGRADATION.indexStale,
+  RETRIEVAL_DEGRADATION.indexBuilding,
   RETRIEVAL_DEGRADATION.storeCatchUpFailed,
   RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty,
   RETRIEVAL_DEGRADATION.keywordTrigramLaneFault,
@@ -438,6 +446,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
   switch (code) {
     case RETRIEVAL_DEGRADATION.indexStale:
       return "the index was last updated more than ten minutes ago, so notes changed since then may be missing";
+    case RETRIEVAL_DEGRADATION.indexBuilding:
+      return "the search index is still being built, so this answer comes from what it has indexed so far and a note or record not found may only not be indexed yet";
     case RETRIEVAL_DEGRADATION.storeCatchUpFailed:
       return "the brain store catch-up before this read failed, so store records added since the last good catch-up may be missing";
     case RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty:
