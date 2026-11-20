@@ -19,6 +19,7 @@ import {
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
+import { storeOnlyMode } from "../../../core/store/store-only.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
@@ -37,6 +38,7 @@ import {
   renderSnapshotListingFailure,
   renderSnapshotListingSkips,
   renderSnapshotReason,
+  renderStoreOnlySnapshotRefusal,
 } from "../snapshot-render.ts";
 
 export async function cmdBrainRollback(argv: string[]): Promise<number> {
@@ -56,6 +58,13 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   // read ONCE for both surfaces below.
   if (!flags["list"] && positional.length < 1)
     return fail("brain rollback requires a <run_id> argument (or --list to enumerate snapshots)");
+  // A restore (or its dry run) compares and replaces the vault's `Brain/`
+  // tree, which a switched machine does not keep its memory in. Only a
+  // switch refuses: a machine that never switched and merely lost its
+  // `Brain/` folder restores it from the archive, as before.
+  if (!flags["list"] && storeOnlyMode({ vault }).reason === "device-switched") {
+    return fail(renderStoreOnlySnapshotRefusal("brain rollback"));
+  }
 
   let listing: SnapshotListing;
   try {

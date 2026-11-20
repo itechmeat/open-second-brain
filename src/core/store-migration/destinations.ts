@@ -100,6 +100,11 @@ export type LegacyItem =
       readonly entry: string;
       readonly fields: Readonly<Record<string, unknown>>;
       readonly text: string;
+      /**
+       * The file's text as read, for a page or a JSON file: the record
+       * keeps it as `raw` when `fields` and `text` do not reproduce it.
+       */
+      readonly raw?: string;
     };
 
 /**

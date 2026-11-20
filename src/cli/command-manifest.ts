@@ -745,6 +745,24 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command("state", "Overwrite-only exact-state lane keyed by aspect: set, get, list, clear"),
         command(
+          "standing-rules",
+          "The operator's standing rules, vault-wide or scoped: show, set, clear",
+          [
+            flag("vault", "string"),
+            flag("project", "string"),
+            flag("harness", "string"),
+            flag("host", "string"),
+            flag("file", "string"),
+            flag("stdin", "boolean"),
+            flag("json", "boolean"),
+          ],
+          [
+            command("show", "Print the rules as stored"),
+            command("set", "Replace the rules with a file's text (--file or --stdin)"),
+            command("clear", "Remove the rules"),
+          ],
+        ),
+        command(
           "health-baseline",
           "Acknowledge-before watermark for health advisories: set, get, clear",
         ),

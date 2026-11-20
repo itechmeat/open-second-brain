@@ -88,6 +88,18 @@ export interface StreamReadOptions {
    * named when kept). Absent, every record.
    */
   readonly keep?: (record: StoreRecord) => boolean;
+  /**
+   * A cooperative deadline (a hook's `Safeguard.checkpoint`), called before
+   * each shard and at each record boundary. What it throws stops the read
+   * and reaches the caller as it is, never taken for an unreadable shard;
+   * a shard it stopped keeps the tail it had.
+   */
+  readonly checkpoint?: () => void;
+}
+
+/** A checkpoint's throw on its way out of a shard scan. */
+class StreamReadInterrupted {
+  constructor(readonly cause: unknown) {}
 }
 
 /**
@@ -202,10 +214,18 @@ function scanKeeping(
   partitionRoot: string,
   offset: number,
   keep: ((record: StoreRecord) => boolean) | undefined,
+  checkpoint?: () => void,
 ): ShardPass {
   const records: ReadRecord[] = [];
   let anyPending = 0;
   const scan = scanShard(path, { partitionRoot, ...(offset > 0 ? { offset } : {}) }, (r) => {
+    if (checkpoint !== undefined) {
+      try {
+        checkpoint();
+      } catch (err) {
+        throw new StreamReadInterrupted(err);
+      }
+    }
     // A record the caller does not keep is garbage at once (`gc-hint.ts`).
     gcHintTick();
     if (r.bodyState === "pending") anyPending += 1;
@@ -242,6 +262,7 @@ function readShardWithTails(
   partitionRoot: string,
   tails: ShardTails,
   keep: ((record: StoreRecord) => boolean) | undefined,
+  checkpoint?: () => void,
 ): ShardPass {
   const kept = tails.get(rel);
   let base: ShardTail | null = null;
@@ -280,7 +301,7 @@ function readShardWithTails(
       }
     }
   }
-  const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep);
+  const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep, checkpoint);
   tails.delete(rel);
   const after = lstatSync(path, { bigint: true });
   // The suffix is combined with the kept prefix only when it came from the
@@ -289,7 +310,7 @@ function readShardWithTails(
   // with the kept records. Then the combination is dropped and the shard
   // is read whole, as with no kept tail.
   if (base !== null && !sameDevIno(after, now)) {
-    return scanKeeping(path, partitionRoot, 0, keep);
+    return scanKeeping(path, partitionRoot, 0, keep, checkpoint);
   }
   const pass: ShardPass =
     base === null
@@ -377,13 +398,22 @@ export function readStreamRecords(
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device) continue;
     if (options.month !== undefined && !options.month(monthOf(shard.rel))) continue;
+    options.checkpoint?.();
     let read: ShardPass;
     try {
       read =
         options.tails === undefined
-          ? scanKeeping(shard.path, partitionRoot, 0, options.keep)
-          : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep);
-    } catch {
+          ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint)
+          : readShardWithTails(
+              shard.path,
+              shard.rel,
+              partitionRoot,
+              options.tails,
+              options.keep,
+              options.checkpoint,
+            );
+    } catch (err) {
+      if (err instanceof StreamReadInterrupted) throw err.cause;
       options.tails?.delete(shard.rel);
       unreadable.push(shard.rel);
       continue;

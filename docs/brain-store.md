@@ -1305,6 +1305,56 @@ machine has no store. These checks read the machine config the write
 itself was made with. A `shared_namespace` path that is not a directory
 (an unmounted share, a missing path, a file) is reported as failed.
 
+## Standing rules and other Brain pages after the switch
+
+On a switched machine the vault may have no `Brain/` folder at all, and
+every reader below reads the store instead, also while a legacy tree is
+still on disk (the store is the truth there):
+
+- **Standing rules.** The migration imports `Brain/standing-rules.md` and
+  the scoped rule files under `Brain/standing-rules/` into the
+  `standing-rule` lane with your authority. The session start, the
+  sub-agent carrier and `brain_context` read them from there, as the files
+  said them: a lane entry keeps the file's text byte for byte when its
+  fields and text would not reproduce it (no frontmatter, CRLF line ends,
+  a quoted value). To change them, run
+  `o2b brain standing-rules set --file my-rules.md`;
+  `o2b brain standing-rules show` prints them, `clear` removes them, and
+  `--project <name>`, `--harness <id>` or `--host <device id>` names one
+  scoped rule file instead. No agent tool writes them.
+- **Forgetting.** `o2b brain forget-source` and `brain_delete_by_source`
+  find the derived signals, preferences and lane entries in the store and
+  remove them with the store's own removal records (`signal-removed`,
+  `preference-remove`, `lane-entry-remove`), whatever name the migrated
+  page had; a removal the store does not reflect afterwards is reported as
+  failed, never as nothing to remove. The forget and its plan name any
+  part of the store they could not read (`unreachable`); a confirmed
+  `forget-source` that carries it exits 1, and running it again once the
+  shard reads removes the rest.
+- **Claims, report snapshots, the signal dedup index.** `o2b brain claims`
+  and `brain_claims` build the claim graph from the store's preferences,
+  signals and `theses` entries; the explorer console lists report snapshot
+  surfaces from the `reports` lane; the capture paths skip a signal the
+  store already holds.
+- **Lessons promotion and the budget watermark.** `o2b brain lessons`
+  reads its candidates and judges its approvals against the store's
+  preferences, and the doctor's `active-budget-pressure` check reads the
+  active digest the session start reads.
+- **Quote check.** A quote of a `Brain/` page other than the two digests
+  (the standing rules, say) reads `note-unavailable` on a switched
+  machine, also while a legacy copy of the page is still on disk: that
+  copy is stale, and the Stop hook does not read the store.
+- **Snapshots.** A snapshot on a switched machine holds only its
+  device-local state, not the memory. `o2b brain rollback <run id>` and
+  `o2b brain snapshot diff <run id>` against the live tree refuse there and
+  name `o2b brain migrate-store --rollback` (back to the legacy tree) and
+  `o2b view recover <page>` (an older version of a view page);
+  `o2b brain snapshot log` and `rollback --list` still list the snapshots.
+- **Not carried over.** `Brain/_vault-map.yaml` (the role tokens of
+  `o2b vault map`) has no destination in the migration: the dry run names
+  it, it stays in the legacy tree and its archive, and once the tree is
+  removed the built-in folder names apply.
+
 ## What the partitions protect, and what they do not
 
 The partitions decide **which machines receive which records**. They are a

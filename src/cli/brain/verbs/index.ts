@@ -23,6 +23,7 @@ export { cmdBrainLogVerify, handleBrainLogSubcommand } from "./log.ts";
 export { cmdBrainAttest } from "./attest.ts";
 export { cmdBrainPin, cmdBrainUnpin } from "./pin.ts";
 export { cmdBrainState } from "./state.ts";
+export { cmdBrainStandingRules } from "./standing-rules.ts";
 export { cmdBrainSetPrimary } from "./set-primary.ts";
 export { cmdBrainProtect, cmdBrainUnprotect } from "./protect.ts";
 export { cmdBrainRollback } from "./rollback.ts";

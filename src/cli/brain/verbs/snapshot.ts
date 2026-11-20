@@ -9,6 +9,7 @@ import {
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
+import { storeOnlyMode } from "../../../core/store/store-only.ts";
 import {
   BRAIN_SNAPSHOT_REASONS,
   isBrainSnapshotReason,
@@ -19,6 +20,7 @@ import {
   renderDerivedStoreCoverage,
   renderSnapshotListingFailure,
   renderSnapshotListingSkips,
+  renderStoreOnlySnapshotRefusal,
   SNAPSHOT_UNKNOWN_LABEL,
 } from "../snapshot-render.ts";
 
@@ -208,6 +210,12 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
     );
   }
   const [a, b] = positional;
+  // With one run id the live `Brain/` tree is side B: a switched machine
+  // keeps no memory there, so the diff would only report an empty tree.
+  // A machine that never switched diffs against its tree, present or not.
+  if (b === undefined && storeOnlyMode({ vault }).reason === "device-switched") {
+    return fail(renderStoreOnlySnapshotRefusal("brain snapshot diff against the live tree"));
+  }
   // Same reason as the log verb: "snapshot not found" over a directory
   // nobody could read names the wrong cause. And an archive that could not
   // be described is exactly the archive an operator is most likely to be

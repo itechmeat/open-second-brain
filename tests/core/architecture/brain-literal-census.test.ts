@@ -65,6 +65,7 @@ const FIXTURE = "builds a throwaway fixture vault (bench, doctor self-test) whos
 const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/cli/aider.ts": TEXT,
   "src/cli/brain/help-text.ts": TEXT,
+  "src/cli/brain/snapshot-render.ts": TEXT,
   "src/cli/brain/verbs/bridges.ts": LANE,
   "src/cli/brain/verbs/clusters.ts": LANE,
   "src/cli/brain/verbs/continuity.ts": TEXT,
@@ -88,6 +89,7 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/architect/decisions.ts": LANE,
   "src/core/brain/architect/generate.ts": LANE,
   "src/core/brain/capture/capture-note.ts": TEXT,
+  "src/core/brain/claim-graph.ts": LABEL,
   "src/core/brain/config-template.ts": TEXT,
   "src/core/brain/context-pack.ts": LABEL,
   "src/core/brain/continuity/promote-host-memory.ts": TEXT,

@@ -120,3 +120,23 @@ export function renderSnapshotListingSkips(skipped: ReadonlyArray<SnapshotEntryS
     `this listing is INCOMPLETE: ${skipped.map(describeSnapshotEntrySkip).join(", ")}`
   );
 }
+
+/**
+ * The refusal of a snapshot restore or a diff against the live tree on a
+ * machine switched to the brain store (design D14). There the vault may
+ * have no `Brain/` at all, and a snapshot holds only this machine's
+ * device-local state, never the memory: comparing it with the vault's
+ * `Brain/` would report an empty tree, and restoring it would bring no
+ * record back (and could write a `Brain/` folder the store-only check
+ * reads as a legacy tree). The sentence names the commands that do what
+ * the operator is after.
+ */
+export function renderStoreOnlySnapshotRefusal(verb: string): string {
+  return (
+    `${verb} refused: this machine keeps its memory in the brain store, not in the vault's ` +
+    "Brain/ folder, and a snapshot here holds only this machine's device-local state. To go " +
+    "back to the legacy Brain/ tree, run `o2b brain migrate-store --rollback`; to restore an " +
+    "older version of a page of the human view, run `o2b view recover <page>`. " +
+    "`o2b brain snapshot log` still lists the snapshots."
+  );
+}

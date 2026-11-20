@@ -92,6 +92,9 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         // confirmed removal that could not delete a file must never read
         // as a clean run with a smaller count.
         failed: plan.failed.map((f) => ({ path: f.path, message: f.message })),
+        // What of the brain store the trace could not read: a run that
+        // carries it is not a complete forget, and exits non-zero.
+        ...(plan.unreachable !== undefined ? { unreachable: [...plan.unreachable] } : {}),
         manifest_entry_removed: plan.manifestEntryRemoved,
         audit_record_id: plan.auditRecordId,
         snapshot_run_id: plan.snapshotRunId,
@@ -100,7 +103,17 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
       });
       // Collected failures are an honest non-zero exit, not a crash: the
       // entries that could be removed were, and the JSON names what stayed.
-      return plan.failed.length > 0 ? 1 : 0;
+      return plan.failed.length > 0 || (plan.confirmed && plan.unreachable !== undefined) ? 1 : 0;
+    }
+
+    // A part of the brain store the trace could not read may hold more of
+    // what derives from the source: said on both runs, and a confirmed run
+    // with it is not complete (non-zero exit).
+    for (const rel of plan.unreachable ?? []) {
+      process.stderr.write(
+        `${plan.confirmed ? "error" : "warning"}: could not read ${rel}; ` +
+          "records there were not traced, so this forget is not complete\n",
+      );
     }
 
     if (plan.confirmed) {
@@ -135,7 +148,7 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
           );
         }
       }
-      return plan.failed.length > 0 ? 1 : 0;
+      return plan.failed.length > 0 || plan.unreachable !== undefined ? 1 : 0;
     }
 
     // Dry-run report.

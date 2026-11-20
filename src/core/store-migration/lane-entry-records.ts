@@ -15,6 +15,7 @@
  */
 
 import { isPrivateFrontmatter, isPrivatePageFile } from "../store/dual-write-records.ts";
+import { lanePrivacyRow, rawToKeep } from "../store/lane-raw.ts";
 import { laneEntryRecord, STANDING_RULE_LANE } from "../store/lane-records.ts";
 import { opaqueFields } from "../store/operation-privacy.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
@@ -42,9 +43,13 @@ function agentOf(fields: Readonly<Record<string, unknown>>): string | undefined 
 export const laneEntryItem: RecordFromItem = (vault, item) => {
   const entry = entryOf(item);
   const isPage = entry.path.endsWith(".md");
+  // The file byte for byte, only when the fields and text do not render it
+  // back (`lane-raw.ts`): a standing rule with no frontmatter reads as the
+  // operator wrote it, not under an invented empty `---` block.
+  const raw = rawToKeep(entry.path, entry.raw, entry.fields, entry.text);
   const isPrivate =
     (isPage ? isPrivatePageFile(entry.path) : isPrivateFrontmatter(entry.fields)) ||
-    rowNamesPrivatePage(vault, { fields: entry.fields, text: entry.text }, ENTRY_OPAQUE_FIELDS);
+    rowNamesPrivatePage(vault, lanePrivacyRow(entry.fields, entry.text, raw), ENTRY_OPAQUE_FIELDS);
   const authority =
     entry.lane === STANDING_RULE_LANE || pageRecordsHumanDecision(entry.fields)
       ? "human"
@@ -55,6 +60,7 @@ export const laneEntryItem: RecordFromItem = (vault, item) => {
     entry: entry.entry,
     fields: entry.fields,
     text: entry.text,
+    ...(raw !== undefined ? { raw } : {}),
     authority,
     ...(agent !== undefined ? { agent } : {}),
     private: isPrivate,

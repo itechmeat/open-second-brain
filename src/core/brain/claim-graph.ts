@@ -25,11 +25,13 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
+import { listLaneFiles, parseLanePage } from "../store/lane-pages.ts";
+import { memoryFromStore, storeRecordPages } from "./memory-pages.ts";
 import { brainDirs, claimGraphPath } from "./paths.ts";
 import { isTombstoned, normalizeChainLink, resolveChainTip } from "./lifecycle/tombstone-read.ts";
 import { isValidAt } from "./lifecycle/temporal-replace.ts";
@@ -125,7 +127,19 @@ function normalizedList(meta: FrontmatterMap, key: string): string[] {
   return out.toSorted();
 }
 
+/** The scanned folders a store memory page can sit in (vault-relative). */
+const MEMORY_SUBDIRS: ReadonlySet<string> = new Set(
+  SCANNED_SUBDIRS.filter((sub) => sub !== "theses").map((sub) => `Brain/${sub}`),
+);
+
+/** The lane folder of the scanned subdirectories (no memory record lives there). */
+const THESES_SUBDIR = "theses";
+
 function toNode(vault: string, absPath: string): ClaimNode | null {
+  return nodeOf(vault, absPath, parseFrontmatter(absPath)[0]);
+}
+
+function nodeOf(vault: string, absPath: string, meta: FrontmatterMap): ClaimNode | null {
   // Unit F: `parseFrontmatter` cannot throw (it reads inside its own try;
   // everything after is string work), so the `catch { return null }` that
   // stood here was unreachable - and redundant, because a failed read
@@ -133,7 +147,6 @@ function toNode(vault: string, absPath: string): ClaimNode | null {
   // it. Dropped lines are reported centrally; see the "Why most readers
   // keep the two-tuple form" section in src/core/vault.ts. A claim node
   // is a graph vertex with no report field, so it opens no channel here.
-  const [meta] = parseFrontmatter(absPath);
   if (Object.keys(meta).length === 0) return null;
   const rel = relative(vault, absPath).split("\\").join("/");
   const id = normalizeChainLink(absPath);
@@ -179,15 +192,7 @@ export function buildClaimGraph(vault: string, opts: BuildClaimGraphOptions = {}
       `buildClaimGraph: maxNodes must be a positive integer; got ${maxNodes}`,
     );
   }
-  const brain = brainDirs(vault).brain;
-  const files: string[] = [];
-  for (const sub of SCANNED_SUBDIRS) collectMarkdown(join(brain, sub), files);
-
-  const nodes: ClaimNode[] = [];
-  for (const file of files) {
-    const node = toNode(vault, file);
-    if (node !== null) nodes.push(node);
-  }
+  const nodes = memoryFromStore(vault) ? storeNodes(vault) : legacyNodes(vault);
   nodes.sort((a, b) => a.path.localeCompare(b.path));
 
   const truncated = nodes.length > maxNodes;
@@ -199,6 +204,41 @@ export function buildClaimGraph(vault: string, opts: BuildClaimGraphOptions = {}
     truncated,
     nodes: kept,
   };
+}
+
+/** The nodes of an unswitched vault: the pages of its `Brain/` folders. */
+function legacyNodes(vault: string): ClaimNode[] {
+  const brain = brainDirs(vault).brain;
+  const files: string[] = [];
+  for (const sub of SCANNED_SUBDIRS) collectMarkdown(join(brain, sub), files);
+  const nodes: ClaimNode[] = [];
+  for (const file of files) {
+    const node = toNode(vault, file);
+    if (node !== null) nodes.push(node);
+  }
+  return nodes;
+}
+
+/**
+ * The nodes of a switched vault (design D14), which may have no `Brain/`
+ * folder at all: the store's preferences, retired preferences and
+ * signals, as the pages they would be in the scanned folders, and the
+ * entries of the `theses` lane.
+ */
+function storeNodes(vault: string): ClaimNode[] {
+  const nodes: ClaimNode[] = [];
+  for (const page of storeRecordPages(vault, { signalStates: "all" })) {
+    if (!MEMORY_SUBDIRS.has(posix.dirname(page.rel))) continue;
+    const node = nodeOf(vault, page.path, page.meta);
+    if (node !== null) nodes.push(node);
+  }
+  const theses = join(brainDirs(vault).brain, THESES_SUBDIR);
+  for (const name of listLaneFiles(vault, theses)) {
+    const path = join(theses, name);
+    const node = nodeOf(vault, path, parseLanePage(vault, path)[0]);
+    if (node !== null) nodes.push(node);
+  }
+  return nodes;
 }
 
 /** Persist a projection to `Brain/claim-graph.json`. */

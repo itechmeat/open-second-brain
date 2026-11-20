@@ -497,6 +497,12 @@ export function serializePlan(
       path: f.path,
       message: local ? f.message : `removal failed (${f.code ?? "error"})`,
     })),
+    // The parts of the brain store the trace could not read (store
+    // partition and shard names, no host path): a plan that carries them
+    // is not a complete forget. Emitted only when non-empty.
+    ...(plan.unreachable !== undefined
+      ? { unreachable: [...plan.unreachable], complete: false }
+      : {}),
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
     // The archive-entry cleanup kind (answer trust, Task C4), reported as

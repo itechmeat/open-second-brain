@@ -69,6 +69,12 @@ function rawOf(body: string): string | null {
 export interface ReadSignalsOptions {
   /** The lifecycle states to return (default: active and staged). */
   readonly states?: ReadonlySet<SignalLifecycle> | "all";
+  /**
+   * A cooperative deadline called at the store fold's record boundaries
+   * when the fold is read (not when this process already holds it); what
+   * it throws reaches the caller.
+   */
+  readonly checkpoint?: () => void;
 }
 
 /**
@@ -171,7 +177,9 @@ export function readSignals(
   }
   if (source.store === null) return [];
   const out: SignalEntry[] = [];
-  for (const [id, signal] of readEntitiesOf(source.store).signals) {
+  const checkpoint = options.checkpoint;
+  const entities = readEntitiesOf(source.store, checkpoint !== undefined ? { checkpoint } : {});
+  for (const [id, signal] of entities.signals) {
     if (!keep(signal.state)) continue;
     const body = signal.record.body;
     out.push({
