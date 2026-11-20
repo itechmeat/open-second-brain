@@ -688,11 +688,13 @@ recall DAG populated by CLI `import-session --recall` or the core API.
 `brain_session_summary` accepts `operation: "write"|"get"|"list"` (write takes
 `session_id` plus any of `request`, `decisions`, `learnings`, `next_steps`,
 `source_turn_ids`, `host`, `project_scope`). `project_scope` is the same
-project axis `brain_search` filters on, normalized to the same `[a-z0-9-]` slug:
+project axis `brain_search` filters on, normalized to the same key a record's
+project is stamped with (lowercase, letters, marks and digits of any script
+kept, other runs to one `-`; ASCII values key as the older `[a-z0-9-]` slug did):
 on `write` it files the digest under that project and folds it into the dedupe
 key, so the same content under two projects is two digests; on `list` it returns
 only that project's digests. Omitted, the digest and its dedupe key are
-byte-identical to the pre-project shape. A value with no alphanumeric is an
+byte-identical to the pre-project shape. A value with no letter or digit is an
 `INVALID_PARAMS` error naming the argument, never a silent drop to unscoped.
 This is unrelated to the `o2b brain project` verb, which links a code directory
 to its owning vault at the configuration level. `brain_idea_lineage` accepts `id` and optional

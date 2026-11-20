@@ -611,6 +611,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     ok(`moved_to_processed: ${summary.moved_to_processed.length}`);
   const archived = summary.archived_signals?.length ?? 0;
   if (archived > 0) ok(`archived_signals: ${archived}`);
+  if (summary.topics !== undefined) ok(`topics: ${summary.topics.summary}`);
   if (summary.view !== undefined) ok(`view: ${summary.view.summary}`);
   return 0;
 }
