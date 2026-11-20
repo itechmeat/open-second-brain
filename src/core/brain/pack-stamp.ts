@@ -55,6 +55,8 @@ import { peekCorpusGenerationSync } from "../search/store.ts";
 import { defaultConfigPath } from "../config.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import { loadIntegrityConfigSafe } from "./policy.ts";
+import { brainSettingsFromStore } from "./policy/load.ts";
+import { readBrainSettingsFromStore } from "./policy/settings-source.ts";
 import type { MemoryPage } from "./memory-pages.ts";
 import { listPreferenceFiles } from "./preferences-collect.ts";
 import { formatFrontmatter } from "../vault.ts";
@@ -114,12 +116,32 @@ function brainTreeToken(vault: string): string {
   }
   // The config the pack reads. Always digested, present or not: an
   // ABSENT config is a state, and creating one must move the token.
-  lines.push(digestLine(vault, brainConfigPath(vault)));
+  lines.push(
+    brainSettingsFromStore(vault) ? storeSettingsLine() : digestLine(vault, brainConfigPath(vault)),
+  );
   lines.sort();
   return createHash("sha256")
     .update(lines.join("\n"))
     .digest("hex")
     .slice(0, BRAIN_TREE_DIGEST_CHARS);
+}
+
+/**
+ * The line for the settings of a vault switched to the store: a digest
+ * of the settings in force (the folded records and the device keys), so a
+ * setting changed in the store moves the token as an edited `_brain.yaml`
+ * does. Settings that cannot be read are a state of their own.
+ */
+function storeSettingsLine(): string {
+  let digest = UNSTATTABLE;
+  try {
+    digest = createHash("sha256")
+      .update(JSON.stringify(readBrainSettingsFromStore().config))
+      .digest("hex");
+  } catch {
+    /* recorded as UNSTATTABLE above - a state, not an omission */
+  }
+  return ["brain-settings", digest].join(DIGEST_FIELD_SEP);
 }
 
 /**

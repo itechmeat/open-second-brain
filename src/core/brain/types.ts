@@ -1938,6 +1938,17 @@ export interface BrainGuardrailConfig {
  * guardrails, which govern fact visibility — this only categorizes
  * freshly-recorded feedback signals.
  */
+/**
+ * Optional `quote_check:` block: the mode of each answer-time quote check
+ * phase (`off`, `shadow` or `enforce`). A phase left out takes the
+ * resolver's default.
+ */
+export interface BrainQuoteCheckConfig {
+  readonly recall?: "off" | "shadow" | "enforce";
+  readonly active?: "off" | "shadow" | "enforce";
+  readonly subagent?: "off" | "shadow" | "enforce";
+}
+
 export interface BrainFeedbackConfig {
   /**
    * Default scope applied to `brain_feedback` / `o2b brain feedback`
@@ -2117,6 +2128,11 @@ export interface BrainConfig {
    * per-call scope. Absent: scope-less calls stay scope-less.
    */
   readonly feedback?: BrainFeedbackConfig;
+  /**
+   * Optional `quote_check:` block. The per-phase modes of the answer-time
+   * quote check. Absent: every phase takes the resolver's default.
+   */
+  readonly quote_check?: BrainQuoteCheckConfig;
   /**
    * Optional `hygiene:` block (continuity-hygiene-freshness suite).
    * Tunes the hygiene pipeline: the external conflict-resolver command

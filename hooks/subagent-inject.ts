@@ -99,6 +99,7 @@ import {
   SOURCE_LESSONS_BODY,
   assembleActiveContext,
   createInjectionMeter,
+  BLOCK_SEPARATOR,
   joinBlocks,
   renderScopedBlock,
   resolveInjectionLimits,
@@ -114,6 +115,7 @@ import { readScopedRules } from "../src/core/brain/scoped-rules.ts";
 import { resolveHostScope, resolveProjectScope } from "../src/core/brain/scope-identity.ts";
 import { readStandingRules } from "../src/core/brain/standing-rules.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContextCut, HOST_CONTEXT_CEILING_CHARS } from "./lib/host-context-ceiling.ts";
 
 /**
  * The primary channel: registered in hooks/hooks.json for SubagentStart,
@@ -242,22 +244,72 @@ function composeCarrierPayload(vault: string, workspaceDir: string): CarrierPayl
   // No last-good cache on this surface: a genuine read error inside the
   // assembly degrades the memory lane to empty rather than emitting a
   // partial or poisoned payload, and the rules lanes above it survive.
+  // The whole payload shares the host's per-hook context ceiling
+  // (hooks/lib/host-context-ceiling.ts): the memory context takes what the
+  // rules lanes leave of it, and the joined block is cut to it as a last
+  // guard when the operator's rules alone run past it.
+  const rules = joinBlocks([standingBlock, scopedBlock]);
+  const roomChars = Math.max(
+    0,
+    HOST_CONTEXT_CEILING_CHARS - (rules.length > 0 ? rules.length + BLOCK_SEPARATOR.length : 0),
+  );
   let memoryContext = "";
   try {
-    memoryContext = assembleActiveContext(vault, memoryBudget, meter);
+    memoryContext = assembleActiveContext(vault, memoryBudget, meter, { roomChars });
   } catch {
     memoryContext = "";
   }
   const emitted = (name: string): boolean => meter.sources.some((s) => s.name === name);
+  const cut = fitHostContextCut(
+    joinBlocks([standingBlock, scopedBlock, memoryContext]),
+    " Call `brain_context` for the full preference set.",
+  );
+  // The evidence is what the emitted block carries, after the last guard:
+  // a lane the cut removed is not delivered, and one it cut into delivered
+  // a prefix, so the quote check never accepts a span from cut content.
+  const lanes = deliveredLanes([standingBlock, scopedBlock, memoryContext], cut.kept);
   return {
-    block: joinBlocks([standingBlock, scopedBlock, memoryContext]),
+    block: cut.text,
     evidencePaths: [
-      ...standingEvidencePaths(vault, limits.standingRulesMaxChars),
-      ...scopedEvidencePaths(vault, workspaceDir, sectionCap),
-      ...(emitted(SOURCE_ACTIVE_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE)] : []),
-      ...(emitted(SOURCE_LESSONS_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE)] : []),
+      ...carried(lanes[0]!, standingEvidencePaths(vault, limits.standingRulesMaxChars)),
+      ...carried(lanes[1]!, scopedEvidencePaths(vault, workspaceDir, sectionCap)),
+      ...carried(lanes[2]!, [
+        ...(emitted(SOURCE_ACTIVE_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE)] : []),
+        ...(emitted(SOURCE_LESSONS_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE)] : []),
+      ]),
     ],
   };
+}
+
+/** How much of one lane the emitted block carries. */
+type LaneDelivery = "whole" | "prefix" | "none";
+
+/**
+ * For each of `blocks`, joined by `joinBlocks`, how much of it the first
+ * `kept` characters of the join carry. An empty block carries nothing.
+ */
+function deliveredLanes(blocks: ReadonlyArray<string>, kept: number): LaneDelivery[] {
+  let start = 0;
+  return blocks.map((block) => {
+    if (block.length === 0) return "none";
+    const end = start + block.length;
+    const lane: LaneDelivery = kept >= end ? "whole" : kept > start ? "prefix" : "none";
+    start = end + BLOCK_SEPARATOR.length;
+    return lane;
+  });
+}
+
+/** `paths` as the emitted block carries them: whole, marked truncated, or not at all. */
+function carried(
+  lane: LaneDelivery,
+  paths: ReadonlyArray<SubagentEvidencePath>,
+): ReadonlyArray<SubagentEvidencePath> {
+  if (lane === "whole") return paths;
+  if (lane === "none") return [];
+  return paths.map((entry) => ({
+    path: typeof entry === "string" ? entry : entry.path,
+    truncated: true,
+  }));
 }
 
 async function main(): Promise<void> {

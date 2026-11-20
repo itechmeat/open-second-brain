@@ -31,8 +31,9 @@ import {
 import { runHygieneScan } from "./hygiene/scan.ts";
 import type { HygieneFinding } from "./hygiene/types.ts";
 import { memoryFromStore, storePagesIn } from "./memory-pages.ts";
-import { brainConfigPath, brainDirsOf, brainManualPath, vaultRelative } from "./paths.ts";
+import { brainDirsOf, brainManualPath, vaultRelative } from "./paths.ts";
 import { loadTemporalConfigSafe } from "./policy.ts";
+import { brainConfigExists } from "./policy/load.ts";
 import { listProfiles } from "./portability/profiles.ts";
 import { buildReviewCandidates } from "./review-candidates.ts";
 import { describeManualRevisionAhead, manualRevisionAhead } from "./templates.ts";
@@ -233,7 +234,8 @@ export async function buildOperatorSnapshot(
   // --- State-file health ---
   // With no vault (design D14) the brain settings are store records with
   // shipped defaults, so there is no settings file to miss.
-  const configPresent = vault === null || existsSync(brainConfigPath(vault));
+  // A vault switched to the store keeps them there too.
+  const configPresent = brainConfigExists(vault);
   let searchDbPath: string | null = null;
   try {
     searchDbPath = resolveSearchConfig({ vault, configPath: opts.configPath ?? undefined }).dbPath;

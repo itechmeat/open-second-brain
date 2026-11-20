@@ -130,7 +130,7 @@ export function loadBrainConfigDetailed(vault: string | null): LoadBrainConfigRe
  * be opened is present, and its contents are not the defaults. Settings
  * read from the store are always present (see the module docblock).
  */
-function brainConfigExists(vault: string | null): boolean {
+export function brainConfigExists(vault: string | null): boolean {
   if (vault === null || brainSettingsFromStore(vault)) return true;
   return existsSync(brainConfigPath(vault));
 }

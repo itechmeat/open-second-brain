@@ -594,6 +594,19 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
     keys: [def("degradation", "hard-cut")],
   },
   {
+    key: "quote_check",
+    doc: [
+      "Answer-time quote check, per phase (recall, active, subagent):",
+      "off, shadow or enforce. Unset, every phase is shadow.",
+    ],
+    emit: "commented-example",
+    keys: [
+      example("recall", "shadow", []),
+      example("active", "enforce", []),
+      example("subagent", "shadow", []),
+    ],
+  },
+  {
     key: "rollup",
     doc: ["Fact rollup-ladder thresholds."],
     emit: "commented-default",

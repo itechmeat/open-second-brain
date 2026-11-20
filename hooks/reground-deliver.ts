@@ -59,6 +59,7 @@ import { resolveRegroundPartsEnabled } from "../src/core/config.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 const HOOK_NAME = "reground-deliver";
 
@@ -191,7 +192,7 @@ async function main(): Promise<void> {
     const out = {
       hookSpecificOutput: {
         hookEventName,
-        additionalContext: take.part,
+        additionalContext: fitHostContext(take.part),
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");

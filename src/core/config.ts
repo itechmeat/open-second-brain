@@ -1584,7 +1584,8 @@ export const ANSWER_QUOTE_CHECK_PHASES = Object.freeze(["recall", "active", "sub
 export type AnswerQuoteCheckPhase = (typeof ANSWER_QUOTE_CHECK_PHASES)[number];
 
 /** The mode every phase resolves to when nothing is configured. */
-const QUOTE_CHECK_DEFAULT: AnswerQuoteCheckMode = "shadow";
+export const ANSWER_QUOTE_CHECK_DEFAULT: AnswerQuoteCheckMode = "shadow";
+const QUOTE_CHECK_DEFAULT = ANSWER_QUOTE_CHECK_DEFAULT;
 
 /** Paths and keys whose unknown-field warning already fired in this process. */
 const quoteCheckWarnedUnknownKeys = new Set<string>();
@@ -1685,7 +1686,10 @@ function resolveAnswerQuoteCheckPhase(
  * The brain config file the resolvers read when the caller names none:
  * the standard vault's `Brain/_brain.yaml`. `null` when no vault
  * resolves, which leaves every phase at its default - a vaultless install
- * has no operator settings to contradict.
+ * has no operator settings to contradict. This is the legacy layout only:
+ * a vault switched to the store keeps the block in its shared settings,
+ * which `resolveAnswerQuoteCheckModes` (`src/core/brain/quote-check-modes.ts`)
+ * reads - the entry point the Stop hook uses.
  */
 function defaultAnswerQuoteCheckConfigPath(): string | null {
   const vault = resolveVault();

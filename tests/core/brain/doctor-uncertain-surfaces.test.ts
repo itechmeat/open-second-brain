@@ -17,9 +17,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { selfHealUpgradeLockPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
 import { DEGRADATION_CODE } from "../../../src/core/integrity/degradation.ts";
 import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import { recordLineageObservation } from "../../../src/core/brain/lineage/ledger.ts";
@@ -118,6 +119,21 @@ describe("runDoctor — writer locks left on disk", () => {
     } finally {
       handle.release();
     }
+  });
+
+  test("a sync-conflict copy of the upgrade lock is named as a copy, not as a held lock", () => {
+    writeVaultIdentity(vault);
+    const lock = selfHealUpgradeLockPath(vault);
+    mkdirSync(dirname(lock), { recursive: true });
+    const copy = lock.replace(/\.lock$/, ".sync-conflict-20261120-101500-ABCDEFG.lock");
+    writeFileSync(copy, JSON.stringify({ token: "t", pid: 1, host: "other", since: "x" }));
+    const entry = (runDoctor(vault).uncertain ?? []).find(
+      (u) => u.code === "stale-lock" && u.path === copy,
+    );
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("sync-conflict copy of the automatic Brain upgrade's lock");
+    expect(entry!.message).toContain("delete the copy");
+    expect(entry!.message).not.toContain("remove the file by hand");
   });
 
   test("a vault with no locks reports none", () => {

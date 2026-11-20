@@ -1084,8 +1084,18 @@ default on) is the end-of-turn reminder to record a brain event after a
 turn that changed files; `"false"` or `"0"` turns it off.
 `quote_check_enabled` (env `OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED`,
 default on) is the answer-time quote check; `"false"` or `"0"` turns the
-whole hook off, whatever the per-phase `quote_check.<phase>` modes in
-`_brain.yaml` say. On Claude Code these Stop advisories (and the hygiene
+whole hook off, whatever the per-phase `quote_check.<phase>` modes say.
+The modes are ordinary brain settings: `o2b brain settings set
+quote_check.active enforce` (likewise `recall` and `subagent`; `off`,
+`shadow` or `enforce`, default `shadow`) writes them to `_brain.yaml` on a
+vault that has not switched to the brain store and to a shared settings
+record on one that has, where the check reads them back. The `active`
+phase checks quotes against the notes the session start emitted, which
+the session start records in the session's injection ledger whenever the
+quote check is on and that phase is not `off` (also with recall
+injection and re-delivery off); on a switched vault the ledger's
+`Brain/active.md` and `Brain/lessons.md` are read from the device-local
+digest cache the session start read. On Claude Code these Stop advisories (and the hygiene
 digest) are synchronous hooks that print nothing and hand their text to
 one `async` hook: the model reads it with the next user message, the chat
 does not print it and it starts no model turn of its own. A one-shot
@@ -1136,10 +1146,28 @@ status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
 explicit note when not.
 
+Host context limit: Claude Code takes at most 10,000 characters of
+`additionalContext` from one hook invocation (each hook of an event is
+measured on its own); a longer value is saved to a file and the model
+gets only the path and a 2,000-character preview, and is not asked to
+read it. So every Open Second Brain hook keeps the whole context it emits
+in one invocation under 9,000 characters (that cap less 10%; Codex
+documents no cap and gets the same ceiling). The SessionStart digest
+shares that ceiling across all it emits: the standing and scoped rules,
+the topic heads, the pinned context, the runtime notices and the active
+and lessons bodies with their framing. The active and lessons bodies
+share one room (each still within `active.inject_budget_chars`), cut with
+the usual "Injection truncated to budget" notice that names
+`brain_context`. A payload that still runs past the ceiling (caps set
+larger than it holds) is cut at a line with the same notice, and a cut
+inside an untrusted-source fence closes the fence first. The other hooks
+that emit context (UserPromptSubmit, the sub-agent carrier, the Stop
+advisories) apply the same last guard.
+
 Chunked re-grounding: `reground_parts_enabled` (env
 `OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED`, default off) splits an
-oversized SessionStart payload instead of emitting it whole. Claude Code
-persists an `additionalContext` past roughly 10,000 UTF-16 units to a
+oversized SessionStart payload instead of cutting it to the ceiling.
+Claude Code persists an `additionalContext` past 10,000 characters to a
 file and shows only a preview, so with the flag on, a joined
 standing-rules, scoped-rules and memory payload longer than the part
 ceiling is cut into at most 8 parts (at block, then paragraph, then line
@@ -1171,7 +1199,9 @@ default 9000 (the observed Claude Code threshold less 10%, applied to
 Codex too until measured). At each level the env value wins over the
 config value, and an invalid value falls through to the next level and
 is named in the receipt's `config_invalid` (by its env variable when
-the rejected value came from the env). The
+the rejected value came from the env). A value above the host's
+context ceiling (9,000 characters) applies as that ceiling: a longer
+part would reach the model as a file path and a preview. The
 queue lives under `.open-second-brain/hook-state/` with a 24 h expiry,
 in a per-session file written with mode `0600`; when `.open-second-brain`
 or `hook-state` is a symbolic link, the hooks neither read nor write

@@ -6,6 +6,7 @@ import {
 import { isValidIsoInstant } from "../../../core/brain/health/iso-time.ts";
 import {
   brainVerbContext,
+  resolveBrainAgent,
   fail,
   normalizeFlagString,
   ok,
@@ -58,9 +59,9 @@ export async function cmdBrainHealthBaseline(argv: string[]): Promise<number> {
         `brain health-baseline set: not an ISO-8601 date (YYYY-MM-DD) or timestamp: ${raw}`,
       );
     }
-    const { vault } = brainVerbContext(flags);
+    const { vault, config } = brainVerbContext(flags);
     try {
-      await writeHealthBaseline(vault, value);
+      await writeHealthBaseline(vault, value, resolveBrainAgent(flags, config));
       if (json) okJson({ baseline: value });
       else ok(`health baseline set to ${value}`);
       return 0;
@@ -70,10 +71,10 @@ export async function cmdBrainHealthBaseline(argv: string[]): Promise<number> {
   }
 
   if (sub === "clear") {
-    const { vault } = brainVerbContext(flags);
+    const { vault, config } = brainVerbContext(flags);
     try {
       const existed = readHealthBaseline(vault) !== null;
-      await writeHealthBaseline(vault, null);
+      await writeHealthBaseline(vault, null, resolveBrainAgent(flags, config));
       if (json) okJson({ cleared: existed });
       else ok(existed ? "health baseline cleared" : "no health baseline set");
       return 0;

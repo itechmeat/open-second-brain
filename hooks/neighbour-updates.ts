@@ -76,6 +76,7 @@ import { armProcessCeiling, decisionWaitMs, resolveHookCeilingMs } from "./lib/p
 import { readHookStamp, updateHookState } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 /** The whole lane's budget: the decision request gets the rest of it. */
 export const LANE_BUDGET_MS = 1500;
@@ -319,7 +320,7 @@ function emit(body: string): void {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: fenceUntrustedContent(body, "neighbour-updates"),
+        additionalContext: fitHostContext(fenceUntrustedContent(body, "neighbour-updates")),
       },
     }),
   );

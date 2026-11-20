@@ -21,6 +21,11 @@ import { brainConfigPath } from "./paths.ts";
 import { loadBrainConfig, resolveHealth } from "./policy.ts";
 import { isValidIsoInstant } from "./health/iso-time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { brainSettingsFromStore } from "./policy/load.ts";
+import { setBrainSetting, unsetBrainSetting } from "./policy/settings-write.ts";
+
+/** The shared setting the baseline is on a vault switched to the store. */
+const SILENCE_BEFORE_SETTING = "health.silence_before";
 
 /** Operational failure surfacing a bad value or an unwritable config. */
 export class HealthBaselineError extends Error {
@@ -46,14 +51,27 @@ export function readHealthBaseline(vault: string): string | null {
  * or a schema mutation) can't race this read-modify-write and lose an
  * update to a last-writer-wins overwrite.
  */
-export async function writeHealthBaseline(vault: string, value: string | null): Promise<void> {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+export async function writeHealthBaseline(
+  vault: string,
+  value: string | null,
+  agent = "o2b",
+): Promise<void> {
   if (value !== null && !isValidIsoInstant(value)) {
     throw new HealthBaselineError(
       `not an ISO-8601 date (YYYY-MM-DD) or timestamp: ${JSON.stringify(value)}`,
     );
   }
+  // A vault switched to the store has no `_brain.yaml`: the baseline is the
+  // shared setting `health.silence_before`, written as the operator's
+  // record by the settings writer, as `o2b brain settings set` does.
+  if (brainSettingsFromStore(vault)) {
+    const ctx = { vault, authority: "human" as const, agent };
+    if (value === null) unsetBrainSetting(ctx, SILENCE_BEFORE_SETTING);
+    else setBrainSetting(ctx, SILENCE_BEFORE_SETTING, value);
+    return;
+  }
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = brainConfigPath(vault);
   await withFileLock(path, { staleMs: 30_000, retries: 3 }, () => {
     if (!existsSync(path)) {

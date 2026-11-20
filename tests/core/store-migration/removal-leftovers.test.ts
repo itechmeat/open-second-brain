@@ -12,14 +12,22 @@
  *    clears it although the cohort no longer matters: the tree is gone.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { LEGACY_LOCAL_FILES_LEFT_CODE } from "../../../src/core/brain/doctor/migration-check.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
+import { readMigrationBackup } from "../../../src/core/store-migration/backup.ts";
+import { migrationDir } from "../../../src/core/store-migration/journal.ts";
+import { MIGRATION_STREAM } from "../../../src/core/store-migration/migration-records.ts";
 import { runMigration } from "../../../src/core/store-migration/migrate.ts";
 import { migrateStore, removeLegacy } from "../../../src/core/store-migration/outcome.ts";
+import {
+  LEGACY_ARCHIVE_DIR,
+  readRemovalInProgress,
+  removeLegacyTree,
+} from "../../../src/core/store-migration/removal.ts";
 import { removedLines, summariseList } from "../../../src/cli/brain/verbs/migrate-store-forms.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
 import { setSilenceDays } from "./fixtures/silence.ts";
@@ -45,8 +53,30 @@ function retire(machine: Machine, device: string): void {
   });
 }
 
+/**
+ * The sync deletes on `machine` what it carried: Brain/ and every synced
+ * file of .open-second-brain/. What it never carried stays: this machine's
+ * search index and its inject cache.
+ */
+function syncDeletesTree(machine: Machine): void {
+  rmSync(join(machine.vault, "Brain"), { recursive: true, force: true });
+  const local = join(machine.vault, ".open-second-brain");
+  for (const name of readdirSync(local))
+    rmSync(join(local, name), { recursive: true, force: true });
+  writeFileSync(join(local, "brain.sqlite"), Buffer.alloc(300_000, 1));
+  mkdirSync(join(local, "inject-cache"), { recursive: true });
+  writeFileSync(join(local, "inject-cache", "digest.json"), "{}\n");
+}
+
+/** The latest `legacy-tree-removed` record `machine` itself wrote. */
+function ownRemovalRecord(machine: Machine) {
+  return machine
+    .records()
+    .findLast((r) => r.kind === "legacy-tree-removed" && r.device === machine.name);
+}
+
 /** Two switched machines; dev-a removed the legacy tree, and the deletion reached dev-b by sync. */
-function treeLeftOnBoth(): { a: Machine; b: Machine } {
+function treeLeftOnBoth(retiredBy: "hand" | "silence" = "hand"): { a: Machine; b: Machine } {
   fleet = makeFleet(["dev-a", "dev-b"]);
   const [a, b] = [fleet.machine("dev-a"), fleet.machine("dev-b")];
   a.use();
@@ -57,7 +87,9 @@ function treeLeftOnBoth(): { a: Machine; b: Machine } {
   expect(migrateStore(b.vault, FAST).ok).toBe(true);
   fleet.syncStore("dev-b", "dev-a");
   a.use();
-  retire(a, "dev-c");
+  // dev-c, the fixture's legacy writer, last wrote on 2026-09-01.
+  if (retiredBy === "hand") retire(a, "dev-c");
+  else setSilenceDays(a, 10);
   const removed = removeLegacy(a.vault);
   if (!removed.removed) throw new Error(`not removed on dev-a: ${removed.reason}`);
   fleet.syncStore("dev-a", "dev-b");
@@ -149,5 +181,144 @@ describe("a machine whose tree left by sync", () => {
     expect((runDoctor(b.vault).uncertain ?? []).map((u) => u.code)).not.toContain(
       LEGACY_LOCAL_FILES_LEFT_CODE,
     );
+  });
+
+  test("a later machine names the devices retired by silence, as the machine that removed the tree did", () => {
+    const { a, b } = treeLeftOnBoth("silence");
+    const first = a.records().find((r) => r.kind === "legacy-tree-removed");
+    const silent = (first?.body["retired_by_silence"] ?? []) as ReadonlyArray<{ device: string }>;
+    expect(silent.map((d) => d.device)).toEqual(["dev-c"]);
+
+    const removed = removeLegacy(b.vault);
+    if (!removed.removed) throw new Error(`not removed on dev-b: ${removed.reason}`);
+    expect(removed.tree_already_left).toBe(true);
+    expect(removed.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+    expect(removed.silence_threshold_days).toBe(10);
+    const text = removedLines(removed).join("\n");
+    expect(text).toContain("switched: dev-a, dev-b");
+    expect(text).toContain("retired by silence (no evidence of life for more than 10 days");
+    expect(text).toContain("dev-c (last evidence 2026-09-01)");
+    expect(text).not.toContain("retired by hand");
+  });
+  test("a cleanup never takes another vault's identity or its silence verdict", () => {
+    const { a, b } = treeLeftOnBoth("silence");
+    const vaultId = a.records().find((r) => r.kind === "legacy-tree-removed")?.body["vault_id"];
+    expect(typeof vaultId).toBe("string");
+    // One store serves every vault on a machine: dev-b later switched on
+    // another vault, whose removal retired dev-z by silence.
+    b.use();
+    for (const [kind, body] of [
+      ["device-switched", { authority: "human", vault_id: "vault-elsewhere", device: "dev-b" }],
+      [
+        "legacy-tree-removed",
+        {
+          authority: "human",
+          vault_id: "vault-elsewhere",
+          device: "dev-b",
+          forced: false,
+          stopped: [],
+          retired_by_silence: [{ device: "dev-z", last_evidence: "2026-08-01T00:00:00Z" }],
+          silence_threshold_days: 5,
+          as_of: "2026-11-01T00:00:00Z",
+        },
+      ],
+    ] as const) {
+      appendRecord(b.store(), {
+        partition: "shared",
+        stream: MIGRATION_STREAM,
+        kind,
+        agent: "t",
+        body: { ...body },
+      });
+    }
+
+    const removed = removeLegacy(b.vault);
+    if (!removed.removed) throw new Error(`not removed on dev-b: ${removed.reason}`);
+    // The id is this vault's, from the backup this machine took of it.
+    expect(ownRemovalRecord(b)?.body["vault_id"]).toBe(vaultId);
+    expect(removed.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+  });
+
+  test("a cleanup whose backup is of another vault records no vault identity", () => {
+    const { b } = treeLeftOnBoth("silence");
+    const backup = readMigrationBackup(migrationDir(b.store()));
+    if (backup === null) throw new Error("dev-b took no migration backup");
+    const manifest = join(backup.dir, "manifest.json");
+    const parsed = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    const elsewhere = join(fleet!.parent, "another-vault");
+    mkdirSync(elsewhere, { recursive: true });
+    writeFileSync(
+      manifest,
+      JSON.stringify({ ...parsed, vault: { vault_id: "vault-elsewhere", path: elsewhere } }),
+    );
+
+    const removed = removeLegacy(b.vault);
+    if (!removed.removed) throw new Error(`not removed on dev-b: ${removed.reason}`);
+    expect(ownRemovalRecord(b)?.body["vault_id"]).toBeNull();
+  });
+
+  test("the verdict of the removal that moved the tree outlives a cleanup that did not see it", () => {
+    fleet = makeFleet(["dev-a", "dev-b", "dev-e"]);
+    const [a, b, e] = [fleet.machine("dev-a"), fleet.machine("dev-b"), fleet.machine("dev-e")];
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    for (const later of [b, e]) {
+      fleet.syncVaultFile("dev-a", later.name, "Brain/vault-id.json");
+      fleet.syncStore("dev-a", later.name);
+      later.use();
+      expect(migrateStore(later.vault, FAST).ok).toBe(true);
+      fleet.syncStore(later.name, "dev-a");
+    }
+    a.use();
+    setSilenceDays(a, 10);
+    const first = removeLegacy(a.vault);
+    if (!first.removed) throw new Error(`not removed on dev-a: ${first.reason}`);
+    expect(first.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+    // The tree's deletion reaches both machines; dev-a's record reaches
+    // only dev-e before dev-b cleans up.
+    fleet.syncStore("dev-a", "dev-e");
+    syncDeletesTree(b);
+    syncDeletesTree(e);
+
+    b.use();
+    const cleanup = removeLegacy(b.vault);
+    if (!cleanup.removed) throw new Error(`not removed on dev-b: ${cleanup.reason}`);
+    expect(cleanup.retired_by_silence).toEqual([]);
+    expect(ownRemovalRecord(b)?.body["tree_already_left"]).toBe(true);
+    // dev-b's later cleanup record reaches dev-e too (its own shards only:
+    // dev-b's copy of dev-a's shards is older than dev-e's).
+    fleet.syncStore("dev-b", "dev-e", (rel) => rel.split(/[\\/]/).includes("dev-b"));
+
+    e.use();
+    const held = e.records().filter((r) => r.kind === "legacy-tree-removed");
+    expect(held.map((r) => r.device).toSorted()).toEqual(["dev-a", "dev-b"]);
+    const removed = removeLegacy(e.vault);
+    if (!removed.removed) throw new Error(`not removed on dev-e: ${removed.reason}`);
+    expect(removed.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+    expect(removed.silence_threshold_days).toBe(10);
+  });
+  test("a cleanup interrupted after its journal is still a cleanup when it is retried", () => {
+    const { b } = treeLeftOnBoth("silence");
+    const first = new Date("2026-11-19T10:00:00.000Z");
+    const archive = join(
+      b.store().deviceStateDir,
+      LEGACY_ARCHIVE_DIR,
+      first.toISOString().replace(/[:.]/g, "-"),
+    );
+    // The leftovers cannot move: something already sits at their archive place.
+    mkdirSync(join(archive, ".open-second-brain", "blocker"), { recursive: true });
+    expect(() => removeLegacyTree(b.vault, b.store(), { agent: "t", now: first })).toThrow();
+    expect(readRemovalInProgress(b.store())?.tree_already_left).toBe(true);
+
+    rmSync(join(archive, ".open-second-brain"), { recursive: true, force: true });
+    const done = removeLegacyTree(b.vault, b.store(), {
+      agent: "t",
+      now: new Date("2026-11-19T11:00:00.000Z"),
+    });
+    if (!done.removed) throw new Error(`not removed on dev-b: ${done.reason}`);
+    expect(done.tree_already_left).toBe(true);
+    expect(done.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+    expect(ownRemovalRecord(b)?.body["tree_already_left"]).toBe(true);
+    expect(readRemovalInProgress(b.store())).toBeNull();
   });
 });

@@ -10,7 +10,6 @@
  * failure, 2 on usage errors.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -20,7 +19,7 @@ import {
 } from "../../../core/brain/link-graph/communities.ts";
 import { graphStats } from "../../../core/brain/link-graph/graph-index.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
-import { brainConfigPath } from "../../../core/brain/paths.ts";
+import { brainConfigExists } from "../../../core/brain/policy/load.ts";
 import {
   createSafeguard,
   OPERATION,
@@ -100,7 +99,7 @@ function clustersStaleness(vault: string, nowMs: number): StalenessResult {
  * that config loudly, and `--if-stale` was the one path that did not.
  */
 function materializeMaxAgeMs(vault: string): number {
-  if (!existsSync(brainConfigPath(vault))) {
+  if (!brainConfigExists(vault)) {
     return BRAIN_HEALTH_DEFAULTS.materialize_max_age_days * MS_PER_DAY;
   }
   return resolveHealth(loadBrainConfig(vault)).materialize_max_age_days * MS_PER_DAY;

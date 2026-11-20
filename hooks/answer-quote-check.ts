@@ -88,9 +88,6 @@ import {
 import { createHash } from "node:crypto";
 
 import {
-  resolveAnswerQuoteCheckActive,
-  resolveAnswerQuoteCheckRecall,
-  resolveAnswerQuoteCheckSubagent,
   resolveAgentName,
   resolveQuoteCheckEnabled,
   resolveRecallInjectEnabled,
@@ -107,7 +104,8 @@ import {
   type AnswerQuoteVerdict,
 } from "../src/core/brain/answer-quotes/check.ts";
 import { findQuoteSpans } from "../src/core/brain/distill/quote-spans.ts";
-import { brainConfigPath } from "../src/core/brain/paths.ts";
+import { resolveAnswerQuoteCheckModes } from "../src/core/brain/quote-check-modes.ts";
+import { compiledDigestPath } from "../src/core/brain/compiled-digest-path.ts";
 import {
   neutralizeUntrustedText,
   untrustedFramingHeader,
@@ -123,12 +121,15 @@ import { stopAdvisoryHandsOver, writeStopAdvisoryHandover } from "./lib/stop-adv
 import {
   isRealSessionId,
   LEDGER_KEY_REGROUND,
+  LEDGER_PATH_ACTIVE_DIGEST,
+  LEDGER_PATH_LESSONS_DIGEST,
   readActiveEmittedPaths,
   readRecallInjected,
   readSubagentDeliveredPaths,
 } from "./lib/injection-ledger.ts";
 import { readHookStamp } from "./lib/session-state.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { fitHostContext } from "./lib/host-context-ceiling.ts";
 
 /**
  * The last assistant messages of the turn the check reads. Everything
@@ -417,12 +418,30 @@ function citationMarks(text: string): ReadonlyArray<CitationMark> {
  * escapes the vault. Exists-checking is the caller's concern.
  */
 function resolveNotePath(vault: string, relativePath: string): string | null {
+  // The two digests the session start emitted: on a vault switched to the
+  // store they are not vault files but the device-local cache the session
+  // start read (rendered there, not again here), so the ledger's
+  // `Brain/active.md` and `Brain/lessons.md` name that cache.
+  const digest = DIGEST_LEDGER_PATHS.get(relativePath);
+  if (digest !== undefined) {
+    try {
+      return compiledDigestPath(vault, digest);
+    } catch {
+      return null;
+    }
+  }
   try {
     return ensureInsideVault(`${vault}/${relativePath}`, vault);
   } catch {
     return null;
   }
 }
+
+/** The ledger paths of the two session-start digests, and which digest each is. */
+const DIGEST_LEDGER_PATHS: ReadonlyMap<string, "active" | "lessons"> = new Map([
+  [LEDGER_PATH_ACTIVE_DIGEST, "active"],
+  [LEDGER_PATH_LESSONS_DIGEST, "lessons"],
+]);
 
 /**
  * The evidence one cited note offers: the exact bytes the context had -
@@ -1025,7 +1044,7 @@ async function main(): Promise<void> {
   if (handsOver || text === null) return;
   process.stdout.write(
     `${JSON.stringify({
-      hookSpecificOutput: { hookEventName: "Stop", additionalContext: text },
+      hookSpecificOutput: { hookEventName: "Stop", additionalContext: fitHostContext(text) },
     })}\n`,
   );
 }
@@ -1050,12 +1069,11 @@ function checkTurn(payload: HookPayloadBase, deferred: boolean): string | null {
   const deadline = started + ANSWER_QUOTE_BUDGET_MS;
   const now = started;
 
-  const configPath = brainConfigPath(vault);
-  const modes: Readonly<Record<AnswerQuoteCheckPhase, AnswerQuoteCheckMode>> = {
-    recall: resolveAnswerQuoteCheckRecall(configPath),
-    active: resolveAnswerQuoteCheckActive(configPath),
-    subagent: resolveAnswerQuoteCheckSubagent(configPath),
-  };
+  // `Brain/_brain.yaml` on a vault that has not switched to the store,
+  // the shared settings records on one that has (its `Brain/` tree may be
+  // gone after `--remove-legacy`).
+  const modes: Readonly<Record<AnswerQuoteCheckPhase, AnswerQuoteCheckMode>> =
+    resolveAnswerQuoteCheckModes(vault);
   // Every phase `off` reports nothing and enforces nothing, so the run
   // pays no ledger read at all: the injection ledgers - whose member
   // strings are prose that gets path-scanned - stay unopened.

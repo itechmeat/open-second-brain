@@ -1103,7 +1103,12 @@ writer when a file names it. Stop the writer and move the folder out of the
 vault.
 
 The `legacy-tree-removed` record names the devices retired by silence when
-the tree left, so the doctor on every machine can say why it left.
+the tree left, so the doctor on every machine can say why it left. A
+machine whose tree had already left by sync, running the removal to clear
+its own leftover files, reports and records the verdict of the removal
+that moved the tree; its own record says it moved no tree
+(`tree_already_left`), so it never replaces that verdict for a later
+machine.
 
 #### A device retired by silence that comes back
 

@@ -31,6 +31,7 @@ import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { HOST_CONTEXT_CEILING_CHARS } from "../../hooks/lib/host-context-ceiling.ts";
 
 // Tests here spawn processes; see tests/helpers/cli-timeout.ts.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -73,6 +74,9 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
     PATH: process.env["PATH"] ?? "",
     ...homeEnv(configHome),
     OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false",
+    // The quote check also reads the ledger; off, these runs show the
+    // re-delivery lane's own effect on it.
+    OPEN_SECOND_BRAIN_QUOTE_CHECK_ENABLED: "false",
     VAULT_DIR: vault,
   };
   const proc = Bun.spawn(["bun", "run", HOOK], {
@@ -277,11 +281,12 @@ describe("active-inject chunked re-delivery", () => {
     ]);
   });
 
-  test("grok-shaped and unknown payloads emit the single full payload and queue nothing", async () => {
+  test("grok-shaped and unknown payloads emit the single payload, fitted to the host's ceiling, and queue nothing", async () => {
     writeLargeVault();
     const off = await runHook(claudePayload());
     const full = contextOf(off);
-    expect(full.length).toBeGreaterThan(9000);
+    expect(full.length).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(full).toContain("Injection truncated to budget");
 
     const grok = await runHook(
       { hook_event_name: "SessionStart", hookEventName: "SessionStart", session_id: SESSION },
@@ -345,7 +350,7 @@ describe("active-inject chunked re-delivery", () => {
     expect(emitted.has("Brain/preferences/pref-n0.md")).toBe(true);
   });
 
-  test("a queue that cannot be written falls back to the whole payload", async () => {
+  test("a queue that cannot be written falls back to one payload under the ceiling", async () => {
     writeLargeVault();
     const off = await runHook(claudePayload());
     // Only the fallback run's receipt is under test.
@@ -356,7 +361,11 @@ describe("active-inject chunked re-delivery", () => {
 
     const r = await runHook(claudePayload(), REGROUND_ON);
     expect(r.exit).toBe(0);
-    expect(r.stdout).toBe(off.stdout);
+    // One payload, cut to the host's ceiling with the usual notice (the
+    // run planned a split, so it was assembled for one, not for the cut).
+    expect(contextOf(off).length).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(contextOf(r).length).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(contextOf(r)).toContain("Injection truncated to budget");
     const injection = injectionPayload();
     expect(injection["parts_total"]).toBe(1);
     expect(injection["parts_dropped"]).toBe(0);
@@ -364,7 +373,7 @@ describe("active-inject chunked re-delivery", () => {
     expect(injection["reground_fallback"]).toBe("ledger_write_failed");
   });
 
-  test("a UserPromptSubmit run past the ceiling emits the whole context and queues nothing", async () => {
+  test("a UserPromptSubmit run past the ceiling emits one payload fitted to it and queues nothing", async () => {
     writeLargeVault();
     const whole = contextOf(await runHook(claudePayload()));
     const r = await runHook(
@@ -404,7 +413,11 @@ describe("active-inject chunked re-delivery", () => {
     const r = await runHook(claudePayload(), REGROUND_ON);
     rmSync(lock, { force: true });
     expect(r.exit).toBe(0);
-    expect(r.stdout).toBe(off.stdout);
+    // One payload, cut to the host's ceiling with the usual notice (the
+    // run planned a split, so it was assembled for one, not for the cut).
+    expect(contextOf(off).length).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(contextOf(r).length).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(contextOf(r)).toContain("Injection truncated to budget");
     const queued = drainQueue();
     expect(queued.map((entry) => entry.epoch)).toEqual(["startup:1"]);
   });

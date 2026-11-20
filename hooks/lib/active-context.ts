@@ -268,7 +268,18 @@ export function assembleActiveContext(
   vault: string,
   budget: number,
   meter: InjectionMeter,
-  opts: { readonly startsSession?: boolean } = {},
+  opts: {
+    readonly startsSession?: boolean;
+    /**
+     * The most characters the whole memory context may take - the runtime
+     * notices, the active body and the lessons body with the separators
+     * between them - so the payload it joins stays under the host's
+     * per-hook context cap. Each body still answers to `budget` too, and
+     * the two bodies share this room instead of each taking `budget`.
+     * Absent: each body takes `budget` on its own, as before.
+     */
+    readonly roomChars?: number;
+  } = {},
 ): string {
   // Runtime-state notices ride the same injection surface as active.md so the
   // agent is proactively aware of a degraded/transient condition (semantic
@@ -290,7 +301,20 @@ export function assembleActiveContext(
   // `Brain/active.md` on an unswitched machine; on a store-only one the
   // digest rendered on demand into the device-local cache (D14 item 7).
   const activePath = activeDigestPathForRead(vault);
-  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, budget, meter) : "";
+  // The room the two bodies share: what the notices leave of the memory
+  // context's room. The notices rendered here are every notice this start
+  // may show, so the ones shown below take no more.
+  let bodyRoom: number | undefined;
+  if (opts.roomChars !== undefined) {
+    const noticesChars = renderRuntimeNotices(notices).length;
+    bodyRoom = Math.max(
+      0,
+      opts.roomChars - noticesChars - (noticesChars > 0 ? BLOCK_SEPARATOR.length : 0),
+    );
+  }
+  const activeBody = existsSync(activePath)
+    ? readActiveBody(vault, activePath, budget, meter, bodyRoom)
+    : "";
 
   // Consumed only once the body is assembled: a read that throws sends the
   // session the last-good cache, which never held this notice, so the
@@ -323,9 +347,13 @@ export function assembleActiveContext(
 function readActiveBody(
   vault: string,
   activePath: string,
-  budget: number,
+  configuredBudget: number,
   meter: InjectionMeter,
+  room?: number,
 ): string {
+  // With a shared room the active body takes at most the room, and the
+  // lessons body what the active body leaves of it.
+  const budget = room === undefined ? configuredBudget : Math.min(configuredBudget, room);
   const body = readFileSync(activePath, "utf8");
 
   // Drop the `kind: brain-active / generated_at` frontmatter - it
@@ -360,7 +388,6 @@ function readActiveBody(
   // on the same SessionStart surface. Fail-soft and budgeted separately:
   // a missing / unreadable / oversized lessons file must never disturb
   // the active-preferences injection above.
-  const lessonsBody = readLessonsBody(vault, budget);
 
   // Untrusted vault content: neutralize (control/bidi/zero-width strip,
   // delimiter escape) BEFORE budgeting, and set under the light
@@ -380,6 +407,14 @@ function readActiveBody(
   const activeBlock = isTruncationNoticeOnly(inner)
     ? ""
     : frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
+  const lessonsBudget =
+    room === undefined
+      ? configuredBudget
+      : Math.min(
+          configuredBudget,
+          room - activeBlock.length - (activeBlock.length > 0 ? BLOCK_SEPARATOR.length : 0),
+        );
+  const lessonsBody = readLessonsBody(vault, lessonsBudget);
   if (activeBlock.length > 0) {
     meter.sources.push({
       name: SOURCE_ACTIVE_BODY,
