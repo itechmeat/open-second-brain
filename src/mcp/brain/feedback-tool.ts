@@ -53,6 +53,7 @@ import {
 import { nextCommandField, requireNextStep } from "../../core/brain/next-step.ts";
 import { resolvePermission } from "../../core/brain/permissions/resolve.ts";
 import { substrateSubject } from "../../core/brain/write-disposition.ts";
+import { computeDedupHash } from "../../core/brain/dedup-hash.ts";
 import { contextVault, type ServerContext } from "../tool-contract.ts";
 import { refuseAgentClaim } from "./agent-claim.ts";
 import { coerceStr, coerceIsoDate } from "../coerce.ts";
@@ -317,6 +318,17 @@ export async function toolBrainFeedback(
     ...(eventTime ? { valid_from: signalCreatedAt, recorded_at: signalCreatedAt } : {}),
     ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     ...(expires !== undefined ? { expiration_date: expires } : {}),
+    // The shared capture hash (topic, sign, principle, the scope the call
+    // named), so the session hook's replay of this very call, a session
+    // import of it, or the same rule from a marker dedups against this
+    // signal instead of writing it twice. It never dedups this call: an
+    // explicit call is one more observation of the rule.
+    dedup_hash: computeDedupHash({
+      topic,
+      signal: signalRaw as BrainSignalSign,
+      principle,
+      ...(scope ? { scope } : {}),
+    }),
     origin: contextRecordOrigin(ctx),
   };
   let sigResult;

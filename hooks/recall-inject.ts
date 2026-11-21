@@ -95,7 +95,7 @@ import { isHookStateCorrupt } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /**
  * Record one decision on both surfaces: the hook audit trail, and the
@@ -419,7 +419,7 @@ async function main(): Promise<void> {
     const out = {
       hookSpecificOutput: {
         hookEventName,
-        additionalContext: fitHostContext(decision.brief),
+        additionalContext: fitHostContextFor(payload, decision.brief),
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");

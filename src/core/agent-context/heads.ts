@@ -104,7 +104,10 @@ export function buildHeadsBlock(input: {
   readonly cutLine: (dropped: number) => string;
   /** The cut line without its pointers, for a block too small for the full one. */
   readonly shortCutLine?: (dropped: number) => string;
+  /** How `maxChars` is measured: the host's unit (UTF-16 by default, UTF-8 bytes for Codex). */
+  readonly measure?: (text: string) => number;
 }): HeadsBlock {
+  const measure = input.measure ?? ((text: string) => text.length);
   const all = [...input.heads];
   const lines = all.slice(0, Math.max(0, input.max)).map(renderHeadLine);
   const render = (n: number, cutLine: (dropped: number) => string): string => {
@@ -116,7 +119,7 @@ export function buildHeadsBlock(input: {
   for (const cutLine of [input.cutLine, ...(input.shortCutLine ? [input.shortCutLine] : [])]) {
     for (let n = lines.length; n >= 1; n--) {
       const text = render(n, cutLine);
-      if (text.length <= input.maxChars) {
+      if (measure(text) <= input.maxChars) {
         return { text, dropped: all.length - n, shown: all.slice(0, n) };
       }
     }

@@ -76,7 +76,7 @@ import { armProcessCeiling, decisionWaitMs, resolveHookCeilingMs } from "./lib/p
 import { readHookStamp, updateHookState } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /** The whole lane's budget: the decision request gets the rest of it. */
 export const LANE_BUDGET_MS = 1500;
@@ -169,6 +169,7 @@ async function main(): Promise<void> {
       const legacy = legacyWatermark(target.vault, sessionId);
       if (legacy !== undefined) {
         emit(
+          payload,
           "_Neighbour updates now read the store directly. What other sessions recorded " +
             `since this session's last turn was not read: \`brain_changes\` since ${legacy} ` +
             "lists it among every record written since then._",
@@ -213,7 +214,7 @@ async function main(): Promise<void> {
       return left !== null && left === projectScope;
     });
     if (scoped.length === 0) {
-      emit(skippedLine);
+      emit(payload, skippedLine);
       storeCursor(target.vault, sessionId, tail.cursor, watermark, [...sessionTopics]);
       return;
     }
@@ -245,7 +246,7 @@ async function main(): Promise<void> {
       .filter((c): c is NeighbourCandidate => c !== null);
     const { kept: candidates, capped } = capNeighbourCandidates(filtered);
     if (candidates.length === 0) {
-      emit(skippedLine);
+      emit(payload, skippedLine);
       storeCursor(target.vault, sessionId, tail.cursor, watermark, [...sessionTopics]);
       return;
     }
@@ -300,7 +301,7 @@ async function main(): Promise<void> {
     // the process ceiling fires only between tasks, so a turn either shows
     // the whole block and moves its cursor or does neither (a turn cut
     // before this point shows its updates on the next one).
-    emit([block.body, skippedLine].filter((part) => part !== "").join("\n"));
+    emit(payload, [block.body, skippedLine].filter((part) => part !== "").join("\n"));
     storeCursor(target.vault, sessionId, tail.cursor, watermark, [...sessionTopics]);
   } catch {
     // Fail-open: exit 0 with no output; the cursor is unchanged.
@@ -314,13 +315,16 @@ async function main(): Promise<void> {
  * Synchronous, so the process ceiling cannot end the process with half of
  * it written.
  */
-function emit(body: string): void {
+function emit(payload: unknown, body: string): void {
   if (body === "") return;
   const bytes = Buffer.from(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
-        additionalContext: fitHostContext(fenceUntrustedContent(body, "neighbour-updates")),
+        additionalContext: fitHostContextFor(
+          payload,
+          fenceUntrustedContent(body, "neighbour-updates"),
+        ),
       },
     }),
   );

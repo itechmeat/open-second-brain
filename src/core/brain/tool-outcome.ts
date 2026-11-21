@@ -10,7 +10,9 @@
  *
  * The shape is Claude Code's: a failed tool result carries
  * `is_error: true`. `success: false` is accepted alongside it because the
- * grok payload spells the same verdict that way. A response the host said
+ * grok payload spells the same verdict that way, and `isError: true`
+ * because that is how an MCP tool result (the `brain_feedback` tool's
+ * own) flags a refusal when a host hands it through. A response the host said
  * nothing about is NOT a failure - absence of a verdict is not a verdict,
  * and treating it as one would silence every runtime that does not report
  * per-call outcomes at all.
@@ -19,5 +21,5 @@
 export function isToolResponseError(response: unknown): boolean {
   if (response === null || typeof response !== "object") return false;
   const record = response as Record<string, unknown>;
-  return record["is_error"] === true || record["success"] === false;
+  return record["is_error"] === true || record["isError"] === true || record["success"] === false;
 }

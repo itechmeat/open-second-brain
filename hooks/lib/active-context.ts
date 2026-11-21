@@ -32,7 +32,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseFrontmatterText } from "../../src/core/vault.ts";
 import { activeDigestPathForRead } from "../../src/core/brain/active.ts";
 import { lessonsDigestPathForRead } from "../../src/core/brain/lessons.ts";
-import { budgetActiveBody, isTruncationNoticeOnly } from "../../src/core/brain/active-budget.ts";
+import {
+  budgetActiveBodyContent,
+  type BudgetedBody,
+  wholeBodyCut,
+} from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
   untrustedBindingFramingHeader,
@@ -72,6 +76,8 @@ import type { BrainConfig } from "../../src/core/brain/types.ts";
 /** Sub-body identifiers recorded per injection. Structural, not content-derived. */
 export const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 export const SOURCE_RUNTIME_NOTICES = "runtime-notices";
+/** The one truncation note a cut payload ends in. */
+export const SOURCE_DIGEST_CUT_NOTE = "digest-cut-note";
 export const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;
 export const SOURCE_LESSONS_BODY = RECEIPT_ITEM_LESSONS_BODY;
 
@@ -124,6 +130,7 @@ export function createInjectionMeter(configuredBudgetChars: number): InjectionMe
     configuredBudgetChars,
     budgetChars: null,
     scopedRulesChars: 0,
+    cuts: [],
   };
 }
 
@@ -279,8 +286,15 @@ export function assembleActiveContext(
      * Absent: each body takes `budget` on its own, as before.
      */
     readonly roomChars?: number;
+    /**
+     * How `roomChars` is measured: the host's unit. UTF-16 code units by
+     * default; UTF-8 bytes for Codex, whose hook context cap counts bytes.
+     * The configured budget stays in characters.
+     */
+    readonly measure?: (text: string) => number;
   } = {},
 ): string {
+  const measure = opts.measure ?? ((text: string) => text.length);
   // Runtime-state notices ride the same injection surface as active.md so the
   // agent is proactively aware of a degraded/transient condition (semantic
   // search fell back to lexical, index missing/rebuilding, read-only vault)
@@ -306,14 +320,14 @@ export function assembleActiveContext(
   // may show, so the ones shown below take no more.
   let bodyRoom: number | undefined;
   if (opts.roomChars !== undefined) {
-    const noticesChars = renderRuntimeNotices(notices).length;
+    const noticesChars = measure(renderRuntimeNotices(notices));
     bodyRoom = Math.max(
       0,
       opts.roomChars - noticesChars - (noticesChars > 0 ? BLOCK_SEPARATOR.length : 0),
     );
   }
   const activeBody = existsSync(activePath)
-    ? readActiveBody(vault, activePath, budget, meter, bodyRoom)
+    ? readActiveBody(vault, activePath, budget, meter, measure, bodyRoom)
     : "";
 
   // Consumed only once the body is assembled: a read that throws sends the
@@ -340,6 +354,46 @@ export function assembleActiveContext(
 }
 
 /**
+ * Budget one memory body to `innerBudget` characters, and, when the
+ * payload shares a room measured in the host's unit, to the largest
+ * character budget whose framed body fits that room too. With the UTF-16
+ * measure the first pass already fits (the inner budget is at most the
+ * room less the header); with Codex's byte measure a non-ASCII body costs
+ * more bytes than characters, so a binary search finds the largest
+ * character budget that fits the bytes. Pure: only the budgeter runs
+ * again, never the reads or the one-time notices around it.
+ */
+function fitFramedBody(
+  origin: string,
+  neutral: string,
+  innerBudget: number,
+  room: number | undefined,
+  measure: (text: string) => number,
+): BudgetedBody {
+  const fits = (budgeted: BudgetedBody): boolean =>
+    room === undefined ||
+    budgeted.content.length === 0 ||
+    measure(frameMemoryBody(origin, budgeted.content)) <= room;
+  const first = budgetActiveBodyContent(neutral, innerBudget);
+  if (fits(first)) return first;
+  // `low` always fits (a zero budget keeps nothing), `high` never does.
+  let low = 0;
+  let best = budgetActiveBodyContent(neutral, 0);
+  let high = innerBudget;
+  while (high - low > 1) {
+    const mid = Math.floor((low + high) / 2);
+    const tried = budgetActiveBodyContent(neutral, mid);
+    if (fits(tried)) {
+      low = mid;
+      best = tried;
+    } else {
+      high = mid;
+    }
+  }
+  return best;
+}
+
+/**
  * Read + budget the active.md / lessons.md body. Returns an empty string when
  * the body is empty; throws on a genuine read error (permissions, fs stall) so
  * the fail-open loader degrades to the last-good cache.
@@ -349,6 +403,7 @@ function readActiveBody(
   activePath: string,
   configuredBudget: number,
   meter: InjectionMeter,
+  measure: (text: string) => number,
   room?: number,
 ): string {
   // With a shared room the active body takes at most the room, and the
@@ -362,59 +417,60 @@ function readActiveBody(
   const trimmed = fmBody.trim();
   if (trimmed.length === 0) return "";
 
-  // A budget that cannot hold even the framing header skips the source
-  // whole: emitting the header alone would push the framed remainder
-  // past the very budget it is charged against, and metering it would
-  // name bytes that never reached the payload. The floor is `<=` - at
-  // exactly the overhead the inner budget is 0 and the budgeter answers
-  // with the truncation notice alone, which is over budget framed. The
-  // lessons reader applies the same floor to its own header.
-  const overhead = framingOverhead(SOURCE_ACTIVE_BODY);
-  if (budget <= overhead) return "";
-
   // Injection budget (token-diet): a large preference set must not flood
   // the session preamble. Resolved once in `resolveInjectionLimits`,
   // which also carries the reasoning for why a config failure lands on
-  // the default here rather than raising. Recorded on the meter only at
-  // this point, because a vault with no `active.md` charged nothing
-  // against it and a receipt naming a budget nothing was measured under
-  // would be a number with no measurement behind it. The CONFIGURED
-  // ceiling is recorded, not the `budget` argument: that is what is left
-  // after the scoped rules were charged, and the receipt reports the two
-  // separately (`inject_budget_chars`, `scoped_rules_chars`).
-
-  // Auto-load the lessons digest alongside active.md so the agent gets
-  // the unified, signed, recency-scored corpus (preferences + dead-ends)
-  // on the same SessionStart surface. Fail-soft and budgeted separately:
-  // a missing / unreadable / oversized lessons file must never disturb
-  // the active-preferences injection above.
-
+  // the default here rather than raising. Recorded on the meter only
+  // once a body emitted, because a vault with no `active.md` charged
+  // nothing against it and a receipt naming a budget nothing was
+  // measured under would be a number with no measurement behind it. The
+  // CONFIGURED ceiling is recorded, not the `budget` argument: that is
+  // what is left after the scoped rules were charged, and the receipt
+  // reports the two separately (`inject_budget_chars`,
+  // `scoped_rules_chars`).
+  //
+  // The lessons digest is auto-loaded alongside active.md so the agent
+  // gets the unified, signed, recency-scored corpus (preferences +
+  // dead-ends) on the same SessionStart surface. Fail-soft and budgeted
+  // separately: a missing / unreadable / oversized lessons file must
+  // never disturb the active-preferences injection.
+  //
   // Untrusted vault content: neutralize (control/bidi/zero-width strip,
   // delimiter escape) BEFORE budgeting, and set under the light
   // framing header. The header's overhead comes out of this body's budget
   // first, so the tier ladder works on the room that is actually left and
   // the framed whole stays within the budget it is charged against.
-  const innerBudget = budget - overhead;
-  const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), innerBudget);
-  // A budgeted body that is ONLY the truncation notice carries no
-  // content at all: framed, header + notice would land over the budget
-  // the source is charged against, so the ACTIVE source skips with it -
-  // the same honesty the sub-header floor practices, one rung up. The
-  // skip is this source's alone: the lessons body read above answers to
-  // its own header's overhead and its own budgeted remainder, so what
-  // it produced still emits and meters. "" is for a run where no block
-  // was produced at all.
-  const activeBlock = isTruncationNoticeOnly(inner)
-    ? ""
-    : frameMemoryBody(SOURCE_ACTIVE_BODY, inner);
-  const lessonsBudget =
+  //
+  // The body carries no truncation note of its own: what the budget cut
+  // is recorded on the meter, and the payload ends in ONE note for every
+  // lane it cut (src/core/agent-context/digest-cut-note.ts). The content
+  // alone fits the budget, so no byte of it goes to a note, and a payload
+  // sized to the host's limit is never cut a second time for one.
+  //
+  // A budget that cannot hold even the framing header skips the source
+  // whole (a bare header would name bytes that never reached the
+  // payload), and the skip is recorded as a cut of the whole body. The
+  // lessons body still gets its own chance below.
+  const neutral = neutralizeUntrustedText(trimmed);
+  const overhead = framingOverhead(SOURCE_ACTIVE_BODY);
+  let activeBlock = "";
+  if (budget > overhead) {
+    const budgeted = fitFramedBody(SOURCE_ACTIVE_BODY, neutral, budget - overhead, room, measure);
+    if (budgeted.cut !== null) meter.cuts.push({ source: SOURCE_ACTIVE_BODY, ...budgeted.cut });
+    if (budgeted.content.length > 0) {
+      activeBlock = frameMemoryBody(SOURCE_ACTIVE_BODY, budgeted.content);
+    }
+  } else {
+    meter.cuts.push({ source: SOURCE_ACTIVE_BODY, ...wholeBodyCut(neutral) });
+  }
+  // The room the active body leaves the lessons body, in the host's measure.
+  const lessonsRoom =
     room === undefined
-      ? configuredBudget
-      : Math.min(
-          configuredBudget,
-          room - activeBlock.length - (activeBlock.length > 0 ? BLOCK_SEPARATOR.length : 0),
-        );
-  const lessonsBody = readLessonsBody(vault, lessonsBudget);
+      ? undefined
+      : room - measure(activeBlock) - (activeBlock.length > 0 ? BLOCK_SEPARATOR.length : 0);
+  const lessonsBudget =
+    lessonsRoom === undefined ? configuredBudget : Math.min(configuredBudget, lessonsRoom);
+  const lessonsBody = readLessonsBody(vault, lessonsBudget, meter, measure, lessonsRoom);
   if (activeBlock.length > 0) {
     meter.sources.push({
       name: SOURCE_ACTIVE_BODY,
@@ -447,7 +503,13 @@ function readActiveBody(
  * neutralized and framed like the active body, with the same
  * budget-charged header overhead.
  */
-function readLessonsBody(vault: string, budget: number): string | null {
+function readLessonsBody(
+  vault: string,
+  budget: number,
+  meter: InjectionMeter,
+  measure: (text: string) => number,
+  room: number | undefined,
+): string | null {
   try {
     // Rendered on demand on a store-only machine; a failure is the same
     // fail-soft skip as an unreadable file.
@@ -457,17 +519,29 @@ function readLessonsBody(vault: string, budget: number): string | null {
     const [, body] = parseFrontmatterText(raw);
     const trimmed = body.trim();
     if (trimmed.length === 0) return null;
+    const neutral = neutralizeUntrustedText(trimmed);
     // The active body's floor, applied to this header: a body whose
-    // framing cannot fit - or whose budgeted remainder would be nothing
-    // but the truncation notice - is skipped rather than emitted over
-    // budget. The floor is `<=` for the same reason: at exactly the
-    // overhead the inner budget is 0 and the budgeter answers with the
-    // notice alone.
+    // framing cannot fit, or whose budgeted remainder is empty, is
+    // skipped rather than emitted over budget, and the skip is recorded
+    // as a cut for the digest's one note.
     const overhead = framingOverhead(SOURCE_LESSONS_BODY);
-    if (budget <= overhead) return null;
-    const inner = budgetActiveBody(neutralizeUntrustedText(trimmed), budget - overhead);
-    if (isTruncationNoticeOnly(inner)) return null;
-    return frameMemoryBody(SOURCE_LESSONS_BODY, inner);
+    if (budget <= overhead) {
+      meter.cuts.push({
+        source: SOURCE_LESSONS_BODY,
+        ...wholeBodyCut(neutral),
+      });
+      return null;
+    }
+    const budgeted = fitFramedBody(SOURCE_LESSONS_BODY, neutral, budget - overhead, room, measure);
+    if (budgeted.content.length === 0) {
+      meter.cuts.push({
+        source: SOURCE_LESSONS_BODY,
+        ...wholeBodyCut(neutral),
+      });
+      return null;
+    }
+    if (budgeted.cut !== null) meter.cuts.push({ source: SOURCE_LESSONS_BODY, ...budgeted.cut });
+    return frameMemoryBody(SOURCE_LESSONS_BODY, budgeted.content);
   } catch {
     return null;
   }

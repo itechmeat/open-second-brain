@@ -23,6 +23,7 @@
  * receipt, not the carrier.
  */
 
+import type { DigestCut } from "../../src/core/agent-context/digest-cut-note.ts";
 import { brainStandingRulesPath } from "../../src/core/brain/paths.ts";
 import { RECEIPT_ITEM_STANDING_RULES } from "../../src/core/brain/context-receipts.ts";
 import {
@@ -84,6 +85,12 @@ export interface InjectionMeter {
   budgetChars: number | null;
   /** Length of the rendered scoped-rules block, subtracted from the budget; 0 when absent. */
   scopedRulesChars: number;
+  /**
+   * What each budgeted lane cut (the pinned context, the active and the
+   * lessons bodies). The lanes carry no note of their own; the payload
+   * ends in one note built from these records.
+   */
+  readonly cuts: DigestCut[];
 }
 
 /** Sub-body identifier recorded for the standing-rules block. */

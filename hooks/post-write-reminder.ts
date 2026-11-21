@@ -32,7 +32,7 @@ import { isToolResponseError } from "../src/core/brain/tool-outcome.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { detectHookRuntime, isArtifactToolName } from "./lib/detect.ts";
 import { postWriteNudge, postWriteReminder } from "./lib/messages.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /** Markers older than this are pruned opportunistically. */
 const MARKER_TTL_MS = 48 * 3600 * 1000;
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   const out = {
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
-      additionalContext: fitHostContext(text),
+      additionalContext: fitHostContextFor(payload, text),
     },
   };
   process.stdout.write(JSON.stringify(out) + "\n");

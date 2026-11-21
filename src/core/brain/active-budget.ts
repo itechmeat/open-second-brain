@@ -267,6 +267,87 @@ export function budgetActiveBody(body: string, budgetChars: number): string {
 }
 
 /**
+ * What the budget cut out of one body, in the units the consumer reads:
+ * characters, rule lines (the `- ` item lines) and `## ` sections. The
+ * session start digest folds the reports of every lane it cut into ONE
+ * note at the end of the payload, so each lane is budgeted without a
+ * note of its own and the note's room is spent once.
+ */
+export interface BodyCut {
+  readonly keptChars: number;
+  readonly totalChars: number;
+  readonly itemsKept: number;
+  readonly itemsTotal: number;
+  /** Sections the budget dropped whole; tiered and trimmed ones count as kept. */
+  readonly sectionsDropped: number;
+  readonly sectionsTotal: number;
+}
+
+/** A body budgeted without a notice, and what the budget cut, or null when nothing. */
+export interface BudgetedBody {
+  readonly content: string;
+  readonly cut: BodyCut | null;
+}
+
+const ITEM_LINE = /^- /gm;
+
+/** How many `- ` item lines a body holds. */
+export function countItemLines(text: string): number {
+  return text.match(ITEM_LINE)?.length ?? 0;
+}
+
+/** How many sections the budget splits a body into (the preamble rides with the first). */
+export function countSections(text: string): number {
+  return text.trim() === "" ? 0 : splitSections(text).length;
+}
+
+/** The report for a body that was not delivered at all. */
+export function wholeBodyCut(body: string): BodyCut {
+  return {
+    keptChars: 0,
+    totalChars: body.length,
+    itemsKept: 0,
+    itemsTotal: countItemLines(body),
+    sectionsDropped: countSections(body),
+    sectionsTotal: countSections(body),
+  };
+}
+
+/**
+ * Fit `body` into `budgetChars` with the same ladder as
+ * {@link budgetActiveBody} - headline tier first, then whole-section
+ * drops, then a line trim of the last section - and return the content
+ * WITHOUT a notice, plus the report of what was cut. The content alone
+ * fits the budget: no byte of it goes to a notice. Within budget the body
+ * passes through byte-identical and the report is null.
+ */
+export function budgetActiveBodyContent(body: string, budgetChars: number): BudgetedBody {
+  if (body.length <= budgetChars) return { content: body, cut: null };
+  const sections = splitSections(body);
+  const ladder = applyHeadlineTiers(sections, budgetChars);
+  let content: string;
+  let droppedSections = 0;
+  if (ladder.tieredKeys.length > 0 && joinedSectionsLength(ladder.sections) <= budgetChars) {
+    content = joinSections(ladder.sections);
+  } else {
+    const result = applySectionBudget(ladder.sections, budgetChars);
+    content = result.body;
+    droppedSections = result.droppedKeys.length;
+  }
+  return {
+    content,
+    cut: {
+      keptChars: content.length,
+      totalChars: body.length,
+      itemsKept: countItemLines(content),
+      itemsTotal: countItemLines(body),
+      sectionsDropped: droppedSections,
+      sectionsTotal: sections.length,
+    },
+  };
+}
+
+/**
  * Bullets a tiered section keeps: the headline tier between
  * section-intact and section-dropped. A named constant, not a config
  * key - the ladder is deterministic machinery shared with the proactive

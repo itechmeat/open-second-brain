@@ -8,6 +8,7 @@ import {
   mirrorSignal,
   resolveSharedNamespace,
 } from "../../../core/brain/shared-namespace.ts";
+import { computeDedupHash } from "../../../core/brain/dedup-hash.ts";
 import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.ts";
 import {
   adviseIncomingFeedback,
@@ -119,6 +120,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     ...(flags["source"] ? { source: flags["source"] as string[] } : {}),
     ...(raw !== undefined ? { raw } : {}),
     ...(expires !== undefined ? { expiration_date: expires } : {}),
+    // The shared capture hash, as `brain_feedback` stamps it: a replay of
+    // the same rule from another surface dedups against this signal; a
+    // second explicit call still records one more observation.
+    dedup_hash: computeDedupHash({
+      topic: String(flags["topic"]),
+      signal: signalSign as "positive" | "negative",
+      principle: String(flags["principle"]),
+      ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
+    }),
     // The project of the directory the command runs in (`record-origin.ts`).
     origin: recordOriginOf(process.cwd(), vault),
   };

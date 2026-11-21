@@ -36,7 +36,12 @@ import {
 } from "../../hooks/lib/injection-ledger.ts";
 import { renderStandingBlock } from "../../hooks/lib/standing-block.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
-import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import { budgetActiveBodyContent } from "../../src/core/brain/active-budget.ts";
+import { HOST_CONTEXT_CEILING_CHARS } from "../../hooks/lib/host-context-ceiling.ts";
+import {
+  renderDigestCutNote,
+  type DigestCut,
+} from "../../src/core/agent-context/digest-cut-note.ts";
 import {
   neutralizeUntrustedText,
   untrustedBindingFramingHeader,
@@ -108,27 +113,35 @@ function writeLessons(body: string): void {
 /**
  * One memory body as the assembly renders it: frontmatter dropped,
  * neutralized, set under the light framing header, with the header's
- * overhead charged against `budget` before the budget core runs.
+ * overhead charged against `budget` before the budget core runs. The
+ * body carries no note; what it cut is pushed to `cuts`.
  */
-function expectedFramedBody(origin: string, fmBody: string, budget: number): string {
+function expectedFramedBody(
+  origin: "active-body" | "lessons-body",
+  fmBody: string,
+  budget: number,
+  cuts: DigestCut[],
+): string {
   const overhead = untrustedBindingFramingHeader(origin).length + 1;
   const inner = Math.max(0, budget - overhead);
-  return `${untrustedBindingFramingHeader(origin)}\n${budgetActiveBody(neutralizeUntrustedText(fmBody.trim()), inner)}`;
+  const budgeted = budgetActiveBodyContent(neutralizeUntrustedText(fmBody.trim()), inner);
+  if (budgeted.cut !== null) cuts.push({ source: origin, ...budgeted.cut });
+  return `${untrustedBindingFramingHeader(origin)}\n${budgeted.content}`;
 }
 
 /** The active.md body as the assembly renders it: frontmatter dropped, guarded, budgeted. */
-function expectedActiveBody(budget: number): string {
+function expectedActiveBody(budget: number, cuts: DigestCut[]): string {
   const raw = readFileSync(join(vault, "Brain", "active.md"), "utf8");
   const [, fmBody] = parseFrontmatterText(raw);
-  return expectedFramedBody(SOURCE_ACTIVE_BODY, fmBody, budget);
+  return expectedFramedBody(SOURCE_ACTIVE_BODY, fmBody, budget, cuts);
 }
 
 /** The lessons.md body as the assembly renders it, or "" without the file. */
-function expectedLessonsBody(budget: number): string {
+function expectedLessonsBody(budget: number, cuts: DigestCut[]): string {
   try {
     const raw = readFileSync(join(vault, "Brain", "lessons.md"), "utf8");
     const [, fmBody] = parseFrontmatterText(raw);
-    return expectedFramedBody(SOURCE_LESSONS_BODY, fmBody, budget);
+    return expectedFramedBody(SOURCE_LESSONS_BODY, fmBody, budget, cuts);
   } catch {
     return "";
   }
@@ -137,10 +150,16 @@ function expectedLessonsBody(budget: number): string {
 /**
  * The budgeted memory context the way the assembly joins it: the runtime
  * notices are disabled for the tests that call this, the active body
- * leads and the lessons body rides along.
+ * leads, the lessons body rides along, and the one note for whatever the
+ * budget cut closes the payload.
  */
 function expectedMemoryContext(budget: number): string {
-  return [expectedActiveBody(budget), expectedLessonsBody(budget)]
+  const cuts: DigestCut[] = [];
+  return [
+    expectedActiveBody(budget, cuts),
+    expectedLessonsBody(budget, cuts),
+    renderDigestCutNote(cuts),
+  ]
     .filter((block) => block.length > 0)
     .join("\n\n");
 }
@@ -385,6 +404,46 @@ describe("subagent-inject hook", () => {
         .filter((block) => block.length > 0)
         .join("\n\n"),
     );
+  });
+
+  test("a Codex sub-agent gets the payload under Codex's byte-counted limit, with one note", async () => {
+    // Codex counts a hook's context in UTF-8 bytes (ceil(bytes / 4) tokens
+    // against 2,500); a Russian digest sized to the character ceiling is
+    // far past that, so the carrier sizes it in bytes for Codex.
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n## Confirmed (400)\n\n" +
+        Array.from(
+          { length: 400 },
+          (_, i) => `- \`pref-r${i}\` — пиши просто и подтверждай каждое утверждение ${i}`,
+        ).join("\n") +
+        "\n",
+    );
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 60000\n",
+      "utf8",
+    );
+    const r = await runHook({
+      ...subagentStartPayload({ agentId: AGENT }),
+      transcript_path: join(
+        configHome,
+        ".codex",
+        "sessions",
+        "2026",
+        "11",
+        "21",
+        "rollout-x.jsonl",
+      ),
+    });
+    expect(r.exit).toBe(0);
+    const context = deliveredContext(r.stdout).additionalContext;
+    const bytes = new TextEncoder().encode(context).length;
+    expect(bytes).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(bytes).toBeGreaterThan(HOST_CONTEXT_CEILING_CHARS - 600);
+    expect(context.split("_Injection truncated to budget:").length - 1).toBe(1);
+    expect(context).not.toContain("to fit the host's context limit");
+    const delivered = context.split("\n").filter((l) => l.startsWith("- `pref-r")).length;
+    expect(context).toContain(`Not shown: ${400 - delivered} of 400 rule lines.`);
   });
 
   test("an oversized digest is budgeted, never dumped whole", async () => {

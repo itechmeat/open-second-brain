@@ -11,11 +11,20 @@
  * 13,600 characters reaches the model as a path and a preview, and the
  * active preferences in it are lost.
  *
- * The ceiling here is that cap less 10% (the margin the split re-delivery
- * default `REGROUND_PART_CHARS_DEFAULT` already keeps). Codex documents no
- * cap of its own; the repository applies the same number to it, and to
- * every other host, rather than guess a larger one. Units are JS
- * `.length` (UTF-16 code units), the host's own measure.
+ * Codex caps it too, in another unit: a SessionStart (or PreToolUse,
+ * PostToolUse, UserPromptSubmit, SubagentStart) hook's context whose
+ * approximate token count - UTF-8 bytes divided by four, rounded up -
+ * exceeds 2,500 is saved to a file, and the model gets a head and tail
+ * preview and the file path (`codex-rs/hooks/src/output_spill.rs`,
+ * `DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT`, release 0.169.0). That is 10,000
+ * UTF-8 bytes, and non-ASCII text costs two or three bytes a character,
+ * so a payload under the character ceiling can still spill there.
+ *
+ * The ceiling here is the cap less 10% (the margin the split re-delivery
+ * default `REGROUND_PART_CHARS_DEFAULT` already keeps), measured in each
+ * host's own unit ({@link hostMeasureFor}): JS `.length` (UTF-16 code
+ * units) for Claude Code and every host without a known cap, UTF-8 bytes
+ * for Codex.
  *
  * Every hook that emits context fits its whole payload - every block,
  * header, notice and fence it joins - under this ceiling. The ones that
@@ -25,6 +34,28 @@
  */
 
 import { UNTRUSTED_SOURCE_TAG } from "../../src/core/brain/untrusted-source.ts";
+import { detectHookRuntime } from "./detect.ts";
+
+/** How a host measures the context a hook hands it. */
+export type HostMeasure = (text: string) => number;
+
+/** UTF-16 code units: Claude Code's measure, and the default. */
+export const utf16Length: HostMeasure = (text) => text.length;
+
+const UTF8 = new TextEncoder();
+
+/** UTF-8 bytes: the unit Codex's token approximation counts. */
+export const utf8Bytes: HostMeasure = (text) => UTF8.encode(text).length;
+
+/**
+ * The measure the ceiling is applied in for a host: UTF-8 bytes for Codex
+ * (ceil(bytes / 4) tokens against its 2,500-token default), UTF-16 code
+ * units for every other host. A byte count is never below the UTF-16
+ * count, so a payload within the byte ceiling is within both.
+ */
+export function hostMeasureFor(runtime: string): HostMeasure {
+  return runtime === "codex" ? utf8Bytes : utf16Length;
+}
 
 /** The host's documented per-hook context cap, in characters. */
 export const HOST_CONTEXT_CAP_CHARS = 10_000;
@@ -54,8 +85,23 @@ export function fitHostContext(
   text: string,
   pointer = "",
   ceiling: number = HOST_CONTEXT_CEILING_CHARS,
+  measure: HostMeasure = utf16Length,
 ): string {
-  return fitHostContextCut(text, pointer, ceiling).text;
+  return fitHostContextCut(text, pointer, ceiling, measure).text;
+}
+
+/**
+ * {@link fitHostContext} under the ceiling of the host that sent
+ * `payload`, in that host's measure ({@link hostMeasureFor}): the last
+ * guard every hook applies to the context it emits.
+ */
+export function fitHostContextFor(payload: unknown, text: string, pointer = ""): string {
+  return fitHostContext(
+    text,
+    pointer,
+    HOST_CONTEXT_CEILING_CHARS,
+    hostMeasureFor(detectHookRuntime(payload)),
+  );
 }
 
 /** What {@link fitHostContextCut} emits, and how much of the input it kept. */
@@ -76,12 +122,14 @@ export function fitHostContextCut(
   text: string,
   pointer = "",
   ceiling: number = HOST_CONTEXT_CEILING_CHARS,
+  measure: HostMeasure = utf16Length,
 ): HostContextCut {
-  if (text.length <= ceiling) return { text, kept: text.length };
+  if (measure(text) <= ceiling) return { text, kept: text.length };
   // The kept count has as many digits as the total at most; room is kept
   // for the closing fence a cut inside an untrusted-source fence needs.
+  // The notice and the fence are ASCII, so their length is their measure.
   const reserve = cutNotice(text.length, text.length, pointer).length + 2 + FENCE_CLOSE.length + 1;
-  const room = Math.max(0, ceiling - reserve);
+  const room = headWithin(text, Math.max(0, ceiling - reserve), measure);
   const lineEnd = text.lastIndexOf("\n", room);
   let head = (
     lineEnd > room / 2 ? text.slice(0, lineEnd) : text.slice(0, codePointCut(text, room))
@@ -92,6 +140,22 @@ export function fitHostContextCut(
   if (head.lastIndexOf(FENCE_OPEN) > head.lastIndexOf(FENCE_CLOSE))
     head = `${head}\n${FENCE_CLOSE}`;
   return { text: `${head}\n\n${cutNotice(kept, text.length, pointer)}`, kept };
+}
+
+/**
+ * The most UTF-16 code units of `text`, from its start, whose measure is
+ * at most `limit`. With the UTF-16 measure that is `limit` itself; with
+ * the byte measure every unit costs at least one byte, so the search
+ * starts at `limit` and steps down by the overshoot.
+ */
+function headWithin(text: string, limit: number, measure: HostMeasure): number {
+  let at = Math.min(limit, text.length);
+  for (;;) {
+    const over = measure(text.slice(0, at)) - limit;
+    if (over <= 0 || at === 0) return at;
+    // A unit costs at most three bytes, and never less than one.
+    at = Math.max(0, at - Math.max(1, Math.ceil(over / 3)));
+  }
 }
 
 /**

@@ -157,6 +157,22 @@ interface NormalizedPayload {
 }
 
 /**
+ * Whether a hook payload's tool is `brain_feedback`: the bare name, or
+ * the name a host gives an MCP tool by prefixing its server
+ * (`mcp__<server>__brain_feedback` in Claude Code and Codex,
+ * `<server>__brain_feedback` in Grok). A payload from a real host carries
+ * the prefixed name, so a bare comparison never replayed a live call.
+ */
+export function isBrainFeedbackToolName(name: string | undefined): boolean {
+  return (
+    name !== undefined &&
+    (name === BRAIN_FEEDBACK_TOOL || name.endsWith(`__${BRAIN_FEEDBACK_TOOL}`))
+  );
+}
+
+const BRAIN_FEEDBACK_TOOL = "brain_feedback";
+
+/**
  * Whether capturing this event may need the signal dedup index - the
  * one step whose cost grows with the vault: a read and a frontmatter
  * parse of every `Brain/inbox/sig-*.md` and `processed/sig-*.md`. On a
@@ -174,7 +190,7 @@ interface NormalizedPayload {
  */
 export function lifecycleEventNeedsDedup(payload: unknown): boolean {
   const normalized = normalizePayload(payload);
-  if (normalized.toolName === "brain_feedback") return true;
+  if (isBrainFeedbackToolName(normalized.toolName)) return true;
   if (normalized.event === "SessionEnd" && normalized.interrupted === true) return true;
   const text = normalized.promptText;
   if (text === undefined) return false;
@@ -365,7 +381,7 @@ export async function captureSessionLifecycleEvent(
   // the tool declined to create. The decline is counted rather than
   // swallowed, so a run that dropped something says so.
   let toolCallsFailed = 0;
-  if (mayWrite && normalized.toolName === "brain_feedback") {
+  if (mayWrite && isBrainFeedbackToolName(normalized.toolName)) {
     if (isToolResponseError(normalized.toolResponse)) {
       toolCallsFailed++;
     } else {

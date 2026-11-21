@@ -42,7 +42,13 @@ function writeRules(body: string): string {
 }
 
 function newMeter(): InjectionMeter {
-  return { sources: [], configuredBudgetChars: 0, budgetChars: null, scopedRulesChars: 0 };
+  return {
+    sources: [],
+    configuredBudgetChars: 0,
+    budgetChars: null,
+    scopedRulesChars: 0,
+    cuts: [],
+  };
 }
 
 describe("renderStandingBlock", () => {

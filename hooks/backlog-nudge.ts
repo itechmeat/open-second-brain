@@ -38,7 +38,7 @@ import {
 import { backlogNudgeCountMatches, writeBacklogNudgeCount } from "./lib/backlog-nudge-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 async function main(): Promise<void> {
   // Fast opt-out FIRST: default OFF means an immediate no-op, no output.
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
       "'o2b brain import-session --propose-backlog --json' for the next sessions to mine.";
     process.stdout.write(
       JSON.stringify({
-        hookSpecificOutput: { hookEventName, additionalContext: fitHostContext(line) },
+        hookSpecificOutput: { hookEventName, additionalContext: fitHostContextFor(payload, line) },
       }) + "\n",
     );
 

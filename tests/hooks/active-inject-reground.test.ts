@@ -47,7 +47,6 @@ const HOOK = resolve(
 const SESSION = "reground-session-0001";
 const REGROUND_ON = { OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED: "true" };
 const CLAUDE_TRANSCRIPT = "/home/u/.claude/projects/p/reground-session-0001.jsonl";
-const CODEX_TRANSCRIPT = "/home/u/.codex/sessions/2026/10/04/rollout.jsonl";
 
 let vault: string;
 let configHome: string;
@@ -113,7 +112,7 @@ function codexPayload(): Record<string, unknown> {
     hook_event_name: "SessionStart",
     source: "startup",
     session_id: SESSION,
-    transcript_path: CODEX_TRANSCRIPT,
+    transcript_path: join(configHome, ".codex", "sessions", "2026", "10", "04", "rollout.jsonl"),
   };
 }
 

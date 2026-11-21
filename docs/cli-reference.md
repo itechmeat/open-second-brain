@@ -1165,19 +1165,33 @@ Host context limit: Claude Code takes at most 10,000 characters of
 `additionalContext` from one hook invocation (each hook of an event is
 measured on its own); a longer value is saved to a file and the model
 gets only the path and a 2,000-character preview, and is not asked to
-read it. So every Open Second Brain hook keeps the whole context it emits
-in one invocation under 9,000 characters (that cap less 10%; Codex
-documents no cap and gets the same ceiling). The SessionStart digest
+read it. Codex (0.169.0) does the same once a hook's context passes
+2,500 tokens, counted as UTF-8 bytes divided by four (10,000 bytes), and
+gives the model a head and tail preview; non-ASCII text costs two or
+three bytes a character there. So every Open Second Brain hook keeps the
+whole context it emits in one invocation under 9,000 units of its host's
+measure (the cap less 10%): UTF-16 characters for Claude Code and every
+host without a known cap, UTF-8 bytes for Codex. The SessionStart digest
 shares that ceiling across all it emits: the standing and scoped rules,
 the topic heads, the pinned context, the runtime notices and the active
 and lessons bodies with their framing. The active and lessons bodies
-share one room (each still within `active.inject_budget_chars`), cut with
-the usual "Injection truncated to budget" notice that names
-`brain_context`. A payload that still runs past the ceiling (caps set
-larger than it holds) is cut at a line with the same notice, and a cut
-inside an untrusted-source fence closes the fence first. The other hooks
-that emit context (UserPromptSubmit, the sub-agent carrier, the Stop
-advisories) apply the same last guard.
+share one room (each still within `active.inject_budget_chars`). No lane
+carries a truncation note of its own: the payload ends in ONE note,
+reserved from the ceiling before any lane is sized, that says how many
+characters were kept of how many, how many rule lines and sections of
+the preference set, how many characters of the pinned context and how
+many lessons are not shown, and names `brain_context` (the full
+preference set and the whole pinned context; the `osb://lessons`
+resource for the lessons). Codex is identified from the configured
+`CODEX_HOME` session roots declared by Open Second Brain. The last-good
+memory body and its cut counts are stored as one atomic snapshot, so a
+cached digest ends in the note that matches its body. A payload that
+still runs past the ceiling (caps set larger than it holds) is cut at a
+line with a notice of its own, and a cut inside an untrusted-source
+fence closes the fence first. The other hooks that emit context (UserPromptSubmit, the
+sub-agent carrier, the Stop advisories, the re-delivery parts) apply the
+same last guard in their host's measure, and the sub-agent carrier ends
+in the same one note.
 
 Chunked re-grounding: `reground_parts_enabled` (env
 `OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED`, default off) splits an

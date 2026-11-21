@@ -81,7 +81,12 @@ import {
   digestNotePaths,
   isRealSessionId,
 } from "./lib/injection-ledger.ts";
-import { LANE_BUDGETED, renderStandingBlock, type InjectionMeter } from "./lib/standing-block.ts";
+import {
+  LANE_BUDGETED,
+  LANE_UNBUDGETED,
+  renderStandingBlock,
+  type InjectionMeter,
+} from "./lib/standing-block.ts";
 import { buildAgentContextBlocks } from "./lib/agent-context-blocks.ts";
 import {
   assembleActiveContext,
@@ -93,6 +98,7 @@ import {
   resolveInjectionLimits,
   scopedSectionCap,
   SOURCE_ACTIVE_BODY,
+  SOURCE_DIGEST_CUT_NOTE,
   SOURCE_LESSONS_BODY,
   type InjectionLimits,
 } from "./lib/active-context.ts";
@@ -104,7 +110,18 @@ import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
-import { fitHostContext, HOST_CONTEXT_CEILING_CHARS } from "./lib/host-context-ceiling.ts";
+import {
+  fitHostContext,
+  HOST_CONTEXT_CEILING_CHARS,
+  hostMeasureFor,
+  type HostMeasure,
+} from "./lib/host-context-ceiling.ts";
+import {
+  DIGEST_CUT_NOTE_RESERVE,
+  type DigestCut,
+  parseDigestCuts,
+  renderDigestCutNote,
+} from "../src/core/agent-context/digest-cut-note.ts";
 
 /**
  * Best-effort hook audit line. Never throws: a failure to record must never
@@ -233,15 +250,24 @@ async function main(): Promise<void> {
     // fits its own ceiling there.
     const startsEpoch = hookEventName === "SessionStart";
     const splits = startsEpoch && regroundSplitApplies(payload);
-    const hostRoom = splits
-      ? null
-      : Math.max(0, HOST_CONTEXT_CEILING_CHARS - separated(standingBlock.length));
+    // The payload ends in one note for every lane the budgets cut
+    // (src/core/agent-context/digest-cut-note.ts). Its room comes off the
+    // ceiling before any lane is sized, so the lanes fill what is left
+    // with rules and the note never pushes the payload past the ceiling:
+    // nothing is cut twice, and no lane spends room on a note of its own.
+    // The ceiling is applied in the host's own unit: UTF-16 code units,
+    // or UTF-8 bytes for Codex, whose cap counts bytes (the note is ASCII,
+    // so its length is its measure in both).
+    const measure = hostMeasureFor(detectHookRuntime(payload));
+    const ceiling = HOST_CONTEXT_CEILING_CHARS - separated(DIGEST_CUT_NOTE_RESERVE);
+    const hostRoom = splits ? null : Math.max(0, ceiling - separated(measure(standingBlock)));
     const agentBlocks = await buildAgentContextBlocks({
       vault,
       workspaceDir,
       limits: agentContextLimits(limits, scopedBlock.length, hostRoom),
       meter,
       remainingMs,
+      measure,
     });
     const headsBlock = agentBlocks.headsBlock;
     const pinnedBlock = agentBlocks.pinnedBlock;
@@ -255,31 +281,55 @@ async function main(): Promise<void> {
         ? undefined
         : Math.max(
             0,
-            HOST_CONTEXT_CEILING_CHARS -
-              separated(joinBlocks([standingBlock, scopedBlock, headsBlock, pinnedBlock]).length),
+            ceiling -
+              separated(measure(joinBlocks([standingBlock, scopedBlock, headsBlock, pinnedBlock]))),
           );
 
     // Fail-open context load: assemble the injected body inside a guard that
     // degrades to the last-good cache (or empty) on any error, never emitting
     // a partial or poisoned payload. A successful non-empty body refreshes the
     // last-good snapshot.
-    const { context: memoryContext, source } = await loadInjectContextFailOpen({
+    const loadedMemory = await loadInjectContextFailOpen({
       vault,
       key: "active",
-      assemble: () =>
-        assembleActiveContext(vault, memoryBudget, meter, {
+      assemble: () => {
+        const context = assembleActiveContext(vault, memoryBudget, meter, {
           startsSession: hookEventName === "SessionStart",
-          ...(memoryRoom !== undefined ? { roomChars: memoryRoom } : {}),
-        }),
+          ...(memoryRoom !== undefined ? { roomChars: memoryRoom, measure } : {}),
+        });
+        const cuts = meter.cuts.filter((cut) => cut.source !== "pinned-context");
+        return context.length === 0 && cuts.length === 0
+          ? ""
+          : JSON.stringify({ version: 1, context, cuts });
+      },
       audit: (degradedSource) =>
         auditHook(vault, "inject_failopen_degraded", {
           hook: "active-inject",
           source: degradedSource,
         }),
     });
+    const snapshot = parseMemorySnapshot(loadedMemory.context);
+    const memoryContext = snapshot?.context ?? "";
+    const source = loadedMemory.source;
     // The early return now fires only when there are NEITHER standing rules
     // NOR memory - a vault with rules and a broken memory layer still speaks.
-    const blocks = [standingBlock, scopedBlock, headsBlock, pinnedBlock, memoryContext];
+    // The one note, last. The memory lanes' cuts are kept beside the
+    // last-good copy of the memory context, so a payload served from that
+    // copy ends in the note its own run wrote; an assembly that threw
+    // without a copy emitted no memory lane and counts none. The pinned
+    // cut is always this run's.
+    const pinnedCuts = meter.cuts.filter((cut) => cut.source === "pinned-context");
+    const memoryCuts = snapshot?.cuts ?? [];
+    const cutNote = renderDigestCutNote([...pinnedCuts, ...memoryCuts]);
+    if (cutNote.length > 0) {
+      meter.sources.push({
+        name: SOURCE_DIGEST_CUT_NOTE,
+        text: cutNote,
+        lane: LANE_UNBUDGETED,
+        outsideBoundary: true,
+      });
+    }
+    const blocks = [standingBlock, scopedBlock, headsBlock, pinnedBlock, memoryContext, cutNote];
     const context = joinBlocks(blocks);
 
     // Only a SessionStart starts an injection epoch: the same hook run on
@@ -292,6 +342,7 @@ async function main(): Promise<void> {
       loaderSource: source,
       memoryContext,
       fullContext: context,
+      tailAfterMemoryChars: cutNote.length > 0 ? BLOCK_SEPARATOR.length + cutNote.length : 0,
       meter,
     };
     if (context.length === 0) {
@@ -314,14 +365,16 @@ async function main(): Promise<void> {
     // 2..n would be lost, so the hook emits the whole payload instead.
     let delivery: Delivery = fitDelivery(
       startsEpoch
-        ? planDelivery(payload, blocks, context)
+        ? planDelivery(payload, blocks, context, measure)
         : { parts: [context], partsDropped: 0, droppedChars: 0, partCeilingChars: 0, meter: null },
       context,
+      measure,
     );
     let ledgerWritten: boolean | null = null;
     if (delivery.parts.length > 1) {
       ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
-      if (!ledgerWritten) delivery = fitDelivery(unsplitDelivery(delivery, context), context);
+      if (!ledgerWritten)
+        delivery = fitDelivery(unsplitDelivery(delivery, context), context, measure);
     }
 
     const out = {
@@ -371,6 +424,8 @@ interface RecordInjectionEpochInput {
   readonly memoryContext: string;
   /** The whole context before any cut: a bullet cut mid-line is recorded truncated. */
   readonly fullContext?: string;
+  /** Separators and unbudgeted cut note after the memory lanes. */
+  readonly tailAfterMemoryChars: number;
   readonly meter: InjectionMeter;
 }
 
@@ -483,7 +538,29 @@ function pruneHookStateFilesSafe(vault: string): void {
 function bodyEmitted(input: RecordInjectionEpochInput, name: string, delivery: Delivery): boolean {
   const end = bodyEndInMemory(input, name);
   if (end === null) return false;
-  return input.memoryContext.length - end >= delivery.droppedChars;
+  const droppedMemoryChars = Math.max(0, delivery.droppedChars - input.tailAfterMemoryChars);
+  return input.memoryContext.length - end >= droppedMemoryChars;
+}
+
+interface MemorySnapshot {
+  readonly context: string;
+  readonly cuts: DigestCut[];
+}
+
+/** Parse one atomic cache snapshot; legacy bodies cannot be paired with unrelated cuts. */
+function parseMemorySnapshot(text: string): MemorySnapshot | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value === null || typeof value !== "object") return null;
+    const snapshot = value as Record<string, unknown>;
+    if (snapshot["version"] !== 1 || typeof snapshot["context"] !== "string") return null;
+    if (!Array.isArray(snapshot["cuts"])) return null;
+    const cuts = parseDigestCuts(JSON.stringify(snapshot["cuts"]));
+    if (cuts.length !== snapshot["cuts"].length) return null;
+    return { context: snapshot["context"], cuts };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -556,6 +633,7 @@ function planDelivery(
   payload: HookPayloadBase,
   blocks: ReadonlyArray<string>,
   context: string,
+  measure: HostMeasure,
 ): Delivery {
   const single: Delivery = {
     parts: [context],
@@ -586,7 +664,7 @@ function planDelivery(
     const resolved = resolveRegroundPartChars(runtime);
     const ceiling = Math.min(resolved.chars, HOST_CONTEXT_CEILING_CHARS);
     const invalid = resolved.invalid;
-    const split = splitRegroundParts(blocks, ceiling, joinBlocks, BLOCK_SEPARATOR);
+    const split = splitRegroundParts(blocks, ceiling, joinBlocks, BLOCK_SEPARATOR, measure);
     return {
       parts: split.parts,
       partsDropped: split.partsDropped,
@@ -636,10 +714,10 @@ const HOST_CUT_POINTER = " Call `brain_context` for the full preference set.";
  * with the notice, and the cut tail counts as not delivered - as the
  * parts the splitter drops do. A split delivery is left as it is.
  */
-function fitDelivery(delivery: Delivery, context: string): Delivery {
+function fitDelivery(delivery: Delivery, context: string, measure: HostMeasure): Delivery {
   if (delivery.parts.length !== 1) return delivery;
   const part = delivery.parts[0]!;
-  const fitted = fitHostContext(part, HOST_CUT_POINTER);
+  const fitted = fitHostContext(part, HOST_CUT_POINTER, HOST_CONTEXT_CEILING_CHARS, measure);
   if (fitted === part) return delivery;
   const kept = fitted.slice(0, fitted.lastIndexOf("\n\n"));
   return {

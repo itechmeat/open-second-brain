@@ -2,7 +2,7 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "brain_feedback",
+        "matcher": "(^|__)brain_feedback$",
         "hooks": [
           {
             "type": "command",

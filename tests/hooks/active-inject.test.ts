@@ -621,7 +621,7 @@ describe("active-inject hook: tiered injection budgeting", () => {
     return JSON.parse(r.stdout).hookSpecificOutput.additionalContext as string;
   }
 
-  test("an over-budget body reaches the context tiered, announced by the tier notice", async () => {
+  test("an over-budget body reaches the context tiered, announced by the one note", async () => {
     // A 1,000-char budget: the whole body overflows it and the tiered
     // body fits the room left once the framing header's overhead is
     // charged (the header rides in the budget, recall-inject
@@ -635,16 +635,22 @@ describe("active-inject hook: tiered injection budgeting", () => {
     writeActive(`${FRONTMATTER}\n${oversizedBody()}\n`);
 
     const injected = await inject();
-    expect(injected).toContain("Headlines kept to fit the injection budget");
-    expect(injected).toContain("brain_context");
-    expect(injected).not.toContain("Injection truncated");
+    // One note closes the payload: the tier cut rule lines and dropped no
+    // section, and the note counts the lines and names the full-set call.
+    const note = injected.slice(injected.lastIndexOf("\n\n") + 2);
+    expect(note).toMatch(/^_Injection truncated to budget: kept \d+ of \d+ characters\. /);
+    expect(note).toMatch(/Not shown: \d+ of 43 rule lines\./);
+    expect(note).not.toContain("section");
+    expect(note).toContain("`brain_context`");
+    expect(injected.split("_Injection truncated to budget:").length - 1).toBe(1);
     // The framed whole - header included - stays within the configured
-    // budget plus the tier notice's new cut-count clause (task 4.4): the
-    // framing is charged, never stacked on top. The header must actually
-    // be present, or the slice below reads as vacuous.
+    // budget; the note rides after it: the framing is charged, never
+    // stacked on top. The header must actually be present, or the slice
+    // below reads as vacuous.
     expect(injected.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY))).toBeGreaterThan(-1);
     const memory = injected.slice(
       injected.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY)),
+      -(note.length + 2),
     );
     expect(memory.length).toBeLessThanOrEqual(1000);
     // Exactly the top three ranked bullets survive in each tiered section.
