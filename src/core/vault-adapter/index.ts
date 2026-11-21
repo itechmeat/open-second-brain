@@ -22,6 +22,7 @@
 import { assertVaultIdentityForWrite, vaultMarkerAbsentNotice } from "../brain/vault-identity.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import { storeOnlyMode } from "../store/store-only.ts";
+import { assertVaultPresent } from "../vault-unexaminable.ts";
 import { VAULT_ADAPTER_REQUIRED_CODE } from "./codes.ts";
 import {
   assertVaultBindingForWrite,
@@ -79,6 +80,11 @@ export function assertNoteVaultForWrite(
   sink?: DegradationNotice[],
 ): string {
   const root = requireVaultAdapter(vault, feature);
+  // The vault folder must be THERE. A note write may create the parents
+  // inside a vault that exists, but never the vault itself: a folder that
+  // is gone is an unmounted disk or a mistyped path, and a fresh tree
+  // written in its place hides the real vault.
+  assertVaultPresent(root);
   if (!storeOnlyMode({ vault: root }).storeOnly) {
     assertVaultIdentityForWrite(root, sink);
     if (vaultMarkerAbsentNotice(root) !== null) {

@@ -64,6 +64,7 @@ import { preferencePath, validateSlug } from "./paths.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { VaultUnexaminableError } from "../vault-unexaminable.ts";
 import { writeBatchPrivacy } from "./write-batch-privacy.ts";
 import type { OperationPrivacy } from "../store/operation-privacy.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
@@ -707,6 +708,10 @@ function envelopeError(err: unknown, index: number): WriteBatchError {
   if (err instanceof CreateNoteError) {
     return new WriteBatchError(err.code, index, `operation ${index}: ${err.message}`);
   }
+  // A vault that is gone (or cannot be examined) is not a fault of THIS
+  // operation: it is the machine's state, and it answers with its own
+  // named refusal (`vault_unreadable`) rather than as a bad operation.
+  if (err instanceof VaultUnexaminableError) throw err;
   return new WriteBatchError(
     "invalid_operation",
     index,

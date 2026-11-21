@@ -17,6 +17,7 @@ import {
 import { WRITE_BINDING_REFUSED_CODE } from "../../core/write-binding/index.ts";
 import { isFrontmatterKey } from "../../core/vault.ts";
 import { rethrowVaultFrozen } from "../frozen-refusal.ts";
+import { rethrowVaultUnreadable } from "../vault-unreachable.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, type JsonRpcErrorCode, MCPError } from "../protocol.ts";
 
 /**
@@ -172,6 +173,9 @@ export function parseFrontmatterArg(
  */
 export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
   rethrowVaultFrozen(err);
+  // A vault that is not there, or cannot be examined: the batch refused
+  // for the machine's state, not for the operation.
+  rethrowVaultUnreadable(err);
   if (err instanceof WriteBatchError) {
     return new MCPError(rpcCodeFor(err.code), `${tool}: ${err.message}`, {
       code: err.code,

@@ -100,6 +100,31 @@ export function unexaminablePath(
   );
 }
 
+/**
+ * The refusal for a vault root that is not there, or cannot be examined.
+ *
+ * A write must never MATERIALISE a vault: the folder is either an
+ * unmounted disk or a mistyped path, and a fresh tree written in its
+ * place hides the real vault. The refusal is the class this module
+ * already owns, so every layer answers `vault_unreadable` for it.
+ */
+export function assertVaultPresent(vault: string): void {
+  const look = lookAtDirectory(vault);
+  if (look === "present") return;
+  if (look === "absent") {
+    const gone = Object.assign(new Error(`ENOENT: no such directory, '${vault}'`), {
+      code: "ENOENT",
+    });
+    throw new VaultUnexaminableError(
+      vault,
+      gone,
+      `the vault ${vault} is not there (ENOENT); a write never creates the vault folder ` +
+        "(mount or restore it, or point the machine config at the vault)",
+    );
+  }
+  throw new VaultUnexaminableError(vault, look.failed);
+}
+
 /** Whether `err` is a failed look that leaves the vault unexaminable. */
 export function isUnexaminableLook(err: unknown): err is NodeJS.ErrnoException & Error {
   return err instanceof Error && UNEXAMINABLE_CODES.has((err as NodeJS.ErrnoException).code ?? "");

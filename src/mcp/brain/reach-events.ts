@@ -36,7 +36,7 @@ import { shapeStoredTextForDelivery } from "../../core/brain/delivery-shaping.ts
 import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import type { TemporalEvent } from "../../core/brain/temporal/types.ts";
 import type { ServerContext } from "../tool-contract.ts";
-import { contextReach } from "../tool-contract.ts";
+import { contextReach, contextVault } from "../tool-contract.ts";
 import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 export { eventAtReach, recordRefs };
@@ -88,13 +88,18 @@ export function deliveryView(
   const reach = contextReach(ctx);
   if (reach === TRANSPORT_REACH.local) return { reach, shape: (text) => text };
   const cache: FrontmatterCache = opts?.cache ?? new Map();
+  // A context serving no vault (none configured, or a switched machine's
+  // vault out of reach) probes with no vault: a memory page the store's
+  // folds rebuild answers, any other page reads as absent and is fenced.
+  // Reading `ctx.vault` there would refuse the whole store-backed answer.
+  const vault = contextVault(ctx);
   return {
     reach,
     shape(text: string, rel: string): string {
       // The rel is a vault-relative POSIX path by contract; fold any
       // Windows separators a caller's spelling carries so the probe
       // names the same page on every host.
-      const origin = pageOriginForDelivery(ctx.vault, posixRel(rel), cache);
+      const origin = pageOriginForDelivery(vault, posixRel(rel), cache);
       return shapeStoredTextForDelivery(text, {
         treatment: storedTextTreatment(origin),
         origin: deliveryOriginLabel(origin),

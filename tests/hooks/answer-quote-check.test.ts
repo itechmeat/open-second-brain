@@ -146,25 +146,29 @@ async function runHook(
   overrides: Record<string, unknown> = {},
   envOverrides: Record<string, string> = {},
   hook: string = HOOK,
+  preload?: string,
 ): Promise<RunResult> {
   const transcriptPath =
     typeof overrides["transcript_path"] === "string"
       ? (overrides["transcript_path"] as string)
       : join(tmp, "transcript.jsonl");
-  const proc = Bun.spawn(["bun", "run", hook], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    // Bun hands a child without `env` the environment this process STARTED
-    // with; pass the live one so the child keeps the hermetic defaults the
-    // suite preload installed, plus this test's VAULT_DIR and recall gate.
-    env: {
-      ...process.env,
-      VAULT_DIR: vault,
-      OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
-      ...envOverrides,
+  const proc = Bun.spawn(
+    preload === undefined ? ["bun", "run", hook] : ["bun", "run", "--preload", preload, hook],
+    {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      // Bun hands a child without `env` the environment this process STARTED
+      // with; pass the live one so the child keeps the hermetic defaults the
+      // suite preload installed, plus this test's VAULT_DIR and recall gate.
+      env: {
+        ...process.env,
+        VAULT_DIR: vault,
+        OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
+        ...envOverrides,
+      },
     },
-  });
+  );
   proc.stdin.write(
     JSON.stringify({
       hook_event_name: "Stop",
@@ -1239,6 +1243,50 @@ describe("answer-quote-check hook - reply presence records", () => {
     expect(records[0]!.payload["checked"]).toBe(0);
     expect(records[0]!.payload["per_note"]).toEqual([
       { path: "Brain/notes/restaking.md", start_line: 1, end_line: 1, verdict: "note-unavailable" },
+    ]);
+  }, 20000);
+
+  test("a note the budget cut inside a verified span reads note-unavailable, never absent", async () => {
+    // The cut lands INSIDE the walk of the last span, after that span has
+    // already verified against the first candidate: the second candidate is
+    // then left unread, and the fold has no verdict for it at all. `absent`
+    // would claim the reply had every chance to touch that note; the cut
+    // is exactly the case where it did not, so the note reads
+    // `note-unavailable` - the same verdict the cut before the walk
+    // produces.
+    writeConfig("shadow");
+    writeNote("Brain/notes/a-first.md", "Restaking reuses staked capital.\n");
+    writeNote("Brain/notes/b-second.md", "Elsewhere collects unrelated facts.\n");
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/a-first.md#L1-L1",
+        "local:Brain/notes/b-second.md#L1-L1",
+      ]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    // The hook reads its clock five times before the second candidate is
+    // looked at: the start of the budget, the check before the message, the
+    // check before the span, the check before the first candidate and the
+    // check before the second. The preload makes the fifth read jump past
+    // the deadline, so the cut lands between the two candidates - after the
+    // first one verified the span.
+    const run = await runHook(
+      {},
+      { OSB_TEST_CLOCK_JUMP_AT: "5" },
+      HOOK,
+      join(import.meta.dir, "..", "fixtures", "hooks", "quote-check-deadline-cut.ts"),
+    );
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    const records = presenceRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["checked"]).toBe(1);
+    expect(records[0]!.payload["per_note"]).toEqual([
+      { path: "Brain/notes/a-first.md", start_line: 1, end_line: 1, verdict: "verified" },
+      { path: "Brain/notes/b-second.md", start_line: 1, end_line: 1, verdict: "note-unavailable" },
     ]);
   }, 20000);
 
