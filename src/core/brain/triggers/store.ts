@@ -51,9 +51,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { parseFrontmatterText } from "../../vault.ts";
+import { lockDirSync } from "../../fs-lock.ts";
 import {
   isTriggerKind,
   isTriggerStatus,
@@ -1258,7 +1257,7 @@ function withTriggerDirLock<T>(vault: string, body: () => T): T {
   // and no trigger directory land in the vault.
   if (lanePagesInStore(vault)) return withLaneLock(vault, dir, body);
   mkdirSync(dir, { recursive: true });
-  const release = lockfile.lockSync(dir, { stale: TRIGGER_LOCK_STALE_MS, realpath: false });
+  const release = lockDirSync(dir, { stale: TRIGGER_LOCK_STALE_MS });
   try {
     return body();
   } finally {

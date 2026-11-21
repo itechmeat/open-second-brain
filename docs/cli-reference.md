@@ -895,6 +895,27 @@ takes it again. A write that still cannot get the lock is refused with
 `ELOCKED` and `lock busy: <lock file>`, writes nothing, and says what to do
 next: retry the ingest, run the parallel ingests one at a time, or raise
 the wait.
+On Windows a lock its holder has just released can answer `EPERM` or
+`EACCES` for a moment instead of "already held"; every lock waits that out
+within the same bound. That wait for the release is a short settle window
+of about 40 ms that is NOT part of the configured wait: the deadline is
+checked after the attempt returns, so a name that is refused for a moment
+is created again over those tens of milliseconds even with
+`OPEN_SECOND_BRAIN_LOCK_WAIT_MS=0`, which means one attempt and no wait for
+another writer. A lock whose folder refuses new entries is refused
+at once with `cannot take the lock <path>: its directory <dir> refuses new
+entries (<code>)`; give the account write access to that folder, or, for
+`EROFS`, keep that data on a writable mount. A stale lock this process may
+not remove (on POSIX a sticky parent that holds another user's lock
+directory) is refused with `cannot remove the stale lock <path>:
+the removal was refused (<code>)`: nobody holds that name, so it is not a
+lock that is busy, and waiting cannot clear it. A removal refused while
+the name is on its way out is not that error: on Windows a name another
+process has just removed is delete pending until its last handle closes,
+and it refuses the removal and any look at it. Such a refusal says a
+release is going through, so the attempt is made again over the settle
+window and, if the name is still refused there, waited out within the
+lock's own budget like any lock changing hands.
 
 ### Trusted recall and memory write surface (since v1.35.0)
 
@@ -1967,7 +1988,7 @@ tool may run, and where the machine-local dedup cache lives. None of them has a
 
 | Variable                            | Default                                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`    | `5000`                                                     | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
+| `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`    | `5000`                                                     | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. A name that another writer is releasing on Windows is created again over a settle window of about 40 ms, which is not part of this wait and happens at `0` as well. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
 | `OPEN_SECOND_BRAIN_SNAPSHOT_TIMEOUT_MS` | `900000` (fifteen minutes) | How long one `tar` or `zstd` run of a Brain snapshot, a derived-store archive or a restore may take before it is killed and the snapshot fails naming the tool. A whole number of milliseconds above zero; anything else is an error. |
 | `OPEN_SECOND_BRAIN_WRITER_LOCK_STALE_MS` | `60000` (one minute) | The stale window of the search index writer lock: a lock whose holder has not refreshed it for this long counts as abandoned and the next writer takes it over. A live holder refreshes it every third of the window, from a worker thread while it is blocked in a bounded synchronous step (a `tar` or `zstd` run, an integrity scan, `VACUUM INTO`, an FTS rebuild, a migration), so a long snapshot, restore or rebuild keeps it; a holder stuck in such a step past its bound stops refreshing and is taken over one window later. Every process sharing an index should use the same value. Releases before this one always use one minute and ignore the variable, so a value below `60000` lets this process take over an older release's live lock: do not set one while an older release shares the index (a process that reads such a value warns about it once). A whole number of milliseconds from `1000` to `86400000` (one day); anything else is an error. |
 | `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` | the user cache directory, `open-second-brain/dedup-index/` | Where the signal dedup index cache is kept, one `<vault-digest>.json` per vault, outside the vault.                                                                                                                                                                                                                                                                                                    |

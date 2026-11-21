@@ -12,8 +12,6 @@ import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
 import { isSecretReferenceValue, SecretReferenceError } from "./secret-ref.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
@@ -31,6 +29,7 @@ import {
 import type { LinkOutputFormat } from "./brain/wikilink.ts";
 import { STORE_DUAL_WRITE_CONFIG_KEY, STORE_DUAL_WRITE_ENV } from "./store/constants.ts";
 import type { ConfigDiscovery } from "./types.ts";
+import { lockDirSync } from "./fs-lock.ts";
 
 /**
  * The named-secret resolver port (trust-surface-hardening, t_e5807974).
@@ -605,7 +604,7 @@ export function resolveDeviceId(configPath?: string): string {
   try {
     for (let attempt = 0; attempt < 10; attempt++) {
       try {
-        release = lockfile.lockSync(dir, { stale: 10_000, realpath: false });
+        release = lockDirSync(dir, { stale: 10_000 });
         break;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;
@@ -720,7 +719,7 @@ export function resolveInstallationSecret(configPath?: string, secretsVault?: st
   try {
     for (let attempt = 0; attempt < 10; attempt++) {
       try {
-        release = lockfile.lockSync(dir, { stale: 10_000, realpath: false });
+        release = lockDirSync(dir, { stale: 10_000 });
         break;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;

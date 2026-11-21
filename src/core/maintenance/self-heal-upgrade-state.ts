@@ -46,6 +46,7 @@ import { assertNoMigrationInProgress } from "../migration-gate.ts";
 import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 import type { CheckResult } from "../types.ts";
 import { machineStatePath } from "../state/machine-state.ts";
+import { tryCreateLockFile } from "../fs-lock.ts";
 
 /** Marker file name inside the per-device `.open-second-brain/` directory. */
 export const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
@@ -528,17 +529,25 @@ export function claimSelfHealUpgradeLock(
   mkdirSync(dirname(path), { recursive: true });
   const token = randomBytes(16).toString("hex");
   for (let attempt = 0; attempt < 2; attempt++) {
+    // EEXIST, or Windows refusing the name while a release goes through,
+    // is a claim to judge; a refused name already free is created again.
+    // The create and the record are two steps: a record that cannot be
+    // written is not a claim someone holds, so the file the create made is
+    // removed again and the write's error is the answer.
+    const outcome = tryCreateLockFile(path, (fd) => {
+      writeFileSync(fd, lockRecordText(token, opts.handed !== true, now));
+    });
+    if ("created" in outcome) return token;
+    const holder = readSelfHealUpgradeLock(vault, now);
+    if (holder.held) return null;
+    // Released before it was judged: nothing of anyone's to remove, so the
+    // create is raced again. Unlinking here could remove the claim another
+    // worker made meanwhile, and both would run.
+    if (holder.kind === "none") continue;
     try {
-      writeFileSync(path, lockRecordText(token, opts.handed !== true, now), { flag: "wx" });
-      return token;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      if (selfHealUpgradeLockHeld(vault, now)) return null;
-      try {
-        unlinkSync(path);
-      } catch {
-        // raced with the holder's release or another takeover; retry
-      }
+      unlinkSync(path);
+    } catch {
+      // raced with the holder's release or another takeover; retry
     }
   }
   return null;

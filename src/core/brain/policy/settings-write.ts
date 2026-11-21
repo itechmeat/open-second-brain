@@ -32,7 +32,6 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import lockfile from "proper-lockfile";
 
 import { canonicalJson } from "../../integrity/digest.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -71,6 +70,7 @@ import {
   refuseWholeListOverStrongerEntries,
 } from "./settings-entry-authority.ts";
 import { storeCommit, type StoreChange } from "./settings-store-commit.ts";
+import { lockDirSync } from "../../fs-lock.ts";
 
 export {
   BrainSettingError,
@@ -466,7 +466,7 @@ function withSettingsFileLock<T>(path: string, fn: () => T): T {
   let lastError: unknown;
   for (let attempt = 0; attempt < 40 && release === null; attempt++) {
     try {
-      release = lockfile.lockSync(path, { stale: 30_000, realpath: false });
+      release = lockDirSync(path, { stale: 30_000 });
     } catch (exc) {
       if ((exc as NodeJS.ErrnoException).code !== "ELOCKED") throw exc;
       lastError = exc;

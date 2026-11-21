@@ -1560,6 +1560,19 @@ Other questions that come up:
 - **Records from another machine are missing.** Check that your sync tool
   has delivered the partition folders (`o2b store path` on both machines
   shows the same store id and both partitions as held where expected).
+- **A write says `store lock busy` or `cannot take the lock`.** Several
+  sessions writing at once take turns on short device-local locks; on
+  Windows a lock that was just released can be refused for a moment, and
+  that is waited out too. `store lock busy` means the lock stayed held past
+  the wait (five seconds by default, `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`
+  raises it): retry. `cannot take the lock <path>: its directory <dir>
+  refuses new entries` means the device-local state directory is not
+  writable by this account (an ACL, Controlled Folder Access): fix its
+  permissions. The check uses the same create operation as the lock, so
+  ACLs can distinguish a file lock from a directory lock. The same message
+  ending in `(EROFS); it is on a read-only mount` means the directory is
+  on a read-only mount: move that data to a writable mount, since no
+  permission change helps there.
 - **A later machine's migration exits 1 and names missing shards.** The
   first machine's files have not arrived yet. Wait for sync and run it
   again, or use `--wait <seconds>`.

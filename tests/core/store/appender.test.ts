@@ -229,9 +229,12 @@ describe("concurrent appends on one device", () => {
   });
   afterEach(() => tmp.cleanup());
 
-  test("child processes produce N complete, verifiable lines and one shared blob", async () => {
-    const WORKERS = 6;
-    const EACH = 100;
+  /**
+   * Start `WORKERS` child processes that each append `EACH` records to one
+   * device's shard at the same moment, wait for them, and check that every
+   * record is there once. Returns the records and the store.
+   */
+  async function appendConcurrently(WORKERS: number, EACH: number, bodies: "mixed" | "small") {
     // Every worker reports ready, then all start on one go file.
     const readyDir = join(tmp.parent, "ready");
     const goFile = join(tmp.parent, "go");
@@ -260,6 +263,7 @@ describe("concurrent appends on one device", () => {
           String(EACH),
           readyDir,
           goFile,
+          bodies,
         ],
         { stdout: "ignore", stderr: "pipe" },
       ),
@@ -286,6 +290,19 @@ describe("concurrent appends on one device", () => {
     expect(new Set(records.map((r) => r.record.id)).size).toBe(WORKERS * EACH);
     expect(new Set(records.map((r) => r.record.hlc)).size).toBe(WORKERS * EACH);
     expect(records.every((r) => r.bodyState !== "pending")).toBe(true);
+    // The workers really contended: their lines interleave in the shard
+    // rather than forming one block per worker.
+    const switches = records.filter(
+      (r, i) => i > 0 && r.record.agent !== records[i - 1]!.record.agent,
+    ).length;
+    expect(switches).toBeGreaterThan(WORKERS - 1);
+    return { records, store };
+  }
+
+  test("child processes produce N complete, verifiable lines and one shared blob", async () => {
+    const WORKERS = 6;
+    const EACH = 100;
+    const { records, store } = await appendConcurrently(WORKERS, EACH, "mixed");
     const blobDirs = readdirSync(join(tmp.root, "shared", "blobs"));
     const blobs = blobDirs.flatMap((d) => readdirSync(join(tmp.root, "shared", "blobs", d)));
     // Every worker spilled the same large body, so they raced for one blob name.
@@ -293,14 +310,21 @@ describe("concurrent appends on one device", () => {
     expect(records.filter((r) => r.bodyState === "blob")).toHaveLength(
       WORKERS * Math.ceil(EACH / 3),
     );
-    // The workers really contended: their lines interleave in the shard
-    // rather than forming one block per worker.
-    const switches = records.filter(
-      (r, i) => i > 0 && r.record.agent !== records[i - 1]!.record.agent,
-    ).length;
-    expect(switches).toBeGreaterThan(WORKERS - 1);
     expect(store.storeId).toMatch(/^[0-9A-Z]{26}$/);
   }, 60_000);
+
+  // Windows refuses a mkdir of a lock directory its holder is still
+  // removing with EPERM rather than EEXIST. Many workers appending one
+  // short line at a time hand the shard lock over as often as possible,
+  // which is where that answer appears; every append must still land.
+  test.skipIf(process.platform !== "win32")(
+    "short appends from many processes all land while the lock changes hands",
+    async () => {
+      const { records } = await appendConcurrently(10, 80, "small");
+      expect(records.every((r) => r.bodyState !== "blob")).toBe(true);
+    },
+    90_000,
+  );
 });
 
 describe("a record read before a write", () => {

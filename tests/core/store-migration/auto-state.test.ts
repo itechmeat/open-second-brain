@@ -280,6 +280,42 @@ describe("the worker lock", () => {
     expect(ownsAutoMigrationLock(vault, token!)).toBe(true);
   });
 
+  test("a claim create refused while the dead worker's removed claim is delete-pending is retried", () => {
+    plantClaim({ pid: deadPid(), started: null, worker: "awaited" } as never);
+    const path = autoMigrationLockPath(vault);
+    const real = fs.openSync;
+    let refusals = 0;
+    const refused = spyOn(fs, "openSync").mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === path && refusals < 2) {
+        // Windows still deletes the claim this call just removed.
+        refusals += 1;
+        throw Object.assign(new Error(`EPERM: operation not permitted, open '${path}'`), {
+          code: "EPERM",
+          syscall: "open",
+          path,
+        });
+      }
+      return (real as (...args: unknown[]) => number)(file, ...rest);
+    }) as typeof fs.openSync);
+    const lost: unknown[] = [];
+    let token: string | null;
+    try {
+      token = claimAutoMigrationLock(vault, new Date(), {
+        ...EXACT,
+        onLostWorker: (worker) => lost.push(worker),
+      });
+    } finally {
+      refused.mockRestore();
+    }
+    expect(refusals).toBe(2);
+    expect(token).not.toBeNull();
+    expect(ownsAutoMigrationLock(vault, token!)).toBe(true);
+    expect(lost).toHaveLength(1);
+  });
+
   test("the state lives outside the vault, in the device-local folder of all stores", () => {
     for (const path of [
       autoMigrationLockPath(vault),

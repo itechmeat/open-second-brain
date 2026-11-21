@@ -25,19 +25,18 @@
  *
  * On Windows a released lock directory lingers in a "delete pending" state
  * until the last handle closes, and a `mkdir` of that name meanwhile fails
- * with `EPERM` instead of `EEXIST`. {@link isLockContention} counts that as
- * a held lock, so a writer that loses a race to a releasing holder waits
- * its turn instead of failing; the Brain log lock (`brain/log.ts`) shares
- * the rule.
+ * with `EPERM` instead of `EEXIST`. The attempt ({@link lockDirSync},
+ * `fs-lock.ts`) counts that as a held lock, so a writer that loses a race
+ * to a releasing holder waits its turn within the same budget, however
+ * often it loses; a directory that refuses new entries fails at once.
  */
 
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import lockfile from "proper-lockfile";
-
-import { isWindowsDeletePending, resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
+import { resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
 import { sleepSync } from "../fs-atomic.ts";
+import { lockDirSync } from "../fs-lock.ts";
 
 /** Age after which a lock directory counts as abandoned by a crashed holder. */
 export const STORE_LOCK_STALE_MS = 60_000;
@@ -46,28 +45,12 @@ export const STORE_LOCK_STALE_MS = 60_000;
 const RETRY_SLEEP_MAX_MS = 20;
 
 /**
- * Whether a failed `proper-lockfile` acquire of `lockTarget` means another
- * holder has the lock: `ELOCKED`, or on Windows an `EPERM`/`EACCES` while
- * the lock directory `<lockTarget>.lock` is still there (a release that
- * has not finished). An `EPERM` with nothing at the name is a directory
- * that refuses writes and stays an error. `platform` is a test seam.
+ * Whether a failed acquire means another holder has the lock: the
+ * `ELOCKED` every attempt here reports for a held lock, Windows'
+ * delete-pending answer included ({@link lockDirSync}).
  */
-export function isLockContention(
-  err: unknown,
-  lockTarget: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const e = err as NodeJS.ErrnoException;
-  return e.code === "ELOCKED" || isWindowsDeletePending(e, `${lockTarget}.lock`, platform);
-}
-
-/** A Windows `EPERM`/`EACCES`, the code a lock create gets while a name is being deleted. */
-export function isWindowsRefusal(
-  err: unknown,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const code = (err as NodeJS.ErrnoException).code;
-  return platform === "win32" && (code === "EPERM" || code === "EACCES");
+export function isLockContention(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === "ELOCKED";
 }
 
 /** How {@link acquireDirLock} waits and what its refusal says. */
@@ -86,24 +69,17 @@ export interface DirLockOptions {
  * Take the `proper-lockfile` directory lock of `lockTarget`
  * (`<lockTarget>.lock`), waiting with jittered, growing sleeps while it is
  * held, and return its release. Throws an `ELOCKED` error naming the
- * target when the lock stays held past the budget; any other failure is
- * rethrown as it is.
+ * target when the lock stays held past the budget; a directory that
+ * refuses new entries throws `LockDirectoryRefusedError` at once, and any
+ * other failure is rethrown as it is.
  */
 export function acquireDirLock(lockTarget: string, options: DirLockOptions): () => void {
   const started = Date.now();
-  let refusalRetried = false;
   for (let attempt = 0; ; attempt++) {
     try {
-      return lockfile.lockSync(lockTarget, { stale: options.staleMs, realpath: false });
+      return lockDirSync(lockTarget, { stale: options.staleMs });
     } catch (err) {
-      if (!isLockContention(err, lockTarget)) {
-        // A Windows EPERM with nothing at the name is a refusing directory
-        // or a release that finished between the mkdir and the check; one
-        // more try tells them apart.
-        if (refusalRetried || !isWindowsRefusal(err)) throw err;
-        refusalRetried = true;
-        continue;
-      }
+      if (!isLockContention(err)) throw err;
       if (Date.now() - started >= options.budgetMs) {
         const refused: NodeJS.ErrnoException = new Error(
           `${options.label} busy: ${lockTarget}: still held after waiting ` +

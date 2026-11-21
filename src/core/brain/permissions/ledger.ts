@@ -24,8 +24,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { ensureInsideVault } from "../../path-safety.ts";
 import {
   JSONL_LEDGER_EXT,
@@ -43,6 +41,7 @@ import type { PermissionAction } from "./document.ts";
 import { readLedgerRows } from "../../store/read/ledger-rows.ts";
 import { routeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
+import { lockDirSync } from "../../fs-lock.ts";
 
 /** Month-sharded JSONL root under `Brain/logs/`, beside the idempotency ledger. */
 const DECISIONS_REL = `${BRAIN_ROOT_REL}/logs/decisions`;
@@ -260,7 +259,7 @@ function withShardLock(shardPath: string, fn: () => void): void {
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts && release === null; attempt++) {
     try {
-      release = lockfile.lockSync(shardPath, { stale: 10_000, realpath: false });
+      release = lockDirSync(shardPath, { stale: 10_000 });
     } catch (exc) {
       if ((exc as NodeJS.ErrnoException).code !== "ELOCKED") throw exc;
       lastError = exc;

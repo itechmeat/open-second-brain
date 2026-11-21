@@ -58,6 +58,13 @@ import { Worker } from "node:worker_threads";
 
 import onExit from "signal-exit";
 
+import {
+  isHeldLockCreateError,
+  isNamedLockFault,
+  isRemovalRefusalTransient,
+  LockRemovalRefusedError,
+  tryCreateLockName,
+} from "../../fs-lock.ts";
 import { SearchError } from "../types.ts";
 
 /**
@@ -654,32 +661,42 @@ class Lease implements WriterLease {
  * again, as `proper-lockfile` does; any other filesystem error is thrown.
  */
 function tryCreateLock(lockDir: string, staleMs: number): boolean {
-  try {
-    mkdirSync(lockDir);
-    return true;
-  } catch (err) {
-    if (errnoCode(err) !== "EEXIST") throw err;
-  }
+  // A held lock answers EEXIST, or on Windows EPERM/EACCES while its
+  // holder's release is still going through (`fs-lock.ts`, which creates a
+  // refused name that is already free again at once); a directory that
+  // refuses new entries throws there with its own reason.
+  if ("created" in tryCreateLockName(lockDir, "directory", () => mkdirSync(lockDir))) return true;
   let mtimeMs: number;
   try {
     mtimeMs = statSync(lockDir).mtimeMs;
   } catch (err) {
-    if (errnoCode(err) !== "ENOENT") throw err;
-    mtimeMs = Number.NEGATIVE_INFINITY; // released meanwhile
+    if (errnoCode(err) === "ENOENT") {
+      return false; // released meanwhile: retry from the caller's wait path
+    } else if (isHeldLockCreateError(err, lockDir, "directory")) {
+      return false; // Windows: the directory is being deleted by its holder
+    } else {
+      throw err;
+    }
   }
   if (mtimeMs >= Date.now() - staleMs) return false;
   try {
     rmdirSync(lockDir);
   } catch (err) {
-    if (errnoCode(err) !== "ENOENT") throw err;
+    if (errnoCode(err) === "ENOENT") {
+      // gone: the create below takes the free name
+    } else if (isRemovalRefusalTransient(lockDir)) {
+      // A release is going through: on Windows a name another process has
+      // just removed is delete pending, and it refuses the removal of it
+      // until its last handle closes. The create below waits that out.
+    } else {
+      // The name is still there and the removal of it was refused: it
+      // cannot be done, and waiting does not change that.
+      throw new LockRemovalRefusedError(lockDir, err as NodeJS.ErrnoException);
+    }
   }
-  try {
-    mkdirSync(lockDir);
-    return true;
-  } catch (err) {
-    if (errnoCode(err) === "EEXIST") return false;
-    throw err;
-  }
+  // On Windows the directory just removed can stay delete-pending for a
+  // moment: the create is made again over a few tens of milliseconds.
+  return "created" in tryCreateLockName(lockDir, "directory", () => mkdirSync(lockDir));
 }
 
 /**
@@ -822,8 +839,10 @@ export function acquireWriterLockSync(path: string): () => void {
  * retries a second apart rather than blocking indefinitely, matching the
  * module's fail-fast contention contract; every failure, a filesystem one
  * included, is reported that way, except a lock directory that was created
- * but cannot be stamped, which is a fault of the filesystem and is thrown
- * as itself. `path` need not exist yet (a fresh
+ * but cannot be stamped, and a folder that refuses the lock
+ * (`LockDirectoryRefusedError` and the probe fault beside it, as on the
+ * sync path), which are faults of the filesystem and are thrown as
+ * themselves. `path` need not exist yet (a fresh
  * reindex has no live index); only its parent directory must.
  */
 export async function acquireWriterLease(
@@ -843,6 +862,10 @@ export async function acquireWriterLease(
     throw lockedError(path);
   } catch (e) {
     if ((e as { lockStampFailure?: boolean } | null)?.lockStampFailure === true) throw e;
+    // A folder that refuses the lock is its own fault, as on the sync path:
+    // reported as contention it would send the operator after a holder
+    // that does not exist.
+    if (isNamedLockFault(e)) throw e;
     throw contentionError(e);
   }
 }
