@@ -34,7 +34,7 @@ import { listLaneFiles, parseLanePage } from "../store/lane-pages.ts";
 import { memoryFromStore, storeRecordPages } from "./memory-pages.ts";
 import { brainDirs, claimGraphPath } from "./paths.ts";
 import { isTombstoned, normalizeChainLink, resolveChainTip } from "./lifecycle/tombstone-read.ts";
-import { isValidAt } from "./lifecycle/temporal-replace.ts";
+import { isValidAt } from "./lifecycle/validity.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Constants ------------------------------------------------------------

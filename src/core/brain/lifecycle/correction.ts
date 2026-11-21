@@ -32,13 +32,12 @@
  * as a missing one before anything is written.
  */
 
-import { join } from "node:path";
-
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import { writeFrontmatterAtomic } from "../../vault.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
 import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
 import {
   LIFECYCLE_STATUS_KEY,
@@ -50,12 +49,19 @@ import {
   tombstone,
 } from "./tombstone.ts";
 import { appendLogEvent } from "../log.ts";
-import { resolveNotePath } from "../note-path.ts";
+import { authorityFromOrigin } from "../../store/dual-write.ts";
+import {
+  assertLifecycleWrite,
+  assertPatchesApply,
+  resolveMemoryTarget,
+  verifyMemoryPatches,
+  writeMemoryPatches,
+  type MemoryPatch,
+  type MemoryTarget,
+} from "./memory-target.ts";
 import { BRAIN_DECISIONS_REL, BRAIN_LOG_REL } from "../path-constants.ts";
 import { isoSecond } from "../time.ts";
-import { vaultRelative } from "../paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { retargetWikilinks } from "../page-dedup.ts";
 import {
   buildClaimGraph,
@@ -191,17 +197,21 @@ export interface CorrectResult {
   readonly receipts: ReadonlyArray<CorrectionReceiptRecord>;
 }
 
-/** Resolve the target to a vault-relative path, refusing it as missing. */
+/**
+ * Resolve the target record, refusing it as missing: its page on an
+ * unswitched machine, its store record once switched (`memory-target.ts`),
+ * named by its path, bare id or `store:<id>`.
+ */
 function resolveTarget(
   vault: string,
   target: string,
   readable: ((rel: string) => boolean) | undefined,
-): string {
-  let abs: string;
+  configPath: string | undefined,
+): MemoryTarget {
   try {
-    abs = resolveNotePath(vault, target, {
-      mustExist: true,
+    return resolveMemoryTarget(vault, target, {
       ...(readable !== undefined ? { readable } : {}),
+      ...(configPath !== undefined ? { configPath } : {}),
     });
   } catch (err) {
     throw new CorrectionError(
@@ -209,7 +219,6 @@ function resolveTarget(
       { cause: err },
     );
   }
-  return vaultRelative(abs, vault);
 }
 
 /** The id a record is mentioned and chained under: basename, no extension. */
@@ -285,10 +294,12 @@ function withinReach(rel: string, readable: ((rel: string) => boolean) | undefin
  * sequence runs only under `dryRun: false`.
  */
 export function correct(input: CorrectInput): CorrectResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J). The
-  // counting passes below write nothing and assert nothing themselves;
-  // this guard refuses a foreign vault before any of the work runs.
-  assertVaultIdentityForWrite(input.vault);
+  // Write guard (context-integrity-gates, Unit J): the vault identity
+  // guard on an unswitched machine, the store's content gates once
+  // switched. The counting passes below write nothing and assert nothing
+  // themselves; this guard refuses a foreign vault before any of the work
+  // runs.
+  assertLifecycleWrite(input.vault, input.configPath);
   const target = input.target.trim();
   if (target === "") throw new CorrectionError("correct: target is required");
   const value = input.value?.trim();
@@ -319,8 +330,9 @@ export function correct(input: CorrectInput): CorrectResult {
   const correctionTs = isoSecond(now);
   const agent = normalizeAgentArgument(input.agent ?? null) ?? resolveAgentName(input.configPath);
 
-  const targetRel = resolveTarget(input.vault, target, input.readable);
-  const targetId = idOfRel(targetRel);
+  const resolved = resolveTarget(input.vault, target, input.readable, input.configPath);
+  const targetRel = resolved.rel;
+  const targetId = resolved.id;
 
   // ----- Discovery (within the caller's reach) -----------------------------
   const graph: ClaimGraph = buildClaimGraph(input.vault, { now });
@@ -418,8 +430,7 @@ export function correct(input: CorrectInput): CorrectResult {
   // Replay detection FIRST, off the target's frontmatter as it stands:
   // an already-applied retirement makes the sequence a recorded no-op -
   // no double tombstone, no re-closed window, no re-appended event.
-  const [rawMeta, body] = parseFrontmatter(join(input.vault, targetRel));
-  const meta = rawMeta as FrontmatterMap;
+  const meta = resolved.meta;
   const storedUntil = meta[VALID_UNTIL_KEY];
   const alreadyRetired =
     policy.endState === "tombstone"
@@ -433,6 +444,27 @@ export function correct(input: CorrectInput): CorrectResult {
   // change as self-correction, never a conflict, and opens its validity
   // window at the correction instant - where the predecessor's closed
   // window ends.
+  // All or none: a retirement a higher-authority write would outrank is
+  // refused before the ledger is touched, so a refused correction leaves no
+  // claim behind and a retry cannot append a second one.
+  if (!alreadyRetired && resolved.inStore) {
+    const planned: Record<string, unknown> =
+      policy.endState === "tombstone"
+        ? { _status: "tombstoned", tombstoned_at: correctionTs, tombstone_reason: reason }
+        : { [VALID_UNTIL_KEY]: policy.validUntil ?? correctionTs };
+    if (successorId !== undefined) planned[SUPERSEDED_BY_KEY] = `[[${successorId}]]`;
+    try {
+      assertPatchesApply(
+        input.vault,
+        [{ target: resolved, patch: planned }],
+        authorityFromOrigin(),
+        input.configPath,
+      );
+    } catch (err) {
+      throw new CorrectionError(`correct: ${(err as Error).message}`, { cause: err });
+    }
+  }
+
   const ledger: Array<CorrectResult["ledger"][number]> = [];
   if (value !== undefined && !alreadyRetired) {
     const sourceBySlot = new Map<string, string>();
@@ -576,7 +608,7 @@ export function correct(input: CorrectInput): CorrectResult {
     receipts.push(Object.freeze({ subject: targetRel, appended: receiptAppended }));
     const res = tombstone({
       vault: input.vault,
-      path: targetRel,
+      path: resolved.inStore ? `store:${resolved.id}` : targetRel,
       reason,
       ...(successorId !== undefined ? { supersededBy: successorId } : {}),
       ...(input.agent !== undefined ? { agent: input.agent } : {}),
@@ -596,29 +628,50 @@ export function correct(input: CorrectInput): CorrectResult {
     // Validity close (the temporal-replace frontmatter convention): the
     // record stays on disk and serveable inside its historical window,
     // pointing at its successor when one is named.
-    const nextMeta: FrontmatterMap = { ...meta };
-    nextMeta[VALID_UNTIL_KEY] = policy.validUntil ?? correctionTs;
-    if (successorId !== undefined) {
-      nextMeta[SUPERSEDED_BY_KEY] = `[[${successorId}]]`;
-    }
+    // Once switched the close is a field change of the store record
+    // (`memory-target.ts`); no legacy page is written.
+    const patches: MemoryPatch[] = [
+      {
+        target: resolved,
+        patch: {
+          [VALID_UNTIL_KEY]: policy.validUntil ?? correctionTs,
+          ...(successorId !== undefined ? { [SUPERSEDED_BY_KEY]: `[[${successorId}]]` } : {}),
+        },
+      },
+    ];
+    let closedPrivate: boolean;
     try {
-      writeFrontmatterAtomic(join(input.vault, targetRel), nextMeta, body, { overwrite: true });
+      ({ private: closedPrivate } = writeMemoryPatches(
+        input.vault,
+        patches,
+        (onDisk) => {
+          for (const { target: page, patch } of onDisk) {
+            const nextMeta: FrontmatterMap = { ...(page.meta as FrontmatterMap) };
+            for (const [name, v] of Object.entries(patch)) nextMeta[name] = v as never;
+            writeFrontmatterAtomic(page.abs, nextMeta, page.body, { overwrite: true });
+          }
+        },
+        input.configPath !== undefined ? { configPath: input.configPath } : {},
+      ));
+      verifyMemoryPatches(input.vault, patches, input.configPath);
     } catch (err) {
       throw new CorrectionError(
         `correct: failed to close validity on ${targetRel}: ${(err as Error).message}`,
         { cause: err },
       );
     }
-    appendLogEvent(input.vault, {
-      timestamp: correctionTs,
-      eventType: BRAIN_LOG_EVENT_KIND.temporalReplace,
-      body: {
-        predecessor: targetRel,
-        ...(successorId !== undefined ? { successor: successorId } : {}),
-        at: policy.validUntil ?? correctionTs,
-        agent,
-      },
-    });
+    withOperationPrivacy(closedPrivate, () =>
+      appendLogEvent(input.vault, {
+        timestamp: correctionTs,
+        eventType: BRAIN_LOG_EVENT_KIND.temporalReplace,
+        body: {
+          predecessor: targetRel,
+          ...(successorId !== undefined ? { successor: successorId } : {}),
+          at: policy.validUntil ?? correctionTs,
+          agent,
+        },
+      }),
+    );
     retirements.push(
       Object.freeze({
         path: targetRel,

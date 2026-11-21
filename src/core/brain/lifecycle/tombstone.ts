@@ -17,17 +17,27 @@
  * byte-identical no-op that returns the existing state and emits no
  * event.
  *
+ * Once the machine is switched to the brain store (`store-only.ts`) the
+ * memory is a store record, not a page: the tombstone is a field change
+ * of that record (a `signal-state`, `preference-set` or `lane-entry`
+ * record), written to the store only, whether the frozen legacy tree is
+ * still on disk or not. Every reader (search, recall, the digests, the
+ * dream pass, a peer machine that syncs the store) folds it at once. On an
+ * unswitched machine the page is written as before and the same record is
+ * dual-written behind the flag. The target may be named by its legacy
+ * path, its bare id or `store:<id>` on both sides (`memory-target.ts`).
+ *
  * The digest renderer depends only on the read side, so this writer can
  * refresh the digest after changing a preference without a module cycle.
  */
-
-import { relative } from "node:path";
 
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import { writeFrontmatterAtomic } from "../../vault.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
+import { StoreWriteError } from "../../store/store-write.ts";
 import { appendLogEvent } from "../log.ts";
 import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
 import { regenerateActiveQuiet } from "../active.ts";
@@ -42,10 +52,17 @@ import {
   readScalar,
   type LifecycleState,
 } from "./tombstone-read.ts";
-import { resolveNotePath } from "../note-path.ts";
+import {
+  assertLifecycleWrite,
+  MemoryTargetError,
+  resolveMemoryTarget,
+  verifyMemoryPatches,
+  writeMemoryPatches,
+  type MemoryPatch,
+  type MemoryTarget,
+} from "./memory-target.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_TOMBSTONE_STATUS } from "../types.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 // Keep the read API available through this module for existing callers.
 export {
@@ -91,7 +108,10 @@ function toWikilink(raw: string): string {
 
 export interface TombstoneInput {
   readonly vault: string;
-  /** Vault-relative POSIX path of the target memory file. */
+  /**
+   * The target memory: its vault-relative POSIX path, its bare id or
+   * wikilink, or `store:<id>` (`memory-target.ts`).
+   */
   readonly path: string;
   /** Operator-facing reason. Required, non-empty after trim. */
   readonly reason: string;
@@ -123,10 +143,6 @@ export interface TombstoneResult {
   readonly loggedAt?: string;
 }
 
-function relForVault(vault: string, absPath: string): string {
-  return relative(vault, absPath).split("\\").join("/");
-}
-
 /**
  * Tombstone a memory of any type in place. Sets `_status: tombstoned`
  * plus `tombstoned_at` / `tombstone_reason` (and `superseded_by` when a
@@ -135,8 +151,9 @@ function relForVault(vault: string, absPath: string): string {
  * existing state is returned with `changed: false`.
  */
 export function tombstone(input: TombstoneInput): TombstoneResult {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(input.vault);
+  // Write guard: the vault identity guard on an unswitched machine, the
+  // store's content gates once switched (context-integrity-gates, Unit J).
+  assertLifecycleWrite(input.vault, input.configPath);
   const reason = sanitiseTextField(input.reason, {
     maxLen: REASON_MAX_LEN,
     singleLine: true,
@@ -145,11 +162,11 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
     throw new TombstoneError("tombstone: reason is required");
   }
 
-  let abs: string;
+  let target: MemoryTarget;
   try {
-    abs = resolveNotePath(input.vault, input.path, {
-      mustExist: true,
+    target = resolveMemoryTarget(input.vault, input.path, {
       ...(input.readable !== undefined ? { readable: input.readable } : {}),
+      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
     });
   } catch (err) {
     throw new TombstoneError(
@@ -158,9 +175,8 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
     );
   }
 
-  const relPath = relForVault(input.vault, abs);
-  const [rawMeta, body] = parseFrontmatter(abs);
-
+  const relPath = target.rel;
+  const rawMeta = target.meta;
   const existing = readLifecycleState(rawMeta);
   if (existing.tombstoned) {
     // Idempotent no-op: never rewrite, never log.
@@ -175,34 +191,59 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
   const tombstonedAt = isoSecond(now);
   const supersededBy = input.supersededBy ? toWikilink(input.supersededBy) : null;
 
-  const nextMeta: FrontmatterMap = { ...(rawMeta as FrontmatterMap) };
-  nextMeta[LIFECYCLE_STATUS_KEY] = BRAIN_TOMBSTONE_STATUS;
-  nextMeta[TOMBSTONED_AT_KEY] = tombstonedAt;
-  nextMeta[TOMBSTONE_REASON_KEY] = reason;
-  if (supersededBy !== null) nextMeta[SUPERSEDED_BY_KEY] = supersededBy;
+  const patchFields: Record<string, unknown> = {
+    [LIFECYCLE_STATUS_KEY]: BRAIN_TOMBSTONE_STATUS,
+    [TOMBSTONED_AT_KEY]: tombstonedAt,
+    [TOMBSTONE_REASON_KEY]: reason,
+    ...(supersededBy !== null ? { [SUPERSEDED_BY_KEY]: supersededBy } : {}),
+  };
+  const patches: MemoryPatch[] = [{ target, patch: patchFields }];
 
+  let isPrivate: boolean;
   try {
-    writeFrontmatterAtomic(abs, nextMeta, body, { overwrite: true });
+    ({ private: isPrivate } = writeMemoryPatches(
+      input.vault,
+      patches,
+      (onDisk) => {
+        for (const { target: page, patch } of onDisk) {
+          const nextMeta: FrontmatterMap = { ...(page.meta as FrontmatterMap) };
+          for (const [name, value] of Object.entries(patch)) nextMeta[name] = value as never;
+          writeFrontmatterAtomic(page.abs, nextMeta, page.body, { overwrite: true });
+        }
+      },
+      input.configPath !== undefined ? { configPath: input.configPath } : {},
+    ));
+    verifyMemoryPatches(input.vault, patches, input.configPath);
   } catch (err) {
-    throw new TombstoneError(`tombstone: failed to write ${relPath}: ${(err as Error).message}`, {
-      cause: err,
-    });
+    const message =
+      err instanceof StoreWriteError || err instanceof MemoryTargetError
+        ? (err as Error).message
+        : `failed to write ${relPath}: ${(err as Error).message}`;
+    throw new TombstoneError(`tombstone: ${message}`, { cause: err });
   }
 
   try {
     const explicitAgent = normalizeAgentArgument(input.agent ?? null);
     const agent = explicitAgent ?? resolveAgentName(input.configPath);
-    appendLogEvent(input.vault, {
-      timestamp: tombstonedAt,
-      eventType: BRAIN_LOG_EVENT_KIND.tombstone,
-      body: {
-        path: relPath,
-        reason,
-        prior_status: priorStatus,
-        ...(supersededBy !== null ? { superseded_by: supersededBy } : {}),
-        agent,
-      },
-    });
+    // The event lands beside the record it describes: in `private` when the
+    // tombstoned record lives there.
+    withOperationPrivacy(isPrivate, () =>
+      appendLogEvent(
+        input.vault,
+        {
+          timestamp: tombstonedAt,
+          eventType: BRAIN_LOG_EVENT_KIND.tombstone,
+          body: {
+            path: relPath,
+            reason,
+            prior_status: priorStatus,
+            ...(supersededBy !== null ? { superseded_by: supersededBy } : {}),
+            agent,
+          },
+        },
+        input.configPath !== undefined ? { configPath: input.configPath } : {},
+      ),
+    );
 
     // Belief lifecycle suite (B4): a supersede/tombstone is a belief change,
     // so it emits a decision-change receipt. The receipt's own idempotency
@@ -210,19 +251,21 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
     // tombstone no-op above. Fail-soft: an accountability-log hiccup must
     // never fail the tombstone write itself.
     try {
-      appendDecisionChangeReceipt(input.vault, {
-        subject: relPath,
-        before: `status:${priorStatus}`,
-        after:
-          supersededBy !== null
-            ? `status:tombstoned superseded_by:${supersededBy}`
-            : "status:tombstoned",
-        actor: agent,
-        rationale: reason,
-        reasonCode: supersededBy !== null ? "supersede" : "tombstone",
-        ...(supersededBy !== null ? { alternatives: [priorStatus] } : {}),
-        ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
-      });
+      withOperationPrivacy(isPrivate, () =>
+        appendDecisionChangeReceipt(input.vault, {
+          subject: relPath,
+          before: `status:${priorStatus}`,
+          after:
+            supersededBy !== null
+              ? `status:tombstoned superseded_by:${supersededBy}`
+              : "status:tombstoned",
+          actor: agent,
+          rationale: reason,
+          reasonCode: supersededBy !== null ? "supersede" : "tombstone",
+          ...(supersededBy !== null ? { alternatives: [priorStatus] } : {}),
+          ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+        }),
+      );
     } catch {
       // Receipt is best-effort accountability; the tombstone frontmatter and
       // its `tombstone` log event remain authoritative.
@@ -241,7 +284,9 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
     };
   } finally {
     // The frontmatter is already committed, even if the audit append throws.
-    if (rawMeta["kind"] === "brain-preference") {
+    // Once switched the digests render on demand from the store, so there
+    // is nothing to refresh (`legacyOnly`).
+    if (target.kind === "preference") {
       regenerateActiveQuiet(input.vault, { now, legacyOnly: true });
     }
   }

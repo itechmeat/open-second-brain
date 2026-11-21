@@ -58,10 +58,11 @@ const WRITE_CALL_RE = new RegExp(
  * (`assertNoteVaultForWrite` is the vault adapter's note-tool guard;
  * `assertLaneWrite` is the lane page store's, the assertion itself on an
  * unswitched machine and nothing on a store-only one, where no vault file
- * is written).
+ * is written; `assertLifecycleWrite` is the single-record lifecycle
+ * verbs' (`lifecycle/memory-target.ts`), the same split).
  */
 const GUARD_RE =
-  /assertVaultIdentityForWrite|brainDirsForWrite|assertNoteVaultForWrite|assertLaneWrite/;
+  /assertVaultIdentityForWrite|brainDirsForWrite|assertNoteVaultForWrite|assertLaneWrite|assertLifecycleWrite/;
 
 /**
  * Every write-capable module that deliberately carries no guard, with the

@@ -70,7 +70,8 @@ import {
 } from "./constants.ts";
 import {
   carriesLifecycleMark,
-  forgottenRecordIds,
+  forgetting,
+  type ForgottenRefs,
   isForgettingFoldInput,
   isForgettingFoldKind,
 } from "./forgotten.ts";
@@ -442,6 +443,8 @@ function isVoidableKind(kind: string): boolean {
 const FOLD_BODY_FIELDS = [
   "authority",
   "id",
+  // A signal's page path: a forgotten signal's events are found by it too.
+  "path",
   "staged",
   "frontmatter",
   "signal",
@@ -483,6 +486,8 @@ interface PlacedRecord {
 interface ForgettingRead {
   /** Ids of the records the index must not hold. */
   readonly ids: ReadonlySet<string>;
+  /** How log events reference the forgotten entities (`forgotten.ts`, `Forgetting.refs`). */
+  readonly refs: ForgottenRefs;
   readonly records: ReadonlyArray<PlacedRecord>;
   /**
    * False when a shard left a gap the folds cannot see past: it could not
@@ -542,7 +547,8 @@ function forgottenInShards(store: IndexedStore, shards: ReadonlyArray<ShardStat>
       complete = false;
     }
   }
-  return { ids: forgottenRecordIds(slim), records, complete, spilledBlobs };
+  const { ids, refs } = forgetting(slim);
+  return { ids, refs, records, complete, spilledBlobs };
 }
 
 /**
@@ -680,6 +686,8 @@ function dropForgotten(
 export interface StoreVisibility {
   readonly hidden: ReadonlySet<string>;
   readonly known: ReadonlySet<string>;
+  /** How log events reference the forgotten entities: one that does is not shown (`forgotten.ts`). */
+  readonly hiddenRefs: ForgottenRefs;
 }
 
 /**
@@ -781,6 +789,7 @@ export function storeRecordVisibility(store: IndexedStore): StoreVisibility | nu
     }
     const value: StoreVisibility = {
       hidden: read.ids,
+      hiddenRefs: read.refs,
       known: new Set(read.records.filter((p) => !p.pending).map((p) => p.id)),
     };
     // Input 5, stamped right after the read. It vouches for the read only

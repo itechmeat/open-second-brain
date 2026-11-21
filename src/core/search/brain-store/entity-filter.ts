@@ -15,16 +15,22 @@
  * read, a record row that cannot be looked up, a body still pending, a
  * record the store no longer holds.
  *
- * Records of every other kind (log events, decisions, topics, ledger rows)
- * pass: no tombstone, mark or approval applies to them.
+ * A log event is shown unless it references a forgotten record itself
+ * (`forgotten.ts`, `namesForgottenEntity`: its id, its page path or a
+ * link to it, never a bare word it shares with one): the record the user
+ * forgot must not stay findable through the events that name it. When
+ * the store cannot be read, a log event fails closed like a fold record.
+ *
+ * Records of every other kind (decisions, topics, ledger rows) pass: no
+ * tombstone, mark or approval applies to them.
  */
 
 import type { Store } from "../store.ts";
 import { getRecord } from "../store/brain-records.ts";
 import { storeRecordVisibility, type StoreVisibility } from "./catch-up.ts";
-import { STORE_PARTITIONS } from "../../store/constants.ts";
+import { LOG_EVENT_KIND, STORE_PARTITIONS } from "../../store/constants.ts";
 import { isStoreRecordPath, STORE_RECORD_PATH_PREFIX } from "./constants.ts";
-import { isForgettingFoldKind } from "./forgotten.ts";
+import { isForgettingFoldKind, namesForgottenEntity, noForgottenRefs } from "./forgotten.ts";
 
 /** The record id of a store record path (`.brain-store/<partition>/<id>`). */
 function recordIdOf(path: string): string {
@@ -49,12 +55,28 @@ export function storeRecordJudge(index: Store): (path: string) => boolean {
     if (!isStoreRecordPath(path)) return true;
     const id = recordIdOf(path);
     let kind: string;
+    let documentId: number | null;
     try {
       const row = getRecord(db, id);
       if (row === null) return false;
       kind = row.kind;
+      documentId = row.documentId;
     } catch {
       return false;
+    }
+    if (kind === LOG_EVENT_KIND) {
+      const v = visible();
+      if (v === null) return false;
+      if (noForgottenRefs(v.hiddenRefs) || documentId === null) return true;
+      try {
+        const text = index
+          .getChunksByDocument(documentId)
+          .map((c) => c.content)
+          .join("\n");
+        return !namesForgottenEntity(text, v.hiddenRefs);
+      } catch {
+        return false;
+      }
     }
     if (!isForgettingFoldKind(kind)) return true;
     const v = visible();

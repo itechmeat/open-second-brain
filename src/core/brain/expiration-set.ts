@@ -44,6 +44,7 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { regenerateActiveQuiet } from "./active.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { appendLogEvent } from "./log.ts";
+import { memoryIdOfStoreRef } from "./lifecycle/memory-target.ts";
 import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { storePreferenceMeta } from "./preference.ts";
 import { routePreferencePage } from "./preference-page-write.ts";
@@ -328,7 +329,9 @@ export function setExpiration(
 ): SetExpirationResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const trimmed = id.trim();
+  // The id in any form the lifecycle verbs take (`store:<id>`, a wikilink,
+  // the page path).
+  const trimmed = memoryIdOfStoreRef(id);
   const { kind, dirs } = candidatePaths(vault, trimmed);
 
   // Validate BEFORE the walk, so a junk date cannot depend on whether the

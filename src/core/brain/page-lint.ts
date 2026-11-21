@@ -115,7 +115,7 @@ import {
   type NearDuplicatePoolEntry,
   type ReadableRef,
 } from "./near-duplicate.ts";
-import { VALID_FROM_KEY } from "./lifecycle/temporal-replace.ts";
+import { VALID_FROM_KEY } from "./lifecycle/validity.ts";
 import { tokenise } from "./similarity.ts";
 import { parseCitations } from "./temporal/citations.ts";
 import type { DoctorSeverity } from "./types.ts";

@@ -326,7 +326,13 @@ export const VERB_HELP: Record<string, string> = {
     "record's correction - blast-radius report by default, --apply retires the target\n" +
     "(validity close, or tombstone when --flatly-wrong), retargets mentions, appends\n" +
     "ledger correction events and bundle-correlated receipts. Tombstoned entries stay\n" +
-    "on disk for audit but are excluded from recall, inject, and active.md.\n",
+    "on disk for audit but are excluded from recall, inject, search and active.md.\n" +
+    "A target is its vault-relative path, its bare id (sig-..., pref-..., a Brain\n" +
+    "page name) or store:<id>. Once the vault is switched to the brain store the\n" +
+    "change is written to the record in the store, never to a legacy page, and\n" +
+    "every read surface drops a tombstoned record at once. A target the store\n" +
+    "does not hold is refused and nothing is written. This is the way to forget\n" +
+    "one signal or preference; the log events naming it leave search too.\n",
   expire:
     "usage: o2b brain expire <id> --expires <YYYY-MM-DD|ISO-8601|none>\n" +
     "  [--agent <name>] [--vault <path>] [--json]\n" +
@@ -1338,6 +1344,8 @@ export const VERB_HELP: Record<string, string> = {
     "Brain/retired/ with retire-shaped frontmatter (_status, retired_at,\n" +
     "retired_reason, optional superseded_by, old-id alias). The directory move\n" +
     "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
+    "A retired signal stays searchable as history; to forget a\n" +
+    "signal use `o2b brain lifecycle tombstone <id> --reason <text>` instead.\n" +
     "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
     "silent no-op).\n",
   capture:

@@ -22,6 +22,7 @@ import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import { appendLogEvent, logShardWikilink } from "../../../core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "../../../core/brain/types.ts";
 import { isStoreOnly } from "../../../core/store/store-only.ts";
+import { memoryIdOfStoreRef } from "../../../core/brain/lifecycle/memory-target.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainReject(argv: string[]): Promise<number> {
@@ -43,7 +44,9 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveAgentName(config);
 
-  const rawId = String(flags["id"]).trim();
+  // The id in any form the lifecycle verbs take (`store:<id>`, a wikilink,
+  // the page path).
+  const rawId = memoryIdOfStoreRef(String(flags["id"]), config);
   const slug = rawId.startsWith("pref-") ? rawId.slice("pref-".length) : rawId;
   const path = preferencePath(vault, slug);
   // The page on an unswitched machine, the store's fold once switched; a
