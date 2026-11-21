@@ -7,7 +7,9 @@
  * Asserted on every platform: each name and body comes back as the archive
  * stores it; nothing is written outside the folder, through a link the
  * archive planted or for a name that climbs out; an archive the system tar
- * wrote (an older snapshot: GNU long names, hard links, symlinks) reads.
+ * wrote (an older snapshot: GNU long names, hard links, symlinks) reads; a
+ * pax record set reaches the member it describes and no other; an archive
+ * that was cut short and an old GNU sparse member are refused.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -211,21 +213,89 @@ describe("extractTarArchive", () => {
     const archive = Buffer.concat([regular, fifoHeader, Buffer.alloc(1024)]);
     expect(() => extractTarArchive(readerOf(archive), out)).toThrow(/unsupported special file/u);
   });
+
+  test("a pax record set that a GNU long name header comes between reaches no member", () => {
+    const archive = Buffer.concat([
+      paxHeader({ size: "4096" }),
+      gnuLongName("Brain/long.md"),
+      tarFile("Brain/plain.md", "hello\n"),
+      Buffer.alloc(1024),
+    ]);
+    extractTarArchive(readerOf(archive), out);
+    expect(readFileSync(join(out, "Brain", "long.md"), "utf8")).toBe("hello\n");
+    expect(existsSync(join(out, "Brain", "plain.md"))).toBe(false);
+  });
+
+  test("a pax record set applies to the member that follows it and to no other", () => {
+    const archive = Buffer.concat([
+      paxHeader({ path: "Brain/pax.md" }),
+      tarFile("Brain/a.md", "aaaaa\n"),
+      tarFile("Brain/b.md", "bbbbbb\n"),
+      Buffer.alloc(1024),
+    ]);
+    extractTarArchive(readerOf(archive), out);
+    expect(readFileSync(join(out, "Brain", "pax.md"), "utf8")).toBe("aaaaa\n");
+    expect(readFileSync(join(out, "Brain", "b.md"), "utf8")).toBe("bbbbbb\n");
+  });
+
+  test("a stream that ends without the end-of-archive marker is refused as truncated", () => {
+    const archive = tarOf(root, [["Brain/a.md", "x"]]).subarray(0, 1024);
+    expect(() => extractTarArchive(readerOf(archive), out)).toThrow(/truncat/u);
+  });
+
+  test("a stream with one zero block instead of the two of the end-of-archive marker is refused", () => {
+    const archive = tarOf(root, [["Brain/a.md", "x"]]).subarray(0, 1536);
+    expect(() => extractTarArchive(readerOf(archive), out)).toThrow(/truncat/u);
+  });
+
+  test("an old GNU sparse member is refused instead of extracting its sparse map as its content", () => {
+    const archive = Buffer.concat([
+      oldGnuSparseHeader("Brain/sparse.md"),
+      Buffer.alloc(512),
+      Buffer.alloc(1024),
+    ]);
+    expect(() => extractTarArchive(readerOf(archive), out)).toThrow(/sparse/u);
+    expect(existsSync(join(out, "Brain", "sparse.md"))).toBe(false);
+  });
 });
 
 function withPaxRecord(key: string, value: string, member: Buffer): Buffer {
-  const content = `${key}=${value}\n`;
-  let length = content.length + 2;
-  for (;;) {
-    const next = String(length).length + 1 + content.length;
-    if (next === length) break;
-    length = next;
+  return Buffer.concat([paxHeader({ [key]: value }), member, Buffer.alloc(1024)]);
+}
+
+/** A pax extended header and its body, one `<length> <key>=<value>\n` record each. */
+function paxHeader(records: Readonly<Record<string, string>>): Buffer {
+  const parts: Buffer[] = [];
+  for (const [key, value] of Object.entries(records)) {
+    const content = `${key}=${value}\n`;
+    let length = content.length + 2;
+    for (;;) {
+      const next = String(length).length + 1 + content.length;
+      if (next === length) break;
+      length = next;
+    }
+    parts.push(Buffer.from(`${length} ${content}`));
   }
-  const body = Buffer.from(`${length} ${content}`);
-  const paxHeader = tarHeader("PaxHeader", "x", body.length);
+  const body = Buffer.concat(parts);
   const padded = Buffer.alloc(Math.ceil(body.length / 512) * 512);
   body.copy(padded);
-  return Buffer.concat([paxHeader, padded, member, Buffer.alloc(1024)]);
+  return Buffer.concat([tarHeader("PaxHeader", "x", body.length), padded]);
+}
+
+/** A GNU long name header and the name it holds. */
+function gnuLongName(name: string): Buffer {
+  const content = Buffer.concat([Buffer.from(name, "utf8"), Buffer.alloc(1)]);
+  const padded = Buffer.alloc(Math.ceil(content.length / 512) * 512);
+  content.copy(padded);
+  return Buffer.concat([tarHeader("././@LongLink", "L", content.length), padded]);
+}
+
+/** A header of the old GNU sparse form: the GNU magic and the extended byte set. */
+function oldGnuSparseHeader(name: string): Buffer {
+  const header = tarHeader(name, "0", 512);
+  header.write("ustar  \0", 257, 8, "latin1");
+  header[482] = 1;
+  return withChecksum(header);
 }
 
 function tarFile(name: string, body: string): Buffer {
@@ -247,6 +317,12 @@ function tarHeader(name: string, type: string, size: number): Buffer {
   header.write(type, 156, 1, "ascii");
   header.write("ustar\0", 257, 6, "ascii");
   header.write("00", 263, 2, "ascii");
+  return withChecksum(header);
+}
+
+/** The header with the checksum of the bytes it now holds. */
+function withChecksum(header: Buffer): Buffer {
+  header.fill(0x20, 148, 156);
   let checksum = 0;
   for (const byte of header) checksum += byte;
   header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii");

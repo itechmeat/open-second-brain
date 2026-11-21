@@ -10,9 +10,19 @@
  * nothing. Names are kept as the bytes the archive stores, so a name that
  * is not UTF-8 (a pax `hdrcharset=BINARY` member) is extracted byte for
  * byte where the filesystem takes bytes.
+ *
+ * A pax extended header describes the header that follows it and no other:
+ * a GNU long name or long link header in between spends those records, so a
+ * member never takes a size or a path from records meant for another header.
+ * An archive ends with the two zero blocks of the end-of-archive marker; a
+ * stream that ends without them is cut short and refused. The old GNU
+ * sparse forms are refused, as the pax sparse records are.
  */
 
 const BLOCK = 512;
+
+/** The end of an archive is marked by two zero blocks; a stream without them is cut short. */
+const TRUNCATED = "the tar stream is truncated: it ends without the end-of-archive marker";
 
 /** One member: its name as stored, and whether it is a directory. */
 export interface TarMemberName {
@@ -43,8 +53,9 @@ export type TarRead = (offset: number, length: number) => Buffer;
 /**
  * Every member of the tar stream `read` gives, in order; the pax and GNU
  * meta headers are folded into the member they describe. Throws on a
- * header whose checksum does not hold, a size that cannot be read, or a
- * stream that ends inside a member.
+ * header whose checksum does not hold, a size that cannot be read, a
+ * stream that ends inside a member, and a stream that ends without the
+ * end-of-archive marker.
  */
 export function* tarEntries(read: TarRead): Generator<TarEntry> {
   let offset = 0;
@@ -54,10 +65,20 @@ export function* tarEntries(read: TarRead): Generator<TarEntry> {
   for (;;) {
     const header = read(offset, BLOCK);
     if (header.length < BLOCK) {
-      if (header.every((b) => b === 0)) return;
-      throw new Error("the tar stream ends inside a header");
+      if (header.some((b) => b !== 0))
+        throw new Error("the tar stream is truncated inside a header");
+      throw new Error(TRUNCATED);
     }
-    if (header.every((b) => b === 0)) return;
+    if (isZeroBlock(header)) {
+      // The end of an archive is marked by two zero blocks. A stream that
+      // ends before the second one is cut short; a lone zero block in the
+      // middle is the archive going on after it, as the system tar reads it.
+      const marker = read(offset + BLOCK, BLOCK);
+      if (marker.length < BLOCK) throw new Error(TRUNCATED);
+      if (isZeroBlock(marker)) return;
+      offset += BLOCK;
+      continue;
+    }
     if (!checksumHolds(header)) throw new Error(`a tar header at byte ${offset} is damaged`);
     const type = header[156] === 0 ? "0" : String.fromCharCode(header[156]!);
     const paxSize = pax.get("size");
@@ -77,8 +98,14 @@ export function* tarEntries(read: TarRead): Generator<TarEntry> {
         if (type === "x") {
           pax = paxRecords(data);
           refuseSparsePax(pax);
-        } else if (type === "L") longName = cBytes(data);
-        else longLink = cBytes(data);
+        } else {
+          // A GNU long name or long link header describes the member itself,
+          // so the pax records before it are spent on it: they reach no
+          // member after it.
+          pax = new Map();
+          if (type === "L") longName = cBytes(data);
+          else longLink = cBytes(data);
+        }
       } else if (type === "g") {
         const data = read(dataOffset, size);
         if (data.length < size) throw new Error("the tar stream ends inside a member");
@@ -88,6 +115,9 @@ export function* tarEntries(read: TarRead): Generator<TarEntry> {
       }
       offset = next;
       continue;
+    }
+    if (isOldGnuSparse(header, type)) {
+      throw new Error(`unsupported old GNU sparse member at byte ${offset}`);
     }
     const paxMtime = pax.get("mtime");
     yield {
@@ -133,6 +163,22 @@ export function readTarMemberNames(read: TarRead): TarMemberName[] {
 /** A pax extended or global header, or a GNU long name or long link name. */
 function isMeta(type: string): boolean {
   return type === "x" || type === "g" || type === "L" || type === "K";
+}
+
+/** A block of nothing, as the end-of-archive marker holds. */
+function isZeroBlock(block: Buffer): boolean {
+  return block.every((b) => b === 0);
+}
+
+/**
+ * The old GNU sparse form: the GNU magic (`ustar  `) and the extended
+ * header byte set. Its payload is a sparse map, not the member's content,
+ * so it is refused like the pax sparse records are.
+ */
+function isOldGnuSparse(header: Buffer, type: string): boolean {
+  if (type !== "0" && type !== "S") return false;
+  if (header.subarray(257, 264).toString("latin1") !== "ustar  ") return false;
+  return header[482] !== 0;
 }
 
 function ustarName(header: Buffer): Buffer {
