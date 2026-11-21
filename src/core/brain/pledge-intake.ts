@@ -61,11 +61,17 @@ import {
   isSourcePage,
   NOTES_HEADER,
   normalizePledgeSource,
+  storedLegacyPledgeSlugs,
   pledgeExists,
+  pledgeSlotReserved,
+  pledgeTitleClaim,
+  titleNamesSlugError,
   pledgeIdentity,
+  pledgeIdentityIndex,
+  pledgeRel,
   pledgeSlugCandidates,
+  readPledgeAt,
   rewritePledgeFrontmatter,
-  showPledge,
   type PledgePage,
 } from "./pledges.ts";
 import { validateIsoDate } from "./paths.ts";
@@ -303,6 +309,7 @@ export function intakePledges(
   const visibility = strictestVisibilityOf([remoteDenyVisibilityTokens(sourceMeta)]);
 
   const prepared: PreparedIntakeItem[] = [];
+  const storedIdentityIndex = pledgeIdentityIndex(vault, opts.readable);
   const seenSlugs = new Set<string>();
   const seenIdentities = new Map<string, string>();
   const counterpartyNames: string[] = [];
@@ -336,21 +343,49 @@ export function intakePledges(
     const identity = pledgeIdentity(title, due, source);
     // Slug resolution, exactly the order the create arm will try: the title
     // slug, then its identity suffix. A candidate held by a DIFFERENT
-    // identity is skipped, not refused - titles that differ only in
-    // non-ASCII letters fold to one slug, and promises to different people
-    // are the family's core case. A repeat of the SAME identity inside one
-    // batch keeps the duplicated-post refusal.
+    // identity is skipped, not refused - titles that key alike fold to one
+    // slug, and promises to different people are the family's core case. A
+    // repeat of the SAME identity inside one batch keeps the duplicated-post
+    // refusal. The Latin-only slugs an older release filed the same promise
+    // under are looked at too, for the same identity only: a match there is
+    // the stored page, and they are never a create target.
     const candidates = pledgeSlugCandidates(title, due, source);
+    const legacy = storedLegacyPledgeSlugs(vault, title, due, source);
     let slug = candidates[0]!;
     let existing: PledgePage | null = null;
     // The first candidate no stored page occupies. The scan records it and
     // keeps going: a LATER candidate may hold this exact identity (the
-    // suffixed page a since-removed slug-holder once forced), and the same
-    // promise must win over a free slot or a re-post would file a second
-    // copy under the freed slug.
+    // suffixed page a since-removed slug-holder once forced, or the old
+    // Latin-only page), and the same promise must win over a free slot or a
+    // re-post would file a second copy under the freed slug.
     let free: string | null = null;
     let resolved = false;
-    for (const candidate of candidates) {
+    let occupiedWithheld: string | null = null;
+    // The same rules the create arm applies (`pledgeTitleClaim`, a slot
+    // another pledge's exact title reserves), decided here so a refusal
+    // lands before any write of the batch. A refusal applies only to a
+    // create: the same promise found below is that pledge, whatever claims
+    // its title.
+    const claim = pledgeTitleClaim(vault, title, opts.readable);
+    const identityMatch = storedIdentityIndex.get(identity) ?? null;
+    if (identityMatch !== null) {
+      if (
+        seenSlugs.has(identityMatch.slug) &&
+        seenIdentities.get(identityMatch.slug) === identity
+      ) {
+        throw new PledgeIntakeError(
+          `pledge intake repeats a slug within one batch: ${identityMatch.slug} - post each pledge once per intake`,
+        );
+      }
+      slug = identityMatch.slug;
+      existing = identityMatch;
+      resolved = true;
+    }
+    for (const candidate of resolved ? [] : [...candidates, ...legacy]) {
+      const creatable =
+        !legacy.includes(candidate) &&
+        candidate !== claimedBase(claim) &&
+        !pledgeSlotReserved(vault, candidate, candidates[0]!, opts.readable);
       if (seenSlugs.has(candidate)) {
         if (seenIdentities.get(candidate) === identity) {
           throw new PledgeIntakeError(
@@ -359,13 +394,11 @@ export function intakePledges(
         }
         continue;
       }
-      const stored = showPledge(vault, {
-        slug: candidate,
-        // The stored-page lookup answers at the caller's reach: a withheld
-        // page is identical to an absent one, so nothing is compared,
-        // classified or rewritten behind the gate.
-        ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
-      });
+      // The stored-page lookup answers at the caller's reach: a withheld
+      // page is identical to an absent one, so nothing is compared,
+      // classified or rewritten behind the gate. It reads the slot itself,
+      // never a page a title would resolve to.
+      const stored = readPledgeAt(vault, candidate, opts.readable);
       if (stored !== null) {
         if (pledgeIdentity(stored.title, stored.due, stored.source) === identity) {
           slug = candidate;
@@ -375,6 +408,11 @@ export function intakePledges(
         }
         continue;
       }
+      if (opts.readable?.(pledgeRel(candidate)) === false && pledgeExists(vault, candidate)) {
+        occupiedWithheld ??= candidate;
+        continue;
+      }
+      if (!creatable) continue;
       // A withheld page passes the lookup above as absent; the create arm
       // refuses that taken slug, and so does the validation pass, before any
       // write - a create would otherwise replace a page the caller cannot
@@ -385,6 +423,14 @@ export function intakePledges(
         );
       }
       if (free === null) free = candidate;
+    }
+    if (!resolved && occupiedWithheld !== null) {
+      throw new PledgeIntakeError(
+        `pledge already exists: ${occupiedWithheld} (remove it first to recreate)`,
+      );
+    }
+    if (!resolved && claim?.kind === "refuse") {
+      throw new PledgeIntakeError(titleNamesSlugError(claim.slug).message);
     }
     if (!resolved && free !== null) {
       slug = free;
@@ -483,6 +529,7 @@ export function intakePledges(
           counterparties: anchoredIds,
           agent: opts.agent,
           now: opts.now,
+          ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
         });
         createdPages.push(page);
         // The page's own slug, not the validation pass's prediction: the
@@ -577,4 +624,9 @@ function rewritePledgeCounterparties(
   } finally {
     handle.release();
   }
+}
+
+/** The base slot a {@link pledgeTitleClaim} hands to another pledge, if any. */
+function claimedBase(claim: ReturnType<typeof pledgeTitleClaim>): string | null {
+  return claim?.kind === "base" ? claim.slug : null;
 }

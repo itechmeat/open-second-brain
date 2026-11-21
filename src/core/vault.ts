@@ -590,11 +590,47 @@ export function slugify(value: string): string {
  * key resolves to itself.
  */
 export function titleSlug(value: string): string {
+  const key = titleKeySlug(value);
+  return WINDOWS_DEVICE_KEY_RE.test(key) ? `${key}-${slugDigest(key)}` : key;
+}
+
+/**
+ * {@link titleSlug} without the Windows device-name suffix, for a slug
+ * that only ever sits inside a longer name: a prefixed and suffixed file
+ * stem (`src-<slug>-<hash>`, `design-<date>-<slug>`, `adr-<sha>-<slug>`),
+ * an entity id, a tag segment, a grouping key. Such a name is never a bare
+ * device name, so `CON` keeps the stem `con` it always had, and for every
+ * ASCII value the result is byte-identical to {@link slugify}.
+ */
+export function titleKeySlug(value: string): string {
   const key = scopedRuleKey(value);
   if (key === null || !TITLE_KEY_WORD_RE.test(key)) {
     return unnamedFallbackSlug(value.trim().toLowerCase());
   }
-  return WINDOWS_DEVICE_KEY_RE.test(key) ? `${key}-${slugDigest(key)}` : key;
+  return key;
+}
+
+/**
+ * True when `value` holds a letter or digit of any script, so its slug is
+ * made of its own words; false when the slug would be the hashed
+ * `unnamed-<hash>` fallback. Asked of the value itself, never of the slug,
+ * so a literal title such as `unnamed-deadbeef` is a title with words.
+ */
+export function hasTitleWords(value: string): boolean {
+  const key = scopedRuleKey(value);
+  return key !== null && TITLE_KEY_WORD_RE.test(key);
+}
+
+/**
+ * The form two titles are compared in when a title names a record: the
+ * whitespace runs collapsed and trimmed (the pledge identity's own title
+ * normalisation) and NFC, so a title typed in NFD on macOS is the stored
+ * NFC title. Nothing else folds: case and punctuation stay, so "Ship the
+ * parser to Ada" and "Ship the parser, to Ada" are two titles even though
+ * their slugs key alike.
+ */
+export function titleIdentity(value: string): string {
+  return value.replaceAll(/\s+/gu, " ").trim().normalize("NFC");
 }
 
 /**
@@ -602,13 +638,17 @@ export function titleSlug(value: string): string {
  * were once written under {@link slugify} and are never renamed: an older
  * release dropped a title's non-Latin words ("Проект release" was
  * `release`), gave a title with no Latin letter `unnamed-<hash>`, and kept
- * a bare Windows device name (`nul`). The {@link titleSlug} page wins when
- * it exists. Otherwise the old slug is taken when its page exists and is
- * this record: `value` is that stored slug itself (a listed slug passed
- * back), or one of the page's stored titles keys like `value`. So a
- * different title that once shared the old slug ("Тема release") does not
- * reach the page. When neither page is there the answer is the
- * `titleSlug`, which a new record is written under.
+ * a bare Windows device name (`nul`). The {@link titleSlug} page is taken
+ * when it is this record: one of its stored titles matches `value` under
+ * `sameRecord` (by default, keys like it). Otherwise an old-slug page is
+ * taken when it exists and is this record (`value` is that stored slug
+ * itself, a listed slug passed back, or a stored title matches): the
+ * value's own old slug, or the old slug of its new slug, where a record
+ * whose new slug `value` takes was filed. So a different title that once
+ * shared the old slug ("Тема release") does not reach the page, and a page
+ * at the new slug that holds another record does not hide this one. When
+ * nothing matches the answer is the `titleSlug`, which a new record is
+ * written under (and which a writer refuses while a page holds it).
  *
  * `storedTitles` answers the titles the page at a slug holds, or null when
  * there is no page there.
@@ -616,15 +656,432 @@ export function titleSlug(value: string): string {
 export function resolveTitleSlug(
   value: string,
   storedTitles: (slug: string) => readonly string[] | null,
+  sameRecord: (stored: string, value: string) => boolean = (stored) =>
+    titleSlug(stored) === titleSlug(value),
 ): string {
   const slug = titleSlug(value);
-  if (storedTitles(slug) !== null) return slug;
-  const legacy = slugify(value);
-  if (legacy === slug) return slug;
-  const titles = storedTitles(legacy);
-  if (titles === null) return slug;
-  if (value.trim() === legacy || titles.some((t) => titleSlug(t) === slug)) return legacy;
+  // The old slug of every form the value can have been typed in.
+  const legacies = legacySlugsOf(value.trim(), slug);
+  // An ASCII value (a device name aside) has one slug under both rules:
+  // the answer is the old helper's, and nothing is read for it.
+  if (legacies.length === 0) return slug;
+  const atSlug = storedTitles(slug);
+  if (atSlug !== null && atSlug.some((t) => sameRecord(t, value))) return slug;
+  // The old slug of the value, then the old slug of the value's new slug:
+  // a record an older release filed under `slugify(S)` whose own new slug
+  // is `S` ("远程办公" at `unnamed-<hash of 远程办公>`) is the record a
+  // keying-alike "远程办公!" meets, though the old hash of that value
+  // differs.
+  for (const candidate of new Set([...legacies, slugify(slug)])) {
+    if (candidate === slug) continue;
+    const titles = storedTitles(candidate);
+    if (titles === null) continue;
+    if (value.trim() === candidate || titles.some((t) => sameRecord(t, value))) return candidate;
+  }
   return slug;
+}
+
+/** How {@link locateTitledPage} reads the pages one lane holds. */
+export interface TitledPageLookup<T> {
+  /**
+   * The page at `slug`, or null when there is none, when the caller's
+   * reach withholds it, or when `slug` cannot name a page of this lane (a
+   * bare device name a validated lane refuses). Asked before anything of
+   * the page is parsed, so a withheld page is never read.
+   */
+  readonly read: (slug: string) => T | null;
+  /** The title (statement) the page stores. */
+  readonly titleOf: (page: T) => string;
+  /**
+   * Further stems that may hold the title, given the base slugs it keys
+   * to (an identity-suffixed `<base>-<hex>` page). Asked only after the
+   * bases missed.
+   */
+  readonly more?: (bases: readonly string[]) => Iterable<string>;
+  /**
+   * True for a slug this lane issues beyond the fixed points of
+   * {@link titleSlug} and {@link slugify}: an identity-suffixed
+   * `<base>-<hex>` stem, which is longer than {@link SLUG_MAX_LEN} when
+   * its base is at the cap and so is no fixed point of either rule.
+   */
+  readonly issued?: (value: string) => boolean;
+  /**
+   * The stem of every page the lane holds, names only (`read` still
+   * applies the caller's reach). With it, the slug a title keys to reaches
+   * the record an older release filed under a hashed old slug, which no
+   * value but the original title derives ({@link locateTitledPage}).
+   */
+  readonly stems?: () => Iterable<string>;
+}
+
+/** Where a lookup by a title or a listed slug landed. */
+export interface TitledPageLocation<T> {
+  /** The page's slug, or the {@link titleSlug} a refusal names when none matched. */
+  readonly slug: string;
+  readonly page: T | null;
+}
+
+/** The hex digits of the identity suffix (`<base>-<hex>`) a lane appends when its base slot is held. */
+export const IDENTITY_SUFFIX_HEX_LENGTH = 6;
+
+/**
+ * True for an identity-suffixed stem `<base>-<6 hex>` whose base is a slug
+ * either rule issues ({@link isTitleSlug}). At the slug cap such a stem is
+ * longer than any slug a title keys to, so it is no fixed point of
+ * {@link titleSlug} and is recognised by its shape.
+ */
+export function isIdentitySuffixedStem(value: string): boolean {
+  const cut = value.length - IDENTITY_SUFFIX_HEX_LENGTH - 1;
+  return (
+    cut > 0 &&
+    value[cut] === "-" &&
+    /^[0-9a-f]+$/u.test(value.slice(cut + 1)) &&
+    isTitleSlug(value.slice(0, cut))
+  );
+}
+
+/** The identity-suffixed stems among `stems` whose base is one of `bases`, in the order given. */
+export function identitySuffixedStemsOf(
+  stems: Iterable<string>,
+  bases: readonly string[],
+): string[] {
+  const out: string[] = [];
+  for (const name of stems) {
+    const cut = name.length - IDENTITY_SUFFIX_HEX_LENGTH - 1;
+    if (cut <= 0 || name[cut] !== "-" || !/^[0-9a-f]+$/u.test(name.slice(cut + 1))) continue;
+    if (bases.includes(name.slice(0, cut))) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * True when `value` is a slug a titled lane issues verbatim: a fixed point
+ * of {@link titleSlug} or of the older {@link slugify} (every slug either
+ * rule ever wrote, the capped, hashed and device-suffixed ones included).
+ */
+export function isTitleSlug(value: string): boolean {
+  const normalized = value.normalize("NFC");
+  return titleSlug(normalized) === normalized || slugify(normalized) === normalized;
+}
+
+/**
+ * The page a caller's title or listed slug names, for a lane whose pages
+ * were once written under {@link slugify} and are never renamed, and where
+ * a title is matched as the record's identity, not merely by its slug.
+ *
+ * A title names only a page whose stored title has the same
+ * {@link titleIdentity}: at its {@link titleSlug}, at the Latin-only slug
+ * an older release gave it, or at a stem `more` adds (the identity-suffixed
+ * page a title takes when its base slug was held). A value that is itself
+ * a slug the lane issues ({@link isTitleSlug}, or `issued`) also names the
+ * page stored at it, whatever title that page holds, unless a page at the
+ * value's own slugs stores the value as its exact title: the title wins,
+ * so a statement never selects a page that stores another statement. The
+ * writers refuse to mint a record that would make the two meanings part
+ * ({@link claimedTitleSlot}), so for records they wrote both hold.
+ *
+ * When nothing matches the answer is the `titleSlug` (the value itself
+ * for an `issued` stem) with no page, which depends only on the value,
+ * never on what `read` withheld. An absent slug both rules give alike
+ * (every ASCII one) reads nothing more.
+ */
+export function locateTitledPage<T>(
+  value: string,
+  lookup: TitledPageLookup<T>,
+): TitledPageLocation<T> {
+  return locate(value, lookup, true);
+}
+
+/**
+ * The page that stores exactly `value` as its title (a
+ * {@link locateTitledPage} lookup that never answers a page by its slug
+ * alone), or null.
+ */
+export function findTitledPage<T>(
+  value: string,
+  lookup: TitledPageLookup<T>,
+): TitledPageLocation<T> | null {
+  const located = locate(value, lookup, false);
+  return located.page !== null ? located : null;
+}
+
+/**
+ * The slug that makes writing a new record titled `value` ambiguous, or
+ * null when its {@link titleSlug} may be written (the lane still refuses a
+ * slot a page already occupies). Two cases:
+ *
+ * 1. `value` is itself a slug the lane issues and the page at it stores
+ *    another title: a record titled `value` would make that listed slug
+ *    name two records.
+ * 2. A record whose exact title is `value`'s new slug `S` exists away from
+ *    `S` (at the Latin-only slug an older release gave it, or at an
+ *    identity-suffixed stem): `S` is that record's own new slug, and a
+ *    record written there would answer a lookup by `S` while the title `S`
+ *    names the other one.
+ *
+ * Asked through `read`, so a page the caller's reach withholds is not
+ * there for it.
+ */
+export function claimedTitleSlot<T>(value: string, lookup: TitledPageLookup<T>): string | null {
+  const trimmed = value.trim();
+  const wanted = titleIdentity(trimmed);
+  if (isIssued(trimmed, lookup)) {
+    const page = lookup.read(trimmed);
+    if (page !== null && titleIdentity(lookup.titleOf(page)) !== wanted) return trimmed;
+  }
+  const slot = titleSlug(trimmed);
+  if (slot !== wanted && findTitledPage(slot, lookup) !== null) return slot;
+  return null;
+}
+
+function isIssued<T>(value: string, lookup: TitledPageLookup<T>): boolean {
+  return isTitleSlug(value) || (lookup.issued?.(value) ?? false);
+}
+
+function locate<T>(
+  value: string,
+  lookup: TitledPageLookup<T>,
+  bySlug: boolean,
+): TitledPageLocation<T> {
+  const trimmed = value.trim();
+  const slug = titleSlug(trimmed);
+  const legacies = legacySlugsOf(trimmed, slug);
+  const wanted = titleIdentity(trimmed);
+  const seen = new Map<string, T | null>();
+  const at = (candidate: string): T | null => {
+    if (!seen.has(candidate)) seen.set(candidate, lookup.read(candidate));
+    return seen.get(candidate) ?? null;
+  };
+  const holds = (page: T | null): page is T =>
+    page !== null && titleIdentity(lookup.titleOf(page)) === wanted;
+  // A slug spelled in NFD is the same slug: a macOS restore wrote the
+  // record's file in NFD, and `list` gives that name back.
+  const fixedPoint =
+    slug === trimmed || slug === trimmed.normalize("NFC") || legacies.includes(trimmed);
+  const issued = fixedPoint || (lookup.issued?.(trimmed) ?? false);
+  const miss = { slug: fixedPoint || !issued ? slug : trimmed, page: null };
+  let listed: T | null = null;
+  let listedSlug = trimmed;
+  if (issued) {
+    listed = at(trimmed);
+    // The same slug in the other Unicode form: a macOS restore writes a
+    // record's file in NFD, so the slug the record was issued under (NFC)
+    // and the one `list` now prints (NFD) both name it.
+    for (const form of [trimmed.normalize("NFD"), trimmed.normalize("NFC")]) {
+      if (listed !== null || form === trimmed) continue;
+      listed = at(form);
+      if (listed !== null) listedSlug = form;
+    }
+    if (holds(listed)) return { slug: listedSlug, page: listed };
+    // An absent slug both rules give alike (every ASCII one) reads nothing
+    // more: the old helper's answer, unless the lane files a title at more
+    // stems than its slugs (an identity-suffixed pledge, whose base may
+    // have been removed). A title that is its own `titleSlug` (a CJK
+    // title) may still sit under its old slug, so it goes on.
+    if (listed === null && legacies.length === 0 && lookup.more === undefined) return miss;
+  }
+  // The old slug of every Unicode form of the value: a title stored as
+  // "Café plan" was filed at `caf-plan`, and the same title typed with a
+  // decomposed "é" gives `cafe-plan`.
+  // The new slug in NFD too: a record whose file a macOS restore renamed
+  // to NFD (and a vault synced from that Mac carries) sits there on a
+  // filesystem that keeps the two forms apart.
+  const nfd = slug.normalize("NFD");
+  const bases = nfd === slug ? [slug, ...legacies] : [slug, nfd, ...legacies];
+  for (const candidate of bases) {
+    const page = at(candidate);
+    if (holds(page)) return { slug: candidate, page };
+  }
+  // Every stem the title may be filed at is asked before the listed slug
+  // answers a page that stores another title: the title wins.
+  for (const candidate of lookup.more?.(bases) ?? []) {
+    const page = at(candidate);
+    if (holds(page)) return { slug: candidate, page };
+  }
+  // A title with no Latin letter was filed at `unnamed-<hash>` of its exact
+  // spelling, spaces included, so the same title typed with other runs of
+  // spaces ("远程 办公", "远程   办公") derives another hash: the lane's
+  // hashed old stems are read for the page that stores it. Only such a
+  // title pays for the listing.
+  if (lookup.stems !== undefined) {
+    for (const name of hashedOldStemsFor(trimmed, lookup.stems)) {
+      if (bases.includes(name)) continue;
+      const page = at(name);
+      if (holds(page)) return { slug: name, page };
+    }
+  }
+  if (bySlug && listed !== null) return { slug: listedSlug, page: listed };
+  // The slug a title keys to, typed while no page sits at it, names the
+  // record an older release filed under an old slug, as it would if that
+  // record sat at its new slug: the one record whose stored title keys to
+  // the value. Two such records name neither.
+  if (bySlug && issued && listed === null && slug === trimmed && slug !== slugify(slug)) {
+    const keyed = recordsKeyedTo(slug, lookup, at);
+    if (keyed.length === 1) return keyed[0]!;
+  }
+  return miss;
+}
+
+/**
+ * Up to two records an older release filed away from `slug` whose stored
+ * title's {@link titleSlug} is `slug`: at its Latin-only slug, at a hashed
+ * `unnamed-<hex>` slug (a title with no Latin letter, whose hash no other
+ * value derives), or, where `stems` lists the lane, at a longer old slug
+ * the cap cut `slug` short of, or at a lane-issued stem of the Latin-only
+ * slug (an identity-suffixed pledge). Only old slugs are read: a page under
+ * a new slug is reached by that slug itself.
+ */
+function recordsKeyedTo<T>(
+  slug: string,
+  lookup: TitledPageLookup<T>,
+  at: (candidate: string) => T | null,
+): TitledPageLocation<T>[] {
+  const legacies = [...new Set(legacySlugForms(slug))];
+  const out: TitledPageLocation<T>[] = [];
+  const consider = (candidate: string): void => {
+    const page = at(candidate);
+    if (page !== null && titleSlug(lookup.titleOf(page)) === slug) {
+      out.push({ slug: candidate, page });
+    }
+  };
+  for (const legacy of legacies) consider(legacy);
+  const capped = slug.length >= SLUG_MAX_LEN - 1;
+  // Only the hash fallback itself (`unnamed-<8 hex>`): an ordinary base
+  // such as `unnamed-release` keeps its longer stems.
+  const hashed = legacies.some((legacy) => HASHED_FALLBACK_RE.test(legacy));
+  for (const name of lookup.stems?.() ?? []) {
+    if (out.length >= 2) break;
+    if (name === slug || legacies.includes(name) || !OLD_SLUG_STEM_RE.test(name)) continue;
+    const longer =
+      !hashed &&
+      legacies.some(
+        (legacy) => name.startsWith(`${legacy}-`) && (capped || (lookup.issued?.(name) ?? false)),
+      );
+    if (longer || HASHED_SLUG_STEM_RE.test(name)) consider(name);
+  }
+  return out.slice(0, 2);
+}
+
+/**
+ * Every Latin-only {@link slugify} slug an older release may have filed
+ * `value` under, in a fixed order, without repeats: one per Unicode form
+ * the value can have been typed in (as given, NFC, NFD; "Café" typed with
+ * a precomposed "é" was `caf`, typed with a combining mark `cafe`), and
+ * the same for its whitespace-canonical spelling ({@link titleIdentity}):
+ * a title with no Latin letter was `unnamed-<hash>` of its exact spaces,
+ * and a title is the same record whatever runs of spaces it is typed
+ * with. Every lane that looks for a record under its old slug asks all of
+ * them; for an ASCII value they are one slug.
+ */
+export function legacySlugForms(value: string): string[] {
+  const identity = titleIdentity(value);
+  const out: string[] = [];
+  for (const form of [
+    value,
+    value.normalize("NFC"),
+    value.normalize("NFD"),
+    identity,
+    identity.normalize("NFD"),
+  ]) {
+    const legacy = slugify(form);
+    if (!out.includes(legacy)) out.push(legacy);
+  }
+  return out;
+}
+
+/**
+ * The hashed old stems (`unnamed-<hex>`, bare or with a lane's suffix)
+ * among the lane's `stems` that may hold `value`, when `value` is a title
+ * with no Latin letter: an older release filed such a title at the hash of
+ * its exact spelling, spaces included, so the same title typed with other
+ * runs of spaces derives another hash, and only reading the page tells.
+ * Empty, and `stems` never listed, for any other value.
+ */
+export function hashedOldStemsFor(value: string, stems: () => Iterable<string>): string[] {
+  const slug = titleSlug(value);
+  if (!legacySlugsOf(value, slug).some((legacy) => HASHED_FALLBACK_RE.test(legacy))) return [];
+  return [...stems()].filter((name) => HASHED_SLUG_STEM_RE.test(name));
+}
+
+/** {@link legacySlugForms} other than `slug` itself. */
+function legacySlugsOf(value: string, slug: string): string[] {
+  return legacySlugForms(value).filter((legacy) => legacy !== slug);
+}
+
+/** The bare hash fallback slug, `unnamed-<8 hex>`. */
+const HASHED_FALLBACK_RE = new RegExp(
+  `^${SLUG_FALLBACK_PREFIX}-[0-9a-f]{${SLUG_FALLBACK_HASH_LEN}}$`,
+  "u",
+);
+
+/** A stem only the Latin-only {@link slugify} rule can have written. */
+const OLD_SLUG_STEM_RE = /^[a-z0-9-]+$/u;
+/** A hashed `unnamed-<hex>` slug, bare or with a lane's suffix. */
+const HASHED_SLUG_STEM_RE = new RegExp(
+  `^${SLUG_FALLBACK_PREFIX}-[0-9a-f]{${SLUG_FALLBACK_HASH_LEN}}(?:-[0-9a-f]+)?$`,
+  "u",
+);
+
+/**
+ * The file stem `<slug>-<suffix>` of a page keyed by `value` and an
+ * identity suffix (a source path and its hash), for a lane whose pages
+ * were once written under {@link slugify} and are never renamed. The
+ * suffix alone names the record, so the old-slug page with the same suffix
+ * IS this record: it is taken when it exists and the {@link titleKeySlug}
+ * page does not, and a re-run updates that page instead of writing a
+ * second one beside it. Otherwise the answer is the `titleKeySlug` stem.
+ * The stem is prefixed and suffixed, so it is never a bare device name and
+ * takes no device suffix: for an ASCII value (`CON` included) both stems
+ * are equal to the old one and `exists` is never asked.
+ */
+export function resolveSuffixedTitleSlug(
+  value: string,
+  suffix: string,
+  exists: (stem: string) => boolean,
+): string {
+  const fresh = `${titleKeySlug(value)}-${suffix}`;
+  // The old slug of every form the value can have been typed in.
+  const legacies = legacySlugForms(value)
+    .map((legacy) => `${legacy}-${suffix}`)
+    .filter((legacy) => legacy !== fresh);
+  const nfdFresh = fresh.normalize("NFD");
+  if (nfdFresh !== fresh && !legacies.includes(nfdFresh)) legacies.push(nfdFresh);
+  if (legacies.length === 0 || exists(fresh)) return fresh;
+  return legacies.find((legacy) => exists(legacy)) ?? fresh;
+}
+
+/** Where {@link locateSuffixedTitleStem} landed. */
+export interface SuffixedTitleStem {
+  /** The stem the caller reads, rewrites and names. */
+  readonly stem: string;
+  /**
+   * True when the record's page exists but the caller's reach withholds
+   * it: the caller then neither reads nor writes any page and answers as
+   * for an absent one, under `stem` (the new slug's stem, so the name does
+   * not tell which page exists either).
+   */
+  readonly withheld: boolean;
+}
+
+/**
+ * {@link resolveSuffixedTitleSlug} with the caller's reach applied to the
+ * stem it selects, before anything of that page is read or written: the
+ * new-slug page, or the old-slug page that is the same record. A selected
+ * page the caller may not read is withheld whichever slug it sits under,
+ * so a rewrite in place never touches it and no second page is written
+ * beside it.
+ */
+export function locateSuffixedTitleStem(
+  value: string,
+  suffix: string,
+  exists: (stem: string) => boolean,
+  readable?: (stem: string) => boolean,
+): SuffixedTitleStem {
+  const selected = resolveSuffixedTitleSlug(value, suffix, exists);
+  if (readable === undefined || readable(selected) || !exists(selected)) {
+    return { stem: selected, withheld: false };
+  }
+  return { stem: `${titleKeySlug(value)}-${suffix}`, withheld: true };
 }
 
 /**

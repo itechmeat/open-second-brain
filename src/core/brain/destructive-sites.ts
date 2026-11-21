@@ -275,6 +275,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "be circular, so `pruneSnapshots` carries a floor and a named refusal instead " +
         "and `restoreSnapshot` takes a manual recovery point of the tree it discards.",
     },
+    "src/core/brain/tar-extract.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_EXCLUDED,
+      reason:
+        "extracts a snapshot into the private temp folder its caller made outside the " +
+        "vault, and removes only a file or link an earlier member of the same archive put " +
+        "there, so a later member replaces it as tar does. No vault byte is touched; the " +
+        "restore that copies the tree into `Brain/` takes its own recovery point.",
+    },
 
     // --- Concurrency primitives ------------------------------------------
     "src/core/brain/sync-lockfile.ts": {

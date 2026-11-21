@@ -12,8 +12,11 @@
  * never re-runs allocation logic and never mutates anything.
  *
  * Grouping rule: within each directory, pages group by their slug stem
- * - `slugify(basename-without-.md)` with a trailing allocation-ladder
- * suffix stripped. The stem is the inverse of `collisionCandidateName`
+ * - `titleKeySlug(basename-without-.md)` with a trailing allocation-ladder
+ * suffix stripped. `titleKeySlug` keeps letters of any script, the slug the
+ * title writers use, so "Проект release" and "Тема release" are two stems
+ * (the Latin-only `slugify` folded both to `release`, a false collision).
+ * The stem is the inverse of `collisionCandidateName`
  * (`paths.ts`): attempt 1 is the bare base, attempts 2..n append
  * `-2`, `-3`, … as canonical decimals, so only unpadded numbers >= 2
  * count as ladder suffixes (`topic-1` and `topic-02` are distinct
@@ -43,7 +46,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-import { listVaultNotePaths, slugify } from "../../../vault.ts";
+import { listVaultNotePaths, titleKeySlug } from "../../../vault.ts";
 import { pathStem } from "../../../fs-utils.ts";
 import { hygieneFindingId } from "./id.ts";
 import type { HygieneFinding } from "../types.ts";
@@ -119,7 +122,7 @@ function collectStemGroups(notes: ReadonlyArray<string>): SlugStemGroup[] {
   for (const note of notes) {
     const segments = note.split("/");
     const directory = segments.length > 1 ? segments.slice(0, -1).join("/") : VAULT_ROOT_DIRECTORY;
-    const { stem, attempt } = splitLadderSuffix(slugify(pathStem(note)));
+    const { stem, attempt } = splitLadderSuffix(titleKeySlug(pathStem(note)));
     const stems = byDirectory.get(directory) ?? new Map();
     const members = stems.get(stem) ?? [];
     members.push({ path: note, attempt });

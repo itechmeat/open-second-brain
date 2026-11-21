@@ -258,6 +258,11 @@ function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan | 
   // each paragraph block, and this idea itself when the note already holds
   // it as a run of blocks, so a replayed multiline idea finds the note it
   // was written to and the retry guard in `writeIdeaNote` applies there.
+  // Unlike a decision or an obligation, an idea note is not one record
+  // named by an exact title: it collects every idea whose slug keys alike
+  // (the `merge` below appends to whatever note sits at the slug), so the
+  // old note is taken for an idea that keys like one it holds, not only
+  // for the same words.
   const slug = resolveTitleSlug(body, (candidate) => {
     const path = ensureInsideVault(join(vault, CAPTURED_NOTES_DIR_REL, `${candidate}.md`), vault);
     if (!existsSync(path)) return null;

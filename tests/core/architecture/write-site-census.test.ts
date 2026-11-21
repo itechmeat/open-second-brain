@@ -980,6 +980,24 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "final name by an exclusive hard link (`linkSync`, or a checked rename where the " +
       "filesystem has no links), so a killed compression never leaves a torn archive.",
   },
+  "src/core/brain/tar-extract.ts": {
+    categories: [C.archiveTransfer],
+    calls: ["chmodSync", "copyFileSync", "rmSync", "symlinkSync", "utimesSync", "writeSync"],
+    reason:
+      "extracts a snapshot's tar stream into the private temp directory the restore, the " +
+      "rollback and the snapshot diff made outside the vault (`mkdtemp`); a member name " +
+      "that would leave it is refused and links are created last. The restore copies the " +
+      "checked tree into `Brain/` itself; no vault page is written here.",
+  },
+  "src/core/brain/tar-writer.ts": {
+    categories: [C.archiveTransfer],
+    calls: ["writeSync"],
+    reason:
+      "writes the tar stream of a snapshot on Windows into a file the caller opened in " +
+      "a private temp directory outside the vault (`wx`), one block at a time; the " +
+      "compressor reads that file and `snapshot.ts` publishes the archive. No vault page " +
+      "is written and no Markdown parser reads the stream.",
+  },
   "src/core/maintenance/self-heal-upgrade-state.ts": {
     categories: [C.lockPrimitive, C.retentionDelete],
     calls: ["unlinkSync", "writeFileSync"],
@@ -1414,8 +1432,10 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 82 -> 83: `src/core/store-migration/auto-state.ts` claims and releases the automatic store migration worker lock (an exclusive create) and removes its state and notice files once moot.
  * 83 -> 82: that module keeps its files in the device-local folder of all stores, never in a vault, so it leaves the in-vault census.
  * 82 -> 83: `src/core/search/build-progress.ts` removes a running rebuild's progress file beside the search index when the rebuild ends.
+ * 83 -> 84: `src/core/brain/tar-writer.ts` writes a Windows snapshot's tar stream into a temp file outside the vault.
+ * 84 -> 85: `src/core/brain/tar-extract.ts` extracts a snapshot's tar stream into a temp directory outside the vault.
  */
-const DIRECT_WRITE_ROWS = 83;
+const DIRECT_WRITE_ROWS = 85;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1806,8 +1826,10 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 81 -> 82: the automatic store migration worker lock and state removal (machine state, no note).
  * 82 -> 81: those files left the vault for the device-local folder of all stores.
  * 81 -> 82: a running rebuild's progress file beside the search index (machine state, no note).
+ * 82 -> 83: the in-process tar writer of a Windows snapshot (a temp tar stream, no note).
+ * 83 -> 84: the in-process tar reader of every restore (a temp extraction folder, no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 82;
+const UNSTAMPED_DIRECT_ROWS = 84;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

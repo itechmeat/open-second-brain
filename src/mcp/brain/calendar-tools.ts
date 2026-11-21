@@ -11,15 +11,13 @@ import {
   addObligation,
   completeObligation,
   listObligations,
+  obligationStemRel,
   removeObligation,
-  noObligationError,
   resolveObligationTarget,
   showObligation,
   type ObligationListItem,
   type ObligationPage,
 } from "../../core/brain/obligations.ts";
-import { BRAIN_OBLIGATIONS_REL } from "../../core/brain/path-constants.ts";
-import { titleSlug } from "../../core/vault.ts";
 import {
   synthesizeAgenda,
   type AgendaEventInput,
@@ -58,11 +56,6 @@ function listItemJson(item: ObligationListItem): Record<string, unknown> {
   };
 }
 
-/** The vault-relative page of an obligation file stem, as listed (no slug fold). */
-function obligationStemRel(stem: string): string {
-  return `${BRAIN_OBLIGATIONS_REL}/${stem}.md`;
-}
-
 function toolBrainObligation(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -98,21 +91,17 @@ function toolBrainObligation(
         agent: resolveAgentName(ctx.configPath ?? undefined),
         ...(anchor ? { anchor } : {}),
         ...(notes ? { notes } : {}),
+        ...(readable !== undefined ? { readable } : {}),
       });
       return { operation, obligation: pageJson(page) };
     }
     const slug = coerceStr(args, "slug", true)!;
-    // Resolved once: the reach check asks about the page the operation then
-    // reads or writes, an obligation an older release stored under its
+    // Resolved once, at the caller's reach: a page the caller may not read
+    // is never parsed and resolves as an absent one would (the value's own
+    // slug, not found), an obligation an older release stored under its
     // Latin-only slug included, and a page another writer adds under the
     // preferred slug in between is not taken instead.
-    const target = resolveObligationTarget(vault, slug);
-    if (readable !== undefined && !readable(obligationStemRel(target.stem))) {
-      if (operation === "show") return { operation, slug, present: false };
-      if (operation === "done" || operation === "remove") {
-        throw noObligationError(titleSlug(slug));
-      }
-    }
+    const target = resolveObligationTarget(vault, slug, readable);
     if (operation === "show") {
       const page = showObligation(vault, target);
       if (page === null) return { operation, slug, present: false };

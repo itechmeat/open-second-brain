@@ -26,10 +26,16 @@ import { originFields, type RecordOrigin } from "../record-origin.ts";
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
-import { resolveTitleSlug, titleSlug } from "../../vault.ts";
+import {
+  claimedTitleSlot,
+  locateTitledPage,
+  titleSlug,
+  type TitledPageLocation,
+  type TitledPageLookup,
+} from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
-import { addObligation, resolveObligationSlug } from "../obligations.ts";
-import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
+import { addObligation, ObligationError, obligationSlotPlan } from "../obligations.ts";
+import { decisionPath, decisionsDir, isValidSlug, validateIsoDate } from "../paths.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
@@ -44,6 +50,7 @@ import {
 import {
   assertLaneWrite,
   lanePageExists,
+  laneStems,
   listLaneFiles,
   parseLanePage,
   writeLaneText,
@@ -155,6 +162,15 @@ export interface RecordDecisionInput {
    * stamped into its log event so topic planning can group it.
    */
   readonly origin?: RecordOrigin;
+  /**
+   * The caller's reach ({@link DecisionReadOptions}). A page an older
+   * release stored under the title's Latin-only slug that the caller may
+   * not read is not this title's duplicate: the decision is recorded
+   * under the title's own slug, as over an absent page. A page at that
+   * slug is refused whoever may read it, because recording would replace
+   * it.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface RecordDecisionResult {
@@ -319,17 +335,66 @@ function render(record: Omit<DecisionRecord, "path">): string {
 }
 
 /**
- * The slug of the decision page a caller's title or slug names: the
- * {@link titleSlug} page, or a page an older release wrote under the
- * Latin-only slug of the same title ({@link resolveTitleSlug}).
+ * The decision page a caller's title or listed slug names, at the caller's
+ * reach ({@link locateTitledPage}). A listed slug names the page stored at
+ * it. A title names only a page that stores exactly that title: at its
+ * {@link titleSlug}, or at the Latin-only slug an older release gave it.
+ * So a title that only keys like a stored one ("Ship the parser, to Ada"
+ * beside "Ship the parser to Ada", or the same Cyrillic words in another
+ * case) reaches nothing, and the refusal names the value's own slug. An
+ * old slug the decision path refuses (`con`, a Windows device name) could
+ * never hold a page and counts as absent. A page the caller may not read
+ * is never parsed and answers like an absent one.
  */
-export function resolveDecisionSlug(vault: string, value: string): string {
-  return resolveTitleSlug(value, (slug) => {
-    const path = decisionPath(vault, slug);
-    if (!lanePageExists(vault, path)) return null;
-    const [meta] = parseLanePage(vault, path);
-    return typeof meta["title"] === "string" ? [meta["title"]] : [];
-  });
+export function locateDecision(
+  vault: string,
+  value: string,
+  readable?: DecisionReadOptions["readable"],
+): TitledPageLocation<DecisionRecord> {
+  return locateTitledPage(value, decisionLookup(vault, readable));
+}
+
+function decisionLookup(
+  vault: string,
+  readable: DecisionReadOptions["readable"],
+): TitledPageLookup<DecisionRecord> {
+  return {
+    read: (slug) => (isValidSlug(slug) ? parsePage(vault, slug, readable) : null),
+    titleOf: (page) => page.title,
+    stems: () => laneStems(vault, decisionsDir(vault), "decision-"),
+  };
+}
+
+/** The slug {@link locateDecision} lands on: the page's, or the value's own when none matched. */
+export function resolveDecisionSlug(
+  vault: string,
+  value: string,
+  readable?: DecisionReadOptions["readable"],
+): string {
+  return locateDecision(vault, value, readable).slug;
+}
+
+/**
+ * The page recording `title` would collide with: the page at its
+ * {@link titleSlug}, whatever title it holds and whoever may read it
+ * (recording would replace it), a page the caller may read that stores
+ * this title under the Latin-only slug an older release gave it, or a
+ * slug another decision the caller may read claims
+ * ({@link claimedTitleSlot}: `title` is that decision's listed slug, or
+ * its `titleSlug` is the exact title of a decision filed under its old
+ * slug), so a lookup by title and by listed slug keep naming one record
+ * each.
+ */
+export function takenDecisionSlug(
+  vault: string,
+  title: string,
+  readable: DecisionReadOptions["readable"],
+): string | null {
+  const slug = titleSlug(title);
+  if (lanePageExists(vault, decisionPath(vault, slug))) return slug;
+  const located = locateDecision(vault, title, readable);
+  if (located.page !== null) return located.slug;
+  return claimedTitleSlot(title, decisionLookup(vault, readable));
 }
 
 function parsePage(
@@ -385,31 +450,69 @@ function reviewObligationTitle(decisionTitle: string): string {
 
 /**
  * Ensure the single review obligation for a decision exists, anchored at
- * `reviewDate`. Idempotent: if the obligation slug already exists, this
- * is a no-op returning `{ created: false }` rather than raising the
- * obligations engine's duplicate error.
+ * `reviewDate`. Idempotent: the obligation that stores exactly the review
+ * title (an older release's under its Latin-only slug, or one in an
+ * identity-suffixed slot, included) is reused and `{ created: false }` is
+ * returned. When another obligation holds the review title's slug (a
+ * leftover of a removed decision whose title differs in case or
+ * punctuation, a peer's, or a slot another obligation's exact title
+ * claims), the review is opened in its identity-suffixed slot
+ * ({@link obligationSlotPlan}): a record is never blocked by a leftover and
+ * never attached to another obligation. One the caller may not read is not
+ * reused (nor named).
  */
 export function ensureReviewObligation(
   vault: string,
-  input: { title: string; reviewDate: string; agent: string; now?: Date },
+  input: {
+    title: string;
+    reviewDate: string;
+    agent: string;
+    now?: Date;
+    readable?: DecisionReadOptions["readable"];
+  },
 ): { slug: string; created: boolean } {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const obligationTitle = reviewObligationTitle(input.title);
-  // An older release's review obligation under the Latin-only slug of the
-  // same title is this decision's: reused, not opened a second time.
-  const slug = resolveObligationSlug(vault, obligationTitle);
-  if (lanePageExists(vault, obligationPath(vault, slug))) {
-    return { slug, created: false };
-  }
+  const plan = planReviewObligation(vault, input.title, input.readable);
+  if (plan.existing) return { slug: plan.slug, created: false };
   const page = addObligation(vault, {
     title: obligationTitle,
     cadence: DECISION_REVIEW_CADENCE,
     agent: input.agent,
     anchor: input.reviewDate,
+    slot: plan.slug,
     ...(input.now !== undefined ? { now: input.now } : {}),
+    ...(input.readable !== undefined ? { readable: input.readable } : {}),
   });
   return { slug: page.slug, created: true };
+}
+
+/**
+ * Where the review obligation of a decision titled `title` goes
+ * ({@link obligationSlotPlan}); refused only when every slot is held, which
+ * is decided before the decision page is written.
+ */
+function planReviewObligation(
+  vault: string,
+  title: string,
+  readable?: DecisionReadOptions["readable"],
+): { readonly slug: string; readonly existing: boolean } {
+  let plan: ReturnType<typeof obligationSlotPlan>;
+  try {
+    plan = obligationSlotPlan(vault, reviewObligationTitle(title), readable);
+  } catch (err) {
+    if (err instanceof ObligationError) {
+      throw new DecisionError(`the review obligation of: ${title}: ${err.message}`);
+    }
+    throw err;
+  }
+  if (plan === null) {
+    throw new DecisionError(
+      `no free slot for the review obligation of: ${title} (remove a held review obligation first)`,
+    );
+  }
+  return plan;
 }
 
 // ----- Capture --------------------------------------------------------------
@@ -437,10 +540,13 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   const slug = titleSlug(title);
   // The same title an older release stored under its Latin-only slug is
   // the same decision: refused as it was then, not recorded a second time.
-  const existing = resolveDecisionSlug(vault, title);
-  if (lanePageExists(vault, decisionPath(vault, existing))) {
+  const existing = takenDecisionSlug(vault, title, input.readable);
+  if (existing !== null) {
     throw new DecisionError(`decision already exists: ${existing} (backfill or remove it first)`);
   }
+  // Decided before the page is written, so a refusal leaves no decision
+  // without its review obligation.
+  planReviewObligation(vault, title, input.readable);
 
   const explicitAgent = normalizeAgentArgument(input.agent ?? null);
   const agent = explicitAgent ?? resolveAgentName(input.configPath);
@@ -466,7 +572,13 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   const path = decisionPath(vault, slug);
   writeLaneText(vault, path, render(record));
 
-  const review = ensureReviewObligation(vault, { title, reviewDate, agent, now });
+  const review = ensureReviewObligation(vault, {
+    title,
+    reviewDate,
+    agent,
+    now,
+    ...(input.readable !== undefined ? { readable: input.readable } : {}),
+  });
 
   appendLogEvent(vault, {
     timestamp: isoSecond(now),
@@ -512,8 +624,7 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
 export function backfillOutcome(vault: string, input: BackfillOutcomeInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = resolveDecisionSlug(vault, input.slug);
-  const prior = parsePage(vault, slug, input.readable);
+  const { slug, page: prior } = locateDecision(vault, input.slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const outcome = sanitiseTextField(input.outcome, {
     maxLen: FIELD_MAX_LEN,
@@ -564,8 +675,7 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
 export function updateRating(vault: string, input: UpdateRatingInput): DecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = resolveDecisionSlug(vault, input.slug);
-  const prior = parsePage(vault, slug, input.readable);
+  const { slug, page: prior } = locateDecision(vault, input.slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const rating = requireRating(input.rating);
   const rationale =
@@ -633,7 +743,7 @@ export function compareDecisions(
 ): DecisionRecord[] {
   const out: DecisionRecord[] = [];
   for (const slug of slugs) {
-    const page = parsePage(vault, resolveDecisionSlug(vault, slug), opts.readable);
+    const { page } = locateDecision(vault, slug, opts.readable);
     if (page !== null) out.push(page);
   }
   return out;
@@ -647,7 +757,7 @@ export function showDecision(
   slug: string,
   opts: DecisionReadOptions = {},
 ): DecisionRecord | null {
-  return parsePage(vault, resolveDecisionSlug(vault, slug), opts.readable);
+  return locateDecision(vault, slug, opts.readable).page;
 }
 
 /** Every decision, sorted by slug. */

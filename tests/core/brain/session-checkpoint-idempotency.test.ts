@@ -51,3 +51,31 @@ describe("saveSessionCheckpoint idempotency covers provenance (CR #127.6)", () =
     );
   });
 });
+
+describe("checkpoint signals of non-Latin topics", () => {
+  // The signal's slug only names its file (the dream pass groups signals by
+  // topic); the Latin-only slug made "без восклицаний" `unnamed-<hash>`.
+  test("the signal file keeps the topic's words, and a replay still dedupes", () => {
+    const input = {
+      ...base,
+      signals: [
+        {
+          topic: "без восклицаний",
+          signal: "positive" as const,
+          principle: "Never use exclamation marks in technical docs",
+        },
+        {
+          topic: "不要感叹号",
+          signal: "positive" as const,
+          principle: "Never use exclamation marks in Chinese docs",
+        },
+      ],
+    };
+    const first = saveSessionCheckpoint(vault, input);
+    expect(first.signals.map((s) => s.id.replace(/^sig-\d{4}-\d{2}-\d{2}-/u, ""))).toEqual([
+      "без-восклицаний",
+      "不要感叹号",
+    ]);
+    expect(saveSessionCheckpoint(vault, input).deduped).toBe(true);
+  });
+});

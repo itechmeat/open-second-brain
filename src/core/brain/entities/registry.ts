@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { statSync } from "node:fs";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { slugify } from "../../vault.ts";
+import { titleKeySlug } from "../../vault.ts";
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { stampKey } from "../../fs-stamp.ts";
@@ -661,9 +661,16 @@ function checkAliasClaims(
   return kept;
 }
 
-/** Allocate an unused `ent-<category>-<slug>` id (suffix -2, -3, ... on collision). */
+/**
+ * Allocate an unused `ent-<category>-<slug>` id (suffix -2, -3, ... on
+ * collision). The slug keeps letters of any script (`titleKeySlug`): an
+ * older release minted "Иван Петров" as `ent-people-unnamed-<hash>`. Only
+ * a NEW entity reaches this: a write resolves an existing record by its
+ * name key and aliases first, and an id once minted is never re-derived,
+ * so an entity minted under the old slug keeps its id and every link to it.
+ */
 function allocateEntityId(index: EntityIndex, category: string, name: string): string {
-  const base = `${BRAIN_ENTITY_ID_PREFIX}${category}-${slugify(name)}`;
+  const base = `${BRAIN_ENTITY_ID_PREFIX}${category}-${titleKeySlug(name)}`;
   const taken = new Set(index.entities.map((e) => e.id));
   if (!taken.has(base)) return base;
   for (let i = 2; ; i++) {

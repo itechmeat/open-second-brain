@@ -16,12 +16,23 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  addPledge,
   listPledges,
+  pledgeRel,
   pledgeExists,
   removePledge,
   showPledge,
@@ -37,7 +48,7 @@ import {
 import { archiveEntity, upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
-import { parseFrontmatter } from "../../../src/core/vault.ts";
+import { parseFrontmatter, slugify } from "../../../src/core/vault.ts";
 
 const NOW = new Date("2026-06-19T12:00:00Z");
 const AGENT = "intake-agent";
@@ -238,6 +249,45 @@ test("a withheld pledge page reads as absent and the create arm refuses the take
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 
+test("a readable legacy duplicate wins over an earlier withheld current slot", () => {
+  const posted = item({ title: "Отправить Аде migration recap" });
+  intake([posted]);
+  const title = posted.title;
+  const fresh = showPledge(vault, { slug: title })!;
+  const legacy = slugify(title);
+  renameSync(fresh.path, join(vault, pledgeRel(legacy)));
+  addPledge(vault, {
+    title: `${title}!`,
+    due: posted.due,
+    source: SOURCE_REL,
+    evidence: [QUOTE],
+    agent: AGENT,
+    now: NOW,
+  });
+  const result = intake([posted], {
+    readable: (rel) => rel !== pledgeRel(fresh.slug),
+  });
+  expect(result.duplicates).toEqual([legacy]);
+  expect(result.created).toEqual([]);
+});
+
+test("a mixed-normalization legacy suffix is found by pledge intake", () => {
+  const original = "Отчёт Cafe\u0301";
+  const posted = item({ title: original });
+  intake([posted]);
+  const fresh = showPledge(vault, { slug: original })!;
+  const digest = createHash("sha256")
+    .update(`${original}\n${posted.due}\n${SOURCE_REL}`)
+    .digest("hex")
+    .slice(0, 6);
+  const legacy = `cafe-${digest}`;
+  renameSync(fresh.path, join(vault, pledgeRel(legacy)));
+
+  const result = intake([item({ title: "Отчёт Café" })]);
+  expect(result.duplicates).toEqual([legacy]);
+  expect(result.created).toEqual([]);
+});
+
 test("a later item's write-pass refusal leaves no earlier page behind", () => {
   // The notes-section header is refused by `addPledge` at write time; the
   // intake has to catch it in the validation pass, or the items before the
@@ -346,36 +396,36 @@ test("a slug held by a different pledge files the new pledge under an identity s
   expect(showPledge(vault, { slug: result.created[0]! })!.due).toBe("2026-08-01");
 });
 
-test("two titles differing only in diacritics create distinct pages in one batch", () => {
-  // `slugify` drops every non-ASCII letter, so Müller and Möller share one
+test("two titles differing only in punctuation create distinct pages in one batch", () => {
+  // Titles that differ only in punctuation key alike, so they share one
   // title slug. Promises to different people are the core use case: the
   // batch must create both pages, the second under its identity suffix,
   // rather than refusing as a repeated slug.
   const result = intake([
-    item({ title: "Ship the parser to Müller" }),
-    item({ title: "Ship the parser to Möller" }),
+    item({ title: "Ship the parser to Ada" }),
+    item({ title: "Ship the parser, to Ada" }),
   ]);
   expect(result.created).toHaveLength(2);
   expect(new Set(result.created).size).toBe(2);
-  expect(result.created[0]).toBe("ship-the-parser-to-m-ller");
-  expect(result.created[1]).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
-  expect(showPledge(vault, { slug: result.created[0]! })!.title).toBe("Ship the parser to Müller");
-  expect(showPledge(vault, { slug: result.created[1]! })!.title).toBe("Ship the parser to Möller");
+  expect(result.created[0]).toBe("ship-the-parser-to-ada");
+  expect(result.created[1]).toMatch(/^ship-the-parser-to-ada-[0-9a-f]{6}$/u);
+  expect(showPledge(vault, { slug: result.created[0]! })!.title).toBe("Ship the parser to Ada");
+  expect(showPledge(vault, { slug: result.created[1]! })!.title).toBe("Ship the parser, to Ada");
 });
 
 test("a re-post of a suffix-filed pledge stays idempotent once the title slug frees up", () => {
   // The first post files under the suffix because the base slug is held;
   // once the holder is removed, the freed base slug must not seduce a
   // re-post into a second page for the same identity.
-  intake([item({ title: "Ship the parser to Müller" })]);
-  const first = intake([item({ title: "Ship the parser to Möller" })]);
+  intake([item({ title: "Ship the parser to Ada" })]);
+  const first = intake([item({ title: "Ship the parser, to Ada" })]);
   expect(first.created).toHaveLength(1);
-  expect(first.created[0]).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
-  removePledge(vault, { slug: "ship-the-parser-to-m-ller" });
-  const again = intake([item({ title: "Ship the parser to Möller" })]);
+  expect(first.created[0]).toMatch(/^ship-the-parser-to-ada-[0-9a-f]{6}$/u);
+  removePledge(vault, { slug: "ship-the-parser-to-ada" });
+  const again = intake([item({ title: "Ship the parser, to Ada" })]);
   expect(again.created).toEqual([]);
   expect(again.duplicates).toEqual(first.created);
-  expect(showPledge(vault, { slug: "ship-the-parser-to-m-ller" })).toBeNull();
+  expect(showPledge(vault, { slug: "ship-the-parser-to-ada" })).toBeNull();
   expect(listPledges(vault, { now: NOW })).toHaveLength(1);
 });
 

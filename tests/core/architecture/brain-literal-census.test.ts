@@ -155,7 +155,7 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/upgrade.ts": MIGRATION,
   "src/core/brain/watchdog.ts": LABEL,
   "src/core/brain/wikilink.ts": LABEL,
-  "src/core/brain/write-session/panel.ts": NOTE_WALL,
+  "src/core/brain/write-session/panel-target.ts": NOTE_WALL,
   "src/core/brain/write-session/personas.ts": LANE,
   "src/core/brain/write-session/store.ts": LANE,
   "src/core/brain/write-session/validate.ts": NOTE_WALL,

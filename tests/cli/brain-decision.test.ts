@@ -727,3 +727,56 @@ describe("o2b brain decision", () => {
     expect(r.stderr).toContain("--choice");
   });
 });
+
+async function recordTitle(title: string) {
+  return runCli(
+    [
+      "brain",
+      "decision",
+      "record",
+      "--config",
+      configPath,
+      "--title",
+      title,
+      "--chosen",
+      "yes",
+      "--assumption",
+      "It holds.",
+      "--review-date",
+      "2026-10-01",
+      "--json",
+    ],
+    { env },
+  );
+}
+
+async function show(value: string) {
+  return runCli(["brain", "decision", "show", value, "--config", configPath, "--json"], {
+    env,
+  });
+}
+
+describe("o2b brain decision: a title names only its own decision", () => {
+  test("a title that only keys like a stored one is refused, the stored title and slug are shown", async () => {
+    expect((await recordTitle("Ship the parser to Ada")).returncode).toBe(0);
+    const other = await show("Ship the parser, to Ada");
+    expect(other.returncode).toBe(1);
+    expect(other.stderr).toContain("no decision: Ship the parser, to Ada");
+    expect(JSON.parse((await show("Ship the parser to Ada")).stdout).slug).toBe(
+      "ship-the-parser-to-ada",
+    );
+    expect(JSON.parse((await show("ship-the-parser-to-ada")).stdout).title).toBe(
+      "Ship the parser to Ada",
+    );
+  });
+
+  test("a decision titled CON is recorded and shown by its title", async () => {
+    const recorded = await recordTitle("CON");
+    expect(recorded.returncode).toBe(0);
+    const slug = JSON.parse(recorded.stdout).slug as string;
+    expect(slug).toMatch(/^con-[0-9a-f]+$/u);
+    const shown = await show("CON");
+    expect(shown.returncode).toBe(0);
+    expect(JSON.parse(shown.stdout).slug).toBe(slug);
+  });
+});

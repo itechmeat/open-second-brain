@@ -223,3 +223,24 @@ test("panel responses survive process restarts via the session file", () => {
   expect(probe.session!.responses["persona:technical"]).toBe("Feasible.");
   expect(probe.session!.step).toBe("persona:strategic");
 });
+
+test("a non-Latin topic keeps its words in the panel path", () => {
+  // The Latin-only slug folded "Проект release" and "Тема release" to one
+  // `release` path, so the second panel of the day was refused at
+  // finalize; a CJK topic had no words at all (`unnamed-<hash>`).
+  expect(openPanel({ topic: "Проект release" }).target_path).toBe(
+    "Brain/decisions/panels/panel-2026-06-04-проект-release.md",
+  );
+  expect(openPanel({ topic: "Тема release" }).target_path).toBe(
+    "Brain/decisions/panels/panel-2026-06-04-тема-release.md",
+  );
+  expect(openPanel({ topic: "采用新的同步引擎" }).target_path).toBe(
+    "Brain/decisions/panels/panel-2026-06-04-采用新的同步引擎.md",
+  );
+});
+
+test("an ASCII device-name topic keeps the panel path it always had", () => {
+  expect(openPanel({ topic: "CON" }).target_path).toBe(
+    "Brain/decisions/panels/panel-2026-06-04-con.md",
+  );
+});

@@ -14,8 +14,11 @@
  *               cited source page (quote-span containment through the
  *               shared comparators), or the write refuses with a named
  *               error. A title slug another pledge already holds is taken
- *               with an identity suffix, so two promises whose titles differ
- *               only in non-ASCII letters land on distinct pages.
+ *               with an identity suffix, so two promises whose titles key
+ *               alike land on distinct pages. The slug keeps letters of
+ *               any script (`titleSlug`); a page an older release filed
+ *               under the Latin-only slug stays where it is and is found
+ *               again by its title (`resolvePledgeSlug`).
  *   - `fulfill` stamps the fulfillment date; a fulfilled pledge stays
  *               stamped (one-off, not recurring).
  *   - `list`    reads pages up to an optional cap, due-sorted, with an
@@ -43,7 +46,23 @@ import { readFileSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
-import { formatFrontmatter, parseFrontmatterText, slugify } from "../vault.ts";
+import {
+  formatFrontmatter,
+  claimedTitleSlot,
+  findTitledPage,
+  IDENTITY_SUFFIX_HEX_LENGTH,
+  identitySuffixedStemsOf,
+  isIdentitySuffixedStem,
+  isTitleSlug,
+  hashedOldStemsFor,
+  legacySlugForms,
+  locateTitledPage,
+  parseFrontmatterText,
+  titleIdentity,
+  titleSlug,
+  type TitledPageLocation,
+  type TitledPageLookup,
+} from "../vault.ts";
 import {
   pledgePath,
   pledgesArchiveDir,
@@ -61,6 +80,7 @@ import {
   assertLaneWrite,
   lanePageExists,
   lanePagesInStore,
+  laneStems,
   listLaneFiles,
   moveLanePage,
   parseLanePage,
@@ -127,6 +147,18 @@ export interface FulfillPledgeInput {
   /** Fulfillment date (`YYYY-MM-DD`); defaults to today (UTC). */
   readonly date?: string;
   readonly now?: Date;
+  /**
+   * The caller's reach ({@link ShowPledgeInput.readable}): a page it
+   * withholds is never read while the slug is resolved and is refused
+   * with the `no pledge` error an absent page gets, naming the same slug.
+   */
+  readonly readable?: (rel: string) => boolean;
+}
+
+export interface RemovePledgeInput {
+  readonly slug: string;
+  /** The caller's reach, as {@link FulfillPledgeInput.readable}. */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface ShowPledgeInput {
@@ -203,7 +235,7 @@ const IDENTITY_HEX_LENGTH = 12;
  * the conventional short-id width and keeps the collision space far above
  * the handful of promises one title slug can plausibly share.
  */
-const SLUG_SUFFIX_HEX_LENGTH = 6;
+const SLUG_SUFFIX_HEX_LENGTH = IDENTITY_SUFFIX_HEX_LENGTH;
 
 /** Collapse whitespace runs and trim: the identity's title normalization. */
 function collapseWhitespace(value: string): string {
@@ -218,28 +250,223 @@ function collapseWhitespace(value: string): string {
  */
 export function pledgeIdentity(title: string, due: string, source: string): string {
   return createHash("sha256")
-    .update(`${collapseWhitespace(title)}\n${due}\n${source}`)
+    .update(`${titleIdentity(collapseWhitespace(title))}\n${due}\n${source}`)
     .digest("hex")
     .slice(0, IDENTITY_HEX_LENGTH);
 }
 
 /**
  * The page slugs one pledge may occupy, in preference order: the title
- * slug, then the same slug with a short identity suffix. `slugify` folds
- * every non-ASCII letter into a separator, so titles that differ only in
- * diacritics share the base slug; the suffix is what keeps them apart
- * without transliterating or rewriting the title.
+ * slug, then the same slug with a short identity suffix. {@link titleSlug}
+ * keeps letters of any script, so titles that differ only in non-Latin
+ * words take two plain slugs; titles that key alike (case, diacritic
+ * forms) share the base slug, and the suffix is what keeps them apart
+ * without rewriting the title.
  */
 export function pledgeSlugCandidates(
   title: string,
   due: string,
   source: string,
 ): ReadonlyArray<string> {
-  const base = slugify(title);
-  return Object.freeze([
-    base,
-    `${base}-${pledgeIdentity(title, due, source).slice(0, SLUG_SUFFIX_HEX_LENGTH)}`,
-  ]);
+  return slugCandidates(titleSlug(title), title, due, source);
+}
+
+/**
+ * The slugs an older release filed the same pledge under: the Latin-only
+ * {@link slugify} of the title, in every form it can have been typed in
+ * ({@link legacySlugForms}), and its identity suffix, minus the ones
+ * {@link pledgeSlugCandidates} already names (an ASCII title's are equal).
+ * Pages are never renamed, so a promise stored before titles kept their
+ * non-Latin words still sits there; a create or an intake checks these for
+ * the same identity before it files a second copy, and never creates here.
+ * The current slugs spelled in NFD are among them: a macOS restore writes
+ * every name it extracts in NFD, and a vault synced from that Mac carries
+ * the renamed page to a filesystem that keeps the two forms apart.
+ */
+export function legacyPledgeSlugCandidates(
+  title: string,
+  due: string,
+  source: string,
+): ReadonlyArray<string> {
+  const current = pledgeSlugCandidates(title, due, source);
+  const seen = new Set(current);
+  const out: string[] = [];
+  const spellings = [
+    title,
+    title.normalize("NFC"),
+    title.normalize("NFD"),
+    titleIdentity(title),
+    titleIdentity(title).normalize("NFD"),
+  ];
+  for (const slug of [
+    ...current.map((s) => s.normalize("NFD")),
+    ...legacySlugForms(title).flatMap((legacy) => slugCandidates(legacy, title, due, source)),
+    ...spellings.flatMap((spelling) => {
+      const suffix = legacyPledgeIdentity(spelling, due, source).slice(0, SLUG_SUFFIX_HEX_LENGTH);
+      return legacySlugForms(spelling).map((legacy) => `${legacy}-${suffix}`);
+    }),
+  ]) {
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    out.push(slug);
+  }
+  return Object.freeze(out);
+}
+
+/** The pre-NFC pledge digest used by older versions for suffixes. */
+function legacyPledgeIdentity(title: string, due: string, source: string): string {
+  return createHash("sha256")
+    .update(`${collapseWhitespace(title)}\n${due}\n${source}`)
+    .digest("hex")
+    .slice(0, IDENTITY_HEX_LENGTH);
+}
+
+/**
+ * {@link legacyPledgeSlugCandidates}, and the hashed old stems in the
+ * pledge folder a title with no Latin letter may sit at when it was typed
+ * with other runs of spaces ({@link hashedOldStemsFor}): every slug a
+ * create or an intake checks for the same promise before it files one.
+ */
+export function storedLegacyPledgeSlugs(
+  vault: string,
+  title: string,
+  due: string,
+  source: string,
+): ReadonlyArray<string> {
+  const current = new Set(pledgeSlugCandidates(title, due, source));
+  const out = [...legacyPledgeSlugCandidates(title, due, source)];
+  for (const stem of hashedOldStemsFor(title, () => laneStems(vault, pledgesDir(vault), ""))) {
+    if (!current.has(stem) && !out.includes(stem)) out.push(stem);
+  }
+  return Object.freeze(out);
+}
+
+/** Index readable active pledges by canonical promise identity. */
+export function pledgeIdentityIndex(
+  vault: string,
+  readable?: (rel: string) => boolean,
+): ReadonlyMap<string, PledgePage> {
+  const out = new Map<string, PledgePage>();
+  for (const stem of laneStems(vault, pledgesDir(vault), "")) {
+    if (readable?.(pledgeRel(stem)) === false) continue;
+    const page = parsePage(vault, stem);
+    if (page !== null) out.set(pledgeIdentity(page.title, page.due, page.source), page);
+  }
+  return out;
+}
+
+/** Find a readable pledge with this canonical promise identity at any stored stem. */
+export function findPledgeByIdentity(
+  vault: string,
+  title: string,
+  due: string,
+  source: string,
+  readable?: (rel: string) => boolean,
+): PledgePage | null {
+  return pledgeIdentityIndex(vault, readable).get(pledgeIdentity(title, due, source)) ?? null;
+}
+
+function slugCandidates(base: string, title: string, due: string, source: string): string[] {
+  return [base, `${base}-${pledgeIdentity(title, due, source).slice(0, SLUG_SUFFIX_HEX_LENGTH)}`];
+}
+
+/**
+ * The pledge page a caller's title or listed slug names, at the caller's
+ * reach ({@link locateTitledPage}). A listed slug names the page stored at
+ * it. A title names only a page that stores that same title: at its
+ * {@link titleSlug}, at the Latin-only slug an older release filed it
+ * under (a bare Windows device name included), or at either one's
+ * identity-suffixed `<base>-<hex>` stem, the slot a title takes when
+ * another promise held its base slug. So "Ship the parser to Ada" and
+ * "Ship the parser, to Ada", whose slugs key alike, each reach their own
+ * page, and a title never selects another promise.
+ *
+ * A page `readable` withholds is skipped before it is parsed, so the
+ * answer, and the slug a refusal names, are the ones an absent page gets.
+ */
+export function locatePledge(
+  vault: string,
+  value: string,
+  readable?: (rel: string) => boolean,
+): TitledPageLocation<PledgePage> {
+  return locateTitledPage(value, pledgeLookup(vault, readable));
+}
+
+/** How the pledge folder is read for a title lookup, at the caller's reach. */
+function pledgeLookup(
+  vault: string,
+  readable: ((rel: string) => boolean) | undefined,
+): TitledPageLookup<PledgePage> {
+  return {
+    read: (slug) =>
+      readable !== undefined && !readable(pledgeRel(slug)) ? null : parsePage(vault, slug),
+    titleOf: (page) => page.title,
+    more: (bases) => suffixedPledgeStems(vault, bases),
+    issued: isSuffixedPledgeStem,
+    stems: () => laneStems(vault, pledgesDir(vault), ""),
+  };
+}
+
+/**
+ * The slug a new pledge titled `title` must not take, for the lookup by
+ * title and by listed slug to keep naming one record each
+ * ({@link claimedTitleSlot}), or null. When `title` is itself another
+ * pledge's listed slug, the pledge is refused (`refuse`). When a pledge
+ * whose exact title is this title's base slug sits away from that slug,
+ * the base slot is that pledge's own (`base`), and the new pledge takes
+ * its identity-suffixed slot instead, as it does beside any other holder.
+ * A page the caller's reach withholds is not there for it.
+ */
+export function pledgeTitleClaim(
+  vault: string,
+  title: string,
+  readable?: (rel: string) => boolean,
+): { readonly kind: "refuse" | "base"; readonly slug: string } | null {
+  const trimmed = title.trim();
+  const claimed = claimedTitleSlot(trimmed, pledgeLookup(vault, readable));
+  if (claimed === null) return null;
+  return { kind: claimed === trimmed ? "refuse" : "base", slug: claimed };
+}
+
+/**
+ * True for an identity-suffixed stem `<base>-<6 hex>` whose base is a slug
+ * either rule issues. At the slug cap the stem is longer than any slug a
+ * title keys to, so it is no fixed point of {@link titleSlug} and is
+ * recognised by its shape.
+ */
+function isSuffixedPledgeStem(value: string): boolean {
+  return isIdentitySuffixedStem(value);
+}
+
+/** The slug {@link locatePledge} answers; the title's `titleSlug` when no page matched. */
+export function resolvePledgeSlug(
+  vault: string,
+  value: string,
+  readable?: (rel: string) => boolean,
+): string {
+  return locatePledge(vault, value, readable).slug;
+}
+
+/** The identity-suffixed stems of `bases` the pledge folder holds, in name order. */
+function suffixedPledgeStems(vault: string, bases: readonly string[]): string[] {
+  const dir = pledgesDir(vault);
+  if (!lanePageExists(vault, dir)) return [];
+  return identitySuffixedStemsOf(
+    listLaneFiles(vault, dir, ".md").map((name) => name.slice(0, -".md".length)),
+    bases,
+  );
+}
+
+/**
+ * The stem a slug this family derived names, verbatim: a fixed point of
+ * {@link titleSlug} or of the older {@link slugify}, or either one's
+ * identity-suffixed stem, whose base may sit at the slug cap (all are safe
+ * file stems). Anything else is keyed by {@link titleSlug} first, so a
+ * free-form value never reaches the path unsanitized.
+ */
+function exactStem(value: string): string {
+  const trimmed = value.trim();
+  return isTitleSlug(trimmed) || isSuffixedPledgeStem(trimmed) ? trimmed : titleSlug(trimmed);
 }
 
 function requireIsoDate(value: string, label: string): string {
@@ -375,6 +602,12 @@ export interface CreatePledgePageInput {
   readonly counterparties?: ReadonlyArray<string>;
   readonly agent: string;
   readonly now?: Date;
+  /**
+   * The caller's reach. A page an older release filed under the Latin-only
+   * slug is looked at only when the caller may read it: it is never a
+   * create target, so a withheld one is simply not there for this caller.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -410,22 +643,31 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
     notes: (input.notes ?? "").trim(),
   };
   const candidates = pledgeSlugCandidates(input.title, input.due, input.source);
-  // A page holding this exact identity is the same promise wherever it
-  // files - including the suffixed candidate a since-removed slug-holder
-  // once forced - so the true-duplicate refusal is decided across ALL
-  // candidates before the create loop, not only when the loop happens to
-  // reach that candidate before the first free one.
-  for (const slug of candidates) {
-    const stored = parsePage(vault, slug);
-    if (stored !== null && pledgeIdentity(stored.title, stored.due, stored.source) === identity) {
-      throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
-    }
+  const duplicate = findPledgeByIdentity(
+    vault,
+    input.title,
+    input.due,
+    input.source,
+    input.readable,
+  );
+  if (duplicate !== null) {
+    throw new PledgeError(`pledge already exists: ${duplicate.slug} (remove it first to recreate)`);
   }
+  // A title that is another pledge's listed slug would make that slug
+  // name two promises: refused. A base slot that is another pledge's own
+  // new slug (its exact title, filed elsewhere) is held by that pledge.
+  const claim = pledgeTitleClaim(vault, input.title, input.readable);
+  if (claim?.kind === "refuse") throw titleNamesSlugError(claim.slug);
   for (const slug of candidates) {
+    if (claim?.kind === "base" && slug === claim.slug) continue;
+    if (pledgeSlotReserved(vault, slug, candidates[0]!, input.readable)) continue;
     const path = pledgePath(vault, slug);
     const handle = acquireLaneLock(vault, path);
     try {
       if (lanePageExists(vault, path)) {
+        if (input.readable?.(pledgeRel(slug)) === false) {
+          throw new PledgeError(`pledge already exists: ${slug} (remove it first to recreate)`);
+        }
         const stored = parsePage(vault, slug);
         // A different identity frees the NEXT candidate; anything this
         // lookup cannot read as a pledge - a non-regular path included -
@@ -449,6 +691,32 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
   // identity suffix both name different promises.
   throw new PledgeError(
     `pledge already exists: ${candidates[candidates.length - 1]} (remove it first to recreate)`,
+  );
+}
+
+/**
+ * True when `slot`, an identity-suffixed candidate beyond the `base`
+ * slug, is another pledge's own name: a pledge whose exact title is
+ * `slot` sits away from it (an older release filed it under its
+ * Latin-only slug). A pledge written there would be named by that listed
+ * slug while the title `slot` names the other one. The base slot is
+ * {@link pledgeTitleClaim}'s. A page the caller's reach withholds is not
+ * there for it.
+ */
+export function pledgeSlotReserved(
+  vault: string,
+  slot: string,
+  base: string,
+  readable?: (rel: string) => boolean,
+): boolean {
+  if (slot === base) return false;
+  return findTitledPage(slot, pledgeLookup(vault, readable)) !== null;
+}
+
+/** The refusal of a title that is another pledge's listed slug. */
+export function titleNamesSlugError(slug: string): PledgeError {
+  return new PledgeError(
+    `pledge title names the slug of another pledge: ${slug} (choose another title)`,
   );
 }
 
@@ -502,6 +770,7 @@ export function addPledge(vault: string, input: AddPledgeInput): PledgePage {
     ...(input.counterparties !== undefined ? { counterparties: input.counterparties } : {}),
     agent: input.agent,
     ...(input.now !== undefined ? { now: input.now } : {}),
+    ...(input.readable !== undefined ? { readable: input.readable } : {}),
   });
 }
 
@@ -510,7 +779,10 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
   // Lane write guard: the vault identity guard on an unswitched machine,
   // the store identity check on a store-only one (design D14 item 13).
   assertLaneWrite(vault);
-  const slug = slugify(input.slug);
+  // Resolved at the caller's reach: a withheld page is the absent one, so
+  // the refusal below names the slug an absent page's refusal names.
+  const { slug, page: found } = locatePledge(vault, input.slug, input.readable);
+  if (found === null) throw noPledgeError(slug);
   const path = pledgePath(vault, slug);
   // The stamp is a read-modify-write of the whole frontmatter, so it holds
   // the same pledge-path lock a create does: a fulfill racing the intake's
@@ -540,9 +812,24 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
 
 /** One pledge, or null. A page the caller's reach withholds answers null. */
 export function showPledge(vault: string, input: ShowPledgeInput): PledgePage | null {
-  const slug = slugify(input.slug);
-  if (input.readable !== undefined && !input.readable(pledgeRel(slug))) return null;
-  return parsePage(vault, slug);
+  return locatePledge(vault, input.slug, input.readable).page;
+}
+
+/**
+ * The pledge stored at exactly `slug`, a slug this family derived
+ * ({@link pledgeSlugCandidates}, {@link legacyPledgeSlugCandidates}), or
+ * null. Unlike {@link showPledge} it never resolves a title to another
+ * page, so a caller walking its candidates sees each slot as it is. A page
+ * the caller's reach withholds answers null.
+ */
+export function readPledgeAt(
+  vault: string,
+  slug: string,
+  readable?: (rel: string) => boolean,
+): PledgePage | null {
+  const stem = exactStem(slug);
+  if (readable !== undefined && !readable(pledgeRel(stem))) return null;
+  return parsePage(vault, stem);
 }
 
 /**
@@ -551,7 +838,7 @@ export function showPledge(vault: string, input: ShowPledgeInput): PledgePage | 
  * that {@link addPledge} would reject.
  */
 export function pledgeExists(vault: string, slug: string): boolean {
-  return lanePageExists(vault, pledgePath(vault, slugify(slug)));
+  return lanePageExists(vault, pledgePath(vault, exactStem(slug)));
 }
 
 /**
@@ -641,11 +928,13 @@ export function listPledges(vault: string, input: ListPledgesInput): ReadonlyArr
 }
 
 /** Retire a pledge into Brain/pledges/archive/ with a collision suffix. */
-export function removePledge(vault: string, input: { slug: string }): RemovePledgeResult {
+export function removePledge(vault: string, input: RemovePledgeInput): RemovePledgeResult {
   // Lane write guard: the vault identity guard on an unswitched machine,
   // the store identity check on a store-only one (design D14 item 13).
   assertLaneWrite(vault);
-  const normalized = slugify(input.slug);
+  // Resolved at the caller's reach, like fulfillPledge.
+  const { slug: normalized, page: found } = locatePledge(vault, input.slug, input.readable);
+  if (found === null) throw noPledgeError(normalized);
   const activePath = pledgePath(vault, normalized);
   // The archive move is a mutation of the page's presence, so it holds the
   // same pledge-path lock the family's other writers do: two concurrent

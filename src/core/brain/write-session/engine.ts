@@ -33,6 +33,7 @@ import { appendLogEvent } from "../log.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { createWriteSession, readWriteSession, saveWriteSession } from "./store.ts";
+import { heldPanelDefaultName } from "./panel-target.ts";
 import {
   buildCorrectionPrompt,
   inspectExistingTarget,
@@ -378,6 +379,26 @@ export function commitArtifact(
   // cover the window between a needs-review park and the operator's
   // approve - if the target appeared meanwhile, `create` must still
   // refuse to overwrite at the write chokepoint itself.
+  // A panel's same-topic panel of the day under its other default name
+  // holds the day as well, after an operator's review too.
+  const heldPanel =
+    session.kind === "panel" && session.intent === "create"
+      ? heldPanelDefaultName(vault, session.topic, session.targetPath)
+      : null;
+  if (heldPanel !== null) {
+    return recordFailedAttempt(
+      vault,
+      session,
+      [
+        Object.freeze({
+          code: "target-exists",
+          path: "target",
+          message: `${heldPanel} already exists; abandon and reopen with --target`,
+        }),
+      ],
+      now,
+    );
+  }
   if (session.intent === "create" && existsSync(absolute)) {
     return recordFailedAttempt(
       vault,

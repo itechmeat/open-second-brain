@@ -148,6 +148,7 @@ async function toolBrainDecision(
           ...(commitment ? { commitment: commitment as BrainCommitmentTier } : {}),
           agent: agent ?? "",
           origin: contextRecordOrigin(ctx),
+          ...reads,
         });
         return {
           action,
@@ -424,6 +425,7 @@ async function toolBrainDecision(
           ...(rationale ? { rationale } : {}),
           ...(agent ? { actor: agent } : {}),
           origin: contextRecordOrigin(ctx),
+          ...reads,
         });
         return { action, id, decision: res.decision };
       }

@@ -19,11 +19,19 @@ import { join } from "node:path";
 
 import { listGitCommits } from "./store.ts";
 import type { GitCommitRecord } from "./store.ts";
-import { assertLaneWrite, lanePageExists, writeLaneText } from "../../store/lane-pages.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  listLaneFiles,
+  writeLaneText,
+} from "../../store/lane-pages.ts";
+import { hasTitleWords, titleKeySlug } from "../../vault.ts";
 
 const CONVENTIONAL_BREAKING_RE = /^[a-z]+(\([^)]*\))?!:/;
 const REVERT_RE = /^revert\b/i;
 const SLUG_MAX = 40;
+/** Cuts a slug between user-perceived characters, never inside one. */
+const GRAPHEMES = new Intl.Segmenter("und", { granularity: "grapheme" });
 // 12 hex chars: git's own "unambiguous in large repos" abbreviation
 // length. Identity must not collide - a collision here would silently
 // skip a real decision via the skip-existing rule.
@@ -47,7 +55,32 @@ export function detectDecisionSignals(subject: string, body: string): ReadonlyAr
   return Object.freeze(signals);
 }
 
+/**
+ * The subject's slug: letters of any script stay ({@link titleKeySlug}:
+ * the name is `adr-<sha>-<slug>.md`, never a bare device name, so `CON`
+ * stays `con`), cut to {@link SLUG_MAX} code units on a grapheme boundary,
+ * so a base letter never loses its combining mark. A subject with no letter
+ * or digit is `decision`, as it always was; that is decided by the subject
+ * itself, so a literal subject such as `unnamed-deadbeef` keeps its words.
+ * For an ASCII subject the slug is byte-identical to
+ * {@link legacySlugFromSubject}.
+ */
 function slugFromSubject(subject: string): string {
+  if (!hasTitleWords(subject)) return "decision";
+  let cut = "";
+  for (const { segment } of GRAPHEMES.segment(titleKeySlug(subject))) {
+    if (cut.length + segment.length > SLUG_MAX) break;
+    cut += segment;
+  }
+  return cut.replace(/-+$/u, "") || "decision";
+}
+
+/**
+ * The Latin-only slug an older release named a candidate with. Where it
+ * equals {@link slugFromSubject} (every ASCII subject) the candidate's file
+ * name is unchanged, so no listing is needed to find an older one.
+ */
+function legacySlugFromSubject(subject: string): string {
   const slug = subject
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -55,6 +88,22 @@ function slugFromSubject(subject: string): string {
     .slice(0, SLUG_MAX)
     .replace(/-+$/, "");
   return slug === "" ? "decision" : slug;
+}
+
+/**
+ * The candidate file names already in `dir`, by their `adr-<sha>-` prefix.
+ * The sha is the candidate's identity and the slug after it is only a
+ * label: an older release wrote it Latin-only ("feat!: Перейти на
+ * Postgres" was `feat-postgres`), so a re-run matches by the prefix and
+ * never writes a second candidate for the same commit under a new slug.
+ */
+function existingCandidatesBySha(vault: string, dir: string): Map<string, string> {
+  const bySha = new Map<string, string>();
+  for (const name of listLaneFiles(vault, dir, ".md")) {
+    const match = /^adr-([0-9a-f]+)-/u.exec(name);
+    if (match !== null && !bySha.has(match[1]!)) bySha.set(match[1]!, name);
+  }
+  return bySha;
 }
 
 function renderCandidate(
@@ -114,13 +163,21 @@ export function mineCommitDecisions(vault: string, repoKey: string): MineCommitD
   let created = 0;
   let skippedExisting = 0;
   const notes: string[] = [];
+  let existing: Map<string, string> | null = null;
   for (const commit of commits) {
     const signals = detectDecisionSignals(commit.subject, commit.body);
     if (signals.length === 0) continue;
-    const path = join(
-      dir,
-      `adr-${commit.sha.slice(0, CANDIDATE_SHA_LEN)}-${slugFromSubject(commit.subject)}.md`,
-    );
+    const shortSha = commit.sha.slice(0, CANDIDATE_SHA_LEN);
+    const slug = slugFromSubject(commit.subject);
+    let name = `adr-${shortSha}-${slug}.md`;
+    if (slug !== legacySlugFromSubject(commit.subject)) {
+      // The name changed since an older release, so the candidate it may
+      // have written is found by its sha. One listing per run, and only for
+      // a subject whose slug changed: an ASCII subject's name is the old one.
+      existing ??= existingCandidatesBySha(vault, dir);
+      name = existing.get(shortSha) ?? name;
+    }
+    const path = join(dir, name);
     notes.push(path);
     if (lanePageExists(vault, path)) {
       // Operator-curated drafts are sacrosanct: identity by sha means

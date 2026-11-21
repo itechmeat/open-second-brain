@@ -25,13 +25,13 @@ import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import {
   loadPreference,
   preferencePresence,
+  resolvePreferenceSlug,
   writePreference,
 } from "../../core/brain/preference.ts";
 import { sha256Hex } from "../../core/integrity/digest.ts";
 import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
-import { slugify } from "../../core/vault.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
@@ -84,11 +84,19 @@ export function writeRefusedToMcp(tool: string, err: WriteRefusedError): MCPErro
  * Build the slug used in the signal / preference filename. We never let
  * the agent decide the slug directly — taking `topic` as the slug stem
  * is what the design doc §9.2 prescribes (slugs are deterministic from
- * topic). The slug is run through `slugify` defensively so a slightly
- * mis-shaped topic still yields a filesystem-safe basename.
+ * topic). `titleSlug` keeps letters of any script and still yields a
+ * filesystem-safe basename; a topic whose rule an older release filed
+ * under the Latin-only slug keeps that slug, so a re-recorded topic meets
+ * its existing rule instead of minting a second one
+ * (`resolvePreferenceSlug`).
  */
-export function deriveSlug(topic: string): string {
-  return slugify(topic);
+export function deriveSlug(
+  vault: string | null,
+  topic: string,
+  configPath?: string,
+  readable?: (rel: string) => boolean,
+): string {
+  return resolvePreferenceSlug(vault, topic, configPath, readable);
 }
 
 /** How a result names a record written with no vault. */
@@ -285,7 +293,14 @@ export async function toolBrainFeedback(
   const signalStamp = eventTime ?? now;
   const signalCreatedAt = isoSecond(signalStamp);
   const signalDate = isoDate(signalStamp);
-  const slug = deriveSlug(topic);
+  // At the caller's reach: a rule it may not read is never consulted, so
+  // the slug (and a refusal naming it) is the one an absent rule gives.
+  const slug = deriveSlug(
+    vault,
+    topic,
+    ctx.configPath ?? undefined,
+    readableAtContextReachOrUndefined(ctx),
+  );
 
   // Vault-configured fallback scope (`feedback.default_scope`). Applied
   // only when the call passes no explicit scope. Compute one effective
