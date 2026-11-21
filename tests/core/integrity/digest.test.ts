@@ -15,14 +15,19 @@
  */
 
 import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   canonicalJson,
   digestVerifies,
+  FILE_DIGEST_CHUNK_BYTES,
   sealWithDigest,
   sha256Hex,
+  sha256HexOfFile,
 } from "../../../src/core/integrity/digest.ts";
 
 /** Independently recomputed, so the test does not restate the implementation. */
@@ -202,5 +207,50 @@ describe("sealWithDigest / digestVerifies", () => {
   test("omits undefined entries from the sealed body exactly as canonicalJson does", () => {
     const withOptional = sealWithDigest({ a: 1, b: undefined });
     expect(withOptional.digest).toBe(sealWithDigest({ a: 1 }).digest);
+  });
+});
+
+describe("sha256HexOfFile", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "o2b-digest-file-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("is the digest of the same bytes read whole, for every file size", () => {
+    // The point of the helper is that it does not read the file whole,
+    // so the sizes that matter are the ones around a chunk boundary: an
+    // empty file (no read at all), a file smaller than one chunk (one
+    // short read), and a file of several chunks plus a remainder (the
+    // last read is short, and the chunks before it are full).
+    const cases: Array<{ readonly name: string; readonly bytes: Buffer }> = [
+      { name: "empty.bin", bytes: Buffer.alloc(0) },
+      { name: "small.bin", bytes: Buffer.from("an archive smaller than one chunk\n") },
+      {
+        name: "large.bin",
+        bytes: Buffer.alloc(FILE_DIGEST_CHUNK_BYTES * 3 + 1234, 0x5a),
+      },
+    ];
+    for (const { name, bytes } of cases) {
+      const file = join(dir, name);
+      writeFileSync(file, bytes);
+      expect(sha256HexOfFile(file)).toBe(sha256Hex(readFileSync(file)));
+      expect(sha256HexOfFile(file)).toBe(referenceSha256(bytes));
+    }
+  });
+
+  test("a file of one byte more than a chunk is digested as a whole", () => {
+    const file = join(dir, "chunk-plus-one.bin");
+    const bytes = Buffer.alloc(FILE_DIGEST_CHUNK_BYTES + 1, 0x2b);
+    writeFileSync(file, bytes);
+    expect(sha256HexOfFile(file)).toBe(sha256Hex(readFileSync(file)));
+  });
+
+  test("a file that is not there is an error the caller sees", () => {
+    expect(() => sha256HexOfFile(join(dir, "absent.bin"))).toThrow();
   });
 });

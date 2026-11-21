@@ -2415,8 +2415,10 @@ function canonicalJson(value) {
   }
   return JSON.stringify(value) ?? "null";
 }
-var DIGEST_ALGORITHM = "sha256";
-var init_digest = () => {};
+var DIGEST_ALGORITHM = "sha256", FILE_DIGEST_CHUNK_BYTES;
+var init_digest = __esm(() => {
+  FILE_DIGEST_CHUNK_BYTES = 1024 * 1024;
+});
 
 // src/core/reliability/command-bridge.ts
 var init_command_bridge = () => {};

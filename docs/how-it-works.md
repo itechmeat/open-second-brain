@@ -834,6 +834,18 @@ written after that. A snapshot interrupted during compression therefore
 leaves no recovery point behind, only a `<run_id>.tar.zst.partial-*` file
 that nothing lists; retention removes it once it is a day old.
 
+A restore treats the archive as untrusted input, because the vault is
+agent-writable and, in a peer-replicated vault, writable by every peer.
+Three things are refused before anything live is touched: an archive (or a
+derived-store archive) that is not a real file, an extracted `Brain/` root
+that is not a real directory — a link in its place is refused by name
+rather than read through — and an archive that inflates past the ceiling
+the in-process gzip path holds in memory (512 MiB by default; raise it
+with `OPEN_SECOND_BRAIN_SNAPSHOT_MAX_INFLATED_BYTES` for a vault that is
+really larger). Symbolic links inside the tree that stay inside it are
+kept: a vault that uses in-tree links produces archives carrying them, and
+a restore must not break on its own output.
+
 From v0.10.6 every snapshot ships with a SHA-256 sidecar manifest
 (`Brain/.snapshots/<run_id>.manifest.json`) listing every regular
 file the snapshot **covers** — the same tree, minus the two excluded
