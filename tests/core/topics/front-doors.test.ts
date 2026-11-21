@@ -34,7 +34,11 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../../src/mcp/i
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { openStore } from "../../../src/core/store/store-open.ts";
 
-const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
+// The real clock, not a fixed date: the CLI dream verb and the MCP dream
+// tool take no clock and read the real one, and the decide pass asks only
+// about records inside DECIDE_LOOKBACK_MS of it, so a seed at a fixed date
+// drops out of the pass once the calendar passes it by that much.
+const T0 = Date.now();
 
 let server: FakeSystemOne;
 beforeAll(async () => {

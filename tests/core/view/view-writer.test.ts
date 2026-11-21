@@ -191,14 +191,22 @@ describe("a writer record read only in part", () => {
     const a = m.open("dev-a");
     claimViewWriter(a, { agent, now });
     expect(pass(a).status).toBe("waiting-for-claim");
+    // The test's clock, not the real one: the shard is monthly, so a
+    // setting stamped by the real clock lands in another month's shard
+    // than the claim once the calendar leaves the claim's month, and the
+    // line corrupted below is then not the setting.
     for (const value of ["en", "ru"]) {
-      appendRecord(a, {
-        partition: "shared",
-        stream: "settings",
-        kind: "setting-set",
-        agent,
-        body: { authority: "human", key: "view.language", value },
-      });
+      appendRecord(
+        a,
+        {
+          partition: "shared",
+          stream: "settings",
+          kind: "setting-set",
+          agent,
+          body: { authority: "human", key: "view.language", value },
+        },
+        { now },
+      );
     }
     const dir = join(a.root, "shared", "settings", "dev-a");
     const shard = join(dir, readdirSync(dir)[0]!);

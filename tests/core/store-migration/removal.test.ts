@@ -125,6 +125,9 @@ describe("removing the legacy tree", () => {
     const a = fleet.machine("dev-a");
     a.use();
     expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // The silence rule off, as above: dev-d's only evidence is a fixed
+    // date, which the rule would retire once the calendar passed it.
+    setSilenceDays(a, 0);
     // dev-d joined after the cohort was recorded and still writes the tree.
     writeFileSync(
       join(a.vault, "Brain", "log", "2026-11-03.dev-d.jsonl"),
