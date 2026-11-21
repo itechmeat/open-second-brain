@@ -29,6 +29,11 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // A config of this test's own that does not exist yet: a machine with no
+  // config, which a tool that mints the installation secret writes into
+  // (`second_brain_query`). Unset, the default path is the per-user config
+  // base, shared by every test of the process.
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = join(tmp, "machine-config.yaml");
   // `vault_health` runs the full doctor, which consults the codegraph
   // partner whenever that binary is on PATH. The partner's cache lives
   // under HOME and this suite mandates a clean one, so each consultation

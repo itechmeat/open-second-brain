@@ -9,7 +9,7 @@
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { main } from "../../src/cli/main.ts";
@@ -117,6 +117,87 @@ export interface RunCliOptions {
   readonly limitMs?: number;
 }
 
+/** The XDG bases and where a POSIX home puts each when it is unset. */
+const XDG_HOME_DEFAULTS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["XDG_CONFIG_HOME", [".config"]],
+  ["XDG_CACHE_HOME", [".cache"]],
+  ["XDG_STATE_HOME", [".local", "state"]],
+  ["XDG_DATA_HOME", [".local", "share"]],
+];
+
+/** The Windows app-data bases and where a profile puts each when it is unset. */
+const WINDOWS_HOME_DEFAULTS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["LOCALAPPDATA", ["AppData", "Local"]],
+  ["APPDATA", ["AppData", "Roaming"]],
+];
+
+/**
+ * The per-user bases a `runCli` caller's environment leaves to the home
+ * fallback, named under the HOME it sandboxes, or a refusal when it
+ * sandboxes none.
+ *
+ * Bun fixes `os.homedir()` when the process starts, so an in-process run
+ * cannot move it: a base the caller leaves to the home fallback would
+ * resolve to the developer's REAL home in-process while a child given the
+ * caller's HOME resolves it under the sandbox. Naming each such base under
+ * the caller's HOME gives both modes the child's answer.
+ *
+ * - POSIX: an XDG base passed empty, and the config base when not passed
+ *   at all (the preload pins it to a root of the run, which a caller that
+ *   sandboxes HOME means to replace), go under HOME.
+ * - Windows (`src/core/platform-dirs.ts`): every base is an exported XDG
+ *   variable, else `%LOCALAPPDATA%`, which the preload pins, so an emptied
+ *   XDG base already lands in the run's app-data root. What falls back to
+ *   the home there is `%LOCALAPPDATA%` or `%APPDATA%` passed empty: each
+ *   goes under the caller's HOME (`USERPROFILE` when it passes that), and
+ *   a `USERPROFILE` passed empty beside a HOME becomes that HOME.
+ *
+ * A base passed empty with no sandboxed home falls back to the developer's
+ * real home in either mode, and the real-home guard sees the entries and
+ * control-file changes such a run leaves, not what it reads, so that is
+ * refused. `XDG_CACHE_HOME` is among them: the signal dedup cache
+ * (`src/core/brain/dedup-index-cache.ts`) lives under it when its own
+ * variable is unset or empty. So is `USERPROFILE` passed empty on Windows,
+ * the home itself.
+ */
+export function perUserSandbox(
+  callerEnv: Readonly<Record<string, string>>,
+  platform: string = process.platform,
+): Record<string, string> {
+  const windows = platform === "win32";
+  const pathJoin = windows ? win32.join : posix.join;
+  const home = windows
+    ? (nonEmptyValue(callerEnv["USERPROFILE"]) ?? nonEmptyValue(callerEnv["HOME"]))
+    : nonEmptyValue(callerEnv["HOME"]);
+  const bases = windows ? WINDOWS_HOME_DEFAULTS : XDG_HOME_DEFAULTS;
+  if (home === null) {
+    const homeVars = windows ? ["USERPROFILE"] : [];
+    const emptied = [...bases.map(([name]) => name), ...homeVars].filter(
+      (n) => callerEnv[n] === "",
+    );
+    if (emptied.length > 0) {
+      throw new Error(
+        `runCli: ${emptied.join(", ")} passed empty without a HOME resolves to the real ` +
+          "home directory; pass HOME (a temp dir) with it",
+      );
+    }
+    return {};
+  }
+  const out: Record<string, string> = {};
+  if (windows && callerEnv["USERPROFILE"] === "") out["USERPROFILE"] = home;
+  for (const [name, parts] of bases) {
+    const passed = callerEnv[name];
+    if (passed === "" || (!windows && passed === undefined && name === "XDG_CONFIG_HOME")) {
+      out[name] = pathJoin(home, ...parts);
+    }
+  }
+  return out;
+}
+
+function nonEmptyValue(value: string | undefined): string | null {
+  return value !== undefined && value.length > 0 ? value : null;
+}
+
 /**
  * The real `process.env` on Windows is case-insensitive: the variable the
  * OS calls `Path` answers to `process.env.PATH`, which is how the product
@@ -161,6 +242,7 @@ function resolveEnv(callerEnv: Record<string, string>): {
   if (process.platform === "win32" && "HOME" in callerEnv && !("USERPROFILE" in callerEnv)) {
     env["USERPROFILE"] = callerEnv["HOME"] as string;
   }
+  Object.assign(env, perUserSandbox(callerEnv));
   // `o2b doctor` consults the codegraph partner by spawning a third-party
   // CLI once per discovered project whenever that binary is on PATH. The
   // suite runs from this repo, which IS such a project, so the check ran
