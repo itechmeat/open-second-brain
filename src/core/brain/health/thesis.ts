@@ -40,9 +40,15 @@
  */
 
 import { FileAlreadyExistsError } from "../../fs-atomic.ts";
-import { slugify } from "../../vault.ts";
+import {
+  claimedTitleSlot,
+  locateTitledPage,
+  titleSlug,
+  type TitledPageLocation,
+  type TitledPageLookup,
+} from "../../vault.ts";
 import { nextDueDate, parseCadence, type ObligationCadence } from "../obligations.ts";
-import { thesesDir, thesisPath, validateIsoDate } from "../paths.ts";
+import { isValidSlug, thesesDir, thesisPath, validateIsoDate } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { type BrainSignalSign, type BrainCommitmentTier } from "../types.ts";
 import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
@@ -57,6 +63,7 @@ import { parseIsoUtc } from "./iso-time.ts";
 import {
   assertLaneWrite,
   lanePageExists,
+  laneStems,
   listLaneFiles,
   parseLanePage,
   writeLaneText,
@@ -252,8 +259,18 @@ export function recordThesis(vault: string, input: RecordThesisInput): ThesisPag
   if (statement.length === 0) throw new ThesisError("thesis statement must not be empty");
   const cadence = parseCadence(input.cadence ?? "monthly");
   const now = input.now ?? new Date();
-  const slug = slugify(statement);
-  if (lanePageExists(vault, thesisPath(vault, slug))) {
+  // The same statement already stored, under its slug or the Latin-only
+  // slug an older release filed it under, is refused like any taken slug,
+  // never written a second time beside the first; so is a different
+  // statement that already holds this statement's slug.
+  // So is a statement whose slug is another thesis's own new slug (that
+  // thesis's exact statement, filed under its old slug), or that is itself
+  // another thesis's listed slug: the lookup by statement and by slug
+  // would then name two theses.
+  const stored = locateThesis(vault, statement);
+  const claimed = stored.page !== null ? null : claimedTitleSlot(statement, thesisLookup(vault));
+  const slug = stored.page !== null ? stored.slug : (claimed ?? titleSlug(statement));
+  if (stored.page !== null || claimed !== null || lanePageExists(vault, thesisPath(vault, slug))) {
     throw new ThesisError(`thesis already exists: ${slug} (remove it first to recreate)`);
   }
   const page = {
@@ -289,8 +306,7 @@ export function recordThesis(vault: string, input: RecordThesisInput): ThesisPag
 export function updateThesis(vault: string, input: UpdateThesisInput): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const slug = slugify(input.slug);
-  const prior = parsePage(vault, slug);
+  const { slug, page: prior } = locateThesis(vault, input.slug);
   if (prior === null) throw new ThesisError(`no thesis: ${slug}`);
   const now = input.now ?? new Date();
   const page = {
@@ -329,8 +345,7 @@ export function recordThesisSupport(
 ): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const normalized = slugify(slug);
-  const prior = parsePage(vault, normalized);
+  const { slug: normalized, page: prior } = locateThesis(vault, slug);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);
   const now = opts.now ?? new Date();
   const date = opts.date ? validateIsoDate(opts.date) : isoDate(now);
@@ -344,8 +359,7 @@ export function recordThesisSupport(
 export function closeThesis(vault: string, slug: string): ThesisPage {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
-  const normalized = slugify(slug);
-  const prior = parsePage(vault, normalized);
+  const { slug: normalized, page: prior } = locateThesis(vault, slug);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);
   const page = { ...prior, status: THESIS_STATUS.closed };
   const { path: _path, ...rest } = page;
@@ -355,7 +369,37 @@ export function closeThesis(vault: string, slug: string): ThesisPage {
 
 /** One thesis, or null. */
 export function showThesis(vault: string, slug: string): ThesisPage | null {
-  return parsePage(vault, slugify(slug));
+  return locateThesis(vault, slug).page;
+}
+
+/**
+ * The slug of the thesis page a caller's statement or slug names
+ * ({@link locateThesis}); the statement's `titleSlug` when none does.
+ */
+export function resolveThesisSlug(vault: string, value: string): string {
+  return locateThesis(vault, value).slug;
+}
+
+/**
+ * The thesis page a caller's statement or listed slug names
+ * ({@link locateTitledPage}): a listed slug names the page stored at it; a
+ * statement names only a page that stores that same statement, at its
+ * `titleSlug` or at the Latin-only slug an older release filed it under,
+ * so a statement that merely keys like another never reaches that page.
+ * An old slug no thesis page can hold (a bare device name such as `con`,
+ * which `thesisPath` refuses) counts as absent, so a valid new statement
+ * containing it is still recorded.
+ */
+function locateThesis(vault: string, value: string): TitledPageLocation<ThesisPage> {
+  return locateTitledPage(value, thesisLookup(vault));
+}
+
+function thesisLookup(vault: string): TitledPageLookup<ThesisPage> {
+  return {
+    read: (slug) => (isValidSlug(slug) ? parsePage(vault, slug) : null),
+    titleOf: (page) => page.statement,
+    stems: () => laneStems(vault, thesesDir(vault), "thesis-"),
+  };
 }
 
 /** All theses sorted by slug; optionally only the active ones. */

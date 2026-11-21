@@ -779,31 +779,31 @@ test("listPledges scanCap does not charge a page the readable predicate refuses"
   }
 });
 
-test("two titles differing only in diacritics land as distinct pages", () => {
-  // `slugify` folds every non-ASCII letter into a separator, so Müller and
-  // Möller share one title slug. Promises to different people are the
+test("two titles differing only in punctuation land as distinct pages", () => {
+  // Titles that differ only in punctuation key alike, so they share one
+  // title slug. Promises to different people are the
   // family's core use case: the second add files under an identity suffix
   // instead of refusing or overwriting the first page.
   const muller = addPledge(vault, {
     ...cite(["Grace will review the incident timeline"]),
-    title: "Ship the parser to Müller",
+    title: "Ship the parser to Ada",
   });
   const moeller = addPledge(vault, {
     ...cite(["Grace will review the incident timeline"]),
-    title: "Ship the parser to Möller",
+    title: "Ship the parser, to Ada",
   });
-  expect(muller.slug).toBe("ship-the-parser-to-m-ller");
-  expect(moeller.slug).toMatch(/^ship-the-parser-to-m-ller-[0-9a-f]{6}$/u);
-  expect(showPledge(vault, { slug: muller.slug })!.title).toBe("Ship the parser to Müller");
-  expect(showPledge(vault, { slug: moeller.slug })!.title).toBe("Ship the parser to Möller");
+  expect(muller.slug).toBe("ship-the-parser-to-ada");
+  expect(moeller.slug).toMatch(/^ship-the-parser-to-ada-[0-9a-f]{6}$/u);
+  expect(showPledge(vault, { slug: muller.slug })!.title).toBe("Ship the parser to Ada");
+  expect(showPledge(vault, { slug: moeller.slug })!.title).toBe("Ship the parser, to Ada");
   // A true duplicate keeps the family's taken-slug refusal: identity, not
   // title-suffix chance, decides what is a repeat.
   expect(() =>
     addPledge(vault, {
       ...cite(["Grace will review the incident timeline"]),
-      title: "Ship the parser to Müller",
+      title: "Ship the parser to Ada",
     }),
-  ).toThrow(/pledge already exists: ship-the-parser-to-m-ller/);
+  ).toThrow(/pledge already exists: ship-the-parser-to-ada/);
   expect(listPledges(vault, { now: NOW })).toHaveLength(2);
 });
 
@@ -813,17 +813,17 @@ test("a re-post of a suffix-filed pledge refuses once the title slug's holder is
   // true-duplicate check has to run across ALL candidates before any create.
   const muller = addPledge(vault, {
     ...cite(["Grace will review the incident timeline"]),
-    title: "Ship the parser to Müller",
+    title: "Ship the parser to Ada",
   });
   const moeller = addPledge(vault, {
     ...cite(["Grace will review the incident timeline"]),
-    title: "Ship the parser to Möller",
+    title: "Ship the parser, to Ada",
   });
   removePledge(vault, { slug: muller.slug });
   expect(() =>
     addPledge(vault, {
       ...cite(["Grace will review the incident timeline"]),
-      title: "Ship the parser to Möller",
+      title: "Ship the parser, to Ada",
     }),
   ).toThrow(/pledge already exists: /);
   expect(showPledge(vault, { slug: muller.slug })).toBeNull();

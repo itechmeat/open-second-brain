@@ -24,7 +24,6 @@ import {
   addPledge,
   fulfillPledge,
   listPledges,
-  noPledgeError,
   pledgeRel,
   removePledge,
   showPledge,
@@ -44,7 +43,6 @@ import {
   ENTITY_STATUS_SCOPE,
   entityStatusInScope,
 } from "../../core/brain/entities/status-scope.ts";
-import { slugify } from "../../core/vault.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -170,11 +168,11 @@ function toolBrainPledge(
   // gate off, so an unfiltered read skips the per-page check entirely.
   // A record-lane tool works with no vault: its pages are store records then.
   const vault = laneVault(ctx);
+  // Every lookup below resolves a title or slug at this reach: a withheld
+  // page is skipped before it is parsed, so the answer and the slug a
+  // refusal names are byte-identical to an absent page's.
   const readable = readableAtContextReachOrUndefined(ctx);
-  const withheld = (slug: string): boolean => {
-    const rel = pledgeRel(slugify(slug));
-    return readable !== undefined && !readable(rel);
-  };
+  const reach = readable !== undefined ? { readable } : {};
   try {
     switch (operation) {
       case "list": {
@@ -217,24 +215,21 @@ function toolBrainPledge(
       case "fulfill":
       case "remove": {
         const slug = coerceStr(args, "slug", true)!;
-        if (withheld(slug)) {
-          if (operation === "show") return { operation, slug, present: false };
-          throw noPledgeError(slugify(slug));
-        }
         if (operation === "show") {
-          const page = showPledge(vault, {
-            slug,
-            ...(readable !== undefined ? { readable } : {}),
-          });
+          const page = showPledge(vault, { slug, ...reach });
           if (page === null) return { operation, slug, present: false };
           return { operation, present: true, pledge: pageJson(page) };
         }
         if (operation === "fulfill") {
           const date = coerceStr(args, "date", false);
-          const page = fulfillPledge(vault, { slug, ...(date !== null ? { date } : {}) });
+          const page = fulfillPledge(vault, {
+            slug,
+            ...reach,
+            ...(date !== null ? { date } : {}),
+          });
           return { operation, pledge: pageJson(page) };
         }
-        const removed = removePledge(vault, { slug });
+        const removed = removePledge(vault, { slug, ...reach });
         // The archive name steps past every name already taken in archive/,
         // readable or not, so below local reach it is left out of the answer.
         if (readable !== undefined) return { operation, slug: removed.slug };
@@ -408,7 +403,7 @@ export const PLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minLength: 1,
           maxLength: 200,
           description:
-            "Pledge id for fulfill/show/remove (a title is also accepted and slugified).",
+            "Pledge id for fulfill/show/remove (a title is also accepted and finds the pledge that stores exactly that title).",
         },
         date: {
           type: "string",

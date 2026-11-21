@@ -45,7 +45,7 @@ import {
 import { appendSessionSummary, type SessionSummaryDigest } from "./session-summary.ts";
 import { writeSignal, type WriteSignalOptions } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
-import { slugify } from "../vault.ts";
+import { titleSlug } from "../vault.ts";
 import type { BrainSignalSign } from "./types.ts";
 
 export const SESSION_CHECKPOINT_STATUS = Object.freeze({
@@ -255,7 +255,9 @@ export function saveSessionCheckpoint(
           principle: sig.principle,
           created_at: createdAt,
           date: signalDate,
-          slug: slugify(sig.topic),
+          // A signal's slug only names its file: the dream pass groups
+          // signals by their topic, so letters of any script can stay.
+          slug: titleSlug(sig.topic),
           ...(sig.scope ? { scope: sig.scope } : {}),
           ...(sig.raw ? { raw: sig.raw } : {}),
           ...(sig.source && sig.source.length > 0 ? { source: [...sig.source] } : {}),

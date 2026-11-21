@@ -38,9 +38,12 @@
  * check, which states the count it found.
  */
 
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import { slugify } from "../vault.ts";
+import { ensureInsideVault } from "../path-safety.ts";
+
+import { titleIdentity, titleKeySlug } from "../vault.ts";
 import {
   DECISION_SIMILARITY_THRESHOLD,
   findSimilarDecisions,
@@ -72,7 +75,12 @@ import { isoDate } from "./time.ts";
 import { listTensions, TENSION_UNRESOLVED_STATUSES, type TensionRecord } from "./tensions.ts";
 import { readTruthState } from "./truth/store.ts";
 import type { ClaimSlot, TruthConflict } from "./truth/types.ts";
-import { assertLaneWrite, writeLanePage } from "../store/lane-pages.ts";
+import {
+  assertLaneWrite,
+  lanePageExists,
+  parseLanePage,
+  writeLanePage,
+} from "../store/lane-pages.ts";
 
 /** Vault-relative directory a committed design note lands in. */
 export const DESIGN_NOTE_DIR_REL = "Brain/decisions";
@@ -399,7 +407,7 @@ export function planDesignNote(
   const visible = (rel: string): boolean =>
     ownerView.visible(rel) && (opts.readable?.(rel) ?? true);
   const grounding = designNoteGrounding(vault, trimmed, visible);
-  const slug = slugify(trimmed);
+  const slug = titleKeySlug(trimmed);
   const targetPath = posix.join(DESIGN_NOTE_DIR_REL, noteBasename(slug, opts.now));
   const linkCandidates = buildLinkCandidateManifest(vault, {
     query: trimmed,
@@ -464,9 +472,19 @@ export function commitDesignNote(
     alternatives: ReadonlyArray<DesignNoteAlternative>;
   };
   const recommended = note.alternatives.find((a) => a.recommended)!;
-  const slug = slugify(trimmed);
+  const slug = titleKeySlug(trimmed);
   const dir = decisionsDir(vault);
-  const path = join(dir, noteBasename(slug, opts.now));
+  // A note an older release wrote for this topic on this day sits under
+  // the Latin-only slug of the form the topic was typed in then (NFC,
+  // NFD, other spaces): the write goes to that name, so the exclusive
+  // write refuses it by name exactly as it refuses a second note under the
+  // new slug, instead of minting a second note of the day beside it.
+  const datePrefix = `design-${isoDate(opts.now)}-`;
+  const sameTopicPath = (existsSync(dir) ? readdirSync(dir) : [])
+    .filter((name) => name.startsWith(datePrefix) && name.endsWith(".md"))
+    .map((name) => join(dir, name))
+    .find((candidate) => sameTopicNote(vault, candidate, trimmed));
+  const path = sameTopicPath ?? join(dir, noteBasename(slug, opts.now));
 
   writeLanePage(
     vault,
@@ -500,6 +518,36 @@ export function commitDesignNote(
 }
 
 // ----- Internals ------------------------------------------------------------
+
+/**
+ * True when the design note at `path` exists and was written for `topic`
+ * (its stored topic has the same {@link titleIdentity}). A different topic
+ * that once shared the old slug ("Тема release" beside "Проект release")
+ * is another note and does not hold the name for this one.
+ */
+function sameTopicNote(vault: string, path: string, topic: string): boolean {
+  if (!lanePageExists(vault, path)) return false;
+  // A name on the vault's disk is read only when it resolves inside the
+  // vault: a link leading elsewhere is never read and holds no name.
+  if (existsSync(path) || isLink(path)) {
+    try {
+      ensureInsideVault(path, vault);
+    } catch {
+      return false;
+    }
+  }
+  const [meta] = parseLanePage(vault, path);
+  const stored = meta["topic"];
+  return typeof stored === "string" && titleIdentity(stored) === titleIdentity(topic);
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
 
 function requireTopic(topic: string): string {
   const trimmed = topic.trim();

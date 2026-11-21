@@ -27,6 +27,7 @@ import {
   rejectSkillProposal,
 } from "../../../src/core/brain/skill-proposals.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { slugify } from "../../../src/core/vault.ts";
 
 let vault: string;
 
@@ -495,4 +496,48 @@ describe("the fact route reads its outcome off the destination's contract", () =
     // reports what it did, this census fails and that field must be read.
     expect(Object.keys(result).toSorted()).toEqual(["id"]);
   });
+});
+
+describe("fact markers with a non-Latin topic", () => {
+  // The Latin-only slug dropped every non-Latin letter: "развёртывание
+  // gate" was `pref-gate` and a CJK topic `pref-unnamed-<hash>`.
+  for (const [topic, slug] of [
+    ["развёртывание gate", "развёртывание-gate"],
+    ["部署门禁", "部署门禁"],
+  ] as const) {
+    test(`the derived preference keeps the topic's words (${topic})`, async () => {
+      seedPremise("gate-green");
+      writeNote(
+        "Daily/2026-07-27.md",
+        `@osb fact topic="${topic}" principle="ship only when the gate is green" premise=gate-green level=deduced\n`,
+      );
+      const result = await scanInline(vault, { agent: "tester", now: NOW });
+      expect(result.errors).toEqual([]);
+      expect(parsePreference(preferencePath(vault, slug)).topic).toBe(topic);
+    });
+
+    test(`a rule filed under the old slug is met, not doubled (${topic})`, async () => {
+      seedPremise("gate-green");
+      const legacy = slugify(topic);
+      writePreference(vault, {
+        slug: legacy,
+        topic,
+        principle: "ship only when the gate is green",
+        created_at: "2026-07-01T00:00:00Z",
+        unconfirmed_until: "2026-08-01T00:00:00Z",
+        status: "confirmed",
+        evidenced_by: [],
+      });
+      writeNote(
+        "Daily/2026-07-27.md",
+        `@osb fact topic="${topic}" principle="ship only when the gate is green" premise=gate-green level=deduced\n`,
+      );
+      const result = await scanInline(vault, { agent: "tester", now: NOW });
+      expect(result.facts).toBe(0);
+      expect(JSON.stringify(result.errors)).toContain(
+        `preference already exists: Brain/preferences/pref-${legacy}.md`,
+      );
+      expect(existsSync(preferencePath(vault, slug))).toBe(false);
+    });
+  }
 });

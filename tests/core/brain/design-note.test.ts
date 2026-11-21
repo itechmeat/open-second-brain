@@ -207,3 +207,34 @@ test("a second note for the same topic and day is refused, never overwritten", (
     commitDesignNote(vault, TOPIC, payload(true), { agent: "tester", now: NOW }),
   ).toThrow(/design-2026-08-22-vector-index-storage/);
 });
+
+test("non-Latin topics keep their words, so two same-day notes do not collide", () => {
+  // The Latin-only slug folded both Cyrillic topics to `release` and a CJK
+  // topic to `unnamed-<hash>`, so the second Cyrillic note was refused as a
+  // duplicate of the first.
+  const ru = commitDesignNote(vault, "Проект release", payload(false, true), {
+    agent: "tester",
+    now: NOW,
+  });
+  const other = commitDesignNote(vault, "Тема release", payload(false, true), {
+    agent: "tester",
+    now: NOW,
+  });
+  const cjk = commitDesignNote(vault, "向量索引存储", payload(false, true), {
+    agent: "tester",
+    now: NOW,
+  });
+  const dir = join(vault, "Brain", "decisions");
+  expect(ru.path).toBe(join(dir, "design-2026-08-22-проект-release.md"));
+  expect(other.path).toBe(join(dir, "design-2026-08-22-тема-release.md"));
+  expect(cjk.path).toBe(join(dir, "design-2026-08-22-向量索引存储.md"));
+  const plan = planDesignNote(vault, "向量索引存储", { now: NOW, ownerScope: null });
+  expect(plan.slug).toBe("向量索引存储");
+  expect(plan.targetPath).toBe("Brain/decisions/design-2026-08-22-向量索引存储.md");
+});
+
+test("an ASCII device-name topic keeps the file name it always had", () => {
+  // `design-<date>-con.md` is no device name, so the stem takes no suffix.
+  const note = commitDesignNote(vault, "CON", payload(false, true), { agent: "tester", now: NOW });
+  expect(note.path).toBe(join(vault, "Brain", "decisions", "design-2026-08-22-con.md"));
+});

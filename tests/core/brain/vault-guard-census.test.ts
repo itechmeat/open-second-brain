@@ -162,6 +162,13 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/sync-lockfile.ts":
     "lock primitive over a caller-supplied path; the writers that acquire it " +
     "are guarded at their own entry points.",
+  "src/core/brain/tar-extract.ts":
+    "extracts a snapshot's tar stream only into the private temp directory " +
+    "its caller made outside the vault; the restore that copies it into " +
+    "`Brain/` is guarded.",
+  "src/core/brain/tar-writer.ts":
+    "writes only the snapshot's tar stream into a private temp directory " +
+    "outside the vault; `createSnapshot`, its one caller, is guarded.",
 });
 
 /**
@@ -202,6 +209,10 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/secrets/envelope.ts": "reached only through the guarded `secrets/store.ts`",
   "src/core/brain/sync-lockfile.ts":
     "lock primitive; the writers that take it are guarded, and the guard asks the gate",
+  "src/core/brain/tar-extract.ts":
+    "writes outside the vault only (the restore's temp extraction folder); its caller `snapshot.ts` is guarded, and the guard asks the gate",
+  "src/core/brain/tar-writer.ts":
+    "writes outside the vault only (the snapshot's temp tar stream); its caller `snapshot.ts` is guarded, and the guard asks the gate",
 });
 
 const GATE_RE = /assertNoMigrationInProgress|migrationGateRefuses/;

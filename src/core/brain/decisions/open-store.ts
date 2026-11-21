@@ -50,7 +50,7 @@ import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { decisionsDir, decisionPath } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
-import { recordDecision, resolveDecisionSlug } from "./record.ts";
+import { recordDecision, takenDecisionSlug } from "./record.ts";
 import { appendDecisionChangeReceipt, DECISION_CHANGE_REASON } from "./receipts.ts";
 import { lockDirSync } from "../../fs-lock.ts";
 import {
@@ -253,6 +253,13 @@ export interface ResolveOpenDecisionInput {
    * stamped into its log event so topic planning can group it.
    */
   readonly origin?: RecordOrigin;
+  /**
+   * The caller's reach. A decision page an older release minted under the
+   * title's Latin-only slug that the caller may not read does not push the
+   * mint to a derived title: the page is minted as over an absent one. A
+   * page at the title's own slug is never replaced, whoever may read it.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface DiscardOpenDecisionInput {
@@ -824,20 +831,37 @@ interface ResolveMintTarget {
  * second "Pick DB" question would otherwise be wedged open forever (and
  * a crash between minting and stamping would wedge the first one too).
  */
-function resolveMintTarget(vault: string, record: OpenDecisionRecord): ResolveMintTarget {
+function resolveMintTarget(
+  vault: string,
+  record: OpenDecisionRecord,
+  readable: ResolveOpenDecisionInput["readable"],
+): ResolveMintTarget {
   const reference = `[[${record.id}]]`;
   const sanitised = sanitiseMintTitle(record.title);
   let title = sanitised;
   let suffix = 0;
   for (;;) {
-    // The page `recordDecision` would refuse this title for: the new slug,
-    // or a page an older release minted under the Latin-only slug of the
-    // same title. One that names this record is the crashed attempt's own;
-    // any other is taken, and the walk moves on to a derived title.
-    const slug = resolveDecisionSlug(vault, title);
+    // The slug `recordDecision` would refuse this title for
+    // (`takenDecisionSlug`): the new slug, a page an older release minted
+    // under the Latin-only slug that stores exactly this title, or a slug
+    // another decision claims. A page there that names this record is the
+    // crashed attempt's own; anything else is taken, and the walk moves on
+    // to a derived title.
+    const slug = takenDecisionSlug(vault, title, readable);
+    if (slug === null) return { title, slug: titleSlug(title), ours: false };
+    // The page is read for the record's reference only when the caller
+    // may read it: a withheld page is another record's for this caller,
+    // so withheld text never decides the target.
     const path = decisionPath(vault, slug);
-    if (!lanePageExists(vault, path)) return { title, slug: titleSlug(title), ours: false };
-    if ((readLaneText(vault, path) ?? "").includes(reference)) return { title, slug, ours: true };
+    const visible =
+      readable === undefined || readable(`${BRAIN_DECISIONS_REL}/decision-${slug}.md`);
+    if (
+      visible &&
+      lanePageExists(vault, path) &&
+      (readLaneText(vault, path) ?? "").includes(reference)
+    ) {
+      return { title, slug, ours: true };
+    }
     title = sanitiseMintTitle(derivedMintTitle(sanitised, record.id, suffix));
     suffix = suffix === 0 ? 2 : suffix + 1;
   }
@@ -888,7 +912,7 @@ export function resolveOpenDecision(
     // rather than inventing a belief, and the body always carries the
     // provenance link so a crashed resolve can converge (see
     // {@link resolveMintTarget}).
-    const target = resolveMintTarget(vault, record);
+    const target = resolveMintTarget(vault, record, input.readable);
     let decisionId: string;
     if (target.ours) {
       // A previous attempt minted this page and crashed before stamping
@@ -906,6 +930,7 @@ export function resolveOpenDecision(
         now,
         ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
         ...(input.origin !== undefined ? { origin: input.origin } : {}),
+        ...(input.readable !== undefined ? { readable: input.readable } : {}),
       });
       decisionId = minted.record.id;
     }

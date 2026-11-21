@@ -27,7 +27,7 @@ import type { FrontmatterMap } from "../../types.ts";
 import { normToken, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { assertCheckpointId } from "../checkpoint-store.ts";
-import { formatFrontmatter, slugify } from "../../vault.ts";
+import { formatFrontmatter, locateSuffixedTitleStem } from "../../vault.ts";
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { originChannelStamp } from "../../origin-channel.ts";
@@ -333,13 +333,27 @@ export function ingestSource(
   // source path always yields the same hash, hence the same file). Computed
   // BEFORE the intake so the review disposition (write-side trust, Task 12)
   // can name the exact target a deny refuses before anything is written.
+  // The slug keeps letters of any script (`titleSlug`); a summary an older
+  // release wrote under the Latin-only slug with the same hash is this
+  // source's page and is rewritten in place, never doubled.
   const sourceHash = sourceIdentityHash([canonicalSource]);
-  const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
+  const relOf = (stem: string): string =>
+    canonicalNotePath(relative(vault, sourcePagePath(vault, stem)));
   // A summary page the caller may not read (it inherited a reserved
   // source's visibility) is neither read nor rewritten, and the answer is
   // the one an absent page gets: its path is deterministic, so `created`
-  // would otherwise tell the caller the page exists.
-  const summaryPath = canonicalNotePath(relative(vault, absPath));
+  // would otherwise tell the caller the page exists. The reach is asked of
+  // the page selected, under either slug; one withheld is answered under
+  // the path an absent page gets (the new slug), so the path itself does
+  // not tell which page exists either.
+  const target = locateSuffixedTitleStem(
+    canonicalSource,
+    sourceHash.slice(0, 12),
+    (candidate) => lanePageExists(vault, sourcePagePath(vault, candidate)),
+    opts.readable !== undefined ? (candidate) => opts.readable!(relOf(candidate)) : undefined,
+  );
+  const absPath = sourcePagePath(vault, target.stem);
+  const summaryPath = relOf(target.stem);
   // Write-time marker neutralization gate (t_c2ac4fc8), resolved beside the
   // disposition and BEFORE ANY FILESYSTEM EFFECT - the capture seam's
   // contract. A misconfigured mode is a misconfiguration of the process,
@@ -399,7 +413,7 @@ export function ingestSource(
   const archive = captureTrustedSourceArchive(vault, canonicalSource, trust);
 
   const pageExists = lanePageExists(vault, absPath);
-  const withheld = pageExists && opts.readable?.(summaryPath) === false;
+  const withheld = target.withheld || (pageExists && opts.readable?.(summaryPath) === false);
   const existed = !withheld && pageExists;
   const stamp = isoSecond(opts.now);
   // Preserve the original created_at and an operator-set visibility on a

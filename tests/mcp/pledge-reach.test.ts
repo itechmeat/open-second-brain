@@ -15,7 +15,15 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -257,5 +265,73 @@ describe("brain_pledge answers at the caller's reach", () => {
     expect(await pledge(a, { operation: "remove", slug: PUBLIC_SLUG }, local)).toContain(
       "archive_path",
     );
+  });
+
+  test("remote reach: a title whose withheld page sits under an older slug answers as for an absent page", async () => {
+    // Vault A holds the promise under the Latin-only slug an older release
+    // gave it, withheld; vault B never had it. Every refusal must name the
+    // same slug in both, so the error cannot map which titles exist.
+    const title = "Отправить Аде release notes";
+    const a = fixture(false);
+    const b = fixture(false);
+    const page = addPledge(a.vault, {
+      title,
+      due: PRIVATE_DUE,
+      source: SOURCE_REL,
+      evidence: EVIDENCE,
+      agent: AGENT,
+    });
+    const old = join(a.vault, BRAIN_PLEDGES_REL, "release-notes.md");
+    renameSync(page.path, old);
+    reserve(old);
+    const before = readFileSync(old, "utf8");
+    for (const operation of ["show", "fulfill", "remove"]) {
+      // oxlint-disable-next-line no-await-in-loop
+      const withheld = await pledge(a, { operation, slug: title });
+      // oxlint-disable-next-line no-await-in-loop
+      const absent = await pledge(b, { operation, slug: title });
+      expect(withheld).toBe(absent);
+      expect(withheld).not.toContain("no pledge: release-notes");
+      if (operation !== "show")
+        expect(withheld).toContain("no pledge: отправить-аде-release-notes");
+    }
+    expect(readFileSync(old, "utf8")).toBe(before);
+    // The operator's own shell still finds it by its title.
+    expect(await pledge(a, { operation: "show", slug: title }, TRANSPORT_REACH.local)).toContain(
+      '"present":true',
+    );
+  });
+
+  test("remote reach: a withheld identity-suffixed page is never matched by its title", async () => {
+    const a = fixture(false);
+    const b = fixture(false);
+    const titles = ["Ship the parser to Ada", "Ship the parser, to Ada"];
+    for (const f of [a, b]) {
+      addPledge(f.vault, {
+        title: titles[0]!,
+        due: PUBLIC_DUE,
+        source: SOURCE_REL,
+        evidence: EVIDENCE,
+        agent: AGENT,
+      });
+    }
+    const hidden = addPledge(a.vault, {
+      title: titles[1]!,
+      due: PRIVATE_DUE,
+      source: SOURCE_REL,
+      evidence: EVIDENCE,
+      agent: AGENT,
+    });
+    reserve(hidden.path);
+    const before = readFileSync(hidden.path, "utf8");
+    for (const operation of ["show", "fulfill", "remove"]) {
+      // oxlint-disable-next-line no-await-in-loop
+      const withheld = await pledge(a, { operation, slug: titles[1] });
+      // oxlint-disable-next-line no-await-in-loop
+      const absent = await pledge(b, { operation, slug: titles[1] });
+      expect(withheld).toBe(absent);
+      expect(withheld).not.toContain(hidden.slug);
+    }
+    expect(readFileSync(hidden.path, "utf8")).toBe(before);
   });
 });

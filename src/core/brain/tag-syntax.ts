@@ -12,7 +12,7 @@
  */
 
 import { isObsidianTagValue } from "../tags.ts";
-import { slugify } from "../vault.ts";
+import { slugify, titleKeySlug } from "../vault.ts";
 
 export { isObsidianTagValue };
 
@@ -48,6 +48,26 @@ export function requireObsidianTagValue(value: string, field: string): string {
     throw new TagSyntaxError(field, value, TAG_VALUE_RULE_TEXT);
   }
   return value;
+}
+
+/**
+ * The `brain/topic/<value>` segment of a topic: its {@link titleKeySlug}
+ * (letters of any script stay, so "без восклицаний" tags as
+ * `без-восклицаний` instead of `unnamed-<hash>`) when that passes the tag
+ * rule, otherwise the Latin-only {@link slugify} the segment always was
+ * (a script whose words carry combining marks, a digit-only topic). For an
+ * ASCII topic (`CON` included: a tag segment is never a file name, so it
+ * takes no device suffix) both are equal. The tag is derived from the topic, never
+ * stored as an identity, so a record rewritten after this change carries
+ * the same segment as a new record of the same topic. The value still
+ * meets {@link requireObsidianTagValue}, which refuses a digit-only slug.
+ */
+export function topicTagValue(topic: string): string {
+  const readable = titleKeySlug(topic.trim());
+  return requireObsidianTagValue(
+    isObsidianTagValue(readable) ? readable : slugify(topic.trim()),
+    "topic",
+  );
 }
 
 /** How {@link scopeTagValues} treats a segment that fails the tag rule. */

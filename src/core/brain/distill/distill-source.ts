@@ -61,7 +61,7 @@ import { relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { formatFrontmatter, slugify } from "../../vault.ts";
+import { formatFrontmatter, locateSuffixedTitleStem } from "../../vault.ts";
 import {
   UNTRUSTED_ORIGIN,
   isSourceHidden,
@@ -376,8 +376,23 @@ export function distillSource(
   }
 
   const idHash = sourceIdentityHash([canonicalSource]);
-  const absPath = distillationPagePath(vault, `${slugify(canonicalSource)}-${idHash.slice(0, 12)}`);
-  const existed = lanePageExists(vault, absPath);
+  // The slug keeps letters of any script (`titleKeySlug`); a distillation
+  // an older release wrote under the Latin-only slug with the same hash is
+  // this source's page and is rewritten in place, never doubled. The
+  // caller's reach is asked of the page selected (either slug) before it
+  // is read or written: a page the caller may not read is neither read,
+  // rewritten nor doubled beside, and the answer is the one an absent page
+  // gets, under the new slug's path.
+  const relOf = (stem: string): string =>
+    canonicalNotePath(relative(vault, distillationPagePath(vault, stem)));
+  const target = locateSuffixedTitleStem(
+    canonicalSource,
+    idHash.slice(0, 12),
+    (stem) => lanePageExists(vault, distillationPagePath(vault, stem)),
+    opts.readable !== undefined ? (stem) => opts.readable!(relOf(stem)) : undefined,
+  );
+  const absPath = distillationPagePath(vault, target.stem);
+  const existed = !target.withheld && lanePageExists(vault, absPath);
   const stamp = isoSecond(opts.now);
   const createdAt = existed ? readCreatedAt(vault, absPath, stamp) : stamp;
   const priorUpdatedAt = existed ? readUpdatedAt(vault, absPath, stamp) : stamp;
@@ -458,7 +473,7 @@ export function distillSource(
   // updated_at preserved, nothing meaningful changed - skip the write and leave
   // updated_at (and the mtime) alone. A real content change bumps updated_at.
   const onDisk = existed ? (readLaneText(vault, absPath) ?? "") : null;
-  if (onDisk === null || onDisk !== buildContents(priorUpdatedAt)) {
+  if (!target.withheld && (onDisk === null || onDisk !== buildContents(priorUpdatedAt))) {
     writeLaneText(vault, absPath, buildContents(stamp));
   }
 

@@ -24,7 +24,7 @@
  * vocabulary, nothing touched.
  */
 
-import { slugify } from "../vault.ts";
+import { resolvePreferenceSlug } from "./preference.ts";
 import {
   DeriveFactError,
   deriveFact,
@@ -141,7 +141,7 @@ function routeFactMarker(
   marker: FactMarker,
   ctx: CaptureRouteContext,
 ): CaptureRouteResult {
-  const result = deriveFact(vault, factInput(marker), { now: ctx.now });
+  const result = deriveFact(vault, factInput(vault, marker), { now: ctx.now });
   return { id: result.id, outcome: "created" };
 }
 
@@ -178,9 +178,13 @@ function skillRouteResult(result: DeclaredSkillProposalResult): CaptureRouteResu
  * meets the destination's own vocabulary check on both paths, instead of
  * being cast into the type and validated only where a write follows.
  */
-function factInput(marker: FactMarker): DeriveFactInput {
+function factInput(vault: string, marker: FactMarker): DeriveFactInput {
   return parseDeriveFactInput({
-    slug: slugify(marker.topic),
+    // Letters of any script stay; a topic whose rule an older release
+    // filed under the Latin-only slug keeps that slug, so a re-recorded
+    // fact meets its rule (and is refused as existing) instead of minting
+    // a second one beside it.
+    slug: resolvePreferenceSlug(vault, marker.topic),
     topic: marker.topic,
     principle: marker.principle,
     premises: [...marker.premise],
@@ -200,7 +204,7 @@ function factInput(marker: FactMarker): DeriveFactInput {
  * there rather than turning a preview into a comfortable lie.
  */
 function previewFactMarker(vault: string, marker: FactMarker): CaptureRouteResult {
-  const input = factInput(marker);
+  const input = factInput(vault, marker);
   for (const premise of input.premises) {
     const slug = premiseSlug(premise);
     if (!slug) throw new DeriveFactError("premise id must not be empty");

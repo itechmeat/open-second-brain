@@ -357,6 +357,18 @@ export function listLaneFiles(vault: string, dir: string, ext = ".md"): string[]
 }
 
 /**
+ * The stems of the `<prefix><stem>.md` pages a lane folder holds, in
+ * either mode ({@link listLaneFiles}); a folder that does not exist holds
+ * none.
+ */
+export function laneStems(vault: string, dir: string, prefix: string): string[] {
+  if (!lanePageExists(vault, dir)) return [];
+  return listLaneFiles(vault, dir, ".md")
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => name.slice(prefix.length, -".md".length));
+}
+
+/**
  * The vault (or lane root) an absolute `Brain/` path was built under: the
  * part before its last `Brain` segment. For a reader handed only a page
  * path (an entity record's `path`), so it can read the page in both modes.

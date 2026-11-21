@@ -180,3 +180,39 @@ describe("slug-collisions scan integration", () => {
     expect(report.findings).toHaveLength(1);
   });
 });
+
+describe("slug-collisions detector on non-Latin names", () => {
+  // The detector grouped by the Latin-only slug, which drops non-Latin
+  // words: "Проект release.md" and "Тема release.md" were one `release`
+  // group (a false collision), and the real ladder pair
+  // "Проект.md" + "Проект-2.md" split into `unnamed-<hash>` and `2`.
+  test("two pages whose names differ only in Cyrillic or CJK words are not a collision", () => {
+    writeNote("Notes/Проект release.md");
+    writeNote("Notes/Тема release.md");
+    writeNote("Notes/向量 release.md");
+    writeNote("Notes/索引 release.md");
+    expect(collisions()).toEqual([]);
+  });
+
+  test("a Cyrillic or CJK ladder pair is reported under its own stem", () => {
+    writeNote("Notes/Проект.md");
+    writeNote("Notes/Проект-2.md");
+    writeNote("Notes/向量索引.md");
+    writeNote("Notes/向量索引-2.md");
+    const stems = collisions().map((f) => f.evidence.stem);
+    expect(stems.toSorted()).toEqual(["проект", "向量索引"]);
+  });
+
+  test("a device-name ladder pair keeps the stem and finding id the Latin-only grouping gave it", () => {
+    // A stem is a grouping key, never a file name, so `con` takes no device
+    // suffix: the pair groups under `con` with the id of its targets, as
+    // it always did.
+    writeNote("Notes/con.md");
+    writeNote("Notes/con-2.md");
+    const findings = collisions();
+    expect(findings.map((f) => f.evidence.stem)).toEqual(["con"]);
+    expect(findings[0]!.id).toBe(
+      hygieneFindingId("slug-collisions", ["Notes/con.md", "Notes/con-2.md"]),
+    );
+  });
+});

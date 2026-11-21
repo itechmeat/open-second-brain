@@ -207,3 +207,48 @@ describe("brain_obligation answers at the caller's reach", () => {
     );
   });
 });
+
+describe("brain_obligation: a title whose withheld page sits under an older slug", () => {
+  // An older release wrote "Проверка zzreserved checklist" as
+  // zzreserved-checklist.md (its non-Latin word dropped). The page is
+  // withheld from a remote caller, who must get the answers a vault
+  // without it gives, adding the title included: that writes a new page
+  // under the title's own slug instead of refusing it as a duplicate.
+  const OLD_TITLE = "Проверка zzreserved checklist";
+  const OLD_STEM = "zzreserved-checklist";
+
+  function legacyFixture(withPrivate: boolean): Vault {
+    const f = fixture(false);
+    const privatePage = join(f.vault, "Brain", "obligations", `${OLD_STEM}.md`);
+    if (withPrivate) {
+      const page = addObligation(f.vault, { title: OLD_TITLE, cadence: "weekly", agent: AGENT });
+      renameSync(page.path, privatePage);
+      reserve(privatePage);
+    }
+    return { ...f, privatePage };
+  }
+
+  for (const args of [
+    { operation: "show", slug: OLD_TITLE },
+    { operation: "done", slug: OLD_TITLE },
+    { operation: "remove", slug: OLD_TITLE },
+    { operation: "add", title: OLD_TITLE, cadence: "daily" },
+  ]) {
+    test(`remote reach: ${args.operation} by the title answers as without the page`, async () => {
+      const a = legacyFixture(true);
+      const before = readFileSync(a.privatePage, "utf8");
+      const withheld = await obligation(a, args);
+      expect(withheld).toBe(await obligation(legacyFixture(false), args));
+      expect(withheld).not.toContain(`"${OLD_STEM}"`);
+      expect(withheld).not.toContain(`: ${OLD_STEM}`);
+      expect(readFileSync(a.privatePage, "utf8")).toBe(before);
+    });
+  }
+
+  test("local control: the operator's own shell reaches the old page by its title", async () => {
+    const a = legacyFixture(true);
+    expect(
+      await obligation(a, { operation: "show", slug: OLD_TITLE }, TRANSPORT_REACH.local),
+    ).toContain('"present":true');
+  });
+});

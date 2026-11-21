@@ -22,13 +22,15 @@
  *     verifying the contents, then replacing every top-level entry
  *     under `Brain/` *except* `.snapshots/`.
  *
- *   - Tooling: we shell out to system `tar` (GNU tar on Linux, bsdtar
- *     on macOS and in `System32\tar.exe` on Windows 10+) and use `zstd`
- *     when it is on PATH. Without `zstd` the archive is gzip-compressed
- *     in-process through `node:zlib`, so no `gzip` binary is needed -
- *     native Windows has none. A missing `tar` throws
- *     {@link BrainSnapshotToolingMissingError} with an actionable
- *     message.
+ *   - Tooling: a snapshot is written by the system `tar` (GNU tar on
+ *     Linux, bsdtar on macOS) and, on Windows, in process
+ *     (`tar-writer.ts`); every archive is read back in process
+ *     (`tar-extract.ts`), so a restore needs no `tar` at all. `zstd` is
+ *     used when it is on PATH. Without `zstd` the archive is
+ *     gzip-compressed in-process through `node:zlib`, so no `gzip` binary
+ *     is needed - native Windows has none. A create without `tar` on
+ *     PATH throws {@link BrainSnapshotToolingMissingError} with an
+ *     actionable message.
  *
  * No external dependencies. Everything is `node:child_process` +
  * `node:fs` + `node:zlib`, so the cost is one subprocess per archive
@@ -113,6 +115,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 
 import { FileAlreadyExistsError, renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 import { productTransientKind } from "./snapshot-transient.ts";
+import { writeTarArchive } from "./tar-writer.ts";
+import { extractTarArchive } from "./tar-extract.ts";
+import { readTarMemberNames, type TarMemberName, type TarRead } from "./tar-names.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
@@ -760,8 +765,9 @@ export function tarPathArg(path: string, platform: NodeJS.Platform = process.pla
  * Names are raw bytes (`Buffer`), not strings: a POSIX file name need not be
  * UTF-8, and a latin1 `caf\xe9.md` decoded to a string comes back as
  * `caf\uFFFD.md` - a name that does not exist, which GNU tar then refuses
- * to archive. Bytes round-trip exactly (on Windows they are the UTF-8 of
- * the UTF-16 name, which is what tar reads the list as).
+ * to archive. On Windows they are the UTF-8 of the UTF-16 name, which the
+ * in-process writer opens as a path (`tar.exe` would read them in the ANSI
+ * code page).
  *
  * The walk is exhaustive or it fails. tar is told not to recurse, so a
  * directory this walk could not read would be archived EMPTY, and bsdtar
@@ -995,8 +1001,10 @@ export function createSnapshot(
   // order, NTFS, APFS). The member ORDER is therefore deterministic; the
   // bytes are not (tar headers still carry mtime, owner and mode).
   // The list travels NUL-separated through a file (`--null -T`), which
-  // GNU tar and bsdtar (macOS, Windows `tar.exe`) both accept and which
-  // survives any character a filename can hold.
+  // GNU tar and macOS bsdtar accept and which survives any character a
+  // filename can hold. Windows `tar.exe` reads that list in the ANSI code
+  // page, so there the stream is written in process instead
+  // (`writeArchiveInProcess`).
   const listDir = mkdtempSync(join(tmpdir(), `o2b-snapshot-list-${runId}-`));
   const listPath = join(listDir, "members");
 
@@ -1020,10 +1028,14 @@ export function createSnapshot(
           emptyLocks,
         ),
       );
-      writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
       rmSync(tarPath, { force: true });
       try {
-        runTar(vault, listPath, tarPath, runId);
+        if (process.platform === "win32") {
+          writeArchiveInProcess(vault, members, tarPath, runId);
+        } else {
+          writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
+          runTar(vault, listPath, tarPath, runId);
+        }
         break;
       } catch (err) {
         const vanished = vanishedMembers(vault, members);
@@ -1052,6 +1064,35 @@ export function createSnapshot(
   return finishSnapshot(vault, logVault, runId, dirs, derivedStore, opts, outPath);
 }
 
+/**
+ * The tar stream of a snapshot on Windows, written in process
+ * (`tar-writer.ts`). `tar.exe` there (bsdtar in `System32`) reads the
+ * names of a `-T` list, and its `-C` directory, in the ANSI code page,
+ * so a member named in Cyrillic, CJK or with an accent (a decision or topic
+ * slug in any script) decoded to a name that does not exist, often an
+ * empty one ("tar: : Couldn't visit directory"), and every snapshot of
+ * such a tree failed. The writer takes the names as Node paths (UTF-16)
+ * and stores them as UTF-8 pax records, which both tars extract under the
+ * right name. A member that vanished fails like a tar run that missed it,
+ * so the caller's vanished-member check decides the same way.
+ */
+function writeArchiveInProcess(
+  vault: string,
+  members: ReadonlyArray<Buffer>,
+  tarPath: string,
+  runId: string,
+): void {
+  try {
+    keepLeasesFreshInProcess(() => writeTarArchive(vault, members, tarPath));
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `archive write failed: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
+  }
+}
+
 /** The tar run of a snapshot: the NUL-separated member list `listPath`, no recursion, into `tarPath`. */
 function runTar(vault: string, listPath: string, tarPath: string, runId: string): void {
   const tarArgs = [
@@ -1069,7 +1110,10 @@ function runTar(vault: string, listPath: string, tarPath: string, runId: string)
   // into a captured pipe, and the compressor reads that file: neither
   // the tar stream nor the compressed archive ever sits in this
   // process's memory, so the size of `Brain/` sets no ceiling here.
-  runArchiveProducer("tar", tarArgs, tarPath, runId);
+  runArchiveProducer("tar", tarArgs, tarPath, runId, {
+    ...process.env,
+    COPYFILE_DISABLE: "1",
+  });
 }
 
 /** The sidecar manifest and the log line of a snapshot whose archive is on disk. */
@@ -1858,6 +1902,7 @@ function runArchiveProducer(
   args: ReadonlyArray<string>,
   outFile: string,
   runId: string,
+  env?: NodeJS.ProcessEnv,
 ): void {
   const fd = openSync(outFile, "wx");
   let r: SpawnSyncReturns<Buffer>;
@@ -1865,7 +1910,11 @@ function runArchiveProducer(
     r = spawnSnapshotTool(
       cmd,
       args,
-      { maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES, stdio: ["ignore", fd, "pipe"] },
+      {
+        maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
+        stdio: ["ignore", fd, "pipe"],
+        ...(env ? { env } : {}),
+      },
       runId,
     );
   } finally {
@@ -2216,12 +2265,6 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
     throw new BrainSnapshotError(`archive does not exist: ${archive}`, runId);
   }
   const tools = detectTooling();
-  if (!tools.tar) {
-    throw new BrainSnapshotToolingMissingError(
-      "tar",
-      "install GNU tar or BSD tar; both support the same -x command.",
-    );
-  }
 
   const tmp = mkdtempSync(join(tmpdir(), `o2b-brain-extract-${runId}-`));
   const cleanup = (): void => {
@@ -2244,46 +2287,33 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
     }
 
     if (decompressor === "zstd") {
-      // Decompressed to a staging file OUTSIDE the extraction root, then
-      // handed to tar as its stdin descriptor: neither stream is captured
-      // in memory, so an archive whose tar stream is larger than any
-      // capture buffer restores as well as a small one. Captured through
-      // a 256 MB `maxBuffer` before, which such an archive overran.
+      // Decompressed to a staging file OUTSIDE the extraction root and read
+      // from it in place: neither stream is held in memory, so an archive
+      // whose tar stream is larger than any buffer restores as well as a
+      // small one.
       const staging = mkdtempSync(join(tmpdir(), `o2b-brain-extract-tar-${runId}-`));
       try {
         const tarball = join(staging, "brain.tar");
         runCompressor("zstd", ["-d", "-q", "-o", tarball, archive], runId);
-        const input = openSync(tarball, "r");
-        let tar: SpawnSyncReturns<Buffer>;
+        const fd = openSync(tarball, "r");
         try {
-          // `-f -` is explicit stdin: GNU tar defaults to stdin without
-          // it, but BSD tar and busybox tar do not, so passing the flag
-          // keeps the extraction portable across hosts.
-          tar = spawnSnapshotTool(
-            "tar",
-            ["-x", "-f", "-", "-C", tarPathArg(tmp)],
-            { stdio: [input, "inherit", "pipe"] },
+          extractTarStream(
+            (offset, length) => {
+              const buf = Buffer.alloc(length);
+              return buf.subarray(0, readSync(fd, buf, 0, length, offset));
+            },
+            tmp,
             runId,
           );
         } finally {
-          closeSync(input);
-        }
-        if (tar.error || tar.status !== 0) {
-          const stderr = Buffer.from(tar.stderr ?? "")
-            .toString("utf8")
-            .trim();
-          throw new BrainSnapshotError(
-            `tar extract failed: ${tar.error?.message ?? stderr}`,
-            runId,
-          );
+          closeSync(fd);
         }
       } finally {
         rmSync(staging, { recursive: true, force: true });
       }
     } else {
-      // gzip is inflated in-process and piped to `tar -f -`, like the zstd
-      // branch: no `gzip` binary needed (native Windows has none), and no
-      // reliance on `tar -z` spawning one.
+      // gzip is inflated in-process, like the tar stream is read in
+      // process: no `gzip` binary needed (native Windows has none).
       let tarball: Buffer;
       try {
         tarball = gunzipSync(readFileSync(archive));
@@ -2293,16 +2323,7 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
           runId,
         );
       }
-      const tar = spawnSnapshotTool(
-        "tar",
-        ["-x", "-f", "-", "-C", tarPathArg(tmp)],
-        { input: tarball, stdio: ["pipe", "inherit", "pipe"] },
-        runId,
-      );
-      if (tar.error || tar.status !== 0) {
-        const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
-        throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);
-      }
+      extractTarStream((offset, length) => tarball.subarray(offset, offset + length), tmp, runId);
     }
 
     const extractedBrain = join(tmp, BRAIN_ROOT_REL);
@@ -2314,6 +2335,124 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
   } catch (err) {
     cleanup();
     throw err;
+  }
+}
+
+/**
+ * Extract the tar stream `read` gives into the empty folder `dir`, in
+ * process (`tar-extract.ts`), after {@link refuseIndistinctMembers}. No
+ * system tar is run: Windows `tar.exe` turned every UTF-8 name into the
+ * ANSI code page and refused a name in Cyrillic, CJK or any script that
+ * code page lacks ("Archive entry has empty or unreadable filename"), so a
+ * snapshot of such a tree could be taken and never restored; macOS bsdtar
+ * renamed every NFC name to NFD. Every name now comes back as the archive
+ * stores it, on every platform. The thread blocks for the whole stream, so
+ * a writer lock the caller holds (the gated restore's) is kept fresh
+ * meanwhile, bounded like the tar run this replaces.
+ */
+function extractTarStream(read: TarRead, dir: string, runId: string): void {
+  refuseIndistinctMembers(read, dir, runId);
+  keepLeasesFreshInProcess(() => {
+    try {
+      extractTarArchive(read, dir);
+    } catch (err) {
+      throw new BrainSnapshotError(
+        `archive extract failed: ${(err as Error).message ?? String(err)}`,
+        runId,
+        { cause: err },
+      );
+    }
+  });
+}
+
+/**
+ * Run in-process archive work (writing or reading a tar stream), which
+ * blocks this thread and has no timeout of its own, with every writer lock
+ * this process holds kept fresh for as long as a tar run doing the same
+ * work could take ({@link resolveSnapshotToolTimeoutMs}, which an operator
+ * raises for a very large tree) plus one stale window.
+ */
+function keepLeasesFreshInProcess<T>(fn: () => T): T {
+  return keepWriterLeasesFresh(resolveSnapshotToolTimeoutMs() + resolveWriterLockStaleMs(), fn);
+}
+
+/**
+ * Refuse, before anything is written, an archive with two members that
+ * would land on one path of the extraction folder `dir`. APFS looks names
+ * up without regard to normalization, so an NFC name and its NFD twin
+ * ("café" typed on two machines) are one file there; APFS and NTFS look
+ * names up without regard to case, so `Note.md` and `note.md` are too.
+ * The second member would replace the first and a restore would lose the
+ * other record; refused instead, naming both.
+ * How this folder treats names is probed on the folder itself, so a
+ * case-sensitive volume or a Linux filesystem that keeps both forms apart
+ * restores both. Two directories that fold together merge, which loses
+ * nothing: the files inside them are checked by their full paths.
+ */
+function refuseIndistinctMembers(
+  read: (offset: number, length: number) => Buffer,
+  dir: string,
+  runId: string,
+): void {
+  let members: TarMemberName[];
+  try {
+    members = readTarMemberNames(read);
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `the archive cannot be read: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
+  }
+  const folding = nameFolding(dir);
+  if (!folding.normalization && !folding.caseFold) return;
+  const keyOf = (name: string): string => {
+    const trimmed = exactTarPath(name);
+    const normalized = folding.normalization ? trimmed.normalize("NFD") : trimmed;
+    return folding.caseFold ? normalized.toLowerCase() : normalized;
+  };
+  const seen = new Map<string, TarMemberName>();
+  for (const member of members) {
+    const key = keyOf(member.name);
+    const other = seen.get(key);
+    if (other === undefined) {
+      seen.set(key, member);
+      continue;
+    }
+    const same = exactTarPath(other.name) === exactTarPath(member.name);
+    if (same || (other.directory && member.directory)) continue;
+    throw new BrainSnapshotError(
+      `the archive holds two names this machine's filesystem cannot keep apart: ` +
+        `${JSON.stringify(other.name)} and ${JSON.stringify(member.name)}; a restore would keep ` +
+        "only one of them, so nothing was restored. Restore it on a filesystem that keeps both " +
+        "names apart, or rename one of the two files where the snapshot was taken and take a new snapshot.",
+      runId,
+    );
+  }
+}
+
+function exactTarPath(name: string): string {
+  return name
+    .split("/")
+    .filter((part) => part !== "" && part !== ".")
+    .join("/");
+}
+
+/**
+ * How the folder `dir` (empty, about to receive the extraction) treats
+ * names: whether two Unicode forms of one name are one file there (APFS),
+ * and whether two cases are (APFS, NTFS).
+ */
+function nameFolding(dir: string): { normalization: boolean; caseFold: boolean } {
+  const probe = join(dir, ".o2b-name-probe-\u00e9");
+  writeFileSync(probe, "");
+  try {
+    return {
+      normalization: existsSync(join(dir, ".o2b-name-probe-e\u0301")),
+      caseFold: existsSync(join(dir, ".O2B-NAME-PROBE-\u00e9")),
+    };
+  } finally {
+    rmSync(probe, { force: true });
   }
 }
 

@@ -11,7 +11,15 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -180,5 +188,98 @@ describe("brain_decision answers at the caller's reach", () => {
       '"rating":1',
     );
     expect(readFileSync(join(a.vault, PRIVATE_DECISION), "utf8")).toContain("rating: 1");
+  });
+});
+
+// An older release wrote "Проект nightingale vendor" as
+// decision-nightingale-vendor.md (its non-Latin word dropped) and its
+// review obligation as review-decision-nightingale-vendor.md. Both are
+// withheld from a remote caller, who must get the answers a vault without
+// them gives: the refusals name the title's own slug, and recording the
+// title writes a new page instead of refusing it as a duplicate.
+const OLD_TITLE = "Проект nightingale vendor";
+const OLD_SLUG = "nightingale-vendor";
+
+function legacyFixture(withPrivate: boolean): Fixture {
+  const base = mkdtempSync(join(tmpdir(), "o2b-decision-reach-old-"));
+  bases.push(base);
+  const f = buildReachLogFixture(base, false, RECALL_CONFIG);
+  record(f, PUBLIC_TITLE, 4);
+  if (withPrivate) {
+    const res = recordDecision(f.vault, {
+      title: OLD_TITLE,
+      chosen: "nightingale vendor now",
+      assumption: "It keeps working.",
+      reviewDate: "2027-01-01",
+      agent: "claude",
+      configPath: f.configPath,
+    });
+    const decisions = join(f.vault, "Brain", "decisions");
+    const oldPage = join(decisions, `decision-${OLD_SLUG}.md`);
+    renameSync(join(decisions, `${res.record.id}.md`), oldPage);
+    reserve(f, `Brain/decisions/decision-${OLD_SLUG}.md`);
+    const obligations = join(f.vault, "Brain", "obligations");
+    const oldReview = join(obligations, `review-decision-${OLD_SLUG}.md`);
+    renameSync(join(obligations, `${res.reviewObligationSlug}.md`), oldReview);
+    reserve(f, `Brain/obligations/review-decision-${OLD_SLUG}.md`);
+  }
+  return f;
+}
+
+/** Park a question titled with the old title, then resolve it. */
+async function resolveOld(f: Fixture): Promise<string> {
+  const opened = await reachServer(f).callTool(TOOL, {
+    action: "open",
+    title: OLD_TITLE,
+    question: "Which vendor?",
+    options: ["nightingale", "lark"],
+  });
+  const id = (opened["structuredContent"] as { id: string }).id;
+  return answer(f, { action: "resolve", id, choice: "lark" });
+}
+
+describe("brain_decision: a title whose withheld page sits under an older slug", () => {
+  const CALLS: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["show", { action: "show", slug: OLD_TITLE }],
+    ["compare", { action: "compare", slugs: [OLD_TITLE, PUBLIC_SLUG] }],
+    ["outcome", { action: "outcome", slug: OLD_TITLE, outcome: "It broke." }],
+    ["rate", { action: "rate", slug: OLD_TITLE, rating: 1 }],
+    [
+      "record",
+      {
+        action: "record",
+        title: OLD_TITLE,
+        chosen: "again",
+        assumption: "It holds.",
+        review_date: "2027-02-01",
+      },
+    ],
+  ];
+
+  for (const [name, args] of CALLS) {
+    test(`remote reach: ${name} by the title answers as in a vault without the page`, async () => {
+      const a = legacyFixture(true);
+      const oldPage = join(a.vault, "Brain", "decisions", `decision-${OLD_SLUG}.md`);
+      const before = readFileSync(oldPage, "utf8");
+      const withheld = await answer(a, args);
+      expect(withheld).toBe(await answer(legacyFixture(false), args));
+      expect(withheld).not.toContain(`decision-${OLD_SLUG}`);
+      expect(withheld).not.toContain(`"${OLD_SLUG}"`);
+      expect(withheld).not.toContain("nightingale vendor now");
+      expect(readFileSync(oldPage, "utf8")).toBe(before);
+    });
+  }
+
+  test("remote reach: resolving a question with the title mints the page an absent one gets", async () => {
+    const withheld = await resolveOld(legacyFixture(true));
+    expect(withheld).toBe(await resolveOld(legacyFixture(false)));
+    expect(withheld).toContain("decision-проект-nightingale-vendor");
+  });
+
+  test("local control: the operator's own shell reaches the old page by its title", async () => {
+    const a = legacyFixture(true);
+    expect(await answer(a, { action: "show", slug: OLD_TITLE }, TRANSPORT_REACH.local)).toContain(
+      "nightingale vendor now",
+    );
   });
 });

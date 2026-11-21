@@ -73,10 +73,9 @@ import {
   formatFrontmatter,
   parseFrontmatter,
   parseFrontmatterText,
-  slugify,
   writeFrontmatterAtomic,
 } from "../vault.ts";
-import { requireObsidianTagValue, scopeTagValues } from "./tag-syntax.ts";
+import { requireObsidianTagValue, scopeTagValues, topicTagValue } from "./tag-syntax.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
 import { resolveWriteDisposition } from "./write-disposition.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
@@ -1189,7 +1188,7 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   };
   push("brain");
   push("brain/signal");
-  push(`brain/topic/${requireObsidianTagValue(slugify(input.topic.trim()), "topic")}`);
+  push(`brain/topic/${topicTagValue(input.topic)}`);
   for (const scope of scopeTagValues(input.scope ?? "")) {
     push(`brain/scope/${scope}`);
   }

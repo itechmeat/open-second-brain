@@ -28,6 +28,7 @@ import {
   isObsidianTagValue,
   requireObsidianTagValue,
   scopeTagValues,
+  topicTagValue,
 } from "../../../src/core/brain/tag-syntax.ts";
 
 describe("isObsidianTagValue — the one shared rule", () => {
@@ -166,5 +167,27 @@ describe("scopeTagValues", () => {
     ["dedupes after slugging", "front end, front-end", ["front-end"]],
   ])("lenient: %s", (_label, scope, expected) => {
     expect(scopeTagValues(scope, { lenient: true })).toEqual(expected);
+  });
+});
+
+describe("topicTagValue - the brain/topic segment", () => {
+  test("keeps letters of any script when the result passes the tag rule", () => {
+    expect(topicTagValue("Prefer Tests")).toBe("prefer-tests");
+    expect(topicTagValue("без восклицаний")).toBe("без-восклицаний");
+    expect(topicTagValue("不要感叹号")).toBe("不要感叹号");
+  });
+
+  test("falls back to the Latin-only slug when the readable one fails the rule", () => {
+    // Devanagari words carry combining marks, which the tag rule refuses.
+    expect(isObsidianTagValue("नमस्ते-दुनिया")).toBe(false);
+    expect(topicTagValue("नमस्ते दुनिया")).toMatch(/^unnamed-[0-9a-f]{8}$/u);
+    // A digit-only topic still refuses with the field named, as it did.
+    expect(() => topicTagValue("2026")).toThrow(TagSyntaxError);
+  });
+
+  test("an ASCII device-name topic keeps the segment it always had", () => {
+    // A tag segment is never a file name, so it takes no device suffix.
+    expect(topicTagValue("CON")).toBe("con");
+    expect(topicTagValue("nul")).toBe("nul");
   });
 });

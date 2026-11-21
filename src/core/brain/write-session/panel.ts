@@ -27,7 +27,8 @@ import {
 import { createWriteSession, saveWriteSession } from "./store.ts";
 import { loadPersonas } from "./personas.ts";
 import { inspectExistingTarget, validateTargetPath } from "./validate.ts";
-import { formatFrontmatter, slugify } from "../../vault.ts";
+import { formatFrontmatter } from "../../vault.ts";
+import { heldLegacyPanelName, heldPanelDefaultName, panelDefaultNames } from "./panel-target.ts";
 import {
   deterministicPrefix,
   emitPromptPrefixMetric,
@@ -71,8 +72,7 @@ export function openPanelSession(
   }
   const personas = selectPersonas(loadPersonas(vault), input.personas);
   const now = resolveNow(input.now);
-  const targetPath =
-    input.targetPath ?? `Brain/decisions/panels/panel-${now.slice(0, 10)}-${slugify(topic)}.md`;
+  const targetPath = input.targetPath ?? defaultPanelTarget(vault, topic, now.slice(0, 10));
   const targetErrors = validateTargetPath(targetPath);
   if (targetErrors.length > 0) {
     throw new WriteSessionRequestError(
@@ -108,6 +108,20 @@ export function openPanelSession(
     }),
   );
   return sessionEnvelope(record);
+}
+
+/**
+ * The default target of a panel on `topic` opened on `day`:
+ * `panel-<day>-<slug>.md`, the slug keeping letters of any script. A panel
+ * an older release wrote for this same topic on this day sits under the
+ * Latin-only slug of the form the topic was typed in then (NFC, NFD,
+ * other spaces), and the target is that name, so the commit's
+ * never-overwrite guard refuses it as it refuses a same-day rerun under
+ * the new slug, instead of committing a second panel of the day beside it.
+ * A different topic that once shared the old slug does not hold the name.
+ */
+function defaultPanelTarget(vault: string, topic: string, day: string): string {
+  return heldLegacyPanelName(vault, topic, day) ?? panelDefaultNames(topic, day).fresh;
 }
 
 export interface SubmitPanelStepInput {
@@ -146,7 +160,10 @@ export function submitToPanelSession(
     // artifact flow. An occupied target (operator-specified, or a
     // same-day rerun of the same topic) is a structured error, not a
     // silent overwrite.
-    if (inspectExistingTarget(vault, session.targetPath) !== null) {
+    // A same-topic panel of the day under the other default name (an older
+    // release's session published it meanwhile) holds the day too.
+    const held = heldPanelDefaultName(vault, session.topic, session.targetPath);
+    if (inspectExistingTarget(vault, session.targetPath) !== null || held !== null) {
       return recordFailedAttempt(
         vault,
         session,
@@ -154,7 +171,7 @@ export function submitToPanelSession(
           Object.freeze({
             code: "target-exists",
             path: "target",
-            message: `${session.targetPath} already exists; abandon and reopen with --target`,
+            message: `${held ?? session.targetPath} already exists; abandon and reopen with --target`,
           }),
         ],
         now,

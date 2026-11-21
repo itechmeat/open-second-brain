@@ -1014,6 +1014,21 @@ export function validateSlug(slug: string): string {
   return trimmed;
 }
 
+/**
+ * True when {@link validateSlug} accepts `slug`. For a lookup that probes
+ * a slug an older release may have derived (a bare device name such as
+ * `con`, which no validated lane can hold): such a slug names no page, so
+ * the lookup counts it as absent instead of throwing.
+ */
+export function isValidSlug(slug: string): boolean {
+  try {
+    validateSlug(slug);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Validate `YYYY-MM-DD`. Throws on bad shape or impossible calendar date. */
 export function validateIsoDate(value: string): string {
   const m = ISO_DATE_RE.exec(value);
