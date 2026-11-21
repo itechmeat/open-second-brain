@@ -151,7 +151,7 @@ describe("doctor", () => {
 
   test("checks valid vault", async () => {
     const r = await runCli(["doctor", "--vault", tmp], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: "", XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+      env: { OPEN_SECOND_BRAIN_CONFIG: "", XDG_CONFIG_HOME: "", VAULT_DIR: "", HOME: tmp },
     });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("[OK]");
@@ -184,7 +184,7 @@ describe("doctor", () => {
 
   test("--json on a healthy vault reports ok with zero failures", async () => {
     const r = await runCli(["doctor", "--vault", tmp, "--json"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: "", XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+      env: { OPEN_SECOND_BRAIN_CONFIG: "", XDG_CONFIG_HOME: "", VAULT_DIR: "", HOME: tmp },
     });
     expect(r.returncode).toBe(0);
     const parsed = JSON.parse(r.stdout);
@@ -292,6 +292,7 @@ describe("doctor", () => {
         OPEN_SECOND_BRAIN_CONFIG: cfg,
         XDG_CONFIG_HOME: "",
         VAULT_DIR: "",
+        HOME: tmp,
         // Fall through to the config file (empty = unset), and make sure no
         // developer-shell embedding key leaks in to rescue the probe.
         OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "",
@@ -311,7 +312,7 @@ describe("onboarding", () => {
     const vault = join(tmp, "ob-vault");
     const config = join(tmp, "ob-config.yaml");
     const r = await runCli(["init", "--vault", vault], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" },
+      env: { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "", HOME: tmp },
     });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("initialized vault");
@@ -322,7 +323,7 @@ describe("onboarding", () => {
   test("o2b onboarding re-runs the checklist and supports --json", async () => {
     const vault = join(tmp, "ob-vault2");
     const config = join(tmp, "ob-config2.yaml");
-    const env = { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "" };
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config, XDG_CONFIG_HOME: "", VAULT_DIR: "", HOME: tmp };
     await runCli(["init", "--vault", vault], { env });
 
     const text = await runCli(["onboarding", "--vault", vault, "--config", config], { env });

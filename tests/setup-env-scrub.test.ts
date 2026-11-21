@@ -1,8 +1,8 @@
 /**
  * The suite preload removes `OPEN_SECOND_BRAIN_EMBEDDING_*` twins a
  * developer exports for daily use, unless the run opts out, and replaces
- * the user-data roots (config, state, data, dedup cache) even when the run
- * exports them. Proved in a child `bun test` run so the variables are
+ * the user-data roots (config file, the config, state and data bases, dedup
+ * cache) even when the run exports them. Proved in a child `bun test` run so the variables are
  * really present at preload time.
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
@@ -62,6 +62,7 @@ test("exported user-data roots never reach the suite: the preload replaces each"
   const exported: Record<string, string> = {
     XDG_STATE_HOME: join(tmpdir(), "exported-real-state"),
     XDG_DATA_HOME: join(tmpdir(), "exported-real-data"),
+    XDG_CONFIG_HOME: join(tmpdir(), "exported-real-config-home"),
     OPEN_SECOND_BRAIN_CONFIG: join(tmpdir(), "exported-real-config.yaml"),
     OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR: join(tmpdir(), "exported-real-dedup"),
   };

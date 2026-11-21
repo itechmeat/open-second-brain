@@ -40,6 +40,16 @@
  *    share (a telemetry write that did not land in one test is a doctor
  *    finding in the next).
  *
+ *  - **A guard on the real per-user directories.** Open Second Brain's own
+ *    config, data, state and cache directories and the host agents' homes
+ *    (`~/.claude`, `~/.codex` and the rest), resolved from the environment
+ *    the process started with, are compared after every test (new entries,
+ *    and content changes of the few control files the product edits in
+ *    place). A change that names a temp root of this run fails the test;
+ *    one that does not fails it on CI and is listed at the end of the run
+ *    elsewhere, since a live process may have made it
+ *    (`tests/helpers/real-home-guard.ts`).
+ *
  * Every override reaches this process and children spawned with an
  * explicit `env: { ...process.env }`. A test that needs another value sets
  * the variable itself. The roots that hold user data (the config file, the
@@ -60,6 +70,16 @@ import { storeWriteStatusPath } from "../src/core/store/store-write.ts";
 import { installInflightRecorder } from "./helpers/inflight-recorder.ts";
 import { DEFAULT_STORE_ROOT_ENV } from "./helpers/test-store.ts";
 import { TEST_DEVICE_ID } from "./helpers/test-vault.ts";
+import { installRealHomeGuard } from "./helpers/real-home-guard.ts";
+
+// Before any override below: the guard resolves the developer's real
+// per-user directories from the environment the process started with (a
+// child spawned with `Bun.spawn` without an `env` resolves every default
+// from that same environment, not from the sandbox set up below). Every
+// temp root made below is handed to `attributeTo`: a change there that
+// names one was written by this process tree and fails the test; any other
+// change fails it only on CI and is otherwise listed at the end of the run.
+const realHomeGuard = installRealHomeGuard({ ...process.env });
 
 // The origin channel (`src/core/origin-channel.ts`) is process-scoped by
 // design: an entry point claims it once and every record written under
@@ -142,6 +162,7 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
 
 {
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
+  realHomeGuard.attributeTo([root]);
   // A preload's afterAll runs once, after the last file: the throwaway
   // default must not outlive the run that minted it.
   afterAll(() => rmSync(root, REMOVE_TREE));
@@ -168,6 +189,7 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
 // store is in use unless a test creates one and sets the variable itself.
 {
   const storeParent = mkdtempSync(join(tmpdir(), "osb-test-store-root-"));
+  realHomeGuard.attributeTo([storeParent]);
   afterAll(() => rmSync(storeParent, REMOVE_TREE));
   process.env["OPEN_SECOND_BRAIN_STORE_ROOT"] = join(storeParent, "store");
   // `o2b init --vault` creates the store (design D14 item 1). The CLI
@@ -189,8 +211,30 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
 // value names the developer's real state).
 {
   const stateRoot = mkdtempSync(join(tmpdir(), "osb-test-state-"));
+  realHomeGuard.attributeTo([stateRoot]);
   afterAll(() => rmSync(stateRoot, REMOVE_TREE));
   process.env["XDG_STATE_HOME"] = stateRoot;
+}
+
+// The per-user config base (`src/core/platform-dirs.ts`) holds the default
+// config file and the host agents' configs some install adapters fall back
+// to (`github-copilot/mcp.json`, `opencode/opencode.json`). The config FILE
+// is pinned above, but a test that clears it (or a child that resolves the
+// default) and a test that sandboxes only HOME would otherwise reach the
+// developer's real `~/.config`: an exported XDG_CONFIG_HOME names it, and
+// with none exported the base falls back to `os.homedir()`, which Bun fixes
+// at process start, so an in-process `process.env.HOME` does not move it.
+// Windows keeps the base under %LOCALAPPDATA%, redirected below, unless
+// XDG_CONFIG_HOME is set, which this pin covers too.
+//
+// Always replaced, like the state root above. A test that sandboxes HOME
+// and wants the base under it sets the variable itself (the CLI harness
+// does that for a caller that passes HOME, `tests/helpers/run-cli.ts`).
+{
+  const configRoot = mkdtempSync(join(tmpdir(), "osb-test-config-"));
+  realHomeGuard.attributeTo([configRoot]);
+  afterAll(() => rmSync(configRoot, REMOVE_TREE));
+  process.env["XDG_CONFIG_HOME"] = configRoot;
 }
 
 // The per-user data base (`src/core/platform-dirs.ts`) is where the brain
@@ -203,6 +247,7 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
 // Always replaced, like the state root above.
 {
   const dataRoot = mkdtempSync(join(tmpdir(), "osb-test-data-"));
+  realHomeGuard.attributeTo([dataRoot]);
   afterAll(() => rmSync(dataRoot, REMOVE_TREE));
   process.env["XDG_DATA_HOME"] = dataRoot;
 }
@@ -224,6 +269,7 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
 // child without one the environment the process started with.
 if (process.platform === "win32") {
   const appRoot = mkdtempSync(join(tmpdir(), "osb-test-appdata-"));
+  realHomeGuard.attributeTo([appRoot]);
   afterAll(() => rmSync(appRoot, REMOVE_TREE));
   for (const name of ["LOCALAPPDATA", "APPDATA"] as const) {
     const dir = join(appRoot, name);
@@ -239,6 +285,7 @@ if (process.platform === "win32") {
 // Always replaced, like the state root above.
 {
   const cacheRoot = mkdtempSync(join(tmpdir(), "osb-test-dedup-cache-"));
+  realHomeGuard.attributeTo([cacheRoot]);
   afterAll(() => rmSync(cacheRoot, REMOVE_TREE));
   process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] = cacheRoot;
 }
@@ -256,6 +303,7 @@ if (process.platform === "win32") {
 // it was - every other leftover still fails the run.
 if (process.env["NODE_COMPILE_CACHE"] === undefined) {
   const nodeCacheRoot = mkdtempSync(join(tmpdir(), "osb-test-node-compile-cache-"));
+  realHomeGuard.attributeTo([nodeCacheRoot]);
   afterAll(() => rmSync(nodeCacheRoot, REMOVE_TREE));
   process.env["NODE_COMPILE_CACHE"] = nodeCacheRoot;
 }
@@ -302,6 +350,7 @@ if (
 // POSIX jobs already enforce the rule for the shared suite.
 {
   const runRoot = mkdtempSync(join(tmpdir(), "osb-run-"));
+  realHomeGuard.attributeTo([runRoot]);
   for (const name of ["TMPDIR", "TMP", "TEMP"] as const) process.env[name] = runRoot;
   afterAll(() => {
     let leftovers: string[] = [];
