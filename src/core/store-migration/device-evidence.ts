@@ -12,8 +12,8 @@
  *    its newest rows: the last {@link TAIL_BYTES}, widened until it holds
  *    the whole newest row, and the newest of them dates the device when it
  *    is later than the name's period.
- *  - **Store records.** The physical part of the clock of every record a
- *    device wrote, in every partition this machine holds.
+ *  - **Store records.** The physical part of the clock of the newest
+ *    record a device wrote, in every partition this machine holds.
  *  - **Cohort records.** The clock of the earliest `migration-cohort`
  *    record naming a device: the stand-in for a device with no dated trace.
  *
@@ -25,10 +25,8 @@ import { join } from "node:path";
 
 import { parseShardedName } from "../brain/ledger-shards.ts";
 import { parseHlc } from "../store/hlc.ts";
-import { STORE_PARTITIONS } from "../store/constants.ts";
-import { forEachPartitionRecord } from "../store/state-digest.ts";
+import { newestRecordOfEachDevice, type NewestRecords } from "../store/newest-records.ts";
 import type { StoreHandle } from "../store/store-open.ts";
-import { partitionDir } from "../store/store-paths.ts";
 import { migrationCatalogue } from "./catalogue.ts";
 import type { Locator } from "./destinations.ts";
 
@@ -186,24 +184,50 @@ function tailOf(path: string): string | null {
   }
 }
 
-function listDir(dir: string): Dirent[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Every device a legacy per-device shard of `vault` names, with its newest
  * dated trace in ms (null for a device whose shards carry no date and no
  * row time).
  */
 export function legacyDeviceEvidence(vault: string): Map<string, number | null> {
+  return new Map(legacyDeviceEvidenceRead(vault).evidence);
+}
+
+/** The legacy evidence, and the devices a legacy shard of which could not be read. */
+export interface LegacyDeviceEvidence {
+  readonly evidence: ReadonlyMap<string, number | null>;
+  /** Devices whose newest legacy trace may be in a shard that could not be read. */
+  readonly uncertain: ReadonlySet<string>;
+  /**
+   * A folder of per-device shards could not be listed: any device may have
+   * a trace in it, so no device is judged silent on this read.
+   */
+  readonly allUncertain: boolean;
+}
+
+/**
+ * {@link legacyDeviceEvidence} with what it could not read: a shard name
+ * whose file cannot be read (a permission, an I/O error) or is a link or
+ * special file, and a shard folder that cannot be listed. The legacy
+ * evidence decides whether a device is retired by silence, which lets the
+ * legacy tree leave the vault, so a trace that could not be read is never
+ * taken for no trace.
+ */
+export function legacyDeviceEvidenceRead(vault: string): LegacyDeviceEvidence {
   const out = new Map<string, number | null>();
+  const uncertain = new Set<string>();
+  let allUncertain = false;
   const note = (device: string, ms: number | null): void => {
     const seen = out.get(device) ?? null;
     out.set(device, ms === null ? seen : seen === null ? ms : Math.max(seen, ms));
+  };
+  const list = (dir: string): Dirent[] => {
+    const entries = listDirChecked(dir);
+    if (entries === null) {
+      allUncertain = true;
+      return [];
+    }
+    return entries;
   };
   const jsonl = migrationCatalogue(vault)
     .flatMap((entry) => entry.locators)
@@ -211,47 +235,69 @@ export function legacyDeviceEvidence(vault: string): Map<string, number | null> 
   const visited = new Set<string>();
   for (const locator of jsonl) {
     const dirs = locator.subdirs
-      ? listDir(locator.dir)
+      ? list(locator.dir)
           .filter((e) => e.isDirectory())
           .map((e) => join(locator.dir, e.name))
       : [locator.dir];
     for (const dir of dirs) {
-      for (const entry of listDir(dir)) {
-        if (!entry.isFile()) continue;
+      for (const entry of list(dir)) {
         const parsed = parseShardedName(entry.name, locator.grammar);
         if (parsed === null || parsed.shardId === "") continue;
+        if (!entry.isFile()) {
+          // A link or special file under a shard name: its rows are not read.
+          if (!entry.isDirectory()) uncertain.add(parsed.shardId);
+          continue;
+        }
         const path = join(dir, entry.name);
         if (visited.has(path)) continue;
         visited.add(path);
         note(parsed.shardId, baseDateMs(parsed.base));
-        const tail = parsed.ext === "jsonl" ? tailOf(path) : null;
-        note(parsed.shardId, tail === null ? null : newestRowTimeMs(tail));
+        if (parsed.ext !== "jsonl") continue;
+        const tail = tailOf(path);
+        if (tail === null) {
+          uncertain.add(parsed.shardId);
+          continue;
+        }
+        note(parsed.shardId, newestRowTimeMs(tail));
       }
     }
   }
-  return out;
+  return { evidence: out, uncertain, allUncertain };
 }
 
-/** The newest clock (physical ms) of the records each device wrote, over the held partitions. */
+/** The entries of a directory, none when it does not exist, null when it cannot be listed. */
+function listDirChecked(dir: string): Dirent[] | null {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? [] : null;
+  }
+}
+
+/** Each device's newest store clock, and the devices whose clock may be short. */
+export interface StoreDeviceEvidence {
+  readonly evidence: ReadonlyMap<string, number>;
+  /**
+   * Devices with a shard this machine could not read whole: their newest
+   * record may be one it did not see, so silence cannot be judged for them.
+   */
+  readonly uncertain: ReadonlySet<string>;
+}
+
+/**
+ * The newest clock (physical ms) of the records each device wrote, over the
+ * held partitions, exactly as a fold of every record finds it
+ * (`../store/newest-records.ts`), with the devices it cannot tell for.
+ */
 export function storeDeviceEvidence(
   store: Pick<StoreHandle, "root" | "partitions">,
-): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const partition of STORE_PARTITIONS) {
-    if (!store.partitions.has(partition)) continue;
-    // Record by record: only each device's newest clock is kept.
-    forEachPartitionRecord(
-      partitionDir(store.root, partition),
-      { onUnreadable: () => {} },
-      {
-        record: (_shard, record) => {
-          const physical = parseHlc(record.hlc)?.physical;
-          if (physical === undefined) return;
-          const seen = out.get(record.device);
-          if (seen === undefined || physical > seen) out.set(record.device, physical);
-        },
-      },
-    );
+  read: NewestRecords = newestRecordOfEachDevice(store),
+): StoreDeviceEvidence {
+  const evidence = new Map<string, number>();
+  for (const [device, record] of read.newest) {
+    const physical = parseHlc(record.hlc)?.physical;
+    if (physical !== undefined) evidence.set(device, physical);
   }
-  return out;
+  return { evidence, uncertain: read.uncertain };
 }

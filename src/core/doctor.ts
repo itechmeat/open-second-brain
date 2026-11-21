@@ -20,6 +20,8 @@ import { dirname, join } from "node:path";
 
 import { resolvePartnerCodegraphDisabled } from "./config.ts";
 import { statOrAbsent } from "./fs-utils.ts";
+import { BRAIN_ROOT_REL } from "./brain/path-constants.ts";
+import { lookAtDirectory, unexaminablePath } from "./vault-unexaminable.ts";
 import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";
 
@@ -31,12 +33,35 @@ import type { CheckResult } from "./types.ts";
 const MANIFEST_FIX = "o2b update";
 
 export function checkVaultWriteable(vault: string): CheckResult {
-  if (!existsSync(vault)) {
+  // Not `existsSync`: a vault below a parent this process cannot traverse
+  // is not a missing one, and `mkdir -p` is no remedy for it.
+  const look = lookAtDirectory(vault);
+  if (look === "absent") {
     return {
       name: "vault_writeable",
       ok: false,
       message: `vault directory missing: ${vault}`,
       fix: `mkdir -p "${vault}"`,
+    };
+  }
+  if (look !== "present") {
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: unexaminablePath(vault, vault, look.failed).message,
+      fix: `chmod u+rwx "${vault}"`,
+    };
+  }
+  // The folder that decides the layout: a Brain/ at mode 000 stats fine and
+  // refuses every look inside it, so every reader of it fails.
+  const brain = join(vault, BRAIN_ROOT_REL);
+  const brainLook = lookAtDirectory(brain);
+  if (brainLook !== "present" && brainLook !== "absent") {
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: unexaminablePath(vault, brain, brainLook.failed).message,
+      fix: `chmod u+rwx "${brain}"`,
     };
   }
   const probe = join(vault, ".open-second-brain-doctor-test");

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import { resolveSearchConfig } from "../../../core/search/index.ts";
+import { VaultUnexaminableError } from "../../../core/vault-unexaminable.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
 import {
   reportSweptFailure,
@@ -140,6 +141,20 @@ const EMPTY_ARCHIVE_SECTION: ArchiveSection = Object.freeze({
   uncited: 0,
 });
 
+/**
+ * The search index the doctor's index checks read, or none when the vault
+ * cannot be examined: where the index lives depends on the layout, and the
+ * doctor reports the unexaminable vault as its own finding.
+ */
+function doctorDbPath(vault: string | null, config: string | null): string | undefined {
+  try {
+    return resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath;
+  } catch (err) {
+    if (err instanceof VaultUnexaminableError) return undefined;
+    throw err;
+  }
+}
+
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -244,7 +259,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
             const ans = await readSingleLine();
             if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
               ok("repair cancelled");
-              return 0;
+              return 1;
             }
             consent = "interactive-yes";
             approvedTargets = preview.applied.map((f) => f.target);
@@ -269,7 +284,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   try {
     result = runDoctor(vault, {
       strict: Boolean(flags["strict"]),
-      dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+      dbPath: doctorDbPath(vault, config),
       // Checks that read a config gate (the recall-channel coverage check reads
       // whether prompt-side recall injection is enabled) must read the SAME
       // config this invocation was pointed at. Letting them fall through to

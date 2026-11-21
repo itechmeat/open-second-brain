@@ -15,9 +15,10 @@
  * that writes again is pending again at once.
  */
 
+import { newestRecordOfEachDevice, type NewestRecords } from "../store/newest-records.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { compareCodeUnits } from "../store/compare.ts";
-import { legacyDeviceEvidence, storeDeviceEvidence } from "./device-evidence.ts";
+import { legacyDeviceEvidenceRead, storeDeviceEvidence } from "./device-evidence.ts";
 import { judgeSilence } from "./device-silence.ts";
 import {
   cohortFirstSeen,
@@ -66,6 +67,17 @@ export interface CohortInput {
   readonly legacy: ReadonlyArray<string>;
   /** Device ids the legacy shards name, with their newest dated trace. */
   readonly legacyEvidence: ReadonlyMap<string, number | null>;
+  /**
+   * Devices a legacy shard of which could not be read (cohort candidates
+   * even with no dated trace), and whether a shard folder could not be
+   * listed (then every judged device): never judged silent.
+   */
+  readonly legacyUncertain?: { readonly devices: ReadonlySet<string>; readonly all: boolean };
+  /**
+   * The store read both decisions are made on (retirement and silence),
+   * when the caller already holds it: one read, one snapshot.
+   */
+  readonly newest?: NewestRecords;
   readonly now: Date;
 }
 
@@ -78,9 +90,21 @@ export function cohortStatus(
 ): CohortStatus {
   const firstSeen = cohortFirstSeen(store);
   const switched = switchedDeviceIds(store);
-  const stored = storeDeviceEvidence(store);
-  const legacy = new Set(input.legacy);
-  const members = new Set([...firstSeen.keys(), ...input.legacyEvidence.keys(), ...legacy]);
+  // One store read decides both who is still on the legacy layout (a
+  // retired device that wrote again, or whose newest record this read
+  // cannot tell) and who is silent: two reads could disagree, a shard
+  // turning unreadable between them.
+  const read = input.newest ?? newestRecordOfEachDevice(store);
+  const storeRead = storeDeviceEvidence(store, read);
+  const stored = storeRead.evidence;
+  const legacyUnreadable = input.legacyUncertain?.devices ?? new Set<string>();
+  const legacy = new Set(legacyDevices(store, [...input.legacy, ...legacyUnreadable], read));
+  const members = new Set([
+    ...firstSeen.keys(),
+    ...input.legacyEvidence.keys(),
+    ...legacyUnreadable,
+    ...legacy,
+  ]);
   const evidenceOf = (device: string): number | null => {
     const values = [input.legacyEvidence.get(device) ?? null, stored.get(device) ?? null].filter(
       (v): v is number => v !== null,
@@ -91,6 +115,13 @@ export function cohortStatus(
     device,
     evidenceMs: evidenceOf(device),
     cohortMs: firstSeen.get(device) ?? null,
+    // A shard of the device that could not be read whole, in the store or
+    // in the legacy tree, may hold its newest evidence: it is never judged
+    // silent on that read.
+    uncertain:
+      storeRead.uncertain.has(device) ||
+      input.legacyUncertain?.all === true ||
+      legacyUnreadable.has(device),
   }));
   const others = [...new Set([...members, ...stored.keys()])]
     .filter((d) => !legacy.has(d))
@@ -146,10 +177,19 @@ export function readCohortStatus(
   vault: string,
   now: Date,
 ): CohortStatus {
-  const legacyEvidence = legacyDeviceEvidence(vault);
-  return cohortStatus(store, {
-    legacy: legacyDevices(store as StoreHandle, [...legacyEvidence.keys()]),
-    legacyEvidence,
-    now,
-  });
+  const legacy = legacyEvidenceInput(vault);
+  // The legacy membership is decided inside, on the same store read as
+  // the silence (`cohortStatus`).
+  return cohortStatus(store, { legacy: [...legacy.legacyEvidence.keys()], ...legacy, now });
+}
+
+/** The legacy half of a {@link CohortInput}: the evidence and what could not be read. */
+export function legacyEvidenceInput(
+  vault: string,
+): Pick<CohortInput, "legacyEvidence" | "legacyUncertain"> {
+  const read = legacyDeviceEvidenceRead(vault);
+  return {
+    legacyEvidence: read.evidence,
+    legacyUncertain: { devices: read.uncertain, all: read.allUncertain },
+  };
 }

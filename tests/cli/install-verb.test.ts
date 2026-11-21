@@ -121,7 +121,9 @@ describe("o2b install --target X --apply", () => {
         const r = await baseRunCli(["install", "--target", "gemini-cli", "--apply"], {
           env: envBase(),
         });
-        expect(r.returncode).toBe(0);
+        // A declined prompt wrote nothing: the consent refusal's exit, as
+        // for a headless run without --yes.
+        expect(r.returncode).toBe(6);
         expect(r.stdout).toContain("install cancelled");
         expect(r.stdout).not.toContain("Proceed? [y/N]");
         expect(r.stderr).toContain("Proceed? [y/N]");

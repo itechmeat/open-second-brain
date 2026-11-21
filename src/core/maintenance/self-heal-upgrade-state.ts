@@ -35,6 +35,7 @@
  * marker without pulling the upgrade and snapshot machinery in.
  */
 
+import { VaultUnexaminableError } from "../vault-unexaminable.ts";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -232,7 +233,15 @@ export const SELF_HEAL_UPGRADE_CHECK = "self_heal_upgrade";
  * error, the time and the next automatic attempt in the message.
  */
 export function checkSelfHealUpgrade(vault: string): CheckResult {
-  const failure = readSelfHealUpgradeFailure(vault);
+  let failure: ReturnType<typeof readSelfHealUpgradeFailure>;
+  try {
+    failure = readSelfHealUpgradeFailure(vault);
+  } catch (err) {
+    // A vault this process cannot examine: the check fails with the one
+    // class's message, and the doctor's other checks still answer.
+    if (!(err instanceof VaultUnexaminableError)) throw err;
+    return { name: SELF_HEAL_UPGRADE_CHECK, ok: false, message: err.message };
+  }
   if (failure === null) {
     return {
       name: SELF_HEAL_UPGRADE_CHECK,

@@ -184,7 +184,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
       ok("rollback cancelled");
-      return 0;
+      return 1;
     }
   }
 

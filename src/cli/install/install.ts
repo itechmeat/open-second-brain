@@ -539,7 +539,7 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
       ok("install cancelled");
-      return INSTALL_EXIT.ok;
+      return INSTALL_EXIT.consentRefused;
     }
   }
 

@@ -95,7 +95,7 @@ import {
 } from "./protocol.ts";
 import { OutputContractError } from "./output-contract.ts";
 import { REACH_REFUSAL } from "./reach-refusal.ts";
-import { StoreOnlyUndeterminedError } from "../core/store/store-only.ts";
+import { VaultUnexaminableError } from "../core/vault-unexaminable.ts";
 
 /** The `_meta` key an `isError` result carries its code under. */
 export const TOOL_ERROR_META_KEY = "open-second-brain/error";
@@ -156,7 +156,7 @@ export const TOOL_ERROR_CODE = Object.freeze({
   storeWriteFailed: "store_write_failed",
   /**
    * The machine cannot tell whether the vault holds a legacy `Brain/`
-   * tree, because the vault cannot be examined (`StoreOnlyUndeterminedError`):
+   * tree, because the vault cannot be examined (`VaultUnexaminableError`):
    * the tool read and wrote nothing rather than guess a layout.
    */
   vaultUnreadable: "vault_unreadable",
@@ -501,7 +501,10 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(InvalidExpirationTargetError, EXPIRATION_REFUSAL_CODE.invalidTarget),
   fixed(QuoteCheckError, TOOL_ERROR_CODE.quoteUnverified),
   fixed(StoreWriteError, TOOL_ERROR_CODE.storeWriteFailed),
-  fixed(StoreOnlyUndeterminedError, TOOL_ERROR_CODE.vaultUnreadable),
+  // The class, not a call site: the store-only predicate's error extends
+  // it, and so does the path-safety check's realpath of a vault it cannot
+  // look at (macOS answers a mode-000 vault's realpath with EACCES).
+  fixed(VaultUnexaminableError, TOOL_ERROR_CODE.vaultUnreadable),
 ]);
 
 /**

@@ -592,6 +592,13 @@ function beforeGate(vault: string, store: StoreHandle, options: MigrationOptions
   const previous = preflight(store, options);
   const plan = planMigrationDryRun(vault);
   if (!plan.ok) {
+    if (plan.unreadable_folders.length > 0) {
+      throw new MigrationRefusedError(
+        `${plan.unreadable_folders.length} legacy folder(s) could not be read ` +
+          `(${plan.unreadable_folders.slice(0, 10).join(", ")}), so what they hold has no ` +
+          "planned destination; fix their permissions and run `o2b brain migrate-store --dry-run`",
+      );
+    }
     const listed = plan.unmapped
       .slice(0, 10)
       .map((u) => u.path)

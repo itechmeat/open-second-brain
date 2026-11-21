@@ -58,9 +58,21 @@ export function runRemoveLegacy(
   } catch (exc) {
     return failWith("remove the legacy tree", exc);
   }
+  // Nothing of the tree is left to remove: the state the command exists
+  // for holds, so it succeeds, and names the cohort as a removal does.
   if (json) {
     writeJson(result);
-    return result.removed ? 0 : 1;
+    return result.removed || result.reason === "no-legacy-tree" ? 0 : 1;
+  }
+  if (!result.removed && result.reason === "no-legacy-tree") {
+    process.stdout.write(
+      [
+        "The legacy tree is not in this vault and this machine left no legacy files in it; " +
+          "nothing was moved.",
+        ...cohortLines(result),
+      ].join("\n") + "\n",
+    );
+    return 0;
   }
   if (!result.removed) {
     const cohort = result.reason === "cohort-pending" ? cohortLines(result) : [];
@@ -141,7 +153,7 @@ function keptBecause(result: KeptResult): string {
     case "not-switched":
       return "this machine has not switched to the brain store; run the migration first";
     case "no-legacy-tree":
-      return "the vault holds no legacy tree";
+      return "nothing of the legacy tree is in the vault";
     default: {
       const unknown: never = result;
       return String((unknown as KeptResult).reason);

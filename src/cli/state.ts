@@ -179,7 +179,7 @@ async function cmdStateMigrate(argv: ReadonlyArray<string>): Promise<number> {
     const answer = (await readSingleLine()).toLowerCase();
     if (answer !== "y" && answer !== "yes") {
       process.stdout.write("state migrate cancelled\n");
-      return STATE_EXIT.ok;
+      return STATE_EXIT.refused;
     }
   }
 
@@ -272,7 +272,7 @@ async function cmdStateRollback(argv: ReadonlyArray<string>): Promise<number> {
     const answer = (await readSingleLine()).toLowerCase();
     if (answer !== "y" && answer !== "yes") {
       process.stdout.write("state rollback cancelled\n");
-      return STATE_EXIT.ok;
+      return STATE_EXIT.refused;
     }
   }
 

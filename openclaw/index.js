@@ -3857,8 +3857,74 @@ var init_ledger_shards = __esm(() => {
   NAME_RE_CACHE = new Map;
 });
 
+// src/core/vault-unexaminable.ts
+import { accessSync, constants, statSync as statSync4 } from "node:fs";
+function lookAtDirectory(path) {
+  let stat;
+  try {
+    stat = statSync4(path);
+  } catch (err) {
+    const code = err.code ?? "";
+    if (ABSENT_CODES.has(code))
+      return "absent";
+    return { failed: err instanceof Error ? err : new Error(String(err)) };
+  }
+  if (!stat.isDirectory()) {
+    return {
+      failed: Object.assign(new Error(`ENOTDIR: not a directory, '${path}'`), { code: "ENOTDIR" })
+    };
+  }
+  try {
+    accessSync(path, constants.R_OK | constants.X_OK);
+  } catch (err) {
+    return { failed: err instanceof Error ? err : new Error(String(err)) };
+  }
+  return "present";
+}
+function unexaminablePath(vault, path, cause) {
+  if (path === vault)
+    return new VaultUnexaminableError(vault, cause);
+  const code = cause.code;
+  return new VaultUnexaminableError(vault, cause, `${path} in the vault ${vault} cannot be examined (${code ?? cause.message}); nothing is ` + "read from or written to the store or the vault until it can be read (make it and every " + "parent directory traversable, chmod u+rx)");
+}
+function isUnexaminableLook(err) {
+  return err instanceof Error && UNEXAMINABLE_CODES.has(err.code ?? "");
+}
+function pathPresent(vault, path) {
+  try {
+    statSync4(path);
+    return true;
+  } catch (err) {
+    const code = err.code ?? "";
+    if (ABSENT_CODES.has(code) || code === "ENOTDIR")
+      return false;
+    throw unexaminablePath(vault, path, err instanceof Error ? err : new Error(String(err)));
+  }
+}
+var VaultUnexaminableError, UNEXAMINABLE_CODES, ABSENT_CODES;
+var init_vault_unexaminable = __esm(() => {
+  VaultUnexaminableError = class VaultUnexaminableError extends Error {
+    vault;
+    code;
+    constructor(vault, cause, message) {
+      const code = cause.code;
+      super(message ?? `the vault ${vault} cannot be examined (${code ?? cause.message}); nothing is read from ` + "or written to the store or the vault until it can be read (make it and every parent " + "directory traversable, chmod u+rx)", { cause });
+      this.name = "VaultUnexaminableError";
+      this.vault = vault;
+      this.code = code;
+    }
+  };
+  UNEXAMINABLE_CODES = new Set(["EACCES", "EPERM", "EIO", "ELOOP"]);
+  ABSENT_CODES = new Set([
+    "ENOENT",
+    "ENAMETOOLONG",
+    "ERR_INVALID_ARG_VALUE",
+    "ERR_INVALID_ARG_TYPE"
+  ]);
+});
+
 // src/core/path-safety.ts
-import { existsSync as existsSync4, realpathSync, statSync as statSync4 } from "node:fs";
+import { lstatSync, realpathSync, statSync as statSync5 } from "node:fs";
 import {
   basename as basename3,
   dirname as dirname5,
@@ -3875,18 +3941,38 @@ function ensureInsideVault(target, vault) {
   if (!isLexicallyInsideHost(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault: ${target}`);
   }
-  if (existsSync4(resolvedVault) && !realpathInsideVault(resolvedTarget, resolvedVault)) {
+  if (!realpathInsideVault(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault via symlink: ${target}`);
   }
   return resolvedTarget;
 }
 function realpathInsideVault(target, vault) {
   const resolvedVault = resolve4(vault);
-  if (!existsSync4(resolvedVault))
+  const look = lookAtDirectory(resolvedVault);
+  if (look === "absent")
     return true;
-  const realVault = safeRealpath(resolvedVault);
-  const realAncestor = safeRealpath(deepestExistingAncestor(resolve4(target)));
+  if (look !== "present")
+    throw unexaminablePath(resolvedVault, resolvedVault, look.failed);
+  const realVault = realpathOrUnexaminable(resolvedVault, resolvedVault);
+  const ancestor = deepestExistingAncestor(resolve4(target), resolvedVault);
+  const realAncestor = realpathOrUnexaminable(ancestor, resolvedVault);
   return isLexicallyInsideHost(realAncestor, realVault);
+}
+function decidesLayout(dir, vault) {
+  const brain = join6(vault, BRAIN_ROOT_REL);
+  return dir === brain || !isLexicallyInsideHost(dir, vault) || dir === vault;
+}
+function realpathOrUnexaminable(path, vault) {
+  try {
+    return safeRealpath(path);
+  } catch (err) {
+    if (!isUnexaminableLook(err))
+      throw err;
+    if (!decidesLayout(path, vault) && !lstatSync(path).isSymbolicLink()) {
+      return join6(realpathOrUnexaminable(dirname5(path), vault), basename3(path));
+    }
+    throw unexaminablePath(vault, path, err);
+  }
 }
 function pathIsInside(target, root) {
   return pathIsInsideOn(hostPlatform(), target, root);
@@ -3908,15 +3994,26 @@ function hostPlatform() {
 function isLexicallyInsideHost(target, root) {
   return isLexicallyInside(hostPlatform(), target, root);
 }
-function deepestExistingAncestor(target) {
+function deepestExistingAncestor(target, vault) {
   let cur = target;
-  while (!existsSync4(cur)) {
+  for (;; ) {
+    try {
+      lstatSync(cur);
+      return cur;
+    } catch (err) {
+      const code = err.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        if (!isUnexaminableLook(err))
+          throw err;
+        if (decidesLayout(dirname5(cur), vault))
+          throw unexaminablePath(vault, cur, err);
+      }
+    }
     const parent = dirname5(cur);
     if (parent === cur)
       return cur;
     cur = parent;
   }
-  return cur;
 }
 function safeRealpath(p) {
   try {
@@ -3936,6 +4033,8 @@ function vaultRelative(target, vault) {
 }
 var VAULT_ESCAPE_CODE = "ESCAPE", VaultEscapeError;
 var init_path_safety = __esm(() => {
+  init_path_constants();
+  init_vault_unexaminable();
   VaultEscapeError = class VaultEscapeError extends Error {
     code = VAULT_ESCAPE_CODE;
     constructor(message) {
@@ -4078,7 +4177,7 @@ import {
   closeSync as closeSync2,
   constants as fsConstants,
   fstatSync,
-  lstatSync,
+  lstatSync as lstatSync2,
   readFileSync as readFileSync5,
   mkdirSync as mkdirSync5,
   openSync as openSync2,
@@ -4093,7 +4192,7 @@ function isWindowsDeletePending(e, lockPath, platform = process.platform, occupi
 }
 function nameIsOccupied(path) {
   try {
-    lstatSync(path);
+    lstatSync2(path);
     return true;
   } catch (err) {
     return err.code !== "ENOENT";
@@ -4442,9 +4541,9 @@ var init_envelope = __esm(() => {
 // src/core/store/safe-fs.ts
 import {
   closeSync as closeSync3,
-  constants,
+  constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync2,
+  lstatSync as lstatSync3,
   mkdirSync as mkdirSync7,
   openSync as openSync3
 } from "node:fs";
@@ -4454,7 +4553,7 @@ function errnoCode(err) {
 }
 function lstatOrNull(path) {
   try {
-    return lstatSync2(path);
+    return lstatSync3(path);
   } catch (err) {
     if (errnoCode(err) === "ENOENT")
       return null;
@@ -4503,11 +4602,11 @@ function isRealDirBelowPartition(partitionRoot, dir) {
   return true;
 }
 function openRegularFileForRead(path, partitionRoot) {
-  if (!lstatSync2(path).isFile())
+  if (!lstatSync3(path).isFile())
     return null;
   let fd;
   try {
-    fd = openSync3(path, constants.O_RDONLY | NO_FOLLOW | NON_BLOCK);
+    fd = openSync3(path, constants2.O_RDONLY | NO_FOLLOW | NON_BLOCK);
   } catch (err) {
     if (errnoCode(err) === "ELOOP")
       return null;
@@ -4525,7 +4624,7 @@ function openRegularFileForRead(path, partitionRoot) {
 }
 function lstatBigOrNull(path) {
   try {
-    return lstatSync2(path, { bigint: true });
+    return lstatSync3(path, { bigint: true });
   } catch (err) {
     if (errnoCode(err) === "ENOENT")
       return null;
@@ -4552,7 +4651,7 @@ function openShardForAppend(path) {
     throw new StoreUnsafePathError(path, "is a symbolic link");
   let fd;
   try {
-    fd = openSync3(path, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | NO_FOLLOW, STORE_FILE_MODE);
+    fd = openSync3(path, constants2.O_RDWR | constants2.O_APPEND | constants2.O_CREAT | NO_FOLLOW, STORE_FILE_MODE);
   } catch (err) {
     if (errnoCode(err) === "ELOOP")
       throw new StoreUnsafePathError(path, "is a symbolic link");
@@ -4583,12 +4682,12 @@ var init_safe_fs = __esm(() => {
       this.path = path;
     }
   };
-  NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
-  NON_BLOCK = constants.O_NONBLOCK ?? 0;
+  NO_FOLLOW = constants2.O_NOFOLLOW ?? 0;
+  NON_BLOCK = constants2.O_NONBLOCK ?? 0;
 });
 
 // src/core/store/store-paths.ts
-import { lstatSync as lstatSync3, realpathSync as realpathSync2 } from "node:fs";
+import { lstatSync as lstatSync4, realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join9, posix as posix4, win32 as win322 } from "node:path";
 function pathsFor(platform) {
@@ -4710,7 +4809,7 @@ function blobPath(partitionRoot, sha) {
   return join9(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
 }
 function lstatIdentity(path) {
-  const st = lstatSync3(path, { bigint: true });
+  const st = lstatSync4(path, { bigint: true });
   return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
 }
 function blobStamp(partitionRoot, sha) {
@@ -4778,7 +4877,7 @@ import {
   openSync as openSync4,
   readFileSync as readFileSync7,
   readSync,
-  statSync as statSync5,
+  statSync as statSync6,
   unlinkSync as unlinkSync3,
   writeSync as writeSync3
 } from "node:fs";
@@ -4788,7 +4887,7 @@ function errnoCode2(err) {
 }
 function sameFilesystem(a, b) {
   try {
-    return statSync5(a).dev === statSync5(b).dev;
+    return statSync6(a).dev === statSync6(b).dev;
   } catch {
     return false;
   }
@@ -5643,7 +5742,7 @@ var init_fs_stamp = __esm(() => {
 
 // src/core/store/shard-quarantine.ts
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync6, readFileSync as readFileSync8, readSync as readSync3, statSync as statSync6 } from "node:fs";
+import { closeSync as closeSync6, readFileSync as readFileSync8, readSync as readSync3, statSync as statSync7 } from "node:fs";
 import { join as join12, resolve as resolve7 } from "node:path";
 function ledgerPath(root) {
   const key = createHash2("sha256").update(resolve7(root)).digest("hex").slice(0, 32);
@@ -5651,7 +5750,7 @@ function ledgerPath(root) {
 }
 function stampOf(path) {
   const observedAtMs = Date.now();
-  const stat = statSync6(path, { bigint: true, throwIfNoEntry: false });
+  const stat = statSync7(path, { bigint: true, throwIfNoEntry: false });
   return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function isPartition(value) {
@@ -6314,7 +6413,7 @@ var init_format_doc = __esm(() => {
 
 // src/core/store/held-ledger.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync9, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync9, rmSync as rmSync2 } from "node:fs";
 import { join as join15, resolve as resolve8 } from "node:path";
 function ledgerDir(dirs = processDirsEnv()) {
   return join15(storesStateDir(dirs), HELD_LEDGER_DIR);
@@ -6327,7 +6426,7 @@ function recordHeldPartitions(root, partitions, dirs) {
   const dir = ledgerDir(dirs);
   for (const partition of partitions) {
     const marker = markerPath(dir, root, partition);
-    if (existsSync5(marker))
+    if (existsSync4(marker))
       continue;
     try {
       mkdirSync9(dir, { recursive: true });
@@ -6340,7 +6439,7 @@ function lostHeldPartitions(root, held) {
   if (STORE_PARTITIONS.every((p) => held.has(p)))
     return [];
   const dir = ledgerDir();
-  return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync5(markerPath(dir, root, p)));
+  return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync4(markerPath(dir, root, p)));
 }
 var HELD_LEDGER_DIR = "held-partitions";
 var init_held_ledger = __esm(() => {
@@ -6351,7 +6450,7 @@ var init_held_ledger = __esm(() => {
 });
 
 // src/core/store/store-open.ts
-import { readFileSync as readFileSync10, statSync as statSync7 } from "node:fs";
+import { readFileSync as readFileSync10, statSync as statSync8 } from "node:fs";
 import { join as join16 } from "node:path";
 function readStoreId(dir) {
   let text;
@@ -6374,7 +6473,7 @@ function readStoreId(dir) {
   return parsed.store_id;
 }
 function heldPartitions(root) {
-  if (statSync7(root, { throwIfNoEntry: false })?.isDirectory() === false) {
+  if (statSync8(root, { throwIfNoEntry: false })?.isDirectory() === false) {
     throw new StoreOpenError(`the brain store root ${root} is not a directory; move the file away or point ` + "the store root at a directory");
   }
   const ids = new Map;
@@ -6462,7 +6561,7 @@ var init_store_open = __esm(() => {
 });
 
 // src/core/store/seen-shards.ts
-import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, statSync as statSync8 } from "node:fs";
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync11, statSync as statSync9 } from "node:fs";
 import { createHash as createHash4 } from "node:crypto";
 import { basename as basename6, dirname as dirname11, join as join17, resolve as resolve9 } from "node:path";
 function withLocalLock2(lockTarget, fn, budgetMs) {
@@ -6496,7 +6595,7 @@ function isPartition2(value) {
 }
 function stampOf2(path) {
   const observedAtMs = Date.now();
-  const stat = statSync8(path, { bigint: true, throwIfNoEntry: false });
+  const stat = statSync9(path, { bigint: true, throwIfNoEntry: false });
   return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function parseLedger(text) {
@@ -6567,7 +6666,7 @@ function update2(path, change) {
 }
 function lockHolderStamp(path) {
   try {
-    return statSync8(`${path}.lock`).mtimeMs;
+    return statSync9(`${path}.lock`).mtimeMs;
   } catch {
     return null;
   }
@@ -6701,7 +6800,7 @@ var init_record_path = __esm(() => {
 
 // src/core/store/read/stream-read.ts
 import { createHash as createHash5 } from "node:crypto";
-import { closeSync as closeSync8, lstatSync as lstatSync4, readSync as readSync5 } from "node:fs";
+import { closeSync as closeSync8, lstatSync as lstatSync5, readSync as readSync5 } from "node:fs";
 
 class StreamReadInterrupted {
   cause;
@@ -6790,7 +6889,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
   const kept = tails.get(rel);
   let base = null;
   const observedAtMs = Date.now();
-  const now = lstatSync4(path, { bigint: true });
+  const now = lstatSync5(path, { bigint: true });
   let hash = null;
   if (kept !== undefined) {
     const size = Number(now.size);
@@ -6818,7 +6917,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
   }
   const fresh = scanKeeping(path, partitionRoot, base?.size ?? 0, keep, checkpoint);
   tails.delete(rel);
-  const after = lstatSync4(path, { bigint: true });
+  const after = lstatSync5(path, { bigint: true });
   if (base !== null && !sameDevIno(after, now)) {
     return scanKeeping(path, partitionRoot, 0, keep, checkpoint);
   }
@@ -6833,7 +6932,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
     return pass;
   }
   hash = base === null ? hashRange(path, partitionRoot, createHash5("sha256"), 0, pass.nextOffset) : hashRange(path, partitionRoot, base.hash.copy(), base.size, pass.nextOffset);
-  if (hash === null || !sameStamp(after, lstatSync4(path, { bigint: true })))
+  if (hash === null || !sameStamp(after, lstatSync5(path, { bigint: true })))
     return pass;
   tails.set(rel, {
     ino: after.ino,
@@ -6949,6 +7048,24 @@ var init_stream_read = __esm(() => {
   PREFIX_CHUNK_BYTES = 1 << 20;
 });
 
+// src/core/store/newest-records.ts
+var HLC_NAME, ESCAPE, COMPACTED_NAME, READ_CHUNK_BYTES2;
+var init_newest_records = __esm(() => {
+  init_constants();
+  init_envelope();
+  init_hlc();
+  init_reader();
+  init_safe_fs();
+  init_seen_shards();
+  init_shard_list();
+  init_state_digest();
+  init_store_paths();
+  HLC_NAME = Buffer.from('"hlc"');
+  ESCAPE = Buffer.from("\\u");
+  COMPACTED_NAME = Buffer.from(`"${COMPACTED_KIND}"`);
+  READ_CHUNK_BYTES2 = 1024 * 1024;
+});
+
 // src/core/store-migration/migration-records.ts
 function sharedSettings(store) {
   if (!store.partitions.has("shared"))
@@ -6988,6 +7105,7 @@ var init_migration_records = __esm(() => {
   init_envelope();
   init_state_digest();
   init_stream_read();
+  init_newest_records();
   init_store_paths();
   MIGRATION_RECORD_KINDS = Object.freeze([
     MIGRATION_COHORT_KIND,
@@ -7117,20 +7235,12 @@ var init_journal = __esm(() => {
 });
 
 // src/core/store/store-only.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync13, statSync as statSync9 } from "node:fs";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync13 } from "node:fs";
 import { dirname as dirname12, join as join18 } from "node:path";
 function lookAtLegacyTree(vault) {
   if (vault === null || vault.trim() === "")
     return "absent";
-  try {
-    statSync9(join18(vault, BRAIN_ROOT_REL));
-    return "present";
-  } catch (err) {
-    const code = err.code;
-    if (ABSENT_CODES.has(code ?? ""))
-      return "absent";
-    return { failed: err instanceof Error ? err : new Error(String(err)) };
-  }
+  return lookAtDirectory(join18(vault, BRAIN_ROOT_REL));
 }
 function markerPath2() {
   return join18(storesStateDir(processDirsEnv()), SWITCH_MARKER_FILE);
@@ -7251,34 +7361,24 @@ function storeOnlyMode(context = {}, options = {}) {
 function isStoreOnly(context = {}, options = {}) {
   return storeOnlyMode(context, options).storeOnly;
 }
-var SWITCH_MARKER_FILE = "store-only.json", readSwitchRecords = (store, deviceId) => isDeviceSwitched(store, deviceId), StoreOnlyUndeterminedError, ABSENT_CODES, seenSwitched;
+var SWITCH_MARKER_FILE = "store-only.json", readSwitchRecords = (store, deviceId) => isDeviceSwitched(store, deviceId), StoreOnlyUndeterminedError, seenSwitched;
 var init_store_only = __esm(() => {
   init_path_constants();
   init_config();
   init_fs_atomic();
   init_migration_records();
   init_platform_dirs();
+  init_vault_unexaminable();
   init_local_lock();
   init_store_open();
   init_store_paths();
-  StoreOnlyUndeterminedError = class StoreOnlyUndeterminedError extends Error {
-    vault;
-    code;
+  StoreOnlyUndeterminedError = class StoreOnlyUndeterminedError extends VaultUnexaminableError {
     constructor(vault, cause) {
       const code = cause.code;
-      super(`cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join18(vault, BRAIN_ROOT_REL)} ` + `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` + "the store or the vault until the vault can be read (check its permissions)", { cause });
+      super(vault, cause, `cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join18(vault, BRAIN_ROOT_REL)} ` + `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` + "the store or the vault until the vault can be read (check its permissions)");
       this.name = "StoreOnlyUndeterminedError";
-      this.vault = vault;
-      this.code = code;
     }
   };
-  ABSENT_CODES = new Set([
-    "ENOENT",
-    "ENOTDIR",
-    "ENAMETOOLONG",
-    "ERR_INVALID_ARG_VALUE",
-    "ERR_INVALID_ARG_TYPE"
-  ]);
   seenSwitched = new Set;
 });
 
@@ -7355,13 +7455,13 @@ import { randomBytes as randomBytes3 } from "node:crypto";
 import {
   chmodSync,
   closeSync as closeSync9,
-  constants as constants2,
+  constants as constants3,
   copyFileSync,
-  existsSync as existsSync6,
+  existsSync as existsSync5,
   fsyncSync as fsyncSync4,
   openSync as openSync6,
   linkSync as linkSync3,
-  lstatSync as lstatSync5,
+  lstatSync as lstatSync6,
   mkdirSync as mkdirSync12,
   readdirSync as readdirSync3,
   readFileSync as readFileSync14,
@@ -7376,7 +7476,7 @@ import { basename as basename7, dirname as dirname13, join as join19, relative a
 function filesBelow(path) {
   let stat;
   try {
-    stat = lstatSync5(path);
+    stat = lstatSync6(path);
   } catch {
     return [];
   }
@@ -7418,13 +7518,13 @@ function tryUnlink(path) {
   } catch {}
 }
 function copyNoClobber(file, target) {
-  if (existsSync6(target))
+  if (existsSync5(target))
     return false;
   mkdirOwnerOnly(dirname13(target));
   const temp = join19(dirname13(target), `.${basename7(target)}${TEMP_INFIX}${randomBytes3(6).toString("hex")}`);
   const { atime, mtime } = statSync10(file);
   try {
-    copyFileSync(file, temp, constants2.COPYFILE_EXCL);
+    copyFileSync(file, temp, constants3.COPYFILE_EXCL);
     if (process.platform !== "win32")
       chmodSync(temp, 384);
     utimesSync(temp, atime, mtime);
@@ -7445,14 +7545,14 @@ function copyNoClobber(file, target) {
     utimesSync(target, atime, mtime);
     return true;
   } finally {
-    if (existsSync6(temp))
+    if (existsSync5(temp))
       tryUnlink(temp);
   }
 }
 function removeEmptyDirs(dir) {
   let stat;
   try {
-    stat = lstatSync5(dir);
+    stat = lstatSync6(dir);
   } catch {
     return;
   }
@@ -7469,7 +7569,7 @@ function sameLanded(file, target, aside, rel) {
     return true;
   for (let n = 0;n < 100; n++) {
     const kept = join19(aside, n === 0 ? rel : `${rel}.${n}`);
-    if (!existsSync6(kept))
+    if (!existsSync5(kept))
       return false;
     if (sameBytes(file, kept))
       return true;
@@ -7481,7 +7581,7 @@ function keepAside(file, aside, rel) {
     const kept = join19(aside, n === 0 ? rel : `${rel}.${n}`);
     if (sameBytes(file, kept))
       return true;
-    if (!existsSync6(kept)) {
+    if (!existsSync5(kept)) {
       copyNoClobber(file, kept);
       if (sameBytes(file, kept))
         return true;
@@ -7492,7 +7592,7 @@ function keepAside(file, aside, rel) {
 function adoptFolder(from, to) {
   if (from === to)
     return true;
-  if (!existsSync6(from))
+  if (!existsSync5(from))
     return true;
   let settled = true;
   const aside = join19(dirname13(to), ADOPT_CONFLICTS_DIR, basename7(from));
@@ -7514,7 +7614,7 @@ function adoptFolder(from, to) {
   return settled && filesBelow(from).length === 0;
 }
 function seedFolderOnce(from, to, marker) {
-  if (existsSync6(marker) || !existsSync6(from))
+  if (existsSync5(marker) || !existsSync5(from))
     return;
   try {
     const seeded = [];
@@ -7536,7 +7636,7 @@ var init_state_moves = __esm(() => {
 
 // src/core/state/machine-state.ts
 import { createHash as createHash6 } from "node:crypto";
-import { cpSync, existsSync as existsSync7, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { cpSync, existsSync as existsSync6, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname14, join as join20, relative as relative5, resolve as resolve11, sep as sep5 } from "node:path";
 function storeIdAt(root) {
   const known = STORE_IDS.get(root);
@@ -7570,7 +7670,7 @@ function freshVaultRel(vault) {
   return join20(FRESH_STATE_DIR, vaultKey(vault));
 }
 function adoptOnce(from, to) {
-  if (from === to || ADOPTED.has(from) || !existsSync7(from))
+  if (from === to || ADOPTED.has(from) || !existsSync6(from))
     return;
   if (adoptFolder(from, to))
     ADOPTED.add(from);
@@ -7584,12 +7684,12 @@ function restoreBackupOnce(local) {
     return;
   const migration = dirname14(local);
   const marker = join20(migration, BACKUP_RESTORED_MARKER);
-  if (existsSync7(marker)) {
+  if (existsSync6(marker)) {
     RESTORED.add(local);
     return;
   }
   const files = join20(migration, MIGRATION_BACKUP_DIR, MIGRATION_BACKUP_FILES_DIR);
-  if (!existsSync7(files)) {
+  if (!existsSync6(files)) {
     RESTORED.add(local);
     return;
   }
@@ -7598,7 +7698,7 @@ function restoreBackupOnce(local) {
     for (const file of filesBelow(files)) {
       const rel = relative5(files, file);
       const target = join20(local, rel);
-      if (existsSync7(target))
+      if (existsSync6(target))
         continue;
       cpSync(file, target, { preserveTimestamps: true });
       restored.push(rel.split(sep5).join("/"));
@@ -7639,7 +7739,7 @@ function locate(vault, configPath, settle) {
     adoptOnce(join20(deviceStateDir(null), freshVaultRel(vault)), root);
     if (storeId !== null)
       adoptOnce(join20(deviceStateDir(storeId), freshVaultRel(vault)), root);
-    if (!existsSync7(join20(vault, BRAIN_ROOT_REL)))
+    if (!pathPresent(vault, join20(vault, BRAIN_ROOT_REL)))
       seedFromVaultOnce(vault, root);
   }
   restoreBackupOnce(root);
@@ -7656,6 +7756,7 @@ function machineStatePathIn(root, ...segments) {
 }
 var FRESH_STATE_DIR = "fresh", VAULT_KEY_CHARS = 16, BACKUP_RESTORED_MARKER = "local-restored.json", STORE_IDS, ADOPTED, SEEDED_MARKER_DIR, RESTORED;
 var init_machine_state = __esm(() => {
+  init_vault_unexaminable();
   init_path_constants();
   init_path_safety();
   init_platform_dirs();
@@ -7775,7 +7876,7 @@ var init_stamp = __esm(() => {
 });
 
 // src/core/brain/freeze-marker.ts
-import { existsSync as existsSync8, readFileSync as readFileSync15, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync15, statSync as statSync11 } from "node:fs";
 import { resolve as resolve12 } from "node:path";
 function markerPathIn(root) {
   return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
@@ -8154,14 +8255,14 @@ var init_migration_gate = __esm(() => {
 });
 
 // src/core/brain/vault-identity.ts
-import { existsSync as existsSync9, readFileSync as readFileSync17, statSync as statSync13 } from "node:fs";
+import { existsSync as existsSync8, readFileSync as readFileSync17, statSync as statSync13 } from "node:fs";
 import { join as join22, resolve as resolve14 } from "node:path";
 function vaultIdentityPath(vault) {
   return ensureInsideVault(join22(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
 }
 function readVaultIdentity(vault) {
   const path = vaultIdentityPath(vault);
-  if (!existsSync9(path))
+  if (!existsSync8(path))
     return null;
   try {
     const parsed = JSON.parse(readFileSync17(path, "utf8"));
@@ -8878,7 +8979,7 @@ var init_caller_reach = __esm(() => {
 });
 
 // src/core/store/read/store-entities.ts
-import { lstatSync as lstatSync6, statSync as statSync14 } from "node:fs";
+import { lstatSync as lstatSync7, statSync as statSync14 } from "node:fs";
 function sharedCountersOf(history, privateIds) {
   const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
   for (const record of history) {
@@ -9232,7 +9333,7 @@ var init_memory_ids = __esm(() => {
 
 // src/core/brain/artifact-ref-resolve.ts
 import { isAbsolute as isAbsolute4, join as join25 } from "node:path";
-import { existsSync as existsSync10, statSync as statSync15 } from "node:fs";
+import { existsSync as existsSync9, statSync as statSync15 } from "node:fs";
 function artifactRefScope(vault, fromStore) {
   let store = fromStore;
   let dirs;
@@ -9263,7 +9364,7 @@ function artifactPath(vault, id, scope) {
     join25(vault, BRAIN_DECISIONS_REL)
   ]) {
     const abs = join25(dir, `${id}${MARKDOWN_EXT}`);
-    if (existsSync10(abs))
+    if (existsSync9(abs))
       return vaultRelative(abs, vault);
   }
   return null;
@@ -9364,7 +9465,7 @@ var init_private_region = __esm(() => {
 });
 
 // src/core/store/reference-privacy.ts
-import { existsSync as existsSync11, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync10, statSync as statSync16 } from "node:fs";
 import { resolve as resolve15 } from "node:path";
 function namesAPage(ref) {
   const trimmed = ref.trim();
@@ -9380,7 +9481,7 @@ function preferenceIdIsPrivate(vault, id, fromStore = vault === null || judgesFr
       preferencePathUnder(scope.dirs(), vault, slug),
       retiredPathUnder(scope.dirs(), vault, slug)
     ];
-    paths = pages.filter((p) => existsSync11(p));
+    paths = pages.filter((p) => existsSync10(p));
   } catch {
     return true;
   }
@@ -9456,7 +9557,7 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
     if (rel === null)
       continue;
     const abs = resolve15(vault, rel);
-    if (!pathIsInside(abs, vault) || existsSync11(abs) && isPrivatePageFile(abs))
+    if (!pathIsInside(abs, vault) || existsSync10(abs) && isPrivatePageFile(abs))
       return true;
   }
   return false;
@@ -10446,7 +10547,7 @@ import { randomBytes as randomBytes6 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync12,
-  existsSync as existsSync12,
+  existsSync as existsSync11,
   mkdirSync as mkdirSync18,
   openSync as openSync9,
   readFileSync as readFileSync23,
@@ -10456,7 +10557,7 @@ import {
 import { dirname as dirname20, join as join29 } from "node:path";
 function ensureSyncExclusionMarker(dir) {
   const marker = join29(dir, ".gitignore");
-  if (existsSync12(marker))
+  if (existsSync11(marker))
     return;
   try {
     writeFileSync5(marker, SYNC_EXCLUSION_CONTENT, { encoding: "utf8", flag: "wx", mode: 384 });
@@ -10469,7 +10570,7 @@ function ensureSyncExclusionMarker(dir) {
 }
 function loadOrCreateKey(keyPath) {
   const keyDir = dirname20(keyPath);
-  if (existsSync12(keyPath)) {
+  if (existsSync11(keyPath)) {
     restrictToOwner(keyDir, "directory");
     restrictToOwner(keyPath, "file");
     if (process.platform !== "win32") {
@@ -10579,7 +10680,7 @@ __export(exports_store, {
 });
 import {
   chmodSync as chmodSync5,
-  existsSync as existsSync13,
+  existsSync as existsSync12,
   readdirSync as readdirSync6,
   readFileSync as readFileSync24,
   renameSync as renameSync2,
@@ -10594,7 +10695,7 @@ function secretsDir(vault) {
   return dir;
 }
 function adoptVaultSecrets(legacy, dir) {
-  if (legacy === dir || existsSync13(dir) || !existsSync13(legacy))
+  if (legacy === dir || existsSync12(dir) || !existsSync12(legacy))
     return;
   const names = readdirSync6(legacy).filter((name) => statSync17(join30(legacy, name)).isFile());
   if (names.length === 0)
@@ -10608,7 +10709,7 @@ function adoptVaultSecrets(legacy, dir) {
     try {
       renameSync2(staging, dir);
     } catch (err) {
-      if (!existsSync13(dir))
+      if (!existsSync12(dir))
         throw err;
     }
   } finally {
@@ -10753,7 +10854,7 @@ function resolveSecretReadOnly(vault, name) {
     throw new Error(`unknown secret "${normalized}"`);
   }
   const kp = keyPath(vault);
-  if (!existsSync13(kp))
+  if (!existsSync12(kp))
     throw new SecretStoreKeyfileMissingError(kp);
   const key = loadOrCreateKey(kp);
   return {
@@ -10806,9 +10907,9 @@ function custodyTargets(vault) {
     [secretsDir(vault), "directory"],
     [keyPath(vault), "file"]
   ];
-  if (existsSync13(storePath(vault)))
+  if (existsSync12(storePath(vault)))
     targets.push([storePath(vault), "file"]);
-  if (existsSync13(tokenStorePath(vault)))
+  if (existsSync12(tokenStorePath(vault)))
     targets.push([tokenStorePath(vault), "file"]);
   return targets;
 }
@@ -10823,7 +10924,7 @@ function toMetadata(name, stored) {
 }
 function readStore(vault) {
   const path = storePath(vault);
-  if (!existsSync13(path))
+  if (!existsSync12(path))
     return { version: SECRETS_SCHEMA_VERSION, secrets: {} };
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
@@ -11077,7 +11178,7 @@ function redactConfigMapping(data, policy = {}) {
 init_config();
 init_secret_ref();
 init_secret_ref();
-import { existsSync as existsSync14 } from "node:fs";
+import { existsSync as existsSync13 } from "node:fs";
 var custodyStoreModule;
 function custodyStore() {
   if (custodyStoreModule === undefined) {
@@ -11130,7 +11231,7 @@ function resolvedSecretLiterals(vault) {
   }
   const heldNames = new Set(held.map((meta) => meta.name));
   const out = [];
-  if (held.length > 0 && existsSync14(store.keyPath(vault))) {
+  if (held.length > 0 && existsSync13(store.keyPath(vault))) {
     for (const meta of held) {
       try {
         out.push(store.resolveSecretReadOnly(vault, meta.name).value);
@@ -11184,8 +11285,10 @@ function probeVaultDirectory(vault) {
 // src/core/doctor.ts
 init_config();
 init_fs_utils();
+init_path_constants();
+init_vault_unexaminable();
 import {
-  existsSync as existsSync16,
+  existsSync as existsSync15,
   mkdirSync as mkdirSync20,
   openSync as openSync10,
   readFileSync as readFileSync25,
@@ -11198,7 +11301,7 @@ import { dirname as dirname23, join as join32 } from "node:path";
 // src/core/partner/codegraph.ts
 init_config();
 init_fs_utils();
-import { existsSync as existsSync15, readdirSync as readdirSync7, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync14, readdirSync as readdirSync7, realpathSync as realpathSync4 } from "node:fs";
 import { dirname as dirname22, join as join31, resolve as resolve18 } from "node:path";
 
 // src/core/project-manifests.ts
@@ -11302,11 +11405,11 @@ function codegraphInitCommand(projectPath) {
 }
 function isCodeProject(dir) {
   try {
-    if (!existsSync15(dir))
+    if (!existsSync14(dir))
       return false;
     if (!isDir(join31(dir, ".git")))
       return false;
-    return CODE_MANIFEST_FILES.some((m) => existsSync15(join31(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync14(join31(dir, m)));
   } catch {
     return false;
   }
@@ -11563,12 +11666,31 @@ function resolveRealpath(value) {
 // src/core/doctor.ts
 var MANIFEST_FIX = "o2b update";
 function checkVaultWriteable(vault) {
-  if (!existsSync16(vault)) {
+  const look = lookAtDirectory(vault);
+  if (look === "absent") {
     return {
       name: "vault_writeable",
       ok: false,
       message: `vault directory missing: ${vault}`,
       fix: `mkdir -p "${vault}"`
+    };
+  }
+  if (look !== "present") {
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: unexaminablePath(vault, vault, look.failed).message,
+      fix: `chmod u+rwx "${vault}"`
+    };
+  }
+  const brain = join32(vault, BRAIN_ROOT_REL);
+  const brainLook = lookAtDirectory(brain);
+  if (brainLook !== "present" && brainLook !== "absent") {
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: unexaminablePath(vault, brain, brainLook.failed).message,
+      fix: `chmod u+rwx "${brain}"`
     };
   }
   const probe = join32(vault, ".open-second-brain-doctor-test");
@@ -11590,7 +11712,7 @@ function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
     mkdirSync20(dirname23(config), { recursive: true });
-    if (!existsSync16(config))
+    if (!existsSync15(config))
       createdForCheck = true;
     const fd = openSync10(config, "a");
     writeSync8(fd, "");

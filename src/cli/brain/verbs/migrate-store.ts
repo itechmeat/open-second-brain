@@ -424,11 +424,20 @@ export function renderDryRun(plan: MigrationDryRun): string {
 
   out.push(`Unmapped entries: ${plan.totals.unmapped}`);
   for (const u of plan.unmapped) out.push(`  ${u.path}${u.type === "directory" ? "/" : ""}`);
+  if (plan.unreadable_folders.length > 0) {
+    out.push(
+      `Unreadable folders: ${plan.unreadable_folders.length}`,
+      ...plan.unreadable_folders.map((f) => `  ${f}/`),
+    );
+  }
   out.push(
     "",
     plan.ok
       ? "Every legacy entry has a destination."
-      : "The migration cannot run until every unmapped entry has a destination.",
+      : plan.unreadable_folders.length > 0
+        ? "The migration cannot run until every legacy folder can be read: what an unreadable " +
+          "folder holds has no planned destination."
+        : "The migration cannot run until every unmapped entry has a destination.",
   );
   return out.join("\n") + "\n";
 }

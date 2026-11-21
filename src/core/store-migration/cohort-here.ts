@@ -6,7 +6,7 @@
  * seen, and a store or config problem answers null.
  */
 
-import { existsSync } from "node:fs";
+import { pathPresent } from "../vault-unexaminable.ts";
 import { join } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
@@ -34,7 +34,7 @@ export function cohortStatusHere(
   configPath: string | undefined,
   now: Date,
 ): CohortStatus | null {
-  if (vault === null || !existsSync(join(vault, BRAIN_ROOT_REL))) return null;
+  if (vault === null || !pathPresent(vault, join(vault, BRAIN_ROOT_REL))) return null;
   return withoutSeenRecording(() => {
     const store = migrationStoreHere(configPath);
     if (store === null) return null;

@@ -75,7 +75,12 @@ import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts"
 import { armProcessCeiling, decisionWaitMs, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { asHookPayload, readHookInput, type HookPayloadBase } from "./lib/stdin.ts";
-import { beginInjectionEpoch, digestNotePaths, isRealSessionId } from "./lib/injection-ledger.ts";
+import {
+  beginInjectionEpoch,
+  digestDeliveredText,
+  digestNotePaths,
+  isRealSessionId,
+} from "./lib/injection-ledger.ts";
 import { LANE_BUDGETED, renderStandingBlock, type InjectionMeter } from "./lib/standing-block.ts";
 import { buildAgentContextBlocks } from "./lib/agent-context-blocks.ts";
 import {
@@ -286,6 +291,7 @@ async function main(): Promise<void> {
       startSource: payload.source,
       loaderSource: source,
       memoryContext,
+      fullContext: context,
       meter,
     };
     if (context.length === 0) {
@@ -363,6 +369,8 @@ interface RecordInjectionEpochInput {
   readonly startSource: unknown;
   readonly loaderSource: InjectContextSource;
   readonly memoryContext: string;
+  /** The whole context before any cut: a bullet cut mid-line is recorded truncated. */
+  readonly fullContext?: string;
   readonly meter: InjectionMeter;
 }
 
@@ -398,6 +406,7 @@ function recordInjectionEpoch(
         activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY, delivery),
         lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY, delivery),
       }),
+      delivered: digestDeliveredText({ emittedText: committed, sourceText: input.fullContext }),
       regroundParts: delivery.parts.slice(1),
       partCeilingChars: delivery.partCeilingChars,
     });

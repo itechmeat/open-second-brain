@@ -91,6 +91,9 @@ const JSON_EXT = ".json";
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 const PAGE_EXT = ".md";
 
+/** How the scan names a folder it could not list (`dry-run.ts` counts them). */
+export const CANNOT_LIST_PREFIX = "cannot list:";
+
 /** The entries of a directory, or none when it does not exist. */
 function entries(dir: string, tally: ScanTally): Dirent[] {
   try {
@@ -100,7 +103,11 @@ function entries(dir: string, tally: ScanTally): Dirent[] {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      tally.problems.push({ path: dir, line: null, reason: `cannot list: ${String(code)}` });
+      tally.problems.push({
+        path: dir,
+        line: null,
+        reason: `${CANNOT_LIST_PREFIX} ${String(code)}`,
+      });
     }
     return [];
   }

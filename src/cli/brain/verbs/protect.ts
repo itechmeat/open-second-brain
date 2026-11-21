@@ -151,7 +151,7 @@ export async function cmdBrainProtect(argv: string[]): Promise<number> {
         const ans = await readSingleLine();
         if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
           ok("protect cancelled");
-          return 0;
+          return 1;
         }
       } else if (compute.changed && !flags["json"]) {
         info(renderUnifiedDiff(compute.before, compute.after, compute.destination));
@@ -250,7 +250,7 @@ export async function cmdBrainUnprotect(argv: string[]): Promise<number> {
         const ans = await readSingleLine();
         if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
           ok("unprotect cancelled");
-          return 0;
+          return 1;
         }
       } else if (compute.changed && !flags["json"]) {
         info(renderUnifiedDiff(compute.before, compute.after, compute.destination));

@@ -47,7 +47,7 @@ import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
 import { readPinnedContext } from "../../core/brain/pinned.ts";
-import { StoreOnlyUndeterminedError } from "../../core/store/store-only.ts";
+import { VaultUnexaminableError } from "../../core/vault-unexaminable.ts";
 import { contextReach, contextVault, type ServerContext } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { deliveryView } from "./reach-events.ts";
@@ -111,7 +111,7 @@ export async function toolBrainContext(ctx: ServerContext): Promise<Record<strin
     activePath = compiledDigestPath(vault, "active");
     onDemand = digestsRenderedOnDemand(vault);
   } catch (err) {
-    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    if (!(err instanceof VaultUnexaminableError)) throw err;
     // Neither the legacy tree nor the store can be read as this vault's
     // memory: say so in `error`, beside the rules, never "no memory". The
     // paths are where the legacy layout keeps the files; the pinned

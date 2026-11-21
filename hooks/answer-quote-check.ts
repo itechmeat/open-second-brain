@@ -124,6 +124,7 @@ import {
   LEDGER_KEY_REGROUND,
   LEDGER_PATH_ACTIVE_DIGEST,
   LEDGER_PATH_LESSONS_DIGEST,
+  readActiveDelivered,
   readActiveEmittedPaths,
   readRecallInjected,
   readSubagentDeliveredPaths,
@@ -438,8 +439,10 @@ function resolveNotePath(vault: string, relativePath: string): string | null {
     return null;
   }
   // Any other `Brain/` page of a switched vault lives in the store, which
-  // the Stop hook does not fold: a legacy file still on disk there is a
-  // stale copy, never evidence of what the context carried.
+  // the Stop hook does not fold (a preference bullet the session start
+  // delivered is judged against its delivered text, `evidenceFor`): a
+  // legacy file still on disk there is a stale copy, never evidence of
+  // what the context carried.
   if (insideBrain(vault, absolute) && lanePagesInStore(vault)) return null;
   return absolute;
 }
@@ -459,12 +462,31 @@ const DIGEST_LEDGER_PATHS: ReadonlyMap<string, "active" | "lessons"> = new Map([
  * `unavailable` / `not-text` evidence rather than throwing. Exported for
  * the bounded-read pins; the ceiling is injectable so a test needs no
  * multi-megabyte fixture.
+ *
+ * A preference page the session start delivered as a digest bullet is
+ * judged against the text that bullet delivered (`delivered`, from the
+ * session's injection ledger): verified means verified against what the
+ * session received, complete, whatever the page reads now. Without that
+ * text a `Brain/` page of a vault switched to the store is `unavailable`:
+ * the store page now may not be the version the session saw, and the hook
+ * does not fold the store for it.
  */
 export function evidenceFor(
   vault: string,
   mark: CitationMark,
   maxBytes: number = ANSWER_QUOTE_NOTE_MAX_BYTES,
+  delivered: ReadonlyMap<
+    string,
+    { readonly text: string; readonly truncated: boolean }
+  > = new Map(),
 ): AnswerQuoteEvidence {
+  const sent = delivered.get(mark.path);
+  if (sent !== undefined) {
+    // A bullet is one line and names no line range of the page; a bullet
+    // the host ceiling cut mid-line is evidence of its delivered part only.
+    if (mark.startLine !== undefined || mark.endLine !== undefined) return { kind: "unavailable" };
+    return { kind: "text", text: sent.text, truncated: sent.truncated };
+  }
   const absolute = resolveNotePath(vault, mark.path);
   if (absolute === null || !existsSync(absolute)) {
     return { kind: "unavailable" };
@@ -494,6 +516,11 @@ export function evidenceFor(
   } catch {
     return { kind: "not-text" };
   }
+  return evidenceOfText(whole, limited, mark);
+}
+
+/** The evidence of a note's text `whole`, cut at the ceiling when `limited`. */
+function evidenceOfText(whole: string, limited: boolean, mark: CitationMark): AnswerQuoteEvidence {
   if (mark.startLine === undefined || mark.endLine === undefined) {
     return { kind: "text", text: whole, truncated: limited };
   }
@@ -766,6 +793,7 @@ function checkSpan(
   candidates: ReadonlyArray<MergedCandidate>,
   vault: string,
   deadline: number,
+  delivered: ReadonlyMap<string, { readonly text: string; readonly truncated: boolean }>,
 ): SpanOutcome {
   // The cited note: the nearest mark before the span, else the first one
   // after it. A mark inside the span is span content, never a citation.
@@ -775,7 +803,7 @@ function checkSpan(
     const mark = before.length > 0 ? before[before.length - 1]! : after[0]!;
     const { outcomes } = checkAnswerQuotes({
       spans: [span.inner],
-      evidence: evidenceFor(vault, mark),
+      evidence: evidenceFor(vault, mark, ANSWER_QUOTE_NOTE_MAX_BYTES, delivered),
     });
     // The span was MEASURED against the cited note's evidence, so every
     // ledger candidate naming the cited note records the outcome -
@@ -843,7 +871,7 @@ function checkSpan(
       ...(candidate.startLine !== undefined ? { startLine: candidate.startLine } : {}),
       ...(candidate.endLine !== undefined ? { endLine: candidate.endLine } : {}),
     };
-    let evidence = evidenceFor(vault, mark);
+    let evidence = evidenceFor(vault, mark, ANSWER_QUOTE_NOTE_MAX_BYTES, delivered);
     // The injection delivered only a prefix of this note: evidence is the
     // delivered prefix, whatever the file holds today. A miss under
     // clipped evidence is `source-truncated`, never a readable miss - a
@@ -1111,6 +1139,13 @@ function checkTurn(payload: HookPayloadBase, deferred: boolean): string | null {
     ANSWER_QUOTE_CHECK_PHASES.filter((phase) => gates[phase]).map((phase) => ledgerNotes[phase]),
   );
 
+  // What each preference bullet of the session start delivered: the text a
+  // quote of that page is verified against.
+  const delivered =
+    sessionId === null
+      ? new Map<string, { readonly text: string; readonly truncated: boolean }>()
+      : readActiveDelivered(vault, sessionId, now);
+
   const messages = lastAssistantMessages(transcriptPath);
   const findings: Array<AnswerQuoteSpanFinding> = [];
   const presenceOutcomes: SpanCandidateOutcome[] = [];
@@ -1143,7 +1178,7 @@ function checkTurn(payload: HookPayloadBase, deferred: boolean): string | null {
         open: span.open,
         close: span.close,
       };
-      const outcome = checkSpan(quoted, marks, candidates, vault, deadline);
+      const outcome = checkSpan(quoted, marks, candidates, vault, deadline, delivered);
       presenceOutcomes.push(...outcome.candidateOutcomes);
       if (outcome.verdict !== ANSWER_QUOTE_VERDICT.verified) {
         // Attribution: the phases whose candidates decided this miss. A

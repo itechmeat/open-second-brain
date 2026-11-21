@@ -889,8 +889,17 @@ the store record the same way. A target the store does not hold is
 refused. `o2b brain signal retire` is not a way to forget: a retired
 signal leaves the dream pass and stays searchable as history.
 
-From now on this machine writes only to the store. Render the view twice
-(the first render after the claim only catches up), and check doctor:
+From now on this machine writes only to the store. Doctor reads the store
+too: while the legacy tree is still in the vault it does not walk or judge
+it (its log, its pages and its lanes are an archive the store already
+holds), and says only what `--remove-legacy` needs said about it (the
+cohort devices, a tree that came back, a failed or available migration),
+beside the store's own checks and the vault-side ones that still matter
+here (a frozen vault, secrets the sync exposes, state git tracks, a link
+that leaves the vault, the deny rules, free disk, the managed rules
+blocks, the search index's health), so it costs about what it costs once
+the tree has left. Render the view
+twice (the first render after the claim only catches up), and check doctor:
 
 <!-- doc-test: scenario=migration machine=laptop exit=0 -->
 ```sh
@@ -1057,6 +1066,19 @@ Nothing is recorded: a device retired by silence that writes again is
 pending again at once when what it writes carries a date within the
 threshold of the reference (a date later than the reference counts as the
 reference); a write stamped older than that leaves it retired by silence.
+A device whose evidence this machine cannot read whole (a store shard of
+it that is a link or special file, cannot be read, holds a rejected line
+where its newest clock is, or was seen before and is gone, or a legacy
+shard of it that cannot be read) is never retired by silence, and a
+device retired by hand whose newest record cannot be read counts as
+having written again: it stays pending, and the tree stays until the read
+is whole again. `--force` removes the tree past a pending device, but not
+past a store shard this machine cannot read at all (a link, a permission
+or I/O error): the removal refuses then, even with `--force`, because the
+tree may be the only other copy of what that shard holds; fix the shard
+(let sync finish, or its permissions) and run the removal again. A shard
+read only in part (a record whose blob has not arrived) is the case
+`--force` goes past.
 The setting is shared by every machine of the store,
 and only you set it:
 
@@ -1121,7 +1143,9 @@ deletes what it carried. What it never carried stays: that machine's own
 search index and caches in `.open-second-brain/` (often hundreds of MB).
 Doctor names them (`legacy-local-files-left`, with their sizes), and
 `o2b brain migrate-store --remove-legacy` run on that machine clears them
-the same way (the cohort no longer matters there: the tree is gone). Afterwards the vault holds your notes and, if
+the same way (the cohort no longer matters there: the tree is gone). Where
+nothing of the tree is left at all (the sync also deleted that folder), the
+command says so, lists the cohort as above, moves nothing and exits 0. Afterwards the vault holds your notes and, if
 `view_target` points into it, the view folder. A rollback is no longer
 possible:
 
@@ -1444,12 +1468,19 @@ still on disk (the store is the truth there):
   it. Without it the entry's rendering applies; the values are the same.
   `o2b brain standing-rules set` stores the text whole.
 - **A vault the process cannot examine.** A vault whose `Brain/` cannot
-  be looked at (its permissions, an I/O error) on a machine that has not
-  switched is neither store-only nor legacy: nothing is read from or
-  written to either layout. Commands fail with one line naming the vault
-  and the error, MCP tools with `vault_unreadable`, the session start
-  shows the rules as unavailable, and a lineage observation is dropped
-  with a named notice.
+  be looked at (its permissions, an I/O error, a `Brain/` at mode 000 that
+  still stats, a vault below a parent that cannot be traversed) on a
+  machine that has not switched is neither store-only nor legacy: nothing
+  is read from or written to either layout, and no reader answers as if
+  the brain were empty. The doctors report it as a failing check, and
+  `o2b brain migrate-store --dry-run` lists the folders it could not read
+  and does not pass. A folder deeper inside `Brain/` that cannot be
+  traversed is not this condition: its readers report it as uncertainty
+  and the rest of the vault stays usable. Commands fail with one line naming the vault
+  and the error, MCP tools with `vault_unreadable` (the server still
+  starts and lists its tools, and answers normally once the vault can be
+  read again, with no restart), the session start shows the rules as
+  unavailable, and a lineage observation is dropped with a named notice.
 
 ## What the partitions protect, and what they do not
 

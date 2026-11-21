@@ -593,7 +593,7 @@ async function runEntityMerge(
     const ans = (await readSingleLine()).toLowerCase();
     if (ans !== "y" && ans !== "yes") {
       ok("merge cancelled");
-      return 0;
+      return 1;
     }
   }
 

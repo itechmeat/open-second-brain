@@ -25,7 +25,6 @@ import {
   AUTHORITY_FIELD,
   DEVICE_RETIRE_KIND,
   SETTING_SILENT_DEVICE_DAYS,
-  STORE_PARTITIONS,
   type StorePartition,
 } from "../store/constants.ts";
 import { returnedAfterRetirement } from "../store/device-retirement.ts";
@@ -35,6 +34,7 @@ import { compareRecords, type StoreRecord } from "../store/envelope.ts";
 import { forEachPartitionRecord, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
+import { newestRecordOfEachDevice, type NewestRecords } from "../store/newest-records.ts";
 import { partitionDir } from "../store/store-paths.ts";
 
 export const MIGRATION_COHORT_KIND = "migration-cohort";
@@ -178,28 +178,28 @@ export function unseenSettingsShards(
  * `store-device-retired-returned` reads the same rule,
  * `store/device-retirement.ts`).
  */
-function returnedRetiredDeviceIds(store: Pick<StoreHandle, "root" | "partitions">): Set<string> {
-  // The rule reads each device's last record and the retirements: record
-  // by record, only those are kept, never the store or one of its shards.
-  const lastOf = new Map<string, StoreRecord>();
-  const retirements: StoreRecord[] = [];
-  for (const partition of STORE_PARTITIONS.filter((p) => store.partitions.has(p))) {
-    forEachPartitionRecord(
-      partitionDir(store.root, partition),
-      { onUnreadable: () => {} },
-      {
-        record: (_shard, record) => {
-          if (record.kind === DEVICE_RETIRE_KIND) retirements.push(record);
-          const last = lastOf.get(record.device);
-          if (last === undefined || compareRecords(record, last) > 0)
-            lastOf.set(record.device, record);
-        },
-      },
-    );
-  }
-  return new Set(
-    returnedAfterRetirement([...retirements, ...lastOf.values()]).map((r) => r.device),
+function returnedRetiredDeviceIds(
+  settings: ReadonlyArray<StoreRecord>,
+  read: NewestRecords,
+): Set<string> {
+  // The rule reads each device's last record and the retirements: the
+  // retirements are records of the shared settings, and each device's last
+  // record is the one a fold of every record finds (`newest-records.ts`).
+  // A device whose last record this machine cannot tell (a shard it could
+  // not read) counts as returned: it stays in the cohort and holds the
+  // legacy tree in place, never "retired" on a read that may be short.
+  const retirements = settings.filter((r) => r.kind === DEVICE_RETIRE_KIND);
+  const returned = new Set(
+    returnedAfterRetirement([...retirements, ...read.newest.values()]).map((r) => r.device),
   );
+  // Only a human retirement takes a device out of the cohort, so only one
+  // is held in it by a read that may be short.
+  for (const r of retirements) {
+    if (!isHuman(r)) continue;
+    const device = r.body["device"];
+    if (typeof device === "string" && read.uncertain.has(device)) returned.add(device);
+  }
+  return returned;
 }
 
 function isHuman(record: StoreRecord): boolean {
@@ -281,7 +281,11 @@ export function hasCohortRecord(store: StoreHandle): boolean {
  * minus the devices that recorded `device-switched` and the devices a
  * human retired (`device-retire`).
  */
-export function legacyDevices(store: StoreHandle, seen: ReadonlyArray<string>): string[] {
+export function legacyDevices(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  seen: ReadonlyArray<string>,
+  read: NewestRecords = newestRecordOfEachDevice(store),
+): string[] {
   const records = sharedSettings(store);
   const devices = new Set(seen);
   for (const r of records) {
@@ -292,7 +296,7 @@ export function legacyDevices(store: StoreHandle, seen: ReadonlyArray<string>): 
   // A retired device leaves the cohort, unless it wrote again after its
   // latest retirement: then it is back, and holds the gate until it
   // switches or is retired again.
-  const returned = returnedRetiredDeviceIds(store);
+  const returned = returnedRetiredDeviceIds(records, read);
   for (const r of records) {
     if (!isHuman(r)) continue;
     const device = r.body["device"];

@@ -8,13 +8,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { cmdBrainUpgrade } from "../../src/cli/brain/verbs/upgrade.ts";
 import * as upgradeModule from "../../src/core/brain/upgrade.ts";
 import type { UpgradePlan } from "../../src/core/brain/upgrade.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 
@@ -199,8 +200,15 @@ describe("brain upgrade", () => {
     const dry = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
-    expect(dry.returncode).toBe(0);
+    // The preview printed an ERROR line, so it is no clean preview.
+    expect(dry.returncode).toBe(1);
     expect(dry.stdout).toMatch(/ERROR/);
+    // The JSON preview says the same: `ok` agrees with the exit code.
+    const json = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(json.returncode).toBe(1);
+    expect(JSON.parse(json.stdout)["ok"]).toBe(false);
 
     const apply = await runCli(["brain", "upgrade", "--vault", vault, "--apply", "--yes"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
@@ -208,6 +216,27 @@ describe("brain upgrade", () => {
     expect(apply.returncode).toBe(1);
     expect(apply.stderr).toContain("upgrade aborted");
   });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable _brain.yaml prints its EACCES and the dry run exits 1",
+    async () => {
+      await bootstrap();
+      const settings = join(vault, "Brain", "_brain.yaml");
+      chmodSync(settings, 0o000);
+      try {
+        const dry = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run"], {
+          env: { OPEN_SECOND_BRAIN_CONFIG: config },
+        });
+        // The plan's ERROR row on stdout where the read fails inside the
+        // plan (Linux); the "upgrade plan failed" line on stderr where the
+        // path check's look at Brain/ fails first (macOS). Exit 1 on both.
+        expect(`${dry.stdout}${dry.stderr}`).toContain("EACCES");
+        expect(dry.returncode).toBe(1);
+      } finally {
+        chmodSync(settings, 0o644);
+      }
+    },
+  );
 
   test("--dry-run and --apply are mutually exclusive", async () => {
     await bootstrap();

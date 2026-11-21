@@ -25,6 +25,7 @@
  * injection and the onboarding checklist) that share it.
  */
 
+import { pathPresent } from "../vault-unexaminable.ts";
 import { existsSync } from "node:fs";
 import { withGateJudge } from "../migration-gate.ts";
 import { join } from "node:path";
@@ -149,7 +150,7 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
   // sentence the guard already writes ("...if it is the intended vault")
   // is the honest form and a structural command would not be.
   try {
-    if (existsSync(join(vault, BRAIN_ROOT_REL))) {
+    if (pathPresent(vault, join(vault, BRAIN_ROOT_REL))) {
       const absent = vaultMarkerAbsentNotice(vault);
       if (absent !== null) {
         notices.push(notice("vault_marker_absent", "warning", `${absent.detail} (${absent.path})`));

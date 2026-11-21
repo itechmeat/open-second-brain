@@ -255,7 +255,7 @@ describe("store evidence", () => {
       { partition: "shared", stream: "events", kind: "note", agent: "t", body: { text: "x" } },
       { now: () => when },
     );
-    expect(storeDeviceEvidence(a.store()).get("dev-a")).toBeGreaterThanOrEqual(when);
-    expect(storeDeviceEvidence(a.store()).has("dev-b")).toBe(false);
+    expect(storeDeviceEvidence(a.store()).evidence.get("dev-a")).toBeGreaterThanOrEqual(when);
+    expect(storeDeviceEvidence(a.store()).evidence.has("dev-b")).toBe(false);
   });
 });

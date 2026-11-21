@@ -35,7 +35,8 @@
  * removes the list the migration wrote.
  */
 
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { pathPresent } from "../../vault-unexaminable.ts";
+import { closeSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -236,7 +237,7 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
   const store = migrationStoreHere(ctx.configPath);
   if (store === null) return;
   const brain = join(ctx.vault, BRAIN_ROOT_REL);
-  if (!existsSync(brain)) return;
+  if (!pathPresent(ctx.vault, brain)) return;
   const vaultId = readVaultIdentity(ctx.vault)?.vault_id ?? null;
   const removedHere = readRemovalMarker(store, ctx.vault) !== null;
   // A record of another vault's removal must not match a tree with no
@@ -317,7 +318,7 @@ export const legacyLocalFilesCheck: StoreSideDoctorCheck = {
     if (ctx.vault === null) return;
     // Only where the tree has left: with Brain/ there, the transition
     // findings speak, and the removal moves both folders together.
-    if (existsSync(join(ctx.vault, BRAIN_ROOT_REL))) return;
+    if (pathPresent(ctx.vault, join(ctx.vault, BRAIN_ROOT_REL))) return;
     const store = withoutSeenRecording(() => migrationStoreHere(ctx.configPath));
     if (store === null || !deviceSwitchedHere(store, store.device)) return;
     leftoverLocalFinding(ctx.vault, out, withholdsPrivate(ctx));

@@ -51,16 +51,9 @@
  * next run into the same archive, and a rollback refuses until then.
  */
 
+import { pathPresent } from "../vault-unexaminable.ts";
 import { createHash } from "node:crypto";
-import {
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { cpSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
@@ -80,6 +73,7 @@ import { readMigrationBackup } from "./backup.ts";
 import { sameVaultPath, writeRemovalMarker } from "./removal-marker.ts";
 import {
   isDeviceSwitched,
+  legacyDevices,
   unseenSettingsShards,
   LEGACY_TREE_REMOVED_KIND,
   legacyTreeRemovedRecords,
@@ -87,8 +81,12 @@ import {
 } from "./migration-records.ts";
 import type { ConvertHooks } from "./convert.ts";
 import { retireAdoptedLaneEntries } from "./retire-adopted.ts";
-import { cohortStatus, type CohortStatus, type DeviceEvidenceDate } from "./cohort-status.ts";
-import { legacyDeviceEvidence } from "./device-evidence.ts";
+import {
+  cohortStatus,
+  legacyEvidenceInput,
+  type CohortStatus,
+  type DeviceEvidenceDate,
+} from "./cohort-status.ts";
 import { GATED_IMPORT_WAIT_MS, importLateLegacyWrites } from "./transition.ts";
 
 /** Where archives of removed legacy trees go, inside the device-local state. */
@@ -112,10 +110,21 @@ export interface SilenceReport {
 export type RemovalResult =
   | {
       readonly removed: false;
-      readonly reason: "not-switched" | "no-legacy-tree";
+      readonly reason: "not-switched";
       /** Devices still on the legacy layout. */
       readonly pending: ReadonlyArray<string>;
     }
+  | ({
+      /**
+       * Nothing of the legacy tree is in the vault: neither `Brain/` nor this
+       * machine's leftover `.open-second-brain/`. The cohort is reported as
+       * the branch whose tree had already left reports it.
+       */
+      readonly removed: false;
+      readonly reason: "no-legacy-tree";
+      /** Devices still on the legacy layout. */
+      readonly pending: ReadonlyArray<string>;
+    } & SilenceReport)
   | ({
       readonly removed: false;
       readonly reason: "cohort-pending";
@@ -258,7 +267,7 @@ function heldBackRefusal(
 function putBack(vault: string, archive: string, journal: string): void {
   const blocked: string[] = [];
   for (const top of readdirSync(archive).toSorted()) {
-    if (existsSync(join(vault, top))) blocked.push(top);
+    if (pathPresent(vault, join(vault, top))) blocked.push(top);
     else moveTree(join(archive, top), join(vault, top));
   }
   if (blocked.length > 0) {
@@ -398,7 +407,10 @@ export function removeLegacyTree(
     const changed = removalChecks(store, options);
     if (changed !== null) return changed;
     const catalogue = migrationCatalogue(vault);
-    const roots = legacyRootNames(vault, catalogue).filter((top) => existsSync(join(vault, top)));
+    // Not `existsSync`: a root that cannot be examined is not one that left.
+    const roots = legacyRootNames(vault, catalogue).filter((top) =>
+      pathPresent(vault, join(vault, top)),
+    );
     const resumed = readRemovalInProgress(store);
     // One removal journal per machine: another vault's unfinished removal
     // would lose its journal (and its resumable archive) to this one.
@@ -409,7 +421,12 @@ export function removeLegacyTree(
       );
     }
     if (roots.length === 0 && resumed === null) {
-      return { removed: false, reason: "no-legacy-tree", pending: [] };
+      return {
+        removed: false,
+        reason: "no-legacy-tree",
+        pending: [],
+        ...cohortWithoutTree(vault, store, options),
+      };
     }
     return removeUnderGate(vault, store, options, { catalogue, roots, resumed });
   } catch (error) {
@@ -441,7 +458,7 @@ function removeUnderGate(
   // evidence is read from the tree before it moves.
   const cohort = cohortStatus(store, {
     legacy: transition.legacy_devices,
-    legacyEvidence: legacyDeviceEvidence(vault),
+    ...legacyEvidenceInput(vault),
     now: options.now ?? new Date(),
   });
   const pending = cohort.pending.map((d) => d.device);
@@ -611,7 +628,20 @@ function silenceOfEarlierRemoval(
     .toSorted(compareRecords)
     .at(-1);
   const listed = earlier?.body["retired_by_silence"];
-  if (!Array.isArray(listed) || listed.length === 0) return own;
+  if (!Array.isArray(listed)) return own;
+  const days = earlier!.body["silence_threshold_days"];
+  const asOf = earlier!.body["as_of"];
+  // An empty list the removal recorded is its verdict too (it retired no
+  // one by silence, the tree left on switches and hand retirements): a
+  // device silent today is not why the tree left.
+  if (listed.length === 0) {
+    return {
+      ...own,
+      retired_by_silence: [],
+      silence_threshold_days: typeof days === "number" ? days : own.silence_threshold_days,
+      as_of: typeof asOf === "string" ? asOf : own.as_of,
+    };
+  }
   const silent: DeviceEvidenceDate[] = [];
   for (const entry of listed) {
     const device = (entry as { device?: unknown } | null)?.device;
@@ -621,8 +651,6 @@ function silenceOfEarlierRemoval(
   }
   if (silent.length === 0) return own;
   const names = new Set(silent.map((d) => d.device));
-  const days = earlier!.body["silence_threshold_days"];
-  const asOf = earlier!.body["as_of"];
   return {
     ...own,
     switched: own.switched.filter((d) => !names.has(d)),
@@ -631,6 +659,29 @@ function silenceOfEarlierRemoval(
     silence_threshold_days: typeof days === "number" ? days : own.silence_threshold_days,
     as_of: typeof asOf === "string" ? asOf : own.as_of,
   };
+}
+
+/**
+ * The cohort of a vault with nothing of the legacy tree left in it, as the
+ * removal reads it once the tree has left: no legacy evidence to judge
+ * silence by, so the devices retired by silence are the ones the removal
+ * that took the tree out recorded.
+ */
+function cohortWithoutTree(
+  vault: string,
+  store: StoreHandle,
+  options: RemovalOptions,
+): SilenceReport {
+  const vaultId = readVaultIdentity(vault)?.vault_id ?? backedUpVaultId(store, vault);
+  // The devices still on the legacy layout as the store records them, as
+  // the import of the tree-already-left branch reports them: a device a
+  // forced removal left behind is still pending, never "retired by hand".
+  const cohort = cohortStatus(store, {
+    legacy: legacyDevices(store, []),
+    legacyEvidence: new Map(),
+    now: options.now ?? new Date(),
+  });
+  return silenceOfEarlierRemoval(store, vaultId, silenceReport(cohort));
 }
 
 function silenceReport(cohort: CohortStatus): SilenceReport {

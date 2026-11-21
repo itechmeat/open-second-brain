@@ -154,7 +154,8 @@ function ledgerNames(partitionRoot: string): string[] {
   }
 }
 
-function streamRefs(partitionRoot: string): Array<StreamRef & { stream: StoreStream }> {
+/** Every stream of a partition, one ref per ledger for `ledgers`, in stream order. */
+export function streamRefs(partitionRoot: string): Array<StreamRef & { stream: StoreStream }> {
   const refs: Array<StreamRef & { stream: StoreStream }> = [];
   for (const stream of STORE_STREAMS) {
     if (stream === LEDGER_STREAM) {
