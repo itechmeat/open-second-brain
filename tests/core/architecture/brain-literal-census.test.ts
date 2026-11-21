@@ -133,7 +133,6 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/permissions/document.ts": ADAPTER,
   "src/core/brain/policy/load.ts": TEXT,
   "src/core/brain/portability/knowledge-pack.ts": TEXT,
-  "src/core/brain/portability/role-tokens.ts": ADAPTER,
   "src/core/brain/preference.ts": TEXT,
   "src/core/brain/procedural-graph.ts": LANE,
   "src/core/brain/procedural-memory.ts": LANE,

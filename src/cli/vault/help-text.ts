@@ -43,6 +43,9 @@ export const VAULT_VERB_HELP: Record<string, string> = {
     "the active profile before the bare config vault key.\n",
   map:
     "usage: o2b vault map [show] [--vault <path>] [--json]\n\n" +
-    "Print the resolved vault-map (role token -> folder), merging an optional\n" +
-    "Brain/_vault-map.yaml over the built-in defaults. Read-only.\n",
+    "Print the resolved vault-map (role token -> folder), merging the vault\n" +
+    "map (the vault_map.document brain setting, or Brain/_vault-map.yaml\n" +
+    "before the switch) over the built-in defaults. Writes nothing, except\n" +
+    "that a machine switched before the setting existed stores the map its\n" +
+    "legacy archive kept, once.\n",
 };

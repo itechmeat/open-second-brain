@@ -55,10 +55,9 @@
  * ({@link isMergeResolved}). The detector never mutates anything.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../../../vault.ts";
+import { listLaneFiles, parseLanePage } from "../../../store/lane-pages.ts";
 import { resolveSearchConfig } from "../../../search/index.ts";
 import { makeProvider } from "../../../search/embeddings/provider.ts";
 import { providerProducesVectors } from "../../../search/embeddings/contract.ts";
@@ -182,12 +181,13 @@ function collectDocumentRecords(
   vault: string,
   readable?: (rel: string) => boolean,
 ): CollectedDocuments {
+  // The lane folder in both modes: the files of `Brain/sources/` on an
+  // unswitched machine, the lane entries of the store on a store-only one
+  // (design D14 item 1), where the folder is absent or stale.
   const dir = join(vault, BRAIN_SOURCES_REL);
-  if (!existsSync(dir)) return { records: [], read: 0, listed: 0 };
   const out: DocumentRecord[] = [];
   let listed = 0;
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".md")) continue;
+  for (const name of listLaneFiles(vault, dir)) {
     const path = `${BRAIN_SOURCES_REL}/${name}`;
     if (readable !== undefined && !readable(path)) continue;
     listed += 1;
@@ -198,7 +198,7 @@ function collectDocumentRecords(
     let meta: Record<string, unknown>;
     let body: string;
     try {
-      [meta, body] = parseFrontmatter(abs);
+      [meta, body] = parseLanePage(vault, abs);
     } catch {
       continue;
     }

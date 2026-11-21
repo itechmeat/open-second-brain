@@ -61,6 +61,9 @@ import { CONTINUITY_SESSION_ID_KEY } from "../continuity/types.ts";
 import type { BrainLogEntry } from "../log.ts";
 import { readLogEventsReport } from "../../store/read/log-events.ts";
 import { isStoreOnly } from "../../store/store-only.ts";
+import { storeMemoryRead } from "../memory-pages.ts";
+import { memoryFoldGap, memorySource } from "../../store/read/memory-ids.ts";
+import type { StoreEntities } from "../../store/read/store-entities.ts";
 import { parseSignal } from "../signal.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorIssue } from "../types.ts";
@@ -275,8 +278,17 @@ function readLogEntries(vault: string, swept: SweptPath): SessionLogSnapshot {
 
 /** One observation whose parent session could not be found. */
 export interface OrphanFinding {
-  /** Vault-absolute path of the signal file. */
+  /**
+   * Vault-absolute path of the signal file; on a store-only machine the
+   * path its page would have (the signal is a store record there).
+   */
   readonly path: string;
+  /**
+   * The signal's id when the signal is a store record (a store-only
+   * machine): the repair detaches the reference with a `signal-state`
+   * record of that id, never a file write. Absent for a legacy file.
+   */
+  readonly id?: string;
   /** The dangling value, verbatim - the repair's decision quotes it. */
   readonly session_ref: string;
   readonly identity: string;
@@ -292,6 +304,8 @@ export function scanOrphanedSessionRefs(
   universe: SessionUniverse,
   swept: SweptPath,
 ): ReadonlyArray<OrphanFinding> {
+  const source = memorySource(vault);
+  if (source !== "legacy") return scanStoreSignals(vault, source, universe, swept);
   const dirs = brainDirs(vault);
   const findings: OrphanFinding[] = [];
   for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
@@ -319,6 +333,94 @@ export function scanOrphanedSessionRefs(
     }
   }
   return findings;
+}
+
+/** The inbox folders whose signals the scan judges, in both modes. */
+const SIGNAL_FOLDERS = ["inbox", "processed", "archived"] as const;
+
+/** Where a store that could not be read is reported. */
+const STORE_SIGNALS_SITE = "store:signals";
+
+/**
+ * A store-only machine (design D14 item 1): the signals are records of
+ * the store's signal fold, rebuilt as the pages of the three inbox
+ * folders, so the scan judges those (the legacy folders are absent or
+ * stale there). A store this machine cannot open is reported as swept
+ * uncertainty, never read as "no observations".
+ */
+function scanStoreSignals(
+  vault: string,
+  source: "store" | "none",
+  universe: SessionUniverse,
+  swept: SweptPath,
+): ReadonlyArray<OrphanFinding> {
+  if (source === "none") {
+    reportSweptFailure(
+      STORE_SIGNALS_SITE,
+      "store signal read failed",
+      new Error("this machine reads the brain store, and no store could be opened"),
+      swept,
+      SWEEP_ORIGIN.root,
+    );
+    return [];
+  }
+  // One read of the signal fold, judged whole on that same read: a
+  // signal lifecycle record it could not read (an events shard unreadable
+  // or gone, a body still a pending blob) may be the one that relinked or
+  // already detached a reference, so while one is missing no reference is
+  // known to dangle. The scan answers an uncertainty and a repair writes
+  // nothing (design D14, fail closed).
+  let read;
+  try {
+    read = storeMemoryRead(vault, SIGNAL_FOLDERS);
+  } catch (err) {
+    reportSweptFailure(
+      STORE_SIGNALS_SITE,
+      "store signal read failed",
+      err,
+      swept,
+      SWEEP_ORIGIN.root,
+    );
+    return [];
+  }
+  const gap =
+    read === null
+      ? "this machine reads the brain store, and no store could be opened"
+      : signalFoldGap(read.entities);
+  if (gap !== null || read === null) {
+    reportSweptFailure(
+      STORE_SIGNALS_SITE,
+      "store signal read incomplete",
+      new Error(gap ?? "no store read"),
+      swept,
+      SWEEP_ORIGIN.root,
+    );
+    return [];
+  }
+  const findings: OrphanFinding[] = [];
+  for (const page of read.pages) {
+    if (page.kind !== "signal") continue;
+    const raw = page.meta["session_ref"];
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    const ref = raw.trim();
+    if (isImportedTranscriptRef(ref)) continue;
+    const { identity } = parseSessionRef(ref);
+    if (universe.ids.has(identity)) continue;
+    // The store keys a signal by the id it carries, which the page
+    // name need not be (a migrated page named by date and slug).
+    const id =
+      typeof page.meta["id"] === "string" && page.meta["id"] !== "" ? page.meta["id"] : page.id;
+    findings.push({ path: page.path, id, session_ref: ref, identity });
+  }
+  return findings;
+}
+
+/**
+ * Why the signal fold of `entities` may miss a lifecycle record, or `null`
+ * when that read is whole. Judged on the read a decision is made on.
+ */
+export function signalFoldGap(entities: StoreEntities): string | null {
+  return memoryFoldGap(entities);
 }
 
 /**

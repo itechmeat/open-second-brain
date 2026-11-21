@@ -35,6 +35,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
+import type { Authority } from "./constants.ts";
 import { acquireLockSyncWithRetry } from "../brain/sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../brain/vault-identity.ts";
 import {
@@ -69,6 +70,7 @@ import {
   sameEntry,
   storeEntries,
   storeEntry,
+  storeEntryRead,
   storedEntryPrivate,
   tombstoneOf,
 } from "./lane-entry-store.ts";
@@ -278,13 +280,57 @@ export function laneFileBytes(vault: string, path: string): number {
 export function readLaneText(vault: string, path: string): string | null {
   if (heldInStore(vault, path)) {
     const value = storeEntry(vault, path);
-    if (value === null) return null;
-    if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
-      return value.raw;
-    }
-    return renderLaneText(path, value.fields, value.text);
+    return value === null ? null : entryText(path, value);
   }
   return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+/** The text of the store entry `value` at `path`, as {@link readLaneText} answers it. */
+function entryText(path: string, value: NonNullable<ReturnType<typeof storeEntry>>): string {
+  if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
+    return value.raw;
+  }
+  return renderLaneText(path, value.fields, value.text);
+}
+
+/**
+ * One read of a store-held lane entry, for a read-modify-write: the page
+ * and the stored text come from the same fold value, and `unchanged()`
+ * answers whether the store still holds that value, so a write that
+ * follows lands only on the entry it was computed from.
+ */
+export interface LaneEntrySnapshot {
+  readonly page: LanePage;
+  readonly text: string;
+  /**
+   * Whether the fold this entry was read from is whole: a record it could
+   * not read (an unreadable shard, a pending body blob) may be a newer
+   * version of the entry, so a write from this read waits while it is not.
+   */
+  readonly whole: boolean;
+  /** The authority of the record that holds the entry now, from the same read. */
+  readonly authority: Authority | null;
+  /** Whether the store, read whole again, still holds the entry this snapshot read. */
+  unchanged(): boolean;
+}
+
+/**
+ * The store-held lane entry at `path` read once ({@link LaneEntrySnapshot}),
+ * or null when the store holds no entry there. For a store-held path only.
+ */
+export function readLaneEntrySnapshot(vault: string, path: string): LaneEntrySnapshot | null {
+  const { value, whole, authority } = storeEntryRead(vault, path);
+  if (value === null) return null;
+  return {
+    page: { path, frontmatter: fieldsCopy(value), body: value.text },
+    text: entryText(path, value),
+    whole,
+    authority,
+    unchanged: () => {
+      const now = storeEntryRead(vault, path);
+      return now.whole && sameEntry(now.value, value.fields, value.text, value.raw);
+    },
+  };
 }
 
 /**
@@ -361,7 +407,14 @@ export function writeLanePage(
   path: string,
   frontmatter: FrontmatterMap,
   body: string,
-  opts: WriteFrontmatterAtomicOptions = {},
+  opts: WriteFrontmatterAtomicOptions & {
+    /**
+     * The store record's authority, for a rewrite that keeps the standing
+     * of the record it replaces; the lane's own when absent. The legacy
+     * file write ignores it.
+     */
+    readonly authority?: Authority;
+  } = {},
 ): boolean {
   let written = true;
   // An overwrite with what the entry already holds writes nothing, as the
@@ -375,7 +428,8 @@ export function writeLanePage(
     routeLaneWrite(vault, path, {
       legacy: () => {
         mkdirSync(dirname(path), { recursive: true });
-        written = writeFrontmatterAtomic(path, frontmatter, body, opts);
+        const { authority: _authority, ...fileOpts } = opts;
+        written = writeFrontmatterAtomic(path, frontmatter, body, fileOpts);
       },
       store: () => [
         ...replacedShared(vault, path),
@@ -385,6 +439,9 @@ export function writeLanePage(
           frontmatter,
           body,
           replaced || storedEntryPrivate(vault, path) || isPrivateEntry(vault, frontmatter, body),
+          "judged",
+          undefined,
+          opts.authority,
         ),
       ],
       context: context(vault),
@@ -599,7 +656,10 @@ export function listLaneDirs(vault: string, dir: string): string[] {
  * before anything moves; a folder moved onto itself changes nothing.
  */
 export function moveLaneTree(vault: string, from: string, to: string): void {
-  const movedTo = (path: string): LaneMove => ({ from: path, to: join(to, relative(from, path)) });
+  const movedTo = (path: string): LaneMove => ({
+    from: path,
+    to: join(to, relative(from, path)),
+  });
   // Judged from the paths alone, so a legacy move reads no store first.
   assertLaneDestination(vault, from, to, [movedTo(join(from, "page.md"))]);
   if (relative(from, to) === "") return;

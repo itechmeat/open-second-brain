@@ -92,7 +92,7 @@ import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vaul
 import type { SessionLineage } from "./types.ts";
 import { dualWrite } from "../../store/dual-write.ts";
 import { readLedgerRows } from "../../store/read/ledger-rows.ts";
-import { isStoreOnly } from "../../store/store-only.ts";
+import { isStoreOnly, StoreOnlyUndeterminedError } from "../../store/store-only.ts";
 import { storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
@@ -888,8 +888,16 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
 export function readLineageLedger(vault: string): LineageLedgerState {
   // A store-only machine (design D14 item 1) folds the `lineage` ledger
   // rows: by `at`, with fold order (the order every machine agrees on)
-  // breaking ties. Never throws, like the legacy read.
-  if (isStoreOnly({ vault })) {
+  // breaking ties. Never throws, like the legacy read: a vault this
+  // process cannot tell is switched or not reads no lineage either way.
+  let storeOnly: boolean;
+  try {
+    storeOnly = isStoreOnly({ vault });
+  } catch (err) {
+    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    return buildState([]);
+  }
+  if (storeOnly) {
     let rows: unknown[];
     try {
       rows = readLedgerRows<unknown>(DUAL_WRITE_LEDGERS.lineage, () => [], { vault });
@@ -940,7 +948,23 @@ export function recordLineageObservation(
   // capture hook must never fail, so a store failure is returned as a
   // named drop, recorded in the gap sidecar, which lives in the
   // device-local state on this machine (nothing is written under `Brain/`).
-  if (isStoreOnly({ vault })) {
+  // A vault this process cannot tell is switched or not takes neither
+  // path: the observation is a named drop, written nowhere.
+  let storeOnly: boolean;
+  try {
+    storeOnly = isStoreOnly({ vault });
+  } catch (err) {
+    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    return {
+      status: LINEAGE_RECORD_STATUS.dropped,
+      notice: degradationNotice({
+        code: DEGRADATION_CODE.lineageObservationDropped,
+        site: LEDGER_SITE,
+        detail: `observation for session ${obs.sessionId} (event ${obs.event}) was not appended: ${err.message}`,
+      }),
+    };
+  }
+  if (storeOnly) {
     try {
       // Lineage says which sessions ran where (working directories, repos,
       // branches): it goes to `private` when this machine holds it.

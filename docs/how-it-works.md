@@ -382,7 +382,7 @@ no-op by default:
 - **Sources dashboard.** `o2b brain sources` / `brain_sources` aggregate
   the brain's signals by (agent, source_type) - a read-only projection.
 - **Vault-map tokens.** `{{role}}` tokens resolve to user content folders
-  via an optional `Brain/_vault-map.yaml` (defaults otherwise), wired into
+  via an optional vault map (the operator-only `vault_map.document` brain setting, which the migration fills from `Brain/_vault-map.yaml`; defaults otherwise), wired into
   scan-inline read paths and graph import. The fixed `Brain/*` layout is
   never routed through the resolver.
 - **Multi-vault profiles.** A `profiles.json` registry beside the config;

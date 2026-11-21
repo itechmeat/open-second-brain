@@ -446,6 +446,36 @@ export function storeMemoryPage(
 
 // ----- By folder --------------------------------------------------------------
 
+/** One read of the store's memory folds: the pages of some folders and the fold they came from. */
+export interface StoreMemoryRead {
+  /** The pages of the folders asked for, every signal state, sorted by name. */
+  readonly pages: StoreMemoryPage[];
+  /** The fold the pages were rebuilt from, so its completeness is judged on the same read. */
+  readonly entities: NonNullable<ReturnType<typeof memoryEntities>>;
+}
+
+/**
+ * The pages of `folders` rebuilt from ONE read of the store's folds, with
+ * that read: a caller that acts on what the pages say (a repair) judges
+ * whether the fold was whole on the very read it judged the pages on.
+ * `null` on an unswitched machine or with no readable store.
+ */
+export function storeMemoryRead(
+  vault: string | null,
+  folders: ReadonlyArray<MemoryFolder>,
+  context: MemoryPagesContext = {},
+): StoreMemoryRead | null {
+  if (memorySource(vault, context.configPath) !== "store") return null;
+  const entities = memoryEntities({ ...contextOf(vault, context), vault });
+  if (entities === null) return null;
+  const rels = new Set(folders.map((folder) => FOLDER_REL[folder]));
+  const pages = rebuiltPages(vault, entities)
+    .filter((page) => rels.has(posix.dirname(page.rel)))
+    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map(ownCopy);
+  return { pages, entities };
+}
+
 function contextOf(vault: string | null, context: MemoryPagesContext): ReadContext {
   return { vault, ...(context.configPath !== undefined ? { configPath: context.configPath } : {}) };
 }

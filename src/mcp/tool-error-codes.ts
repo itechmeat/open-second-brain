@@ -95,6 +95,7 @@ import {
 } from "./protocol.ts";
 import { OutputContractError } from "./output-contract.ts";
 import { REACH_REFUSAL } from "./reach-refusal.ts";
+import { StoreOnlyUndeterminedError } from "../core/store/store-only.ts";
 
 /** The `_meta` key an `isError` result carries its code under. */
 export const TOOL_ERROR_META_KEY = "open-second-brain/error";
@@ -153,6 +154,12 @@ export const TOOL_ERROR_CODE = Object.freeze({
    * 1); the payload names its reason and remedy ({@link ToolErrorDetail}).
    */
   storeWriteFailed: "store_write_failed",
+  /**
+   * The machine cannot tell whether the vault holds a legacy `Brain/`
+   * tree, because the vault cannot be examined (`StoreOnlyUndeterminedError`):
+   * the tool read and wrote nothing rather than guess a layout.
+   */
+  vaultUnreadable: "vault_unreadable",
 } as const);
 
 /** Closed union over {@link TOOL_ERROR_CODE}. */
@@ -494,6 +501,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(InvalidExpirationTargetError, EXPIRATION_REFUSAL_CODE.invalidTarget),
   fixed(QuoteCheckError, TOOL_ERROR_CODE.quoteUnverified),
   fixed(StoreWriteError, TOOL_ERROR_CODE.storeWriteFailed),
+  fixed(StoreOnlyUndeterminedError, TOOL_ERROR_CODE.vaultUnreadable),
 ]);
 
 /**

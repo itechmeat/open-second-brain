@@ -20,6 +20,7 @@ import {
   parsePermissionsDocumentText,
   PERMISSIONS_DOCUMENT_SETTING,
 } from "../permissions/document.ts";
+import { invalidVaultMapValue, VAULT_MAP_SETTING } from "../portability/vault-map-document.ts";
 import { DEFAULT_VIEW_LANGUAGE, isViewLanguage, VIEW_LANGUAGES } from "../../view/i18n.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./defaults.ts";
 import { brainConfigKey, brainKeyHome, brainSettingKey } from "./settings-keys.ts";
@@ -97,6 +98,15 @@ export const STORE_NATIVE_SETTINGS: Readonly<Record<string, StoreNativeSetting>>
         return err instanceof Error ? err.message : String(err);
       }
     },
+    default: null,
+    operatorOnly: true,
+  },
+  // The vault map of a store-only machine (`_vault-map.yaml` once
+  // switched): the role tokens' folder names, as the file's text.
+  // Operator-only, as the file was: an agent never wrote it, and a token
+  // pointed elsewhere moves what the note walk and graph import read.
+  [VAULT_MAP_SETTING]: {
+    invalid: invalidVaultMapValue,
     default: null,
     operatorOnly: true,
   },

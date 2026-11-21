@@ -13,6 +13,7 @@ import { preferencePath } from "../../../src/core/brain/paths.ts";
 import {
   derivedPreferenceBody,
   moveToRetired,
+  preferencePageBody,
   preferencePageProse,
   writePreference,
 } from "../../../src/core/brain/preference.ts";
@@ -86,9 +87,13 @@ describe("preference prose", () => {
     const meta = { evidenced_by: ["[[sig-x]]"] };
     expect(preferencePageProse(meta, derivedPreferenceBody(meta, false), false)).toBeNull();
     expect(preferencePageProse(meta, "", false)).toBeNull();
-    expect(preferencePageProse(meta, "A note.\n\n## Origin\n\n- [[sig-x]]", false)).toBe(
-      "A note.\n\n## Origin\n\n- [[sig-x]]",
-    );
+    // The evidence list under `## Origin` is rendered from the field, so
+    // it is no prose; the note is.
+    expect(preferencePageProse(meta, "A note.\n\n## Origin\n\n- [[sig-x]]", false)).toBe("A note.");
+    // Words of the page's own under the heading are prose, and stay.
+    expect(
+      preferencePageProse(meta, "## Origin\n\nImported from [[sig-x]].\n\n- [[sig-x]]", false),
+    ).toBe("## Origin\n\nImported from [[sig-x]].");
   });
 });
 
@@ -165,4 +170,50 @@ test("the writer's evidence sections are no prose", () => {
   });
   expect(preferencePageProse(meta, body, false)).toBeNull();
   expect(preferencePageProse(meta, `${body}\n\n## Notes\n\nMine.\n`, false)).toContain("Mine.");
+});
+
+test("the derived sections leave the prose by their real headings only, fenced examples kept", () => {
+  const meta = { evidenced_by: ["[[sig-new]]"] } as never;
+  const body = [
+    "## Origin",
+    "",
+    "- [[sig-old]]",
+    "",
+    "## Recent applications",
+    "",
+    "- [[notes/x]] — 2026-11-01T00:00:00Z",
+    "",
+    "# Notes",
+    "",
+    "Keep me.",
+    "",
+    "  ```md",
+    "## Origin",
+    "- [[sig-example]]",
+    "  ```",
+    "",
+    "~~~",
+    "## Recent violations",
+    "~~~",
+    "",
+    "Last line.",
+  ].join("\n");
+  const prose = preferencePageProse(meta, body, false) ?? "";
+  // The derived sections go, up to the next real heading of their level:
+  // a level-one heading after one ends it, it is not swallowed.
+  expect(prose).not.toContain("[[sig-old]]");
+  expect(prose).not.toContain("[[notes/x]]");
+  expect(prose).toContain("# Notes\n\nKeep me.");
+  // A heading inside a backtick (indented) or tilde fence is an example.
+  expect(prose).toContain("  ```md\n## Origin\n- [[sig-example]]\n  ```");
+  expect(prose).toContain("~~~\n## Recent violations\n~~~");
+  expect(prose).toContain("Last line.");
+
+  // The page body renders the Origin from the field, the prose as it is.
+  const page = preferencePageBody(meta, prose, false);
+  expect(page.startsWith("## Origin\n\n- [[sig-new]]")).toBe(true);
+  expect(page).toContain("- [[sig-example]]");
+  expect(page).not.toContain("[[sig-old]]");
+  // Prose stored before this rule, with its Origin, renders the field's list.
+  expect(preferencePageBody(meta, body, false)).not.toContain("[[sig-old]]");
 });

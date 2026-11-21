@@ -25,13 +25,14 @@ import { join, posix, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { realpathInsideVault } from "../path-safety.ts";
-import { formatFrontmatter, parseFrontmatter, parseFrontmatterText } from "../vault.ts";
+import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
 import { rewriteStorePreference, storePreferencePages } from "./preference-page-write.ts";
 import { preferencesStoreOnly } from "./preference-store.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { matchScope, mayDescend, resolveVaultScope } from "../vault-scope/index.ts";
 import { pathCovers, type VaultScopeRules } from "../vault-scope/defaults.ts";
-import { brainDirs, BRAIN_ROOT_REL } from "./paths.ts";
+import { memoryFolderPages, type MemoryPage, type StoreMemoryPage } from "./memory-pages.ts";
+import { BRAIN_ROOT_REL } from "./paths.ts";
 import { codeRegions } from "./wikilink.ts";
 import {
   isMergeResolved,
@@ -78,21 +79,26 @@ export interface DedupReport {
   readonly scanned: number;
 }
 
+/**
+ * The preference and retired pages of `vault`: the folder files on an
+ * unswitched machine, the pages the store's fold rebuilds on a switched
+ * one ({@link memoryFolderPages}), so the dedup scan sees the same pages
+ * in both modes.
+ */
 function readPageRecords(vault: string): PageRecord[] {
-  const dirs = brainDirs(vault);
   const out: PageRecord[] = [];
-  const sources: Array<{ dir: string; prefix: string }> = [
-    { dir: dirs.preferences, prefix: "pref-" },
-    { dir: dirs.retired, prefix: "ret-" },
+  const sources: Array<{ folder: "preferences" | "retired"; prefix: string }> = [
+    { folder: "preferences", prefix: "pref-" },
+    { folder: "retired", prefix: "ret-" },
   ];
-  for (const { dir, prefix } of sources) {
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
+  for (const { folder, prefix } of sources) {
+    for (const page of memoryFolderPages(vault, folder)) {
+      const name = page.name;
       if (!name.endsWith(".md") || !name.startsWith(prefix)) continue;
-      const path = join(dir, name);
+      const path = page.path;
       let meta: Record<string, unknown>;
       try {
-        [meta] = parseFrontmatter(path);
+        [meta] = page.read();
       } catch {
         continue;
       }
@@ -100,7 +106,7 @@ function readPageRecords(vault: string): PageRecord[] {
       const topic = typeof meta["topic"] === "string" ? meta["topic"] : "";
       const principle = typeof meta["principle"] === "string" ? meta["principle"] : "";
       const createdAtIso = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
-      const createdAtMs = createdAtIso ? Date.parse(createdAtIso) : statSync(path).mtimeMs;
+      const createdAtMs = createdAtIso ? Date.parse(createdAtIso) : pageMtimeMs(page);
       // Per-scope keying (t_37c05a34): fold the page's composite scope
       // (owner/session/project) into the dedup key so identical text in two
       // scopes is not collapsed. Additive: a scopeless page yields an empty
@@ -121,6 +127,12 @@ function readPageRecords(vault: string): PageRecord[] {
     }
   }
   return out;
+}
+
+/** A page's mtime: the file's, or the store's twin of it for a rebuilt page. */
+function pageMtimeMs(page: MemoryPage): number {
+  if (page.stored) return (page as StoreMemoryPage).updatedMs;
+  return statSync(page.path).mtimeMs;
 }
 
 /**

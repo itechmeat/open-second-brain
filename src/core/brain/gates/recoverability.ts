@@ -123,6 +123,12 @@ export const RECOVERABILITY_BLOCKER = Object.freeze({
   snapshotExcludedEntry: "snapshot_excluded_entry",
   /** The derived store is at risk and the recovery point did not carry it. */
   derivedStoreNotArchived: "derived_store_not_archived",
+  /**
+   * The brain records at risk live in the brain store (a switched
+   * machine), and a snapshot archives only the device-local state there:
+   * the store's records are in no archive.
+   */
+  brainRecordsInStore: "brain_records_in_store",
 } as const);
 
 /** Closed union over {@link RECOVERABILITY_BLOCKER}. */
@@ -172,6 +178,12 @@ export interface RecoverabilityFacts {
   readonly blastRadius: DestructiveBlastRadius;
   /** True when that archive carried the derived store. Defaults to false. */
   readonly derivedStoreArchived?: boolean;
+  /**
+   * True on a machine whose brain lives in the store (store-only): the
+   * Brain region of the blast radius is store records, which the archive
+   * does not hold. Defaults to false.
+   */
+  readonly brainInStore?: boolean;
 }
 
 /** The frozen verdict, carrying sorted token arrays and never prose. */
@@ -213,8 +225,9 @@ export function classifyRecoverability(facts: RecoverabilityFacts): Recoverabili
 
   const archivedStore = facts.recoveryPoint && facts.derivedStoreArchived === true;
 
+  const brainInStore = facts.brainInStore === true;
   const coverage: RecoveryCoverage[] = [];
-  if (facts.recoveryPoint && radius.brainTopLevel === true) {
+  if (facts.recoveryPoint && radius.brainTopLevel === true && !brainInStore) {
     coverage.push(RECOVERY_COVERAGE.brainTopLevel);
   }
   if (archivedStore && radius.derivedStore === true) {
@@ -229,6 +242,9 @@ export function classifyRecoverability(facts: RecoverabilityFacts): Recoverabili
   }
   if (radius.derivedStore === true && !archivedStore) {
     blockers.push(RECOVERABILITY_BLOCKER.derivedStoreNotArchived);
+  }
+  if (radius.brainTopLevel === true && brainInStore) {
+    blockers.push(RECOVERABILITY_BLOCKER.brainRecordsInStore);
   }
 
   return Object.freeze({

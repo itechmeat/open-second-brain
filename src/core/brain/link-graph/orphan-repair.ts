@@ -44,7 +44,13 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { vaultRelative } from "../../path-safety.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { collectKnownSessionIds, scanOrphanedSessionRefs } from "../doctor/orphan-session-check.ts";
+import { routeSignalState } from "../signal-state.ts";
+import {
+  collectKnownSessionIds,
+  scanOrphanedSessionRefs,
+  signalFoldGap,
+} from "../doctor/orphan-session-check.ts";
+import { readStoreEntities } from "../../store/read/store-entities.ts";
 import type { DoctorUncertainEntry } from "../doctor/report.ts";
 import type { SweptPath } from "../doctor/unreadable-path.ts";
 
@@ -78,7 +84,12 @@ export class OrphanRepairStoreUnreadableError extends Error {
 }
 
 /** What the lane decided about one finding. */
-export type OrphanRepairAction = "detach" | "skip-cap" | "skip-changed" | "skip-locked";
+export type OrphanRepairAction =
+  | "detach"
+  | "skip-cap"
+  | "skip-changed"
+  | "skip-locked"
+  | "skip-incomplete";
 
 export interface OrphanRepairDecision {
   /** Vault-relative path of the signal file. */
@@ -158,7 +169,11 @@ export function runOrphanRepair(vault: string, opts: OrphanRepairOptions = {}): 
       decisions.push({ ...decision, action: "skip-cap" });
       continue;
     }
-    const outcome = apply ? detachSessionRef(finding.path, finding.session_ref) : "detached";
+    const outcome = !apply
+      ? "detached"
+      : finding.id !== undefined
+        ? detachStoreSessionRef(vault, finding.id, finding.session_ref)
+        : detachSessionRef(finding.path, finding.session_ref);
     if (outcome !== "detached") {
       decisions.push({ ...decision, action: outcome });
       continue;
@@ -207,4 +222,38 @@ export function detachSessionRef(
   } finally {
     handle.release();
   }
+}
+
+/**
+ * The store-only form of {@link detachSessionRef}: the signal is a store
+ * record (design D14 item 1), so the detach is one `signal-state` record
+ * removing the `session_ref` field (`null` removes a field in the signal
+ * fold), the body and every other field untouched, and nothing under
+ * `Brain/` is written. The same compare as the file form runs against the
+ * fold first: a reference rewritten since the scan is `skip-changed`, a
+ * reference already gone is not a write. The compare and the completeness
+ * check run on one read of the fold: while that read may miss a signal
+ * lifecycle record (an events shard unreadable or gone, a body still a
+ * pending blob), the reference it shows may be stale, so the signal is
+ * `skip-incomplete` and nothing is written.
+ */
+export function detachStoreSessionRef(
+  vault: string,
+  id: string,
+  expected: string,
+): "detached" | "skip-changed" | "skip-incomplete" {
+  const entities = readStoreEntities();
+  if (entities === null || signalFoldGap(entities) !== null) return "skip-incomplete";
+  const current = entities.signals.get(id)?.frontmatter["session_ref"];
+  if (current === undefined) return "detached";
+  if (typeof current !== "string" || current.trim() !== expected) return "skip-changed";
+  routeSignalState({
+    vault,
+    id,
+    fields: { session_ref: null },
+    legacy: () => {
+      throw new Error(`signal ${id} is a store record, but this machine writes the legacy tree`);
+    },
+  });
+  return "detached";
 }

@@ -6,7 +6,10 @@
  *
  *  - `signal` `{ id, path, staged, frontmatter, raw }`: the capture. A
  *    signal starts `active` (in the inbox) or, when `staged`, `staged`
- *    (waiting for write approval).
+ *    (waiting for write approval). A capture whose `path` lies in
+ *    `Brain/inbox/processed/` or `Brain/inbox/archived/` starts `consumed`
+ *    or `archived`: only the migration writes such a capture, for a legacy
+ *    page whose folder was its state ({@link captureState}).
  *  - `signal-state` `{ authority, signal, state?, fields? }`: one lifecycle
  *    move of the signal `signal`, a change of some of its frontmatter
  *    fields, or both. `state` is one of {@link SIGNAL_STATE_VALUES};
@@ -34,6 +37,7 @@
  *    `removed` counts them for the doctor.
  */
 
+import { BRAIN_ARCHIVED_SIGNALS_REL, BRAIN_PROCESSED_REL } from "../brain/path-constants.ts";
 import { SIGNAL_KIND } from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
 import { prepareRecords, recordAuthority, type RejectedRecord } from "./fold.ts";
@@ -100,6 +104,32 @@ export interface SignalsFold {
 }
 
 const STATE_SET: ReadonlySet<string> = new Set(SIGNAL_STATE_VALUES);
+
+/**
+ * The state a capture starts in. On a legacy machine a signal page's state
+ * is its folder (`read/signals.ts`), and a page moved into `processed/` or
+ * `archived/` by hand carries no state of its own; the migration imports
+ * it with the path it was found at. So a capture in one of those folders
+ * starts consumed or archived, as the legacy reader saw it, and stores
+ * migrated before the import also wrote the state record read the same.
+ * Such a capture also outranks every state record before it (the legacy
+ * reader never read those); a state record after it wins as usual.
+ */
+function captureState(record: StoreRecord): SignalLifecycle {
+  if (record.body["staged"] === true) return "staged";
+  const path = record.body["path"];
+  if (typeof path === "string") {
+    const dir = path.replaceAll("\\", "/").split("/").slice(0, -1).join("/");
+    if (dir === BRAIN_PROCESSED_REL) return "consumed";
+    if (dir === BRAIN_ARCHIVED_SIGNALS_REL) return "archived";
+  }
+  return "active";
+}
+
+/** Whether `state` is one only a folder can give a capture (`captureState`). */
+function isFolderState(state: SignalLifecycle): boolean {
+  return state === "consumed" || state === "archived";
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -182,6 +212,15 @@ export function foldSignals(input: Iterable<StoreRecord>): SignalsFold {
       entry.signal = record;
       entry.removed = false;
       entry.history.push(record);
+      // A capture found in `processed/` or `archived/` is the migration's
+      // import of where the legacy page sat when the machine switched, and
+      // the legacy side's state is its folder, whatever state records said
+      // before (a page approved, then moved there by hand, read as
+      // consumed). So it outranks every earlier state; a later one wins.
+      if (isFolderState(captureState(record))) {
+        entry.state = null;
+        entry.stateRecord = null;
+      }
       continue;
     }
     if (record.kind === SIGNAL_REMOVED_KIND) {
@@ -247,7 +286,7 @@ export function foldSignals(input: Iterable<StoreRecord>): SignalsFold {
     signals.set(id, {
       id,
       signal: entry.signal,
-      state: entry.state ?? (entry.signal.body["staged"] === true ? "staged" : "active"),
+      state: entry.state ?? captureState(entry.signal),
       stateRecord: entry.stateRecord,
       frontmatter,
       history: entry.history,

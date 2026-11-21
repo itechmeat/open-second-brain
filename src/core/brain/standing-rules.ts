@@ -51,17 +51,14 @@
  * without a word is worse than one that was never written.
  */
 
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { foldIncomplete, heldInStore, storeEntry } from "../store/lane-entry-store.ts";
 import { laneStoreFold } from "../store/lane-fold-cache.ts";
 import { rawParsesBack, renderLaneText } from "../store/lane-raw.ts";
-import {
-  BRAIN_ROOT_REL,
-  BRAIN_SCOPED_RULES_DIR,
-  BRAIN_STANDING_RULES_FILE,
-} from "./path-constants.ts";
+import { legacyArchivePath } from "../store-migration/legacy-kept.ts";
+import { BRAIN_SCOPED_RULES_DIR, BRAIN_STANDING_RULES_FILE } from "./path-constants.ts";
 import { brainDirs, brainStandingRulesPath } from "./paths.ts";
 import { applySectionBudget } from "./text/text-budget.ts";
 
@@ -192,16 +189,9 @@ export function readStandingRules(
  * whole is a failure, never "no rules": the missing records may hold them.
  */
 export function readOperatorRuleFile(vault: string, path: string): string {
+  // A vault this process cannot examine is neither layout: `heldInStore`
+  // throws `StoreOnlyUndeterminedError`, a failure, never "no rules".
   if (!heldInStore(vault, path)) return readFileSync(path, "utf8");
-  // A vault the process cannot traverse also shows no `Brain/` folder,
-  // which reads as a store-only machine: that is a failure to read, never
-  // "no rules", so the error of the probe itself is thrown.
-  try {
-    statSync(join(vault, BRAIN_ROOT_REL));
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== ENOENT && code !== "ENOTDIR") throw err;
-  }
   const value = storeEntry(vault, path);
   if (value === null) {
     if (foldIncomplete()) {
@@ -221,7 +211,38 @@ export function readOperatorRuleFile(vault: string, path: string): string {
     return value.raw;
   }
   if (Object.keys(value.fields).length === 0) return value.text;
-  return renderLaneText(path, value.fields, value.text);
+  return (
+    keptOriginalOf(vault, path, value.fields, value.text) ??
+    renderLaneText(path, value.fields, value.text)
+  );
+}
+
+/**
+ * The bytes of a rule file a release before the `raw` field imported as
+ * fields and text only, when this machine still keeps them: the file in
+ * the legacy tree, or its copy in the archive the tree's removal kept in
+ * the device-local state. Served only when they parse back to exactly the
+ * entry's fields and text, so an entry changed since the migration never
+ * reads the old file; `null` when neither copy is there or matches (the
+ * entry's rendering applies, its YAML re-serialised).
+ */
+function keptOriginalOf(
+  vault: string,
+  path: string,
+  fields: Readonly<Record<string, unknown>>,
+  text: string,
+): string | null {
+  const archived = legacyArchivePath(vault, relative(vault, path));
+  for (const candidate of archived === null ? [path] : [path, archived]) {
+    let kept: string;
+    try {
+      kept = readFileSync(candidate, "utf8");
+    } catch {
+      continue;
+    }
+    if (rawParsesBack(path, kept, fields, text)) return kept;
+  }
+  return null;
 }
 
 /** Refusal raised by {@link assertStandingRulesNotTargeted}. */

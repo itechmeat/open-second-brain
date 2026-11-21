@@ -10,11 +10,8 @@
  * read-only dashboard ships.)
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
-import { brainDirs } from "../paths.ts";
-import { parseSignal } from "../signal.ts";
+import { memoryFolderPages } from "../memory-pages.ts";
+import { parseSignalPage } from "../signal.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
 
 export interface SourceRow {
@@ -44,14 +41,24 @@ interface Bucket {
 }
 
 type SignalDirKind = "active" | "processed" | "archived";
+type SignalFolder = "inbox" | "processed" | "archived";
 
-function scanDir(dir: string, kind: SignalDirKind, buckets: Map<string, Bucket>): void {
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
+/**
+ * Count one signal folder: its files on an unswitched machine, the pages
+ * the store's signal fold rebuilds on a switched one ({@link memoryFolderPages}).
+ */
+function scanFolder(
+  vault: string,
+  folder: SignalFolder,
+  kind: SignalDirKind,
+  buckets: Map<string, Bucket>,
+): void {
+  for (const page of memoryFolderPages(vault, folder)) {
+    if (!page.name.endsWith(".md")) continue;
     let sig;
     try {
-      sig = parseSignal(join(dir, name));
+      const [meta, body] = page.read();
+      sig = parseSignalPage(meta, body, page.path);
     } catch {
       continue;
     }
@@ -81,11 +88,10 @@ function scanDir(dir: string, kind: SignalDirKind, buckets: Map<string, Bucket>)
  * Aggregate the brain's signals into a per-source dashboard. Read-only.
  */
 export function aggregateSources(vault: string): SourcesReport {
-  const dirs = brainDirs(vault);
   const buckets = new Map<string, Bucket>();
-  scanDir(dirs.inbox, "active", buckets);
-  scanDir(dirs.processed, "processed", buckets);
-  scanDir(dirs.archived, "archived", buckets);
+  scanFolder(vault, "inbox", "active", buckets);
+  scanFolder(vault, "processed", "processed", buckets);
+  scanFolder(vault, "archived", "archived", buckets);
 
   const sources = [...buckets.values()]
     .map((b) => ({

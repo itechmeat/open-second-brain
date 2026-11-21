@@ -6,8 +6,10 @@ import { fail, info, writeJson } from "../../output.ts";
 
 /**
  * `o2b vault map [show]` - print the resolved vault-map (role token ->
- * folder), merging an optional `Brain/_vault-map.yaml` over the built-in
- * defaults. Read-only.
+ * folder), merging the vault map (`role-tokens.ts`: the operator's
+ * `vault_map.document` setting, or `Brain/_vault-map.yaml` before the
+ * switch) over the built-in defaults. Writes nothing, except the one-time
+ * carry-over of an archived map on a machine switched before the setting.
  */
 export async function cmdVaultMap(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, { vault: { type: "string" }, json: { type: "boolean" } });

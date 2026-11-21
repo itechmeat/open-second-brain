@@ -188,3 +188,30 @@ describe("buildSchemaReport", () => {
     expect(Object.isFrozen(report.findings)).toBe(true);
   });
 });
+
+test("a log event header inside a fenced code block of an event body is not counted", () => {
+  writeBrainConfig(["schema_version: 1", "schema:", "  log_event_kinds: [milestone]"].join("\n"));
+  writeFileSync(
+    join(vault, "Brain", "log", "2026-05-30.md"),
+    [
+      "# Brain log — 2026-05-30",
+      "",
+      "## 12:00:00Z — milestone",
+      "- text: quoting the log format",
+      "",
+      "```",
+      "## 12:00:01Z — milestone",
+      "```",
+      "",
+      "~~~",
+      "## 12:00:02Z — mystery",
+      "~~~",
+    ].join("\n"),
+    "utf8",
+  );
+  const report = buildSchemaReport(vault);
+  expect(report.usage.log_event_kinds).toEqual([{ token: MILESTONE, count: 1 }]);
+  expect(
+    report.findings.filter((f) => "category" in f && f.category === "log_event_kinds"),
+  ).toEqual([]);
+});

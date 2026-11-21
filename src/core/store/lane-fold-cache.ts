@@ -26,7 +26,7 @@ import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { processDirsEnv, stateRootDir } from "../platform-dirs.ts";
-import { STORE_PARTITIONS } from "./constants.ts";
+import { STORE_PARTITIONS, type Authority } from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
 import { parseHlc } from "./hlc.ts";
 import {
@@ -49,6 +49,12 @@ export interface LaneFolded {
   readonly clocks: ReadonlyMap<string, number>;
   /** Keys of the live entries whose winning record is in `private`. */
   readonly privateKeys: ReadonlySet<string>;
+  /**
+   * The authority of each live entry's winning record: a rewrite that only
+   * adds to an entry (a privacy restamp) keeps it, so a later writer of the
+   * same standing can still replace the entry.
+   */
+  readonly authorities: ReadonlyMap<string, Authority>;
   /**
    * `<partition>/<rel>` of every `events` shard whose records the fold
    * could not see (unreadable, or gone since this machine read it).
@@ -89,6 +95,7 @@ const EMPTY_FOLD: LaneFolded = {
   entries: new Map(),
   clocks: new Map(),
   privateKeys: new Set(),
+  authorities: new Map(),
   unreadable: [],
   pendingBlobs: [],
 };
@@ -179,9 +186,12 @@ export function laneStoreFold(): LaneFolded {
   const entries = new Map<string, LaneEntryValue>();
   const clocks = new Map<string, number>();
   const privateKeys = new Set<string>();
+  const authorities = new Map<string, Authority>();
   for (const [key, state] of foldLaneEntries(records).entries) {
     if (state.value === null) continue;
     entries.set(key, state.value);
+    const winner = state.history.find((h) => h.record.id === state.winner);
+    if (winner !== undefined) authorities.set(key, winner.authority);
     if (inPrivate.has(state.winner)) privateKeys.add(key);
     let newest = 0;
     for (const h of state.history) newest = Math.max(newest, parseHlc(h.record.hlc)?.physical ?? 0);
@@ -208,6 +218,7 @@ export function laneStoreFold(): LaneFolded {
     entries,
     clocks,
     privateKeys,
+    authorities,
     unreadable,
     pendingBlobs,
   };

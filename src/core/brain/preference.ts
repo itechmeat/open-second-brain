@@ -676,6 +676,14 @@ function writeStorePreference(
   return { path, id };
 }
 
+/** The evidence list of a page about to retire: its derived `_evidenced_by`, else a plain `evidenced_by`. */
+function retiredEvidence(meta: FrontmatterMap, prefPath: string): string[] {
+  const managed = optionalStringArray(meta, "_evidenced_by", prefPath);
+  return managed.length > 0
+    ? [...managed]
+    : [...optionalStringArray(meta, "evidenced_by", prefPath)];
+}
+
 /** Fields only a retire writes: never part of a live preference. */
 const RETIRE_ONLY_FIELDS: ReadonlyArray<string> = Object.freeze([
   "retired_at",
@@ -1924,7 +1932,10 @@ export function moveToRetired(
         created_at: requireString(meta, "created_at", prefPath),
         unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
         status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
-        evidenced_by: optionalStringArray(meta, "evidenced_by", prefPath),
+        // The page carries the list under its derived `_` name: read there
+        // first, so the retired page's `## Origin` list is the field's, as
+        // a page rebuilt from the store renders it (FORMAT.md "Preferences").
+        evidenced_by: retiredEvidence(meta, prefPath),
         ...(opts.evidenceApplied !== undefined ? { recentApplied: opts.evidenceApplied } : {}),
         ...(opts.evidenceViolated !== undefined ? { recentViolated: opts.evidenceViolated } : {}),
       };

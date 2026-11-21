@@ -572,6 +572,45 @@ export function getBrainSetting(ctx: BrainSettingsReadContext, name: string): Br
   return yamlView(target, parseBrainYaml(text) as Record<string, unknown>);
 }
 
+/**
+ * A one-time carry-over: store `value` for `name` at the operator's
+ * authority, from a copy the operator wrote (an archived legacy file),
+ * only while no record of the setting decides otherwise. Every judgement
+ * and the write rest on ONE read of the shared settings: nothing is
+ * written, and `false` comes back, while a settings shard cannot be seen
+ * (an unset may sit in it; an incomplete read is no proof that no record
+ * exists, and a human write passes every other guard, design D14), while
+ * a record in force unset it (a decision to use the default), or while
+ * the operator's own value is in force. `true` when the value was stored.
+ * A store-mode setting only; an unswitched machine reads its file.
+ */
+export function carryOverBrainSetting(
+  ctx: BrainSettingsWriteContext,
+  name: string,
+  value: string,
+): boolean {
+  const target = resolveSettingName(name);
+  if (target.native === undefined && modeOf(ctx) !== "store") return false;
+  const problem = target.native?.invalid(value) ?? null;
+  if (problem !== null) throw new BrainSettingError("invalid_setting_value", problem);
+  const read = sharedRead(ctx);
+  if (read.unseen.length > 0) return false;
+  const state = read.fold.settings.get(target.key);
+  if (state !== undefined && (state.removed || state.winner.authority === "human")) return false;
+  if (target.native === undefined) {
+    validateCandidate(
+      readRawBrainSettingsFromStore(
+        ctx.configPath !== undefined ? { configPath: ctx.configPath } : {},
+      ),
+      target,
+      value,
+      "brain settings",
+    );
+  }
+  storeCommit({ ...ctx, authority: "human" }, [{ target, value }]);
+  return true;
+}
+
 /** The store-native settings that are set, read from the store in either mode. */
 function nativeViews(ctx: BrainSettingsReadContext): BrainSettingView[] {
   const fold = sharedFold(ctx);

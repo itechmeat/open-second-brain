@@ -117,6 +117,10 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * and emits the field through the same producer, once per operation
  * result, like every other aggregate on that tool.
  *
+ * 47 to 48: `brain_context` answers a vault this process cannot tell is
+ * switched or not (`StoreOnlyUndeterminedError`) with its own early
+ * return, which carries the field through the same producer.
+ *
  * That tool is also where this census's reach ends, so the limit is
  * stated rather than left to be discovered. The population is keyed on
  * the FIELD NAME `vault_path`, and the tool carries three other
@@ -130,7 +134,7 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * future view that adds a fourth path-bearing member under a fourth
  * name needs its own assertion there, because this count will not move.
  */
-const EMITTING_SITES = 47;
+const EMITTING_SITES = 48;
 
 /** One `vault_path:` property found in the source. */
 interface FieldSite {

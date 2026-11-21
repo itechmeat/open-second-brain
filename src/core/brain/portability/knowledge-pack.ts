@@ -55,6 +55,15 @@ import {
   stripPrivateRegions,
 } from "../../redactor.ts";
 import { appendContinuitySourceInvalidation } from "../continuity/store.ts";
+import {
+  memoryFolderPages,
+  memoryPageNamed,
+  type MemoryPage,
+  type StoreMemoryPage,
+} from "../memory-pages.ts";
+import { removeFile } from "../source-cleanup.ts";
+import { memoryEntities, memoryFoldGap } from "../../store/read/memory-ids.ts";
+import { StoreOnlyUndeterminedError } from "../../store/store-only.ts";
 import { topicKey } from "../dream-plan.ts";
 import {
   collectExportRowsWithDenials,
@@ -425,14 +434,21 @@ export function selectKnowledgePack(
   };
 }
 
+/**
+ * The `owner` of preference `id`: its page on an unswitched machine, the
+ * page the store's fold rebuilds on a switched one. An unreadable page
+ * has no owner to report, as before.
+ */
 function preferenceOwner(vault: string, id: string): string | null {
-  let text: string;
+  let meta: FrontmatterMap;
   try {
-    text = readFileSync(join(vault, BRAIN_PREFERENCES_REL, `${id}.md`), "utf8");
+    const page = memoryPageNamed(vault, "preferences", `${id}.md`);
+    if (page === null) return null;
+    meta = page.read()[0];
   } catch {
     return null;
   }
-  const owner = parseFrontmatterText(text)[0]["owner"];
+  const owner = meta["owner"];
   return typeof owner === "string" && owner.trim() !== "" ? owner : null;
 }
 
@@ -865,11 +881,11 @@ function preferenceConflicts(vault: string, id: string): KnowledgePackConflict[]
   const slug = slugOf(id);
   if (slug === null) return [];
   const live = safePreferencePath(vault, slug);
-  if (live !== null && existsSync(live)) {
+  if (live !== null && memoryPageNamed(vault, "preferences", `${id}.md`) !== null) {
     return [{ kind: "preference", id, reason: "id_exists", detail: `Brain/preferences/${id}.md` }];
   }
   const retired = safeRetiredPath(vault, slug);
-  if (retired !== null && existsSync(retired)) {
+  if (retired !== null && memoryPageNamed(vault, "retired", `ret-${slug}.md`) !== null) {
     return [
       {
         kind: "preference",
@@ -1157,6 +1173,18 @@ function readStamped(abs: string): { meta: FrontmatterMap; stamp: string; text: 
   } catch {
     return null;
   }
+  return stampedText(text);
+}
+
+/** A memory page's stamp: the file's text, or the page the store's fold rebuilt. */
+function readStampedPage(
+  page: MemoryPage,
+): { meta: FrontmatterMap; stamp: string; text: string } | null {
+  if (!page.stored) return readStamped(page.path);
+  return stampedText((page as StoreMemoryPage).text);
+}
+
+function stampedText(text: string): { meta: FrontmatterMap; stamp: string; text: string } | null {
   if (!text.includes(KNOWLEDGE_PACK_FIELD)) return null;
   const meta = parseFrontmatterText(text)[0];
   const stamp = parseKnowledgePackStamp(meta[KNOWLEDGE_PACK_FIELD]);
@@ -1170,16 +1198,22 @@ function toPosix(p: string): string {
 /** Every entry in the vault carrying a knowledge-pack stamp. Read-only. */
 function scanInstalled(vault: string): KnowledgePackInstalledEntry[] {
   const out: KnowledgePackInstalledEntry[] = [];
-  const prefDir = join(vault, BRAIN_PREFERENCES_REL);
-  let names: string[] = [];
+  // The preferences: the folder's files on an unswitched machine, the
+  // store's fold on a switched one. When the vault cannot tell which it is,
+  // the scan fails with that reason: a list of the staged pages alone would
+  // read as the whole pack, and an uninstall would delete them and leave
+  // the pack's rules behind.
+  let pages: MemoryPage[] = [];
   try {
-    names = readdirSync(prefDir);
-  } catch {
-    names = [];
+    pages = memoryFolderPages(vault, "preferences", { sorted: true });
+  } catch (err) {
+    if (err instanceof StoreOnlyUndeterminedError) throw err;
+    pages = [];
   }
-  for (const name of names.toSorted()) {
+  for (const prefPage of pages) {
+    const name = prefPage.name;
     if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
-    const found = readStamped(join(prefDir, name));
+    const found = readStampedPage(prefPage);
     if (found === null) continue;
     const status = found.meta["_status"] ?? found.meta["status"];
     out.push({
@@ -1275,6 +1309,12 @@ export interface KnowledgePackUninstallPlan {
   }>;
   /** Paths actually removed this run (empty on a dry run). */
   readonly deleted: ReadonlyArray<string>;
+  /**
+   * Preferences a confirmed run found but could not remove (the removal
+   * refused the path, for example a link leaving the vault, or the entry
+   * was already gone). Left in place and not counted as removed.
+   */
+  readonly refused: ReadonlyArray<string>;
   readonly snapshotRunId: string | null;
   readonly snapshotPath: string | null;
   /** What the recovery point is worth: staged pages live outside `Brain/`. */
@@ -1316,6 +1356,11 @@ export function uninstallKnowledgePack(
   const confirm = opts.confirm === true;
   if (confirm) assertVaultIdentityForWrite(vault);
 
+  // The memory fold the plan judges (null on an unswitched machine): which
+  // rules carry the pack's stamp and which have local evidence is read
+  // from it, so a confirmed run removes a rule only while that same read
+  // is whole and still the store's current one.
+  const fold = memoryEntities({ vault });
   const remove: KnowledgePackInstalledEntry[] = [];
   const kept: { entry: KnowledgePackInstalledEntry; reason: KnowledgePackKeptReason }[] = [];
   for (const entry of scanInstalled(vault)) {
@@ -1341,6 +1386,7 @@ export function uninstallKnowledgePack(
       ...base,
       confirmed: confirm,
       deleted: [],
+      refused: [],
       snapshotRunId: null,
       snapshotPath: null,
       recoverability: classifyRecoverability({ recoveryPoint: false, blastRadius: {} }),
@@ -1349,13 +1395,33 @@ export function uninstallKnowledgePack(
   }
 
   const deleted: string[] = [];
+  const refused: string[] = [];
+  // A record the fold could not read may be local evidence or an edit that
+  // adopted the rule; a store changed since the plan was judged on another
+  // read. Either way no preference is removed this run.
+  const foldStale =
+    fold !== null && (memoryFoldGap(fold) !== null || memoryEntities({ vault }) !== fold);
   const gated = withDestructiveSnapshot(
     vault,
     BRAIN_SNAPSHOT_REASON.knowledgePackUninstall,
     () => {
       for (const entry of remove) {
-        const abs = ensureInsideVault(join(vault, entry.path), vault);
-        rmSync(abs, { force: true });
+        if (entry.kind === "preference") {
+          if (foldStale) {
+            refused.push(entry.path);
+            continue;
+          }
+          // A preference is a store record on a switched machine: its
+          // removal is the store's tombstone, which `removeFile` writes
+          // (and checks); an unswitched machine removes the file. A path
+          // the removal refuses is reported, never counted as removed.
+          if (!removeFile(vault, entry.path)) {
+            refused.push(entry.path);
+            continue;
+          }
+        } else {
+          rmSync(ensureInsideVault(join(vault, entry.path), vault), { force: true });
+        }
         deleted.push(entry.path);
       }
     },
@@ -1371,6 +1437,7 @@ export function uninstallKnowledgePack(
     ...base,
     confirmed: true,
     deleted,
+    refused,
     snapshotRunId: gated.snapshot.runId,
     snapshotPath: gated.snapshot.path,
     recoverability: gated.recoverability,
