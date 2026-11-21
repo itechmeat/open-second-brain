@@ -33,10 +33,14 @@ import { gzipSync } from "node:zlib";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { snapshotPath } from "../../../src/core/brain/paths.ts";
+import { writeTarArchive } from "../../../src/core/brain/tar-writer.ts";
 import {
   extractSnapshotToTemp,
   BrainSnapshotError,
   restoreSnapshot,
+  MAX_INFLATED_ARCHIVE_BYTES,
+  resolveMaxInflatedBytes,
+  SNAPSHOT_MAX_INFLATED_BYTES_ENV,
 } from "../../../src/core/brain/snapshot.ts";
 import { IS_WINDOWS } from "../../helpers/platform.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
@@ -78,6 +82,39 @@ function writeArchive(runId: string, staging: string): string {
   // Raw bytes, not the atomic string writer: the payload is gzip output.
   writeFileSync(archive, gzipSync(tar.stdout));
   return archive;
+}
+
+/**
+ * Tar the members `members` name out of `staging` with the repository's own
+ * tar writer and gzip the result into the archive path `runId` names. The
+ * writer stores a link as a link, so an archive whose `Brain` member is one
+ * is built the same way the extractor reads it.
+ */
+function writeArchiveFromMembers(runId: string, staging: string, members: string[]): string {
+  const tarDir = mkdtempSync(join(tmpdir(), "o2b-snap-tar-"));
+  try {
+    const tarPath = join(tarDir, "brain.tar");
+    writeTarArchive(
+      staging,
+      members.map((name) => Buffer.from(name, "utf8")),
+      tarPath,
+    );
+    const archive = snapshotPath(vault, runId);
+    writeFileSync(archive, gzipSync(readFileSync(tarPath)));
+    return archive;
+  } finally {
+    rmSync(tarDir, { recursive: true, force: true });
+  }
+}
+
+/** The error a call raised, or a failure of the test itself when it raised none. */
+function captureError(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (err) {
+    return err;
+  }
+  throw new Error("expected the call to refuse, and it did not");
 }
 
 describe.skipIf(IS_WINDOWS)("extractSnapshotToTemp containment", () => {
@@ -154,6 +191,106 @@ describe.skipIf(IS_WINDOWS)("extractSnapshotToTemp containment", () => {
       );
     } finally {
       rmSync(outside, { recursive: true, force: true });
+      rmSync(staging, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(IS_WINDOWS)("extractSnapshotToTemp root shape", () => {
+  test("an archive whose Brain root is a symbolic link refuses the extract", () => {
+    const outside = mkdtempSync(join(tmpdir(), "o2b-snap-outside-"));
+    const staging = mkdtempSync(join(tmpdir(), "o2b-snap-stage-"));
+    try {
+      // What the link points at holds a plain file, so the sweep that
+      // walks the extracted root finds nothing to complain about: the
+      // refusal can only come from the root itself.
+      writeFileSync(join(outside, "keep.md"), "kept");
+      symlinkSync(outside, join(staging, "Brain"));
+      writeArchiveFromMembers("sec-root-link", staging, ["Brain"]);
+
+      const err = captureError(() => extractSnapshotToTemp(vault, "sec-root-link"));
+      expect(err).toBeInstanceOf(BrainSnapshotError);
+      const message = (err as BrainSnapshotError).message;
+      expect(message).toMatch(/symbolic link/);
+      expect(message).toContain("Brain");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      rmSync(staging, { recursive: true, force: true });
+    }
+  });
+
+  test("an archive whose Brain root is a file refuses the extract", () => {
+    const staging = mkdtempSync(join(tmpdir(), "o2b-snap-stage-"));
+    try {
+      writeFileSync(join(staging, "Brain"), "not a directory");
+      writeArchiveFromMembers("sec-root-file", staging, ["Brain"]);
+
+      const err = captureError(() => extractSnapshotToTemp(vault, "sec-root-file"));
+      expect(err).toBeInstanceOf(BrainSnapshotError);
+      // The refusal is the tool's own wording, not the operating system's
+      // "ENOTDIR: not a directory, scandir" from a walk of a file.
+      expect((err as BrainSnapshotError).message).toMatch(/is not a directory/);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
+  });
+
+  test("an archive that is a symbolic link refuses the extract", () => {
+    const staging = mkdtempSync(join(tmpdir(), "o2b-snap-stage-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "o2b-snap-elsewhere-"));
+    try {
+      mkdirSync(join(staging, "Brain"));
+      writeFileSync(join(staging, "Brain", "keep.md"), "kept");
+      writeArchiveFromMembers("sec-archive-link", staging, ["Brain", "Brain/keep.md"]);
+
+      // The archive the vault names is a link to a file that holds a
+      // perfectly good archive: the restore reads the path it is given,
+      // so the link is refused rather than followed.
+      const archive = snapshotPath(vault, "sec-archive-link");
+      const held = join(elsewhere, "brain.tar.gz");
+      writeFileSync(held, readFileSync(archive));
+      rmSync(archive);
+      symlinkSync(held, archive);
+
+      const err = captureError(() => extractSnapshotToTemp(vault, "sec-archive-link"));
+      expect(err).toBeInstanceOf(BrainSnapshotError);
+      expect((err as BrainSnapshotError).message).toMatch(/symbolic link/);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+      rmSync(staging, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("extractSnapshotToTemp inflate limit", () => {
+  test("the ceiling in force is the default unless the operator sets one", () => {
+    expect(resolveMaxInflatedBytes({})).toBe(MAX_INFLATED_ARCHIVE_BYTES);
+    expect(resolveMaxInflatedBytes({ [SNAPSHOT_MAX_INFLATED_BYTES_ENV]: "4096" })).toBe(4096);
+    expect(() => resolveMaxInflatedBytes({ [SNAPSHOT_MAX_INFLATED_BYTES_ENV]: "many" })).toThrow(
+      SNAPSHOT_MAX_INFLATED_BYTES_ENV,
+    );
+  });
+
+  test("an archive that inflates past the limit refuses the extract", () => {
+    const staging = mkdtempSync(join(tmpdir(), "o2b-snap-stage-"));
+    const limit = 1024 * 1024;
+    const previous = process.env[SNAPSHOT_MAX_INFLATED_BYTES_ENV];
+    process.env[SNAPSHOT_MAX_INFLATED_BYTES_ENV] = String(limit);
+    try {
+      mkdirSync(join(staging, "Brain"));
+      writeFileSync(join(staging, "Brain", "keep.md"), "kept");
+      // A member big enough that the tar inflates past the limit.
+      writeFileSync(join(staging, "Brain", "pad.bin"), Buffer.alloc(2 * limit, 0));
+      writeArchiveFromMembers("sec-inflate", staging, ["Brain", "Brain/keep.md", "Brain/pad.bin"]);
+
+      const err = captureError(() => extractSnapshotToTemp(vault, "sec-inflate"));
+      expect(err).toBeInstanceOf(BrainSnapshotError);
+      const message = (err as BrainSnapshotError).message;
+      expect(message).toMatch(/inflates/);
+      expect(message).toContain(String(limit));
+    } finally {
+      if (previous === undefined) delete process.env[SNAPSHOT_MAX_INFLATED_BYTES_ENV];
+      else process.env[SNAPSHOT_MAX_INFLATED_BYTES_ENV] = previous;
       rmSync(staging, { recursive: true, force: true });
     }
   });

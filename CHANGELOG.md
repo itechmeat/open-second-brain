@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A snapshot restore refuses an archive whose Brain root is not a real directory, and a compressed archive that inflates past the limit.** The extracted `Brain/` root is now judged as an entry of the extracted tree: a root that is a symbolic link or a file is refused by name instead of being read through. Every archive a restore reads — the snapshot archive and the derived-store archive — must be a real file for the same reason. The gzip branch of a restore (the one in-process path, used where no `zstd` binary exists) inflates under a ceiling instead of without one: an archive that inflates past 512 MiB is refused by name, and a vault that really is larger raises the ceiling through `OPEN_SECOND_BRAIN_SNAPSHOT_MAX_INFLATED_BYTES`. An archive's digest is computed in bounded memory, so checking a large derived-store archive against the digest its manifest recorded no longer reads the file whole.
 - **Session-start digest snapshots stay paired.** Codex detection now follows the configured `CODEX_HOME` session roots, so relocated sessions keep byte-based sizing. Windows session roots match case-insensitively across slash styles while retaining a directory boundary check. The last-good memory body and its cut counts share one atomic cache record, and the reserved note covers a nonzero pinned omission count.
 
 ### Added

@@ -42,9 +42,26 @@
  * the migration manifest MAY bind its timestamp, because the seal there
  * answers "are these still the bytes that were measured", and when they
  * were measured is part of that answer.
+ *
+ * ## Hashing a file without holding it in memory
+ *
+ * {@link sha256Hex} takes the bytes it hashes as an argument, so a caller
+ * that hashes a file reads the whole file first. That is fine for a note
+ * and not fine for a snapshot archive, which is as large as the vault it
+ * copies: the read is bounded by the process, not by the file.
+ *
+ * {@link sha256HexOfFile} is the same digest over the same bytes, read in
+ * fixed-size chunks and folded into one hash. A caller that only needs to
+ * know whether a file still holds the bytes it recorded pays one buffer
+ * instead of the file's size. The digest it returns is byte-for-byte the
+ * digest `sha256Hex(readFileSync(path))` returns, and
+ * `tests/core/integrity/digest.test.ts` pins that against an independently
+ * computed reference over an empty file, a file smaller than one chunk and
+ * a file of several chunks plus a remainder.
  */
 
 import { createHash } from "node:crypto";
+import { closeSync, openSync, readSync } from "node:fs";
 
 /**
  * The digest algorithm every persisted hash in this project is written
@@ -63,6 +80,52 @@ export const DIGEST_ALGORITHM = "sha256";
  */
 export function sha256Hex(input: string | Uint8Array): string {
   return createHash(DIGEST_ALGORITHM).update(input).digest("hex");
+}
+
+/**
+ * Bytes read per pass when a file's digest is computed.
+ *
+ * One fixed buffer, whatever the file's size: the memory a file digest
+ * costs is this constant, not the file's length. A megabyte is small
+ * enough to keep the read count low on a large archive and large enough
+ * that the per-call overhead of a read does not matter.
+ */
+export const FILE_DIGEST_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Lowercase hex SHA-256 over a file's bytes, read in bounded memory.
+ *
+ * The digest is the one {@link sha256Hex} gives for the same bytes: the
+ * hash is over the file's content, in the file's order, and a caller
+ * cannot tell from the result which of the two produced it. What differs
+ * is what the process holds while it computes it - one chunk of
+ * {@link FILE_DIGEST_CHUNK_BYTES} rather than the whole file - so a
+ * multi-gigabyte archive can be checked against a recorded digest
+ * without being loaded.
+ *
+ * The file is read from the start to its end as it is found at read time.
+ * A file that grows while it is read contributes the bytes that were
+ * there, and a file that shrinks ends the read early; the same holds for
+ * `readFileSync`, so a caller sees no difference between the two.
+ *
+ * Throws what the read throws: a path that does not exist, a file that
+ * cannot be opened, a read that fails. The caller decides what a failed
+ * digest means.
+ */
+export function sha256HexOfFile(path: string): string {
+  const hash = createHash(DIGEST_ALGORITHM);
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(FILE_DIGEST_CHUNK_BYTES);
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read === 0) break;
+      hash.update(buffer.subarray(0, read));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
 /**

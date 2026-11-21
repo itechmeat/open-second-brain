@@ -119,7 +119,7 @@ import { writeTarArchive } from "./tar-writer.ts";
 import { extractTarArchive } from "./tar-extract.ts";
 import { readTarMemberNames, type TarMemberName, type TarRead } from "./tar-names.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
-import { sha256Hex } from "../integrity/digest.ts";
+import { sha256HexOfFile } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { compareKey, foldsCase, isStoreFamilyEntry } from "../search/store-family.ts";
 
@@ -1387,7 +1387,7 @@ function coverDerivedStore(
     included: true,
     source_path: sourcePath,
     archive_name: basename(archivePath),
-    archive_sha256: sha256Hex(readFileSync(archivePath)),
+    archive_sha256: sha256HexOfFile(archivePath),
     archive_size: archiveSize,
     live_size: liveSize,
     exclusion_reason: null,
@@ -1828,6 +1828,47 @@ export function resolveSnapshotToolTimeoutMs(env: NodeJS.ProcessEnv = process.en
     throw new Error(
       `${SNAPSHOT_TOOL_TIMEOUT_ENV}=${raw} is not a timeout; set it to a whole number of ` +
         `milliseconds > 0 (the default is ${SNAPSHOT_TOOL_TIMEOUT_MS}), or unset it`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * The ceiling on the INFLATED size of a snapshot archive, in bytes.
+ *
+ * The gzip branch of a restore inflates in process, because native Windows
+ * has no `gzip` binary, and the inflated bytes are held in memory: the
+ * tar stream of `Brain/` (or the archived derived store) comes back as one
+ * buffer. Without a ceiling an archive that inflates far past the tree it
+ * claims to hold takes the process down with it, so the restore refuses one
+ * by name instead.
+ *
+ * The default is half a gigabyte: twice the ceiling this tool's own
+ * defaults put on the largest artifact it archives (the derived store,
+ * `snapshots.derived_store_max_bytes`, 256 MiB by default) and far above
+ * the Markdown tree of any vault this tool was built for. A vault past it
+ * raises the bound - see {@link SNAPSHOT_MAX_INFLATED_BYTES_ENV}.
+ */
+export const MAX_INFLATED_ARCHIVE_BYTES = 512 * 1024 * 1024;
+
+/** Environment variable that overrides {@link MAX_INFLATED_ARCHIVE_BYTES}. */
+export const SNAPSHOT_MAX_INFLATED_BYTES_ENV = "OPEN_SECOND_BRAIN_SNAPSHOT_MAX_INFLATED_BYTES";
+
+/**
+ * The inflate ceiling in force: {@link SNAPSHOT_MAX_INFLATED_BYTES_ENV} when
+ * it is a whole number of bytes above zero, {@link MAX_INFLATED_ARCHIVE_BYTES}
+ * when it is unset or empty. Any other value is an error rather than a
+ * silent fallback, so a typo cannot quietly change the bound.
+ */
+export function resolveMaxInflatedBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[SNAPSHOT_MAX_INFLATED_BYTES_ENV];
+  if (raw === undefined || raw.trim() === "") return MAX_INFLATED_ARCHIVE_BYTES;
+  const text = raw.trim();
+  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `${SNAPSHOT_MAX_INFLATED_BYTES_ENV}=${raw} is not a byte count; set it to a whole number of ` +
+        `bytes > 0 (the default is ${MAX_INFLATED_ARCHIVE_BYTES}), or unset it`,
     );
   }
   return parsed;
@@ -2277,9 +2318,7 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
   vault = machineStateRoot(vault);
   validateRunId(runId);
   const archive = snapshotPath(vault, runId);
-  if (!existsSync(archive)) {
-    throw new BrainSnapshotError(`archive does not exist: ${archive}`, runId);
-  }
+  assertRegularFile(archive, runId, "archive");
   const tools = detectTooling();
 
   const tmp = mkdtempSync(join(tmpdir(), `o2b-brain-extract-${runId}-`));
@@ -2330,22 +2369,18 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
     } else {
       // gzip is inflated in-process, like the tar stream is read in
       // process: no `gzip` binary needed (native Windows has none).
-      let tarball: Buffer;
-      try {
-        tarball = gunzipSync(readFileSync(archive));
-      } catch (err) {
-        throw new BrainSnapshotError(
-          `gzip decompress failed: ${(err as Error).message ?? String(err)}`,
-          runId,
-        );
-      }
+      // The inflate is bounded: the bytes it produces are held in memory.
+      const tarball = inflateGzipArchive(archive, runId);
       extractTarStream((offset, length) => tarball.subarray(offset, offset + length), tmp, runId);
     }
 
     const extractedBrain = join(tmp, BRAIN_ROOT_REL);
-    if (!existsSync(extractedBrain)) {
+    if (lstatSync(extractedBrain, { throwIfNoEntry: false }) === undefined) {
       throw new BrainSnapshotError(`archive does not contain a ${BRAIN_ROOT_REL}/ root`, runId);
     }
+    // The root itself is judged, not only what is inside it: an archive
+    // whose `Brain/` member is a link is refused here, before anything
+    // reads through it.
     refuseEscapingSymlinks(extractedBrain, runId);
     return Object.freeze({ tmpRoot: tmp, brainRoot: extractedBrain, cleanup });
   } catch (err) {
@@ -2498,8 +2533,28 @@ function nameFolding(dir: string): { normalization: boolean; caseFold: boolean }
  * root: the tmpdir this tree extracts into may itself sit behind a
  * platform symlink (macOS `/var`), and a compare against only one
  * spelling would refuse the tree's own honest links.
+ *
+ * The root is an entry of the tree like any other, and is judged first: it
+ * must be a real directory. A link in its place is refused here rather than
+ * followed, because every reader after this sweep - the staging copy into
+ * the live tree, the diff, the store-migration rollback - reads through
+ * the path it is given, and a root that is a link hands them whatever it
+ * points at.
  */
 function refuseEscapingSymlinks(root: string, runId: string): void {
+  const rootStat = lstatSync(root, { throwIfNoEntry: false });
+  if (rootStat === undefined) {
+    throw new BrainSnapshotError(`the extracted tree is not there: ${root}`, runId);
+  }
+  if (rootStat.isSymbolicLink()) {
+    throw new BrainSnapshotError(
+      `the extracted root is a symbolic link, not a directory: ${root}`,
+      runId,
+    );
+  }
+  if (!rootStat.isDirectory()) {
+    throw new BrainSnapshotError(`the extracted root is not a directory: ${root}`, runId);
+  }
   const realRoot = realpathSync(root);
   const lexicalRoot = resolve(root);
   const inside = (p: string): boolean =>
@@ -2546,6 +2601,83 @@ function refuseEscapingSymlinks(root: string, runId: string): void {
     }
   }
 }
+
+/**
+ * A file the restore reads must be a real file. `existsSync` follows a
+ * symbolic link, so an archive the vault holds as one would be read through
+ * it - and the vault is agent-writable, and in a peer-replicated vault
+ * writable by every peer. The link is refused by name instead.
+ */
+function assertRegularFile(path: string, runId: string, what: string): void {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat === undefined) {
+    throw new BrainSnapshotError(`${what} does not exist: ${path}`, runId);
+  }
+  if (stat.isSymbolicLink()) {
+    throw new BrainSnapshotError(`${what} is a symbolic link, not a file: ${path}`, runId);
+  }
+  if (!stat.isFile()) {
+    throw new BrainSnapshotError(`${what} is not a regular file: ${path}`, runId);
+  }
+}
+
+/**
+ * The inflated bytes of a gzip archive, refused when they pass the ceiling
+ * {@link MAX_INFLATED_ARCHIVE_BYTES} names.
+ *
+ * The gzip branch of a restore inflates in process, because native Windows
+ * has no `gzip` binary, and what it inflates is held in memory: the tar
+ * stream of `Brain/`, or the archived derived store. An archive that
+ * inflates far past the tree it claims to hold is refused by name, and the
+ * operator who really has such a vault raises the ceiling through
+ * {@link SNAPSHOT_MAX_INFLATED_BYTES_ENV}.
+ */
+function inflateGzipArchive(archive: string, runId: string): Buffer {
+  const limit = resolveMaxInflatedBytes();
+  const compressed = readCompressedArchive(archive, runId, limit);
+  try {
+    return gunzipSync(compressed, { maxOutputLength: limit });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+      throw new BrainSnapshotError(
+        `the archive inflates to more than ${limit} bytes; refusing to restore it ` +
+          `(raise ${SNAPSHOT_MAX_INFLATED_BYTES_ENV} for a larger vault)`,
+        runId,
+        { cause: err },
+      );
+    }
+    throw new BrainSnapshotError(
+      `gzip decompress failed: ${(err as Error).message ?? String(err)}`,
+      runId,
+    );
+  }
+}
+
+/**
+ * The compressed bytes of an archive, refused before they are read when the
+ * file is larger than the ceiling allows. Gzip output is never meaningfully
+ * smaller than the bytes it holds, so a file this large cannot inflate to
+ * less than the ceiling either - and reading it would cost the memory the
+ * ceiling exists to bound.
+ */
+function readCompressedArchive(archive: string, runId: string, limit: number): Buffer {
+  const size = statSync(archive).size;
+  if (size > limit + GZIP_OVERHEAD_SLACK_BYTES) {
+    throw new BrainSnapshotError(
+      `the archive is ${size} bytes, over the ${limit}-byte ceiling a restore allows ` +
+        `(raise ${SNAPSHOT_MAX_INFLATED_BYTES_ENV} for a larger vault)`,
+      runId,
+    );
+  }
+  return readFileSync(archive);
+}
+
+/**
+ * What gzip may add to the bytes it holds: a header, a trailer, and a few
+ * bytes per deflate block. A compressed archive of exactly the ceiling size
+ * is therefore still an archive of the ceiling size.
+ */
+const GZIP_OVERHEAD_SLACK_BYTES = 1024 * 1024;
 
 /**
  * Restore the archive identified by `runId` over `Brain/`, and the
@@ -3179,6 +3311,10 @@ function assertDerivedStoreRestorable(vault: string, runId: string): void {
       runId,
     );
   }
+  // The archive is read as a file, so it has to be one: `existsSync`
+  // follows a link, and a vault that holds the archive as one would
+  // otherwise have the restore read through it.
+  assertRegularFile(archive, runId, "the derived-store archive");
 }
 
 /**
@@ -3397,6 +3533,11 @@ function stageDerivedStore(
   // An absent archive is unreachable through `restoreSnapshot`, which
   // refuses it in its pre-flight; kept because a store swap must never
   // begin against an archive that is not there.
+  // The archive must be a real file before anything reads it, the digest
+  // check below included.
+  if (lstatSync(archive, { throwIfNoEntry: false }) !== undefined) {
+    assertRegularFile(archive, runId, "the derived-store archive");
+  }
   const archiveProblem = derivedStoreArchiveProblem(vault, runId, record);
   if (archiveProblem !== null) {
     throw new BrainSnapshotError(
@@ -3609,7 +3750,7 @@ function derivedStoreArchiveProblem(
   if (record.archive_sha256 === null) return null;
   let actual: string;
   try {
-    actual = sha256Hex(readFileSync(archive));
+    actual = sha256HexOfFile(archive);
   } catch (err) {
     return `the derived-store archive ${archive} could not be read (${errorText(err)})`;
   }
@@ -3868,16 +4009,9 @@ function decompressArchiveTo(archive: string, outPath: string, runId: string): v
     return;
   }
   // gzip is inflated in-process (no `gzip` binary on native Windows);
-  // `wx` keeps the destination exclusive.
-  let bytes: Buffer;
-  try {
-    bytes = gunzipSync(readFileSync(archive));
-  } catch (err) {
-    throw new BrainSnapshotError(
-      `gzip decompress failed: ${(err as Error).message ?? String(err)}`,
-      runId,
-    );
-  }
+  // `wx` keeps the destination exclusive. The inflate is bounded: its
+  // bytes are held in memory.
+  const bytes = inflateGzipArchive(archive, runId);
   writeArchiveExclusive(outPath, bytes, runId);
 }
 
