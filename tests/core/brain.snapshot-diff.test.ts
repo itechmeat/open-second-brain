@@ -250,6 +250,20 @@ describe("diffBrainTrees — ignored regions", () => {
     expect(d.removed.find((e) => e.path.includes(".snapshots/"))).toBeUndefined();
   });
 
+  test("entries a restore leaves in place are skipped: .artifacts/ and a restore's staging folder", () => {
+    const a = makeRoot("a");
+    const b = makeRoot("b");
+    // A rollback neither archives nor replaces them, so listing them as
+    // removed would announce a change the restore never makes.
+    mkdirSync(join(a, ".artifacts", "run-1"), { recursive: true });
+    writeFileSync(join(a, ".artifacts", "run-1", "payload.json"), "{}", "utf8");
+    mkdirSync(join(a, ".restore-staging-r1"), { recursive: true });
+    writeFileSync(join(a, ".restore-staging-r1", "left.md"), "x", "utf8");
+    const d = diffBrainTrees(a, b);
+    const all = [...d.added, ...d.removed, ...d.modified.map((c) => c.entry)];
+    expect(all.map((e) => e.path)).toEqual([]);
+  });
+
   test("symlinks are not followed (defense against malicious snapshot tarballs)", async () => {
     const a = makeRoot("a");
     const b = makeRoot("b");

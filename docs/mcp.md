@@ -113,7 +113,43 @@ with no pre-run snapshot, and the doctor runs its store-side checks. A
 second machine sharing the store finds the same records once its own index
 catches up. A tool that works on notes, and the vault-file modes of these
 tools (a doctor repair, a single dream step, the staged dream lifecycle, a
-cross-vault search), refuse with `vault_required`.
+cross-vault search), refuse with `vault_required`. At remote reach the
+stored text these tools hand out (the digest, a pinned scratchpad) is
+fenced as usual; with no vault page to probe, only a memory page the
+store rebuilds can name its provenance, and every other body gets the
+fence for unknown provenance.
+
+A machine switched to the brain store whose configured vault folder
+cannot be examined (its permissions, an I/O error) or is gone (an
+unmounted disk) is served the same way, call by call: the tools above
+answer from the store, and a tool that needs the vault refuses with
+`vault_unreadable` instead of `vault_required`. The server looks at the
+vault on every call, so it answers normally once the folder is back. The
+operator's rules live in the vault, so `brain_context` reports them as
+unread on such a machine - an `UNAVAILABLE:` notice for the standing and
+the scoped rules, naming the reason - instead of reporting no rules,
+which reads as "the operator wrote none". The rules are not read from
+the store: the store holds the operator's memories, not their rules.
+
+A machine that has not switched is not served that way, and its two
+cases are not the same answer, because the store-only predicate reads
+the `Brain/` folder, not the vault:
+
+- **The vault folder is gone.** No legacy tree is left behind, so the
+  machine is store-only (`no-legacy-tree`): the store-backed tools above
+  answer from the store, and a tool that needs the vault refuses because
+  there is nothing to read.
+- **The vault folder cannot be examined.** The machine cannot tell
+  whether it holds a legacy tree (`undetermined`), so the tools that ask
+  refuse with `vault_unreadable`, and nothing is read from or written to
+  the store or the vault.
+
+`second_brain_status` is the diagnostic that reports a condition instead
+of refusing it: with the folder gone it answers with `vault_exists:
+false` and the store block, and where the look at the vault directory
+itself is what failed it answers with the reason in `vault_exists` and
+the degraded vault, brain and search blocks. Where the folder is there
+but its contents cannot be walked, it refuses like the other tools.
 
 ### Progress notifications
 
@@ -337,7 +373,7 @@ generic tokens:
 | `argument_forbidden` | `brain_scaffold_stub` was given an argument that belongs to its other action |
 | `quote_unverified` | `brain_distill_source` with `strict_quotes: true` refused the write because a quoted span in a claim did not verify against its source (see "Source distillation" below) |
 | `store_write_failed` | a write on a machine that writes the brain store only did not land; the payload (`_meta` on a tool result, `error.data` on a JSON-RPC error) also carries `reason` (`no-store`, `no-device`, `root-inside-vault`, `partition-unavailable`, `store-identity` or `store-error`) and `remedy`, one sentence naming the fix |
-| `vault_unreadable` | the machine cannot tell whether the vault holds a legacy `Brain/` tree, because the vault cannot be examined (its permissions, an I/O error), so the tool neither read nor wrote anything rather than answer from a guessed layout. The server starts on such a vault, answers `initialize` and `tools/list`, and each call reads the vault again, so it answers normally once the vault can be read |
+| `vault_unreadable` | the machine cannot tell whether the vault holds a legacy `Brain/` tree, because the vault cannot be examined (its permissions, an I/O error), so the tool neither read nor wrote anything rather than answer from a guessed layout. The server starts on such a vault, answers `initialize` and `tools/list`, and each call reads the vault again, so it answers normally once the vault can be read. On a machine switched to the brain store the brain is in the store: while its vault folder cannot be examined or is gone, each call is served as on a server with no vault (see "Running with no vault"), and only a tool that needs the vault refuses, as a JSON-RPC error with this code in `error.data`, without writing anything or recreating the folder |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:

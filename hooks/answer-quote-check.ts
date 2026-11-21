@@ -774,9 +774,10 @@ interface SpanOutcome {
   /**
    * The verdicts the reply-presence fold records for this span, in check
    * order (t_f8510c55). A span that verified somewhere records ONLY the
-   * verifying candidate's outcome - the span belongs to the note that
-   * carries it, and a candidate that missed it before the walk reached
-   * the verifier did not measure the span in any sense worth reporting.
+   * verifying candidates' outcomes - the span belongs to every note that
+   * carries it, and a candidate that missed it did not measure the span
+   * in any sense worth reporting - plus, when the deadline cut the walk,
+   * the candidates the cut left unread, as `note-unavailable`.
    * A span that verified nowhere records every candidate's miss. A
    * candidate left unmeasured appears here for no span, which the fold
    * reads as `absent`; a candidate the budget cut reads
@@ -784,6 +785,13 @@ interface SpanOutcome {
    * masquerade as an untouched note.
    */
   readonly candidateOutcomes: ReadonlyArray<SpanCandidateOutcome>;
+}
+
+/** The outcomes of the candidates a verified span verified against. */
+function verifyingOutcomes(
+  outcomes: ReadonlyArray<SpanCandidateOutcome>,
+): ReadonlyArray<SpanCandidateOutcome> {
+  return outcomes.filter((outcome) => outcome.verdict === ANSWER_QUOTE_VERDICT.verified);
 }
 
 /** One span's verdict under the resolved evidence, inside the budget. */
@@ -848,6 +856,30 @@ function checkSpan(
   let preview = previewAnswerQuoteSpan(span.inner);
   for (const [index, candidate] of candidates.entries()) {
     if (Date.now() > deadline) {
+      // A span that already verified keeps its verdict: the notes it
+      // verified against are recorded, the unread ones stay unmeasured
+      // by it, as they were before the walk went past its first verifier.
+      if (verdicts.includes(ANSWER_QUOTE_VERDICT.verified)) {
+        // The candidates the cut left unread were NOT measured at all:
+        // the walk stopped before their turn. They are recorded here, as
+        // `note-unavailable`, so the fold cannot read them as `absent` -
+        // the verdict that claims the reply had every chance to touch
+        // them. A candidate another span measured keeps that span's
+        // verdict: the fold merges the outcomes, and a verified or a
+        // degraded measurement outranks this one.
+        return {
+          verdict: ANSWER_QUOTE_VERDICT.verified,
+          preview,
+          decidingPhases,
+          candidateOutcomes: [
+            ...verifyingOutcomes(candidateOutcomes),
+            ...candidates.slice(index).map((unread) => ({
+              candidate: unread,
+              verdict: ANSWER_QUOTE_VERDICT.noteUnavailable,
+            })),
+          ],
+        };
+      }
       // Budget spent with unread candidates left: the check did not
       // finish, so it never reports a readable-miss verdict. Every
       // unread candidate is recorded as `note-unavailable` for this
@@ -889,20 +921,22 @@ function checkSpan(
     verdicts.push(verdict);
     candidateOutcomes.push({ candidate, verdict });
     for (const phase of candidate.phases) decidingPhases.push(phase);
-    if (verdict === ANSWER_QUOTE_VERDICT.verified) break;
+    // The walk does not stop at the first note that carries the span: one
+    // text can sit in several delivered notes - a preference bullet is in
+    // the active digest (`Brain/active.md`, which sorts first) and is the
+    // whole evidence of its own page - and every one of them carries it.
   }
   const merged = mergeAnswerQuoteVerdicts(verdicts);
-  // A span that verified somewhere belongs to the note it verified
-  // against: only that candidate's outcome is recorded. The misses the
-  // walk accumulated before reaching the verifier were measurements of
-  // the span against evidence that could not carry it - recording them
-  // would make an unrelated note's verdict depend on whether its path
-  // sorts before or after the verifying one. Per-candidate misses stay
-  // only for spans that verified nowhere, where every miss is the
+  // A span that verified somewhere belongs to the notes it verified
+  // against: only those candidates' outcomes are recorded. The misses
+  // the walk measured against notes that could not carry it are dropped
+  // - recording them would make an unrelated note's verdict depend on
+  // which other note happens to carry the span. Per-candidate misses
+  // stay only for spans that verified nowhere, where every miss is the
   // span's own history.
   const recordedOutcomes =
     merged === ANSWER_QUOTE_VERDICT.verified
-      ? candidateOutcomes.filter((outcome) => outcome.verdict === ANSWER_QUOTE_VERDICT.verified)
+      ? verifyingOutcomes(candidateOutcomes)
       : candidateOutcomes;
   return {
     verdict: merged,
@@ -926,8 +960,8 @@ function checkSpan(
  * measured while the budget was exhausted - the transcript went unread
  * past the cut, which is not evidence the note went untouched, so the
  * fold refuses to spend `absent` on it. A span that verified somewhere
- * measured only the note that carries it ({@link checkSpan} records the
- * verifying candidate alone), so a note's verdict is a fact about the
+ * measured only the notes that carry it ({@link checkSpan} records the
+ * verifying candidates alone), so a note's verdict is a fact about the
  * reply, never about where its path sorts. Rows carry identifiers and
  * verdicts only; no answer text rides the record.
  */

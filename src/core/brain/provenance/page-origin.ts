@@ -73,10 +73,11 @@ export interface PageOriginForDelivery {
  * page that cannot be read at all answers all-absent: `unreadable` and
  * "no stamps" are the same fact for this probe, and both fail closed in
  * {@link storedTextTreatment}. Never throws; the cache already absorbs
- * the filesystem's bad days.
+ * the filesystem's bad days. With no vault (`null`) only a memory page the
+ * store's folds rebuild has stamps; every other page reads as absent.
  */
 export function pageOriginForDelivery(
-  vault: string,
+  vault: string | null,
   rel: string,
   cache: FrontmatterCache,
 ): PageOriginForDelivery {

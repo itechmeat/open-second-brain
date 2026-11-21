@@ -1019,6 +1019,15 @@ auditing stay byte-equal:
   into a sibling tmp dir, compute the live → snapshot diff, print it,
   drop the tmp dir. Mutually exclusive with `--yes` since
   preview-vs-execute is contradictory. No live writes; no log entry.
+  The list names every file under `Brain/` the restore would put back,
+  change or remove, in any folder (files outside the preference folders
+  are in the `Other` section), and a closing `Not listed` section says
+  what it leaves out and why: `.snapshots/` and `.artifacts/`, which no
+  archive holds and a restore leaves in place; symbolic links, which the
+  differ never reads and the restore replaces with what the snapshot
+  holds; and the derived store (search index), which a rollback puts back
+  from its own archive when the snapshot covers it. `--json` carries the
+  same facts as `derived_store` and `not_listed` beside the diff.
 - **`o2b brain snapshot diff <run_id_a> [<run_id_b>]`** — same
   renderer, but compares snapshot ↔ snapshot when both ids are
   supplied (and snapshot ↔ live when only one is). `--json` yields
@@ -1028,7 +1037,10 @@ auditing stay byte-equal:
 name the reason too — it is the one fact that distinguishes two archives
 minted seconds apart.
 
-The diff classifies every file under each root into six artifact
+The diff skips the top-level entries the snapshot family never touches
+(`.snapshots/`, `.artifacts/` and a restore's staging folder), so a
+preview never announces a change no rollback makes. It classifies every
+other file under each root into six artifact
 kinds (preference, retired, signal, log, config, other). Preference
 and retired files receive a typed field-level diff for the derived
 counters (`_status`, `_applied_count`, `_violated_count`,

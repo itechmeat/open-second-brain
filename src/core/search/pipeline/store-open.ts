@@ -473,9 +473,11 @@ export async function openReadOrSelfHeal(
     if (healFailure === null) throw e;
     const code: SearchErrorCode = e instanceof SearchError ? e.code : "INDEX_UNREADABLE";
     const symptom = e instanceof Error ? e.message : String(e);
+    // Name what was tried: with no rebuild run, only the in-place upgrade.
+    const tried = rebuild ? "automatic rebuild" : "in-place upgrade";
     throw new SearchError(
       code,
-      `${symptom} (the automatic rebuild of ${config.dbPath} after ` +
+      `${symptom} (the ${tried} of ${config.dbPath} after ` +
         `${openFailure.code} also failed: ${healFailure})`,
     );
   }
