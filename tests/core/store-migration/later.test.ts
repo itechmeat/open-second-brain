@@ -33,6 +33,7 @@ import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { readVaultBindings } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { readViewWriter } from "../../../src/core/view/writer.ts";
 import { makeFleet, type Fleet } from "./fixtures/fleet.ts";
+import { setSilenceDays } from "./fixtures/silence.ts";
 import { renderMigration } from "../../../src/cli/brain/verbs/migrate-store.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 
@@ -223,6 +224,11 @@ describe("the transition", () => {
     ];
     a.use();
     expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // The silence rule off (it is covered in removal-silence.test.ts): the
+    // legacy writes below carry fixed dates, which the rule would retire
+    // as silent once the calendar passed them, so the test holds whatever
+    // the date.
+    setSilenceDays(a, 0);
     for (const to of ["dev-b", "dev-c"]) fleet.syncVaultFile("dev-a", to, MARKER);
     fleet.syncStore("dev-a", "dev-b");
     fleet.syncStore("dev-a", "dev-c");

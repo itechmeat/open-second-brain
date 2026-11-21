@@ -140,7 +140,11 @@ test("brain_entity, brain_trigger, brain_skill_proposals and brain_procedural_me
         cooldownKey: "contradiction:pref-a:pref-b",
       },
     ],
-    { now: NOW },
+    // The real clock, not NOW: `brain_trigger list` takes no clock and
+    // reads the real one, and a trigger expires TRIGGER_TTL_DAYS after it
+    // was created, so a fixed creation date drops out of the list once the
+    // calendar passes it by that much.
+    { now: new Date() },
   );
   const drafted = draftDeclaredSkillProposal(root, {
     name: "Release ritual",
