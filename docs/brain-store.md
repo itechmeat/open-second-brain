@@ -1481,6 +1481,11 @@ still on disk (the store is the truth there):
   starts and lists its tools, and answers normally once the vault can be
   read again, with no restart), the session start shows the rules as
   unavailable, and a lineage observation is dropped with a named notice.
+  A switched machine knows where its brain is: while its vault cannot be
+  examined or is gone, its MCP server answers each call as a server with
+  no vault does (the brain tools from the store, a tool that needs the
+  vault refuses with `vault_unreadable`), and never recreates a vault
+  folder that is gone.
 
 ## What the partitions protect, and what they do not
 

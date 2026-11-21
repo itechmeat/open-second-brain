@@ -183,11 +183,13 @@ test("set on a switched vault, the quote check finds the session start's notes a
   // cache, not reported unavailable for lack of a `Brain/active.md` file.
   expect(payload.per_note.find((n) => n.path === "Brain/active.md")?.verdict).toBe("verified");
   // The preference page the digest's bullet came from is judged against the
-  // text that bullet delivered: the span the digest left unverified was
-  // measured against it (it used to read `note-unavailable`).
+  // text that bullet delivered (it used to read `note-unavailable`), and the
+  // quoted rule verifies on it too: the page is the note the text belongs to,
+  // even though the digest, which sorts first, also carries it (it used to
+  // read `not-in-note`, measured only by the invented span).
   expect(
     payload.per_note.find((n) => n.path === "Brain/preferences/pref-otters-first.md")?.verdict,
-  ).toBe("not-in-note");
+  ).toBe("verified");
 
   const enforced = readAllLogEntries(env.vault).filter((event) =>
     JSON.stringify(event).includes("answer-quote-check"),

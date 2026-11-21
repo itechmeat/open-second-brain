@@ -333,6 +333,48 @@ export function storeOnlyAnswer(
 }
 
 /**
+ * The refusal for a vault a switched machine cannot reach, or `null` when
+ * the vault is there to read or the machine has not switched.
+ *
+ * On a switched machine the brain lives in the store, and the vault is
+ * only the human view and the user's notes (design D14 items 2 and 8): a
+ * vault folder that cannot be examined (its permissions, an I/O error) or
+ * is gone (an unmounted disk) leaves the store readers and writers working
+ * as on a machine with no vault, and only what needs the vault refuses,
+ * with this error. A machine that has not switched answers `null` here and
+ * keeps its refusal of every read and write ({@link storeOnlyMode}).
+ */
+export function switchedVaultUnreachable(
+  vault: string,
+  context: Pick<StoreOnlyContext, "configPath"> = {},
+): VaultUnexaminableError | null {
+  const look = lookAtDirectory(vault);
+  if (look === "present") return null;
+  if (!isSwitched({ vault, ...context }, {})) return null;
+  if (look === "absent") {
+    const gone = Object.assign(new Error(`ENOENT: no such directory, '${vault}'`), {
+      code: "ENOENT",
+    });
+    return new VaultUnexaminableError(
+      vault,
+      gone,
+      `the vault ${vault} is not there (ENOENT); this machine's brain is in the store, so ` +
+        "the brain tools keep working, and a tool that needs the vault answers once the folder " +
+        "is back (mount or restore it, or point the machine config at the vault)",
+    );
+  }
+  return new VaultUnexaminableError(
+    vault,
+    look.failed,
+    `the vault ${vault} cannot be examined (${
+      (look.failed as NodeJS.ErrnoException).code ?? look.failed.message
+    }); this machine's brain is in the store, so the brain tools keep working, and a tool ` +
+      "that needs the vault answers once it can be read (make it and every parent directory " +
+      "traversable, chmod u+rx)",
+  );
+}
+
+/**
  * Whether, and why, this machine writes to the store only. Throws
  * {@link StoreOnlyUndeterminedError} when it cannot tell.
  */

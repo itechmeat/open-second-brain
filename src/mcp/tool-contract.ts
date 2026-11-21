@@ -141,6 +141,20 @@ export interface RequestIdentity {
   readonly via: "token" | "shared-key";
 }
 
+/**
+ * Why the vault a context serves cannot be reached, when it cannot: a
+ * switched machine whose vault folder is gone or cannot be examined
+ * (design D14). Absent when the vault is there to read, and absent on a
+ * server with no vault at all - there the vault was never configured, so
+ * there are no operator rules to have missed.
+ */
+export interface VaultUnreachable {
+  /** The vault that could not be reached. */
+  readonly vault: string;
+  /** The reason, in words: what the look at the vault failed with. */
+  readonly reason: string;
+}
+
 export interface ServerContext {
   /**
    * The vault this server serves. On a server with no vault (design D14)
@@ -156,6 +170,13 @@ export interface ServerContext {
    * answer.
    */
   readonly vaultOrNull?: string | null;
+  /**
+   * Why the vault this context serves cannot be reached, when it cannot
+   * (see {@link VaultUnreachable}). A surface that answers about the
+   * operator's rules says so - naming the reason - instead of reporting
+   * no rules, which reads as "the operator wrote none".
+   */
+  readonly vaultUnreachable?: VaultUnreachable;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
   readonly capabilityReport?: ToolCapabilityReport;

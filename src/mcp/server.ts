@@ -25,6 +25,7 @@ import {
 } from "./frozen-refusal.ts";
 import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
 import { withPrivateWithheld } from "../core/store/caller-reach.ts";
+import { switchedVaultUnreachable } from "../core/store/store-only.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
   INTERNAL_ERROR,
@@ -44,6 +45,7 @@ import {
   isToolErrorCode,
   defaultCodeForRpc,
   TOOL_ERROR_META_KEY,
+  TOOL_ERROR_CODE,
   toolErrorMeta,
   type ToolErrorCode,
   type ToolErrorDetail,
@@ -199,6 +201,30 @@ function vaultRequired(tool: string | undefined): MCPError {
   });
 }
 
+/**
+ * The refusal a tool that needs the vault gives on a switched machine whose
+ * vault cannot be read or is gone: the `vault_required` shape, with the
+ * `vault_unreadable` code and the reason.
+ */
+function vaultUnreachable(tool: string | undefined, reason: Error): MCPError {
+  const subject = tool === undefined ? "this request" : `\`${tool}\``;
+  return new MCPError(INVALID_PARAMS, `${subject} needs the vault: ${reason.message}`, {
+    code: TOOL_ERROR_CODE.vaultUnreadable,
+  });
+}
+
+/**
+ * The reason a vault could not be reached, in the short form the surfaces
+ * that report it use: the vault and what the look at it failed with. The
+ * refusal's own message carries the remedy as well, and is longer than a
+ * notice in a context payload should be.
+ */
+function unreachableReason(vault: string, reason: Error): string {
+  const code = (reason as NodeJS.ErrnoException).code;
+  if (code === "ENOENT") return `the vault ${vault} is not there (ENOENT)`;
+  return `the vault ${vault} cannot be examined (${code ?? reason.message})`;
+}
+
 export class MCPServer {
   readonly vault: string | null;
   readonly configPath: string | null;
@@ -276,16 +302,37 @@ export class MCPServer {
    */
   private contextFor(identity?: RequestIdentity, toolName?: string): ServerContext {
     const configPath = this.configPath ?? undefined;
-    const served = this.vault;
+    // A switched machine whose vault folder cannot be read or is gone holds
+    // its brain in the store: the request is served as on a server with no
+    // vault, and a tool that needs the vault refuses with the reason
+    // (`vault_unreadable`). Looked at per request, so the same server
+    // answers normally once the vault is back.
+    const unreachable =
+      this.vault === null
+        ? null
+        : switchedVaultUnreachable(this.vault, configPath !== undefined ? { configPath } : {});
+    const served = unreachable === null ? this.vault : null;
     return {
       // With no vault, reading `vault` is the uniform refusal (design D14):
       // a vault-adapter tool refuses at its first use, every other tool
       // reads `vaultOrNull` or never asks.
       get vault(): string {
+        if (unreachable !== null) throw vaultUnreachable(toolName, unreachable);
         if (served === null) throw vaultRequired(toolName);
         return served;
       },
       vaultOrNull: served,
+      // The reason the vault is out of reach, for the surfaces that report
+      // what they could not read instead of refusing (the operator's rules
+      // in `brain_context`).
+      ...(unreachable !== null && this.vault !== null
+        ? {
+            vaultUnreachable: {
+              vault: this.vault,
+              reason: unreachableReason(this.vault, unreachable),
+            },
+          }
+        : {}),
       configPath: this.configPath,
       repoRoot: this.repoRoot,
       capabilityReport: this.capabilityReport,

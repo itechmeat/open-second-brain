@@ -24,7 +24,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { parseLogFileName } from "./log-jsonl.ts";
-import { BRAIN_LOG_DIR, BRAIN_SNAPSHOTS_DIR } from "./path-constants.ts";
+import { BRAIN_LOG_DIR } from "./path-constants.ts";
+import { isSnapshotExcludedEntry } from "./snapshot.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import type { BrainPreference, BrainRetired } from "./types.ts";
 
@@ -216,10 +217,12 @@ function walkBrain(root: string): ReadonlyArray<ScannedFile> {
       }
       if (st.isSymbolicLink()) continue;
       const rel = relative(root, abs).replaceAll("\\", "/");
-      // `.snapshots/` is the snapshot family itself — comparing
-      // archives across snapshots is not meaningful (each snapshot
-      // owns its own archive set). Skip the tree entirely.
-      if (rel === BRAIN_SNAPSHOTS_DIR || rel.startsWith(`${BRAIN_SNAPSHOTS_DIR}/`)) continue;
+      // The top-level entries the snapshot family never touches: an
+      // archive never holds them and a restore leaves them in place, so
+      // listing them would announce a change no rollback makes.
+      // `.snapshots/` is the snapshot family itself, `.artifacts/` holds
+      // tool payloads, and a restore's staging folder is its plumbing.
+      if (dir === root && isSnapshotExcludedEntry(name)) continue;
       // Defense-in-depth: an entry whose relative path escapes the
       // walker root (`..` segment) cannot legitimately be inside
       // a Brain snapshot — drop it rather than classify under a
