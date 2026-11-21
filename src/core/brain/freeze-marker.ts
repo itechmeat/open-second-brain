@@ -56,6 +56,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { stampOfStats, stampVouches, type FileStamp } from "../fs-stamp.ts";
 import {
   machineStateLocation,
   machineStatePathIn,
@@ -178,20 +179,19 @@ const UNREADABLE_MARKER: FreezeMarker = Object.freeze({
 });
 
 /**
- * Inode identity of the marker the last read parsed, per resolved root.
+ * Stamp of the marker the last read parsed, per resolved root.
  *
  * The check sits in front of every content write - the same
  * append-heavy loops `vault-identity.ts` measures - so the steady-state
  * cost has to be one syscall rather than an open-read-parse. The marker
- * is written through `atomicWriteFileSync` (temp file plus rename), so a
- * replaced marker always arrives with a new inode; matching on
- * (inode, size, mtime) therefore proves the bytes are the ones already
- * parsed.
+ * is written through `atomicWriteFileSync` (temp file plus rename), but
+ * a same-size rewrite in place inside one tick of the volume's clock
+ * keeps inode, size and times, so the stamp vouches for the parsed bytes
+ * only once it has settled (`fs-stamp.ts`). Whether the vault is frozen
+ * never comes from the cache: an absent file is seen by the stat itself.
  */
 interface MarkerStamp {
-  readonly ino: bigint;
-  readonly size: bigint;
-  readonly mtimeNs: bigint;
+  readonly stamp: FileStamp;
   readonly marker: FreezeMarker;
 }
 const MARKER_STAMPS = new Map<string, MarkerStamp>();
@@ -275,6 +275,8 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
   // discarded one Error, with its stack, per guarded write. The `catch`
   // stays because the option suppresses ENOENT only and every other stat
   // failure (EACCES, ELOOP) must not propagate out of a write guard.
+  // Taken before the stat, so it is no later than the read of the bytes.
+  const readAtMs = Date.now();
   let stat;
   try {
     // bigint: the inode compared below is exact on Windows too (NTFS ids
@@ -288,21 +290,11 @@ export function readFreezeMarker(vault: string): FreezeMarker | null {
     return null;
   }
   const cached = MARKER_STAMPS.get(root);
-  if (
-    cached !== undefined &&
-    cached.ino === stat.ino &&
-    cached.size === stat.size &&
-    cached.mtimeNs === stat.mtimeNs
-  ) {
+  if (cached !== undefined && stampVouches(cached.stamp, stat)) {
     return cached.marker;
   }
   const marker = parseMarker(path);
-  MARKER_STAMPS.set(root, {
-    ino: stat.ino,
-    size: stat.size,
-    mtimeNs: stat.mtimeNs,
-    marker,
-  });
+  MARKER_STAMPS.set(root, { stamp: stampOfStats(stat, readAtMs), marker });
   return marker;
 }
 

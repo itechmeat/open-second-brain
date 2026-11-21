@@ -1,5 +1,6 @@
-import { test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { test, expect, beforeEach, afterEach, setSystemTime, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import { existsSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -24,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   cleanup();
 });
 
@@ -191,6 +193,61 @@ test("mtime+size fastpath skips read; hash fallback detects same-content touch",
   expect(second.unchanged).toBe(1);
   expect(second.updated).toBe(0);
   expect(second.added).toBe(0);
+});
+
+test("a same-size edit saved in the second of the indexed version is re-indexed", async () => {
+  // The index keeps the file's mtime in whole seconds. A same-size edit
+  // saved in the same second as the indexed version (or the same tick of
+  // a coarse volume clock) keeps both fields, so a row that young does
+  // not take the fastpath (`fs-stamp.ts`, racily clean).
+  writeMd(vault, "a.md", "# Hello World\n\nalpha content.");
+  const p = join(vault, "a.md");
+  const mtime = statSync(p).mtime;
+  const cfg = makeConfig({ vault, dbPath });
+  expect((await indexVault(cfg)).added).toBe(1);
+
+  writeFileSync(p, "# Hello World\n\ngamma content.");
+  utimesSync(p, mtime, mtime);
+  const second = await indexVault(cfg);
+  expect(second.updated).toBe(1);
+  expect(second.unchanged).toBe(0);
+});
+
+test("a row proves the note only as of the moment the indexer looked, not when it wrote", async () => {
+  // A run reads the note, then pauses for longer than the racy window
+  // before it writes the row; a same-size edit lands in the same second
+  // as the indexed version during the pause. A row stamped with its write
+  // time would vouch for the old bytes; one stamped with the time the
+  // walk observed the note does not.
+  writeMd(vault, "b.md", "# Hello World\n\nalpha content.");
+  const p = join(vault, "b.md");
+  const second = Math.floor(Date.now() / 1000);
+  utimesSync(p, second, second);
+  const cfg = makeConfig({ vault, dbPath });
+  const realRead = fs.readFileSync;
+  let edited = false;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((
+    path: unknown,
+    ...rest: unknown[]
+  ) => {
+    const out = (realRead as (...a: unknown[]) => unknown)(path, ...rest);
+    if (String(path) === p && !edited) {
+      edited = true;
+      writeFileSync(p, "# Hello World\n\ngamma content.");
+      utimesSync(p, second, second);
+      setSystemTime(new Date(Date.now() + 3_000));
+    }
+    return out;
+  }) as typeof fs.readFileSync);
+  try {
+    expect((await indexVault(cfg)).added).toBe(1);
+  } finally {
+    read.mockRestore();
+  }
+  expect(edited).toBe(true);
+  const again = await indexVault(cfg);
+  setSystemTime();
+  expect(again.updated).toBe(1);
 });
 
 test("declaring vault.include_paths and reindexing PRUNES what is now out of scope", async () => {

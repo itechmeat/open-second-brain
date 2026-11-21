@@ -26,9 +26,13 @@ interface OwnAppend {
  * reader that kept a shard at one stamp and finds it at another may skip
  * re-hashing the bytes it kept only when a chain of this process's
  * appends leads from the first stamp to the second, each starting from
- * exactly the stamp the one before it left: then no other writer touched
- * the file in between (an in-place rewrite moves mtime and ctime, and an
- * append by another writer moves the size), and a shard is append-only.
+ * exactly the stamp the one before it left: then no other writer appended
+ * in between (an append by another writer moves the size), and a shard is
+ * append-only. The times do not prove that nothing rewrote the file in
+ * place: a write that lands in the clock tick of the stamp it follows
+ * (Windows sets file times per timer tick, FAT keeps the mtime to 2 s)
+ * leaves the stamp as it was. The format never rewrites a shard in place
+ * (`FORMAT.md`, "Reading"), so the chain relies on that, not on the times.
  */
 const ownAppends = new Map<string, OwnAppend[]>();
 

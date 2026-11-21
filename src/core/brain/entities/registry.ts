@@ -24,6 +24,7 @@ import type { FrontmatterMap } from "../../types.ts";
 import { slugify } from "../../vault.ts";
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
+import { stampKey } from "../../fs-stamp.ts";
 import { isoSecond } from "../time.ts";
 import { entityPath } from "../paths.ts";
 import {
@@ -335,7 +336,7 @@ const PERSON_DERIVED_CACHE_MAX = 16;
 let unstableSignatureCounter = 0;
 
 /**
- * The nickname file's change signature: nanosecond mtime plus byte size
+ * The nickname file's change signature: its stat stamp (`stampKey`)
  * when it exists, a fixed marker when it does not. A stat failure other
  * than a missing file yields a fresh marker each call, so an unreadable
  * file is never cached - the read path keeps surfacing the fault.
@@ -347,8 +348,12 @@ function personNicknameFileSignature(vault: string): string {
       : "missing";
   }
   try {
+    // Unique per call while too recent to vouch for the bytes
+    // (`fs-stamp.ts`): a same-size hand edit in the tick of the last read
+    // keeps mtime and size.
+    const observedAtMs = Date.now();
     const st = statSync(join(vault, PERSON_NICKNAMES_ARTIFACT_REL), { bigint: true });
-    return `${st.mtimeNs}\0${st.size}`;
+    return stampKey(st, observedAtMs);
   } catch (err) {
     if (typeof err === "object" && err !== null && (err as { code?: string }).code === "ENOENT") {
       return "missing";
@@ -362,8 +367,7 @@ function personNicknameFileSignature(vault: string): string {
  * Resolve the derived person-form index for `vault`, reusing the last
  * build while neither the entity files nor the nickname file changed.
  * The entity side is detected through the entity index's own memo
- * (object identity), the nickname side through its mtime/size
- * signature - so a per-query expansion, a registry read or a doctor
+ * (object identity), the nickname side through its stat stamp - so a per-query expansion, a registry read or a doctor
  * scan each pay the parse and the derivation once per signature instead
  * of per call. An unusable nickname file is captured as
  * `nicknameError` (consumers keep their documented degradations); any

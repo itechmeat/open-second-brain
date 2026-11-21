@@ -33,6 +33,7 @@ import { dirname, join } from "node:path";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { renameWithRetry } from "../../fs-atomic.ts";
+import { stampKey } from "../../fs-stamp.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { SECRET_CUSTODY_AUDIT_DIR } from "../audit-dirs.ts";
 import { brainDirsForWrite } from "../paths.ts";
@@ -453,11 +454,16 @@ function writeTokenStore(
   cacheByPath.delete(path);
 }
 
-// ----- mtime cache -----------------------------------------------------------
+// ----- stat cache ------------------------------------------------------------
 
 interface CacheEntry {
-  readonly mtimeMs: number;
-  readonly size: number;
+  /**
+   * The store file's stamp, taken before the read (`fs-stamp.ts`): a
+   * rotation in another process that lands in the same tick of the
+   * volume's clock at the same size would otherwise keep a rotated-out
+   * hash resolving as current here.
+   */
+  readonly stamp: string;
   readonly index: ReadonlyMap<string, HashIndexEntry>;
 }
 
@@ -479,9 +485,10 @@ function activeHashIndex(path: string): ReadonlyMap<string, HashIndexEntry> {
     cacheByPath.delete(path);
     return EMPTY_INDEX;
   }
-  const stats = statSync(path);
+  const observedAtMs = Date.now();
+  const stamp = stampKey(statSync(path, { bigint: true }), observedAtMs);
   const cached = cacheByPath.get(path);
-  if (cached !== undefined && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+  if (cached !== undefined && cached.stamp === stamp) {
     return cached.index;
   }
   const index = new Map<string, HashIndexEntry>();
@@ -508,7 +515,7 @@ function activeHashIndex(path: string): ReadonlyMap<string, HashIndexEntry> {
       }
     }
   }
-  cacheByPath.set(path, { mtimeMs: stats.mtimeMs, size: stats.size, index });
+  cacheByPath.set(path, { stamp, index });
   return index;
 }
 

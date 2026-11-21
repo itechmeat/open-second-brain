@@ -18,6 +18,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -343,5 +344,27 @@ describe("the store lock stays with the store module", () => {
       ran = true;
     });
     expect(ran);
+  });
+});
+
+describe("the resolve cache on a volume whose clock did not advance", () => {
+  test("a same-size rewrite by another process with mtime put back is seen", () => {
+    // Another process's rotation (or a hand edit) that lands in the same
+    // tick of the volume's clock keeps size and mtime: new material has a
+    // hash of the same length. ctime and the racy window must catch it
+    // (`fs-stamp.ts`), or the rotated-out material keeps resolving here.
+    const { tokenMaterial: old } = mintAgentToken(vault, "mcp_token_cli", "@ops");
+    const path = tokenStorePath(vault);
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    expect(resolveAgentForToken(vault, old)?.agent).toBe("@ops");
+
+    const replacement = fakeCredential("replacement-material");
+    const raw = readFileSync(path, "utf8");
+    writeFileSync(path, raw.replace(hashOf(old), hashOf(replacement)));
+    utimesSync(path, mtime, mtime);
+
+    expect(resolveAgentForToken(vault, old)).toBeNull();
+    expect(resolveAgentForToken(vault, replacement)?.agent).toBe("@ops");
   });
 });

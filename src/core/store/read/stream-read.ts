@@ -22,6 +22,7 @@ import { createHash, type Hash } from "node:crypto";
 import { type BigIntStats, closeSync, lstatSync, readSync } from "node:fs";
 
 import { sameDevIno } from "../../fs-identity.ts";
+import { statSettled } from "../../fs-stamp.ts";
 
 import { BLOB_REF_KEY, type StorePartition } from "../constants.ts";
 import type { StoreRecord } from "../envelope.ts";
@@ -126,6 +127,13 @@ export interface ShardTail {
   readonly ctimeNs: bigint;
   /** sha256 state of those bytes, extended by the next read. */
   readonly hash: Hash;
+  /**
+   * Wall-clock time (ms) captured before the `lstat` and the read that
+   * kept this tail. The equal-stamp shortcut trusts the stamp only when
+   * the shard's times were older than this by the racy window
+   * (`fs-stamp.ts`); otherwise the kept bytes are checksummed first.
+   */
+  readonly observedAtMs: number;
   /** The records the read kept, in file order. */
   readonly records: ReadonlyArray<ReadRecord>;
   readonly compactions: ReadonlyArray<Compaction>;
@@ -140,7 +148,12 @@ export interface ShardTail {
  * once per write. With a tail kept:
  *
  *  - a shard whose inode, device, size, mtime and ctime are all unchanged
- *    is not opened: the kept read answers;
+ *    is not opened, when those times were older than the read that kept
+ *    the tail by the racy window (`fs-stamp.ts`): the kept read answers.
+ *    A stamp younger than that proves nothing (a same-size write inside
+ *    one clock tick, or a same-size replacement on a volume that reuses
+ *    file ids, keeps all five), so the kept bytes are checksummed, and the
+ *    kept read answers only when the sum still matches;
  *  - a shard with the same inode that is no shorter is read from where the
  *    kept read ended when the bytes before are known unchanged: appends of
  *    this process alone took it from the kept stamp to the current one
@@ -148,6 +161,17 @@ export interface ShardTail {
  *    kept one (the prefix is hashed, not parsed);
  *  - anything else (another inode, a shorter file, a changed prefix, no
  *    usable inode) is read whole, and a read with a problem is not kept.
+ *
+ * Neither the inode nor the times are trusted alone. An inode of 0 keeps
+ * nothing; a file id reused after a replace (FAT and exFAT derive it from
+ * the directory entry, ReFS does not promise unique 64-bit ids) still
+ * meets the size and the checksum, and a newer copy a sync tool delivers
+ * has the kept bytes as its prefix. Times that do not move within a clock
+ * tick are trusted only once they had settled when the tail was kept;
+ * what remains is a write the format never makes (an in-place rewrite of
+ * the same size) that also lands in this process's own-append chain, or a
+ * volume whose clock runs more than the racy window behind this one
+ * (`FORMAT.md`, "Reading").
  *
  * A tail holds only the records its caller keeps, so the bound is what
  * the caller's fold holds anyway, not a parsed copy of the stream.
@@ -190,6 +214,28 @@ function hashRange(
     closeSync(fd);
   }
   return hash;
+}
+
+/**
+ * Whether a kept tail whose stamp the shard still shows may answer without
+ * reading the shard: at once when the stamp had settled as the tail was
+ * kept, otherwise only when the kept bytes still hash to the kept sum. A
+ * matching sum observed once the stamp has settled renews the tail with
+ * this observation, so the check is paid for at most the racy window.
+ */
+function keptStampHolds(
+  path: string,
+  partitionRoot: string,
+  kept: ShardTail,
+  tails: ShardTails,
+  rel: string,
+  observedAtMs: number,
+): boolean {
+  if (statSettled(kept, kept.observedAtMs)) return true;
+  const check = hashRange(path, partitionRoot, createHash("sha256"), 0, kept.size);
+  if (check === null || check.digest("hex") !== kept.hash.copy().digest("hex")) return false;
+  if (statSettled(kept, observedAtMs)) tails.set(rel, { ...kept, observedAtMs });
+  return true;
 }
 
 function sameStamp(a: BigIntStats, b: BigIntStats): boolean {
@@ -274,6 +320,8 @@ function readShardWithTails(
 ): ShardPass {
   const kept = tails.get(rel);
   let base: ShardTail | null = null;
+  // The observation clock, captured before the lstat and the read below.
+  const observedAtMs = Date.now();
   // lstat: a link swapped in under the name has an inode of its own. Taken
   // before the read too, so a read is kept only when the file did not
   // change from before the read to after its checksum.
@@ -282,7 +330,12 @@ function readShardWithTails(
   if (kept !== undefined) {
     const size = Number(now.size);
     if (sameDevIno(now, kept) && size >= kept.size) {
-      if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs) {
+      if (
+        size === kept.size &&
+        now.mtimeNs === kept.mtimeNs &&
+        now.ctimeNs === kept.ctimeNs &&
+        keptStampHolds(path, partitionRoot, kept, tails, rel, observedAtMs)
+      ) {
         return {
           records: kept.records,
           compactions: kept.compactions,
@@ -348,6 +401,7 @@ function readShardWithTails(
     mtimeNs: after.mtimeNs,
     ctimeNs: after.ctimeNs,
     hash,
+    observedAtMs,
     records: pass.records,
     compactions: pass.compactions,
   });

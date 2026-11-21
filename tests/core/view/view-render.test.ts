@@ -4,7 +4,7 @@
  * before the replacement, conflict copies are ingested and removed, and
  * only changed bytes are written. Human edits become human records.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import {
   existsSync,
@@ -21,10 +21,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import type { StoreRecord } from "../../../src/core/store/envelope.ts";
 import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import { allRecords, catchUp } from "../../../src/core/view/catch-up.ts";
 import { VIEW_RECOVER_DAYS } from "../../../src/core/view/constants.ts";
+import { readPageStats } from "../../../src/core/view/page-stats.ts";
 import { listReplacedVersions } from "../../../src/core/view/recover.ts";
 import { runViewPass, type ViewPassReport } from "../../../src/core/view/render.ts";
 import type { ReplaceHooks } from "../../../src/core/view/page-io.ts";
@@ -56,7 +58,10 @@ beforeEach(() => {
   pass();
   pass();
 });
-afterEach(() => m.cleanup());
+afterEach(() => {
+  setSystemTime();
+  m.cleanup();
+});
 
 function pass(hooks?: ReplaceHooks, store: StoreHandle = a): ViewPassReport {
   clock += 1000;
@@ -457,5 +462,77 @@ describe("render protocol", () => {
     const count = allRecords(catchUp(a, now)).length;
     pass();
     expect(allRecords(catchUp(a, now)).length).toBe(count);
+  });
+});
+
+describe("page stats", () => {
+  test("an edit saved at the same size in the tick of the last render is ingested", () => {
+    // What a volume whose clock did not move between the render and the
+    // edit reports (Windows ticks, FAT keeps mtime to 2 s): the edited
+    // page keeps the size, times and file id the writer left.
+    const before = statSync(about());
+    writeFileSync(about(), read().replace("- Rule A.", "- Rule Z."));
+    const real = fs.statSync;
+    const spy = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, opts?: unknown) =>
+      path === about() ? before : real(path, opts as fs.StatSyncOptions)) as typeof fs.statSync);
+    try {
+      pass();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(humanPreferenceSets()).toEqual([
+      { preference: "pref-a", fields: { principle: "Rule Z." } },
+    ]);
+  });
+
+  test("an edit saved between the pass's read and its stat is not vouched for by a later clock", () => {
+    // The page settled long ago, so its stat is kept once it is read. A
+    // same-size edit lands right after this pass read the page, and the
+    // clock then moves past the racy window before the stat: a clock read
+    // after the render would take the edited stat for the writer's bytes.
+    const old = new Date(MON);
+    utimesSync(about(), old, old);
+    const edited = read().replace("- Rule A.", "- Rule Q.");
+    const realOpen = fs.openSync;
+    const realClose = fs.closeSync;
+    let pageFd = -1;
+    let done = false;
+    const open = spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (realOpen as (...a: unknown[]) => number)(p, ...rest);
+      if (String(p) === about() && pageFd === -1 && !done) pageFd = fd;
+      return fd;
+    }) as typeof fs.openSync);
+    const close = spyOn(fs, "closeSync").mockImplementation(((fd: number) => {
+      realClose(fd);
+      if (fd === pageFd && !done) {
+        done = true;
+        writeFileSync(about(), edited);
+        setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
+      }
+    }) as typeof fs.closeSync);
+    try {
+      pass();
+    } finally {
+      open.mockRestore();
+      close.mockRestore();
+    }
+    expect(done).toBe(true);
+    pass();
+    setSystemTime();
+    expect(humanPreferenceSets()).toEqual([
+      { preference: "pref-a", fields: { principle: "Rule Q." } },
+    ]);
+  });
+
+  test("a page's stat is kept for the next pass only once the clock has moved past it", () => {
+    // Fresh from the writer: the next pass reads the page again.
+    expect(readPageStats(a).has("about-me.md")).toBe(false);
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
+    try {
+      pass();
+      expect(readPageStats(a).has("about-me.md")).toBe(true);
+    } finally {
+      setSystemTime();
+    }
   });
 });

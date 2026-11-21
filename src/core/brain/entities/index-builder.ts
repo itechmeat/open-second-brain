@@ -19,6 +19,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
+import { stampKey } from "../../fs-stamp.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { extractFrontmatterRelations } from "../../graph/frontmatter-relations.ts";
 import { brainDirs } from "../paths.ts";
@@ -184,8 +185,14 @@ function entityIndexSignature(
   const parts: string[] = [];
   for (const path of files) {
     try {
+      // A stamp too recent to vouch for the bytes is unique per call
+      // (`fs-stamp.ts`): a same-size edit in the same tick of the
+      // volume's clock as the last build keeps mtime and size.
+      // The clock is captured before the stat, and the files are read
+      // only after the signature: a stamp vouches only as of its look.
+      const observedAtMs = Date.now();
       const st = statSync(path, { bigint: true });
-      parts.push(`${path}\0${st.mtimeNs}\0${st.size}`);
+      parts.push(`${path}\0${stampKey(st, observedAtMs)}`);
     } catch {
       // File vanished between walk and stat: fold in a distinct marker so
       // the signature still changes relative to a build that saw it.
@@ -206,11 +213,14 @@ const INDEX_CACHE_MAX = 16;
 
 /**
  * Build the identity index, reusing the last result when nothing under
- * `Brain/entities/` changed since (mtime/size-keyed). The registry rebuilds
- * after each write, so the memo also serves those callers correctly: a write
- * shifts the signature and forces a fresh build. A write that lands within
- * the (now nanosecond) mtime granularity of the previous build can serve one
- * stale read - a deliberate, documented trade-off for the per-query win.
+ * `Brain/entities/` changed since (keyed by each file's stat stamp,
+ * `fs-stamp.ts`). The registry rebuilds after each write, so the memo also
+ * serves those callers correctly: a write shifts the signature and forces a
+ * fresh build. A file changed less than the racy window ago gives a
+ * signature no other build shares, so a same-size write inside one tick of
+ * the volume's clock (which keeps mtime and size) is never served from the
+ * memo; the price is a rebuild per call for a couple of seconds after a
+ * change.
  */
 export function buildEntityIndex(vault: string): EntityIndex {
   // The mode is decided once per build: asking it per page re-ran the

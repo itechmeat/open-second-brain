@@ -47,6 +47,7 @@ import { STORE_LINE_CAP_BYTES, STORE_PARTITIONS, type StorePartition } from "./c
 import { parseHlc } from "./hlc.ts";
 import { openRegularFileForRead } from "./safe-fs.ts";
 import { storesStateDir } from "./store-paths.ts";
+import { stampKey } from "../fs-stamp.ts";
 
 /** Folder of the ledgers under the stores state folder. */
 export const SHARD_QUARANTINE_DIR = "shard-quarantine";
@@ -106,9 +107,16 @@ export function ledgerPath(root: string): string {
   return join(storesStateDir(), SHARD_QUARANTINE_DIR, `${key}.json`);
 }
 
+/**
+ * The ledger's stamp, or `absent`. A stamp too recent to vouch for the
+ * bytes is unique per call (`fs-stamp.ts`), so a release and a quarantine
+ * that land in one tick of the volume's clock at the same size are still
+ * read.
+ */
 function stampOf(path: string): string {
-  const stat = statSync(path, { throwIfNoEntry: false });
-  return stat === undefined ? "absent" : `${stat.size}:${stat.mtimeMs}`;
+  const observedAtMs = Date.now();
+  const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 
 function isPartition(value: unknown): value is StorePartition {
@@ -184,8 +192,9 @@ export function dropLoadedLedger(path: string): void {
 }
 
 /**
- * The size and mtime of the ledger of the store at `root` (`absent` when
- * there is none). A cache of a whole read keys on it beside the shards'
+ * The stamp of the ledger of the store at `root` (`absent` when there is
+ * none; unique per call while the file is too recent to vouch for its
+ * bytes). A cache of a whole read keys on it beside the shards'
  * stamps: a quarantine or a release changes no shard byte, yet changes
  * whether a shard reads whole.
  */

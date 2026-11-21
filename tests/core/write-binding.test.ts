@@ -36,6 +36,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -517,5 +518,21 @@ describe("a re-declared binding takes effect on the next call", () => {
     writeBrainConfig(vault, declaredBindingYaml("Elsewhere"));
     expect(checkWriteBinding(vault, OUTSIDE_PATH)).toBeNull();
     expect(checkWriteBinding(vault, INSIDE_PATH)).not.toBeNull();
+  });
+
+  test("a same-size edit in place with mtime put back changes what is admitted", () => {
+    // An editor saving in place keeps the inode, two prefixes of one
+    // length keep the size, and a volume whose clock did not advance (or
+    // a copy that keeps times) keeps mtime: only ctime and the racy
+    // window are left to notice (`fs-stamp.ts`).
+    const path = join(vault, "Brain", "_brain.yaml");
+    writeBrainConfig(vault, declaredBindingYaml("Aaaaa"));
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    expect(checkWriteBinding(vault, "Aaaaa/note.md")).toBeNull();
+    writeFileSync(path, declaredBindingYaml("Bbbbb"), "utf8");
+    utimesSync(path, mtime, mtime);
+    expect(checkWriteBinding(vault, "Aaaaa/note.md")).not.toBeNull();
+    expect(checkWriteBinding(vault, "Bbbbb/note.md")).toBeNull();
   });
 });

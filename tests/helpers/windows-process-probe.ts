@@ -90,3 +90,107 @@ export function windowsProcessAfterKill(pid: number, exit: number | string | nul
       : `os after the kill: unknown (${String(code ?? err)})`;
   }
 }
+
+/** One row of the operating system's process table. */
+export interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly name: string;
+  readonly commandLine: string;
+}
+
+/**
+ * Every process below `root` in `rows`, depth first. A parent id can name a
+ * process that has gone and whose id was reused, so a loop is walked once.
+ */
+export function descendantsOf(root: number, rows: ReadonlyArray<ProcessRow>): ProcessRow[] {
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    if (row.pid === row.ppid) continue;
+    const list = children.get(row.ppid) ?? [];
+    list.push(row);
+    children.set(row.ppid, list);
+  }
+  const seen = new Set<number>([root]);
+  const out: ProcessRow[] = [];
+  const walk = (pid: number): void => {
+    for (const child of children.get(pid) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      out.push(child);
+      walk(child.pid);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * The descendant lines of the limit failure. A handle's owner cannot be
+ * named without a handle tool, but a pipe outlives the child only through
+ * a process it started, so a live descendant is one that can hold it. An
+ * empty list clears no one: Windows keeps a parent id that names a process
+ * that has exited, so a grandchild whose parent is gone is not linked back
+ * to the child and can still hold an inherited pipe.
+ */
+export function formatDescendants(
+  root: number,
+  rows: ReadonlyArray<ProcessRow>,
+  ms: number,
+): string {
+  const found = descendantsOf(root, rows);
+  const head = `descendants at the limit (Win32_Process, ${ms} ms): `;
+  if (found.length === 0) return `${head}none found in this snapshot`;
+  return [
+    `${head}${found.length}, any of them may hold the child's stdout and stderr`,
+    ...found.map((row) => `  pid ${row.pid} (parent ${row.ppid}) ${row.name}: ${row.commandLine}`),
+  ].join("\n");
+}
+
+const DESCENDANT_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; name = [string]$_.Name; commandLine = [string]$_.CommandLine } } | ConvertTo-Json -Compress",
+].join("; ");
+
+/**
+ * The child's live descendants with their command lines, from one
+ * bounded `Get-CimInstance Win32_Process` query. Never throws.
+ */
+export async function windowsDescendants(pid: number): Promise<string> {
+  const startedAt = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const probe = Bun.spawn(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(DESCENDANT_SCRIPT, "utf16le").toString("base64"),
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const text = Promise.all([
+      new Response(probe.stdout).text(),
+      new Response(probe.stderr).text(),
+    ]);
+    const cap = new Promise<null>((done) => {
+      timer = setTimeout(() => done(null), OS_PROBE_LIMIT_MS);
+    });
+    const out = await Promise.race([text, cap]);
+    if (out === null) {
+      probe.kill();
+      return `descendants at the limit (Win32_Process, timed out after ${OS_PROBE_LIMIT_MS} ms): no answer`;
+    }
+    const parsed = JSON.parse(out[0]) as ProcessRow | ProcessRow[];
+    return formatDescendants(
+      pid,
+      Array.isArray(parsed) ? parsed : [parsed],
+      Date.now() - startedAt,
+    );
+  } catch (err) {
+    return `descendants at the limit (Win32_Process, failed): ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}

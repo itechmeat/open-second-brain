@@ -39,7 +39,8 @@ import {
 } from "../../hooks/lib/hygiene-digest-text.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { stateRootDir } from "../../src/core/platform-dirs.ts";
-import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { CLI_CHILD_LIMIT_MS, CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { spawnWithLimit } from "../helpers/run-cli.ts";
 
 // Tests here spawn processes; see tests/helpers/cli-timeout.ts.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -160,10 +161,9 @@ async function runHook(
   preload: ReadonlyArray<string> = [],
   hook: string = HOOK,
 ): Promise<RunResult> {
-  const proc = Bun.spawn(["bun", "run", ...preload, hook], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
+  // Bounded, so a child that hangs fails with its evidence instead of a
+  // bare test timeout (`spawnWithLimit`).
+  const r = await spawnWithLimit(["bun", "run", ...preload, hook], {
     cwd: configHome,
     env: {
       PATH: process.env["PATH"] ?? "",
@@ -171,15 +171,10 @@ async function runHook(
       VAULT_DIR: vault,
       ...env,
     },
+    stdin: JSON.stringify(payload),
+    limitMs: CLI_CHILD_LIMIT_MS,
   });
-  proc.stdin.write(JSON.stringify(payload));
-  await proc.stdin.end();
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const exit = await proc.exited;
-  return { stdout, stderr, exit };
+  return { stdout: r.stdout, stderr: r.stderr, exit: r.returncode };
 }
 
 describe("hygiene-digest hook", () => {

@@ -305,11 +305,14 @@ jobs:
         run: bun install --frozen-lockfile
 
       # A copy, so `--update-timings` can write this shard's measurements
-      # without touching the checkout.
+      # without touching the checkout. The file system of C: and D: goes to
+      # the log: what a volume reports as a file id and how fast its clock
+      # moves decide what the store's readers can see of a rewrite.
       - name: Stage the Windows test timings
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/timings"
+          pwsh -NoProfile -Command "Get-Volume -DriveLetter C,D | Format-Table DriveLetter,FileSystemType,FileSystemLabel,DriveType -AutoSize | Out-String -Width 200" || true
+          mkdir -p "$RUNNER_TEMP/timings" "$RUNNER_TEMP/tmp" "$RUNNER_TEMP/bun-transpiler-cache"
           cp .github/windows-test-timings.json "$RUNNER_TEMP/timings/windows-timings.json"
 
       - name: Publish o2b on PATH (the anti-drift test needs the live server)
@@ -348,7 +351,11 @@ jobs:
 
       # Samples CPU, disk queue, free memory and the bun.exe count every 10 s
       # while the suite runs, so a slow day on a slow runner shows up as data
-      # in the job's artifact instead of a guess.
+      # in the job's artifact instead of a guess. The queue and the latency
+      # of each volume (C: is the system disk, D: holds the workspace and
+      # the runner's temp folder) say which one stalled: every child that
+      # hung did so while the total queue stayed at two or more with the
+      # processor idle.
       - name: Record runner load
         id: telemetry
         background: true
@@ -358,14 +365,23 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'telemetry\runner-load.csv'
           New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
-          'time,cpu_pct,disk_queue,free_mb,bun_procs' | Set-Content $out
+          'time,cpu_pct,disk_queue,free_mb,bun_procs,c_queue,d_queue,c_ms_per_io,d_ms_per_io' |
+            Set-Content $out
           $counters = '\Processor(_Total)\% Processor Time',
                       '\PhysicalDisk(_Total)\Current Disk Queue Length',
-                      '\Memory\Available MBytes'
+                      '\Memory\Available MBytes',
+                      '\LogicalDisk(C:)\Current Disk Queue Length',
+                      '\LogicalDisk(D:)\Current Disk Queue Length',
+                      '\LogicalDisk(C:)\Avg. Disk sec/Transfer',
+                      '\LogicalDisk(D:)\Avg. Disk sec/Transfer'
           while ($true) {
             $v = (Get-Counter $counters -ErrorAction SilentlyContinue).CounterSamples.CookedValue
             $n = @(Get-Process bun -ErrorAction SilentlyContinue).Count
-            '{0:HH:mm:ss},{1:N0},{2:N1},{3:N0},{4}' -f (Get-Date), $v[0], $v[1], $v[2], $n |
+            # Invariant culture, so no number carries a thousands separator
+            # that reads as one more column.
+            [string]::Format([cultureinfo]::InvariantCulture,
+              '{0:HH:mm:ss},{1:F0},{2:F1},{3:F0},{4},{5:F1},{6:F1},{7:F1},{8:F1}',
+              (Get-Date), $v[0], $v[1], $v[2], $n, $v[3], $v[4], ($v[5] * 1000), ($v[6] * 1000)) |
               Add-Content $out
             Start-Sleep -Seconds 10
           }
@@ -405,9 +421,22 @@ jobs:
       # GitHub's Windows runners are slower than Linux over the same suite,
       # so Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
       # times out tests that pass locally. Tests with their own timeout keep it.
+      #
+      # TEMP and the transpiler cache on D:, the runner's temp folder, not
+      # on the system disk C:. A child that hung on the runner had started,
+      # used a fraction of a second of processor time and then waited on
+      # the kernel with no output, while the disk queue stayed at two or
+      # more with the processor idle, for half a minute to three and a half
+      # minutes, about eight minutes into the job. Every fixture the suite
+      # writes, and every transpiled file a bun child caches, went to C:
+      # until now.
       - name: TypeScript test suite (shard ${{ matrix.shard }}/10)
         env:
           O2B_TEST_INFLIGHT_DIR: ${{ runner.temp }}/test-inflight
+          TEMP: ${{ runner.temp }}\tmp
+          TMP: ${{ runner.temp }}\tmp
+          TMPDIR: ${{ runner.temp }}\tmp
+          BUN_RUNTIME_TRANSPILER_CACHE_PATH: ${{ runner.temp }}\bun-transpiler-cache
         run: >-
           bun test --shard=${{ matrix.shard }}/10
           --timings=${{ runner.temp }}/timings/windows-timings.json --update-timings

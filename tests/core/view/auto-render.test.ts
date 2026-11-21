@@ -4,11 +4,12 @@
  * the hook, inside a time budget, fail-open, and a machine that is not the
  * writer reads nothing but the writer records.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { join } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import { initStore } from "../../../src/core/store/store-init.ts";
 import { openStore, type StoreHandle } from "../../../src/core/store/store-open.ts";
 import { autoViewAudit, runAutoViewPass } from "../../../src/core/view/auto-render.ts";
@@ -35,7 +36,10 @@ beforeEach(() => {
   ({ parent, root, view } = env);
 });
 
-afterEach(() => env.cleanup());
+afterEach(() => {
+  setSystemTime();
+  env.cleanup();
+});
 
 function writerStore(): StoreHandle {
   return seedWriterStore(root);
@@ -87,6 +91,11 @@ describe("automatic view render", () => {
     const a = writerStore();
     const opts = { target: view, vault: null, agent: "t" } as const;
     runViewPass(a, opts);
+    // A page's stat is kept for the next pass only once the clock has
+    // moved past the racy window (`fs-stamp.ts`): a same-size edit in the
+    // tick of the render would keep it. This pass reads the pages and
+    // keeps their stats.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     runViewPass(a, opts);
     const read = spyOn(fs, "readFileSync");
     const opened = spyOn(fs, "openSync");

@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { atomicWriteText } from "../fs-atomic.ts";
+import { stampKey } from "../fs-stamp.ts";
 import { compareCodeUnits } from "./compare.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
 import { SEEN_SHARDS_FILE, STORE_PARTITIONS, type StorePartition } from "./constants.ts";
@@ -159,9 +160,15 @@ function isPartition(value: string): value is StorePartition {
   return (STORE_PARTITIONS as ReadonlyArray<string>).includes(value);
 }
 
+/**
+ * The ledger's stamp, or `absent`; unique per call while it is too recent
+ * to vouch for the bytes (`fs-stamp.ts`), so another process's update in
+ * the same tick of the volume's clock is read, not served from the cache.
+ */
 function stampOf(path: string): string {
-  const stat = statSync(path, { throwIfNoEntry: false });
-  return stat === undefined ? "absent" : `${stat.size}:${stat.mtimeMs}`;
+  const observedAtMs = Date.now();
+  const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 
 function parseLedger(text: string): Ledger {

@@ -48,6 +48,13 @@ export interface DocumentInput {
   readonly mtime: number; // unix seconds
   readonly size: number;
   /**
+   * When the indexer observed the file (ms, captured before its `stat`):
+   * kept as the row's `indexed_at`, which proves the fingerprint only as
+   * of that moment (`indexedSnapshotStale`). Absent for a row that has no
+   * file behind it; then the row's write time is kept.
+   */
+  readonly observedAtMs?: number;
+  /**
    * The page's declared frontmatter `type` (normalized token), or null
    * when undeclared. Persisted so link-constraint enforcement can join
    * endpoint types without re-reading files (v6).
@@ -126,6 +133,8 @@ export interface DocumentSummary {
   readonly contentHash: string;
   readonly mtime: number;
   readonly size: number;
+  /** When the row was last written or touched (ms; `NaN` when unreadable). */
+  readonly indexedAtMs: number;
 }
 
 /**
@@ -148,9 +157,13 @@ export function listDocuments(db: Database): Map<string, DocumentSummary> {
         content_hash: string;
         mtime: number;
         size: number;
+        indexed_at: string;
       },
       [number, string]
-    >("SELECT id, path, content_hash, mtime, size FROM documents WHERE substr(path, 1, ?) != ?")
+    >(
+      "SELECT id, path, content_hash, mtime, size, indexed_at FROM documents " +
+        "WHERE substr(path, 1, ?) != ?",
+    )
     .all(storePrefix.length, storePrefix);
   const map = new Map<string, DocumentSummary>();
   for (const r of rows) {
@@ -159,6 +172,7 @@ export function listDocuments(db: Database): Map<string, DocumentSummary> {
       contentHash: r.content_hash,
       mtime: r.mtime,
       size: r.size,
+      indexedAtMs: Date.parse(r.indexed_at),
     });
   }
   return map;
@@ -210,6 +224,7 @@ export function getDocumentIdByPath(db: Database, path: string): number | null {
 
 export function upsertDocument(db: Database, doc: DocumentInput): number {
   const now = nowIso();
+  const indexedAt = doc.observedAtMs === undefined ? now : new Date(doc.observedAtMs).toISOString();
   // SQLite RETURNING on INSERT...ON CONFLICT works in 3.35+; bun:sqlite ships modern SQLite.
   const row = db
     .query<
@@ -284,7 +299,7 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       doc.pinned === undefined ? null : doc.pinned ? PINNED_YES : PINNED_NO,
       now,
       now,
-      now,
+      indexedAt,
     );
   if (!row) {
     throw new SearchError("INDEX_UNREADABLE", `upsertDocument returned no id for '${doc.path}'`);
@@ -514,13 +529,21 @@ export function deleteDocument(db: Database, vecLoaded: boolean, path: string): 
  * Touch a document's mtime and size without changing its title,
  * hash, or triggering chunk replacement. Used by the indexer's
  * mtime-fastpath fallback to re-arm the stat cache after a
- * same-content touch.
+ * same-content touch. `observedAtMs` is when the indexer observed the
+ * file (captured before its `stat`), kept as `indexed_at`: the row
+ * proves the fingerprint only as of that moment, never as of this write.
  */
-export function touchDocument(db: Database, path: string, mtime: number, size: number): void {
+export function touchDocument(
+  db: Database,
+  path: string,
+  mtime: number,
+  size: number,
+  observedAtMs: number,
+): void {
   const now = nowIso();
   db.run(
     "UPDATE documents SET mtime = ?, size = ?, updated_at = ?, indexed_at = ? WHERE path = ?",
-    [mtime, size, now, now, path],
+    [mtime, size, now, new Date(observedAtMs).toISOString(), path],
   );
 }
 

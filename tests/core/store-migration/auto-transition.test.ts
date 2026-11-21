@@ -5,10 +5,11 @@
  * most once an hour from session start, and stops once no roster device
  * is left on the legacy layout.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { renameSync, rmSync } from "node:fs";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { runAutoTransition } from "../../../src/core/store-migration/auto-transition.ts";
 import { migrationDir } from "../../../src/core/store-migration/journal.ts";
@@ -19,11 +20,24 @@ import { moveNeverHeld } from "../../helpers/held-partitions.ts";
 
 let fleet: Fleet | null = null;
 afterEach(() => {
+  setSystemTime();
   fleet?.cleanup();
   fleet = null;
 });
 
 const HOUR = 3_600_000;
+
+/**
+ * Moves the clock past the racy window (`fs-stamp.ts`). A legacy file
+ * changed less than that before a watermark is taken gets a stamp that
+ * matches nothing, so the next run imports again rather than idle: a
+ * same-size rewrite inside one tick of the volume's clock would keep
+ * every field. A test that expects an idle run lets the files it wrote
+ * settle before the run that records the watermark.
+ */
+function settle(): void {
+  setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
+}
 const SIGNAL = (id: string): string => `---\nid: ${id}\ntopic: ${id}\nprinciple: ${id}\n---\n`;
 
 describe("runAutoTransition", () => {
@@ -46,6 +60,7 @@ describe("runAutoTransition", () => {
     ).toBe("not-switched");
 
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     const run = (trigger: "dream" | "session-start") =>
       runAutoTransition({
@@ -60,6 +75,7 @@ describe("runAutoTransition", () => {
     // dev-c (old release) writes; vault sync delivers it to A.
     c.write("Brain/inbox/2026-11-07-from-c.md", SIGNAL("sig-from-c"));
     fleet.syncVaultFile("dev-c", "dev-a", "Brain/inbox/2026-11-07-from-c.md");
+    settle();
     const first = run("dream");
     expect(first.status).toBe("imported");
     if (first.status === "imported") expect(first.imported).toBe(1);
@@ -95,10 +111,47 @@ describe("runAutoTransition", () => {
     expect(a.byKey().get("Brain/inbox/2026-11-07-from-c.md")).toHaveLength(1);
   });
 
+  test("a same-size rewrite in place with mtime put back is imported", () => {
+    // What a volume whose clock did not move between two writes reports:
+    // same inode, size and mtime. The watermark keys on the full stat
+    // stamp, ctime included, and never trusts one younger than the racy
+    // window, so the rewrite is not taken for an unchanged tree.
+    fleet = makeFleet(["dev-a", "dev-c"]);
+    const [a, c] = [fleet.machine("dev-a"), fleet.machine("dev-c")];
+    a.use();
+    settle();
+    expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
+    const rel = "Brain/inbox/2026-11-07-from-c.md";
+    c.write(rel, SIGNAL("sig-from-c"));
+    fleet.syncVaultFile("dev-c", "dev-a", rel);
+    // A whole second, so `utimes` can put it back exactly.
+    const path = join(a.vault, rel);
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    settle();
+    const run = () =>
+      runAutoTransition({
+        store: a.store(),
+        vault: a.vault,
+        agent: "t",
+        vaultId: null,
+        trigger: "dream",
+      });
+    expect(run().status).toBe("imported");
+    expect(run().status).toBe("idle");
+    // Back to the real clock: the rewrite below is as young as it is.
+    setSystemTime();
+
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("sig-from-c", "sig-from-d"));
+    utimesSync(path, mtime, mtime);
+    expect(run().status).toBe("imported");
+  });
+
   test("an item held back for a partition this machine lacks idles until the partitions change", () => {
     fleet = makeFleet(["dev-a", "dev-c"]);
     const [a, c] = [fleet.machine("dev-a"), fleet.machine("dev-c")];
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     // A no longer holds the private partition; dev-c writes a private page.
     const aside = join(fleet.parent, "private-aside");
@@ -106,6 +159,7 @@ describe("runAutoTransition", () => {
     const rel = "Brain/inbox/2026-11-07-secret.md";
     c.write(rel, `---\nid: sig-secret\ntopic: s\nprinciple: s\nvisibility: private\n---\n`);
     fleet.syncVaultFile("dev-c", "dev-a", rel);
+    settle();
     const run = () =>
       runAutoTransition({
         store: a.store(),
@@ -133,6 +187,7 @@ describe("runAutoTransition", () => {
     fleet = makeFleet(["dev-a"]);
     const a = fleet.machine("dev-a");
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     // Every other cohort device is retired: nothing is left on the legacy layout.
     for (const device of legacyDevices(a.store(), [])) {
@@ -172,6 +227,7 @@ describe("runAutoTransition", () => {
     fleet = makeFleet(["dev-a"]);
     const a = fleet.machine("dev-a");
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     for (const device of legacyDevices(a.store(), [])) {
       appendRecord(a.store(), {
@@ -196,6 +252,7 @@ describe("runAutoTransition", () => {
     // An old-release device syncs a page and no log shard.
     const rel = "Brain/inbox/2026-11-08-page-only.md";
     a.write(rel, SIGNAL("sig-page-only"));
+    settle();
     const found = run();
     expect(found.status).toBe("imported");
     if (found.status === "imported") expect(found.imported).toBe(1);
@@ -212,6 +269,7 @@ describe("runAutoTransition", () => {
     fleet = makeFleet(["dev-a"]);
     const a = fleet.machine("dev-a");
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     for (const device of legacyDevices(a.store(), [])) {
       appendRecord(a.store(), {
@@ -227,6 +285,7 @@ describe("runAutoTransition", () => {
     // changed since its final pass.
     const rel = "Brain/inbox/2026-11-08-early.md";
     a.write(rel, SIGNAL("sig-early"));
+    settle();
     const run = () =>
       runAutoTransition({
         store: a.store(),
@@ -245,6 +304,7 @@ describe("runAutoTransition", () => {
     fleet = makeFleet(["dev-a"]);
     const a = fleet.machine("dev-a");
     a.use();
+    settle();
     expect(runMigration(a.vault, { settleMs: 0 }).ok).toBe(true);
     for (const device of legacyDevices(a.store(), [])) {
       appendRecord(a.store(), {
@@ -259,6 +319,7 @@ describe("runAutoTransition", () => {
     rmSync(join(migrationDir(a.store()), "transition-watermark.json"), { force: true });
     const rel = "Brain/inbox/2026-11-08-unwatched.md";
     a.write(rel, SIGNAL("sig-unwatched"));
+    settle();
     const run = () =>
       runAutoTransition({
         store: a.store(),

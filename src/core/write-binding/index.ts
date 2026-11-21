@@ -85,6 +85,7 @@ import {
 import { requireNextStep } from "../brain/next-step.ts";
 import { loadBrainConfig } from "../brain/policy.ts";
 import { brainSettingsFromStore } from "../brain/policy/load.ts";
+import { stampKey } from "../fs-stamp.ts";
 import { realVaultRelative, toPosix } from "../path-safety.ts";
 import { normaliseWriteBindingPrefix, writeBindingPrefixCovers } from "./prefix.ts";
 
@@ -169,10 +170,12 @@ interface CachedBinding {
  * One slot is the right size: the loop that pays the cost hits the same
  * vault every iteration.
  *
- * The key is the config file's own identity, never a clock — see
- * {@link brainConfigIdentity}. A file that changed by any of inode, size
- * or mtime misses, so a cached answer can never outlive the declaration
- * it came from.
+ * The key is the config file's stamp — see {@link brainConfigIdentity}.
+ * A file that changed by any of device, inode, size, mtime or ctime
+ * misses, and a stamp too recent to vouch for the bytes never hits (an
+ * edit in place inside one tick of the volume's clock keeps all five;
+ * `fs-stamp.ts`), so a cached answer can never outlive the declaration
+ * it came from: the binding is a write boundary.
  */
 let cachedBinding: CachedBinding | null = null;
 
@@ -186,8 +189,8 @@ let cachedBinding: CachedBinding | null = null;
  */
 function brainConfigIdentity(path: string): string | null {
   try {
-    const st = statSync(path, { bigint: true });
-    return `${st.ino}:${st.size}:${st.mtimeNs}`;
+    const observedAtMs = Date.now();
+    return stampKey(statSync(path, { bigint: true }), observedAtMs);
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
     throw err;

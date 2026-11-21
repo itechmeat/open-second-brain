@@ -58,8 +58,8 @@ import { APP_DIR_NAME, cacheBaseDir } from "../platform-dirs.ts";
 /** Bumped whenever the file layout below changes; other versions are ignored. */
 const CACHE_VERSION = 1;
 
-/** A timestamp this close to the build is not trusted (racy-clean rule). */
-export const RACY_WINDOW_MS = 2_000;
+/** A timestamp this close to the build is not trusted (racy-clean rule, `fs-stamp.ts`). */
+export { RACY_WINDOW_MS } from "../fs-stamp.ts";
 
 const CACHE_DIR_ENV = "OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR";
 const CACHE_SWITCH_ENV = "OPEN_SECOND_BRAIN_DEDUP_CACHE";

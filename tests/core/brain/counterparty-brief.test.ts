@@ -10,7 +10,7 @@
  * word list - the triggers are the operator's own.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
@@ -31,6 +31,7 @@ import { addPledge, fulfillPledge } from "../../../src/core/brain/pledges.ts";
 import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { buildEntityIndex } from "../../../src/core/brain/entities/index-builder.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
+import * as lanePages from "../../../src/core/store/lane-pages.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const NOW = new Date("2026-06-01T12:00:00Z");
@@ -364,20 +365,27 @@ describe("buildCounterpartyBrief abstentions", () => {
     });
   });
 
-  // A mode change cannot make a file unreadable to uid 0, nor on Windows.
-  test.skipIf(CHMOD_CANNOT_DENY)(
-    "an entity page that cannot be read is treated as carrying the reserved token",
-    () => {
-      const id = seedPerson("Ada Lovelace");
-      seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
-      // The entity index is memoized, so the record is a live match while
-      // its page is still readable: it is the GATE that must stop on the
-      // unreadable bytes, not the index.
-      const warm = expectBrief(
-        buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
-      );
-      expect(warm.entityId).toBe(id);
-      chmodSync(join(vault, entityRel(id)), 0o000);
+  test("an entity page that cannot be read is treated as carrying the reserved token", () => {
+    const id = seedPerson("Ada Lovelace");
+    seedPledge({ title: "Ship the parser", due: "2026-06-05", entityId: id });
+    const warm = expectBrief(
+      buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
+    );
+    expect(warm.entityId).toBe(id);
+    // The index read the page while it was readable; only the gate's read
+    // of the bytes fails, as when the page goes dark between the two. A
+    // spy stands in for that: a mode change moves the page's ctime, so the
+    // entity index (keyed on the full stat, `fs-stamp.ts`) would drop the
+    // record itself, and the gate would not be what this test checks. It
+    // used to rely on the memo serving the index through the mode change.
+    const page = buildEntityIndex(vault).entities.find((entity) => entity.id === id)!.path;
+    const real = lanePages.readLaneText;
+    const spy = spyOn(lanePages, "readLaneText").mockImplementation((v, path) => {
+      if (path === page)
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      return real(v, path);
+    });
+    try {
       // The record is still in the index - only its BYTES went dark - so
       // the abstention below is the gate's verdict and nothing else.
       expect(buildEntityIndex(vault).entities.map((entity) => entity.id)).toContain(id);
@@ -387,8 +395,10 @@ describe("buildCounterpartyBrief abstentions", () => {
       expect(buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW })).toEqual(
         { abstain: "no_match" },
       );
-    },
-  );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("buildCounterpartyBrief items", () => {

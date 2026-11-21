@@ -8,12 +8,13 @@
  * can parse freezes the vault rather than reopening it.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import {
   FREEZE_MARKER_SCHEMA_VERSION,
   FREEZE_MARKER_UNREADABLE_REASON,
@@ -38,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   rmSync(vault, { recursive: true, force: true });
   resetFreezeMarkerCache();
 });
@@ -122,16 +124,35 @@ describe("the per-process cache", () => {
   test("re-reads only when the file on disk is not the one already parsed", () => {
     writeMarker("first");
     expect(readFreezeMarker(vault)!.reason).toBe("first");
-    const afterFirst = freezeMarkerReloadCount();
-    // Same bytes, same inode: the cached parse answers.
+    // A stamp vouches for the parsed bytes only once the marker's times
+    // are older than the read by the racy window (`fs-stamp.ts`), so the
+    // clock moves past it: one more read settles the stamp.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     expect(readFreezeMarker(vault)!.reason).toBe("first");
-    expect(freezeMarkerReloadCount()).toBe(afterFirst);
+    const settled = freezeMarkerReloadCount();
+    // Same bytes, same inode, settled stamp: the cached parse answers.
+    expect(readFreezeMarker(vault)!.reason).toBe("first");
+    expect(freezeMarkerReloadCount()).toBe(settled);
 
     // `atomicWriteFileSync` renames a temp file into place, so a replaced
     // marker always arrives with a new inode.
     writeMarker("second");
     expect(readFreezeMarker(vault)!.reason).toBe("second");
-    expect(freezeMarkerReloadCount()).toBe(afterFirst + 1);
+    expect(freezeMarkerReloadCount()).toBe(settled + 1);
+  });
+
+  test("a same-size rewrite in place inside one clock tick is seen", () => {
+    writeMarker("aaaa");
+    const path = frozenMarkerPath(vault);
+    // A whole second an hour back, so `utimes` can put it back exactly.
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    expect(readFreezeMarker(vault)!.reason).toBe("aaaa");
+    // Same inode, same size, and mtime put back where it was: what a
+    // volume whose clock did not advance between the two writes reports.
+    writeFileSync(path, readFileSync(path, "utf8").replace("aaaa", "bbbb"));
+    utimesSync(path, mtime, mtime);
+    expect(readFreezeMarker(vault)!.reason).toBe("bbbb");
   });
 
   test("an unfreeze is visible to a process that had the freeze cached", () => {

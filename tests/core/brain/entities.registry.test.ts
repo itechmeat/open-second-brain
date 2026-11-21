@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import { buildEntityIndex } from "../../../src/core/brain/entities/index-builder.ts";
 import {
   archiveEntity,
@@ -34,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });
@@ -533,6 +535,9 @@ describe("buildEntityIndex", () => {
 
   test("memoizes: an unchanged registry returns the same index object", () => {
     seedAda();
+    // A file changed less than the racy window ago never keys the memo
+    // (`fs-stamp.ts`), so the clock moves past it before a hit is expected.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     const first = buildEntityIndex(vault);
     const second = buildEntityIndex(vault);
     expect(second).toBe(first); // same reference: no rebuild when nothing changed

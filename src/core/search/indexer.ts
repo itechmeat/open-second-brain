@@ -110,6 +110,7 @@ import {
   readEmbedderRecordCensusSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
+  indexedSnapshotStale,
   Store,
   CHUNKER_VERSION_STATE_KEY,
   EMBEDDING_PREFIX_QUERY_STATE_KEY,
@@ -551,9 +552,12 @@ async function indexIntoRun(
 
         // Fastpath: if mtime and size both match, skip the full
         // content read + SHA256 hash. This is the same trade-off
-        // as `make` — mtime can theoretically be fooled but the
-        // probability is negligible for vault editing workflows.
-        if (!opts?.force && prev && prev.mtime === mtimeSec && prev.size === size) {
+        // as `make`, with git's racily clean rule on top: a row
+        // indexed within the racy window of the file's mtime does not
+        // vouch for the bytes (a same-size edit in the same second
+        // keeps both), so that file is read and hashed again
+        // (`indexedSnapshotStale`).
+        if (!opts?.force && prev && !indexedSnapshotStale(prev, file.stat)) {
           stats.unchanged++;
           opts?.onFile?.({ path: file.relPath, kind: "unchanged" });
           continue;
@@ -574,7 +578,7 @@ async function indexIntoRun(
           stats.unchanged++;
           // Re-arm the fastpath: store the current stat so next
           // run can skip the read entirely.
-          store.touchDocument(file.relPath, mtimeSec, size);
+          store.touchDocument(file.relPath, mtimeSec, size, file.observedAtMs);
           opts?.onFile?.({ path: file.relPath, kind: "unchanged" });
           continue;
         }
@@ -613,6 +617,9 @@ async function indexIntoRun(
           contentHash,
           mtime: mtimeSec,
           size: file.stat.size,
+          // When the walk observed the file (before its stat): the row
+          // proves the fingerprint only as of then (`indexedSnapshotStale`).
+          observedAtMs: file.observedAtMs,
           pageType: pageTypeFromFrontmatter(frontmatter),
           // `t0` - the instant this run started - is the reading clock the
           // "not later than the read" refusal measures against. One clock
