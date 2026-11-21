@@ -85,6 +85,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { stampOfStats, stampVouches, type FileStamp } from "../fs-stamp.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import {
   DEGRADATION_CODE,
@@ -213,21 +214,23 @@ export class VaultIdentityMismatchError extends Error {
 const PINNED_IDENTITIES = new Map<string, string>();
 
 /**
- * Inode identity of the marker file the last assertion parsed, per
- * resolved root.
+ * Stamp of the marker file the last assertion parsed, per resolved root.
  *
  * The guard sits on EVERY write, including append-heavy telemetry loops
- * that record tens of thousands of rows in one run, so the per-call cost
- * has to be one syscall rather than an open-read-parse. `writeVaultIdentity`
- * goes through `atomicWriteFileSync` - a temp file plus a rename - so a
- * replaced marker always arrives with a new inode. Matching on
- * (inode, size, mtime) therefore proves the bytes are the ones already
- * parsed; anything else falls through to a full re-read.
+ * that record tens of thousands of rows in one run, so the steady-state
+ * cost has to be one syscall rather than an open-read-parse. The stamp
+ * alone is not proof: `writeVaultIdentity` replaces the marker through a
+ * temp file and a rename (a new inode), but a hand edit, a sync tool or a
+ * FAT volume that reuses ids can rewrite it in place at the same size
+ * inside one tick of the volume's clock, and then inode, size and both
+ * times all match. `stampVouches` (`fs-stamp.ts`) therefore trusts a
+ * stamp only once the marker's times are older than the read by the racy
+ * window; until then, and whenever any field differs, the marker is read
+ * again. A missed identity change here would let a write land in a vault
+ * that is no longer the one this process pinned.
  */
 interface MarkerStamp {
-  readonly ino: bigint;
-  readonly size: bigint;
-  readonly mtimeNs: bigint;
+  readonly stamp: FileStamp;
   readonly vaultId: string;
 }
 const MARKER_STAMPS = new Map<string, MarkerStamp>();
@@ -272,6 +275,8 @@ function currentVaultId(root: string): string | null {
   // The `catch` stays. The option suppresses ENOENT only, and every
   // other stat failure (EACCES, ELOOP) must still collapse to "absent"
   // exactly as before, rather than propagate out of a write guard.
+  // Taken before the stat, so it is no later than the read of the bytes.
+  const readAtMs = Date.now();
   let stat;
   try {
     // bigint: the inode compared below is exact on Windows too (NTFS ids
@@ -285,12 +290,7 @@ function currentVaultId(root: string): string | null {
     return null;
   }
   const cached = MARKER_STAMPS.get(root);
-  if (
-    cached !== undefined &&
-    cached.ino === stat.ino &&
-    cached.size === stat.size &&
-    cached.mtimeNs === stat.mtimeNs
-  ) {
+  if (cached !== undefined && stampVouches(cached.stamp, stat)) {
     return cached.vaultId;
   }
   const identity = readVaultIdentity(root);
@@ -298,12 +298,7 @@ function currentVaultId(root: string): string | null {
     MARKER_STAMPS.delete(root);
     return null;
   }
-  MARKER_STAMPS.set(root, {
-    ino: stat.ino,
-    size: stat.size,
-    mtimeNs: stat.mtimeNs,
-    vaultId: identity.vault_id,
-  });
+  MARKER_STAMPS.set(root, { stamp: stampOfStats(stat, readAtMs), vaultId: identity.vault_id });
   return identity.vault_id;
 }
 

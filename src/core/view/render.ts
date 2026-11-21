@@ -88,7 +88,14 @@ import {
   type ReplacedReason,
 } from "./view-records.ts";
 import { claimSettled, releaseIfRequested, renderLockTarget } from "./writer.ts";
-import { readPageStats, sameStat, statPage, writePageStats, type PageStats } from "./page-stats.ts";
+import {
+  readPageStats,
+  sameStat,
+  settledStat,
+  statPage,
+  writePageStats,
+  type PageStats,
+} from "./page-stats.ts";
 import { pageFileInside } from "./page-path.ts";
 import { retirePages, type RetireContext } from "./retire.ts";
 import { topicPages } from "./topic-pages.ts";
@@ -225,14 +232,23 @@ function ingest(
 
 function renderOnePage(ctx: PageContext, page: string, path: string): PageReport {
   if (unchangedByStat(ctx, page, path)) return { page, status: "unchanged", ingested: 0 };
+  // The observation clock: wall-clock time (not the pass clock, it is
+  // compared with file times), captured before this pass reads or writes
+  // the page. A stat taken later proves the bytes only if the page's times
+  // are older than this by the racy window: a clock read after the render
+  // could be past a same-size edit that landed between the read and the
+  // stat, and would vouch for it as the writer's own render.
+  const observedAtMs = Date.now();
   const report = renderPageNow(ctx, page, path);
   const stat = statPage(path);
   const last = lastRender(ctx.read, page);
   // Cached only when this pass left the writer's own render on disk: a
   // page left as found (its base not synced, refused, busy) must be read
-  // again next pass, or an edit on it would never be ingested.
+  // again next pass, or an edit on it would never be ingested. A stat
+  // too recent to vouch for the bytes is not kept either: an edit saved
+  // at the same size in the same tick of the volume's clock keeps it.
   const settled = report.status === "written" || report.status === "unchanged";
-  if (stat !== null && last !== null && settled) {
+  if (stat !== null && last !== null && settled && settledStat(stat, observedAtMs)) {
     ctx.stats.set(page, { ...stat, sum: last.record.body["sum"] as string });
   } else {
     ctx.stats.delete(page);

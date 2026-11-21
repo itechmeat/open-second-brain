@@ -39,6 +39,7 @@ import { join, resolve } from "node:path";
 import { EXCLUDED_DIRS, listVaultPages, parseFrontmatter } from "../../vault.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
+import { stampKey } from "../../fs-stamp.ts";
 import { isoSecond } from "../time.ts";
 import {
   deriveDatasetHash,
@@ -374,7 +375,7 @@ function isLearnedCommonWord(entries: Record<string, EntityLexiconEntry>, token:
 // ----- Resolver ---------------------------------------------------------------
 //
 // The resolved handle is memoized per vault, keyed on the artifact's own
-// mtime+size: one stat per resolution, a full re-read (freshness walk
+// stat stamp (`fs-stamp.ts`): one stat per resolution, a full re-read (freshness walk
 // included) only when the artifact changed or is first met in this
 // process. Between rebuilds the handle is stable by design - a corpus
 // that moved on without a rebuild keeps serving the last learned
@@ -411,8 +412,11 @@ export function resolveEntityLexicon(vault: string): EntityLexiconHandle | null 
     if (text !== null) key = `store:${laneEntryClockMs(root, artifact) ?? "?"}:${text.length}`;
   } else {
     try {
+      // Unique per call while too recent to vouch for the bytes
+      // (`fs-stamp.ts`).
+      const observedAtMs = Date.now();
       const st = statSync(join(root, ENTITY_LEXICON_ARTIFACT_REL), { bigint: true });
-      key = `${st.mtimeNs}:${st.size}`;
+      key = stampKey(st, observedAtMs);
     } catch {
       key = "absent";
     }

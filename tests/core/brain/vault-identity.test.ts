@@ -8,8 +8,9 @@
  * live process is unambiguous and refuses.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -205,7 +207,7 @@ describe("brainDirsForWrite", () => {
   });
 
   test("a replacement marker of identical size is still caught", () => {
-    // The guard memoizes (inode, size, mtime) so the hot write path costs
+    // The guard memoizes the marker's stat so the hot write path costs
     // one stat instead of an open-read-parse. Two markers minted by
     // `writeVaultIdentity` serialize to the same byte length, so this
     // pins that the memo keys on more than size.
@@ -219,6 +221,44 @@ describe("brainDirsForWrite", () => {
     expect(readFileSync(vaultIdentityPath(vault)).length).toBe(firstBytes);
 
     expect(() => brainDirsForWrite(vault)).toThrow(VaultIdentityMismatchError);
+  });
+
+  test("a same-size rewrite in place with mtime put back is still caught", () => {
+    // A hand edit, a sync tool or a FAT volume that reuses ids can rewrite
+    // the marker in place: same inode, same size. Putting mtime back (a
+    // copy that preserves times, or a clock that did not advance) leaves
+    // only ctime and the racy window to notice (`fs-stamp.ts`).
+    const first = writeVaultIdentity(vault);
+    const path = vaultIdentityPath(vault);
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    brainDirsForWrite(vault);
+
+    const other = first.vault_id.replace(/^./, (c) => (c === "a" ? "b" : "a"));
+    writeFileSync(path, readFileSync(path, "utf8").replace(first.vault_id, other));
+    utimesSync(path, mtime, mtime);
+
+    expect(() => brainDirsForWrite(vault)).toThrow(VaultIdentityMismatchError);
+  });
+
+  test("a same-size rewrite in place on a volume whose clock did not move is caught", () => {
+    // What the Windows CI volume did: the rewrite landed inside one tick,
+    // so inode, size, mtime and ctime all came out as the guard had kept
+    // them. The spy reports exactly that for the marker.
+    const first = writeVaultIdentity(vault);
+    const path = vaultIdentityPath(vault);
+    const frozen = fs.statSync(path, { bigint: true });
+    const real = fs.statSync;
+    const spy = spyOn(fs, "statSync").mockImplementation(((p: fs.PathLike, o?: unknown) =>
+      String(p) === path ? frozen : real(p, o as never)) as typeof fs.statSync);
+    try {
+      brainDirsForWrite(vault);
+      const other = first.vault_id.replace(/^./, (c) => (c === "a" ? "b" : "a"));
+      writeFileSync(path, readFileSync(path, "utf8").replace(first.vault_id, other));
+      expect(() => brainDirsForWrite(vault)).toThrow(VaultIdentityMismatchError);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("a matching marker never refuses, however many writes follow", () => {

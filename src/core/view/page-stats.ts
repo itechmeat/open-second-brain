@@ -7,12 +7,17 @@
  *
  * The change time cannot be set by a sync tool or an editor, so a file
  * replaced or rewritten since the writer left it never matches, even when
- * its size and modification time were kept.
+ * its size and modification time were kept. That holds only once the
+ * clock has moved: an edit saved in place at the same size inside the
+ * tick of the stat (1 to 15.6 ms on Windows, 2 s on FAT) keeps every
+ * field, so a stat is kept only once it has settled ({@link settledStat},
+ * `fs-stamp.ts`).
  */
 
 import { readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { timesSettled } from "../fs-stamp.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { VIEW_PAGE_STATS_FILE, VIEW_STATE_DIR } from "./constants.ts";
 
@@ -34,6 +39,16 @@ export function statPage(path: string): PageStat | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether `stat` may stand for the page's bytes on a later pass, where
+ * `readAtMs` is the clock captured before the pass read or wrote the
+ * page: its times are older than that by the racy window, so neither a
+ * write the pass did not see nor a later one can share them.
+ */
+export function settledStat(stat: PageStat, readAtMs: number): boolean {
+  return timesSettled(stat.mtimeMs, stat.ctimeMs, readAtMs);
 }
 
 export function sameStat(a: PageStat, b: PageStat | null): boolean {

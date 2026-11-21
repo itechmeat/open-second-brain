@@ -33,6 +33,12 @@ export interface WalkedFile {
   /** Vault-relative POSIX path. */
   readonly relPath: string;
   readonly stat: Stats;
+  /**
+   * Wall-clock time (ms) captured before `stat` was taken: the moment the
+   * index observed the file. A row proves the bytes it holds only as of
+   * then (`indexedSnapshotStale`), never as of a later write of the row.
+   */
+  readonly observedAtMs: number;
 }
 
 function isInsideVault(absTarget: string, vaultReal: string): boolean {
@@ -137,6 +143,7 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       const isLinkHint = entry.isSymbolicLink();
 
       let stat: Stats;
+      const observedAtMs = Date.now();
       try {
         stat = statSync(absPath);
       } catch {
@@ -186,7 +193,7 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       // admit, so all existing non-lane content is yielded unchanged.
       if (!admitToIndex(relPath).admit) continue;
 
-      yield { absPath, relPath, stat };
+      yield { absPath, relPath, stat, observedAtMs };
     }
   }
 

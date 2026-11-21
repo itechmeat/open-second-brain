@@ -989,7 +989,9 @@ server restart and keeps the PREVIOUS material authenticating for a
 ten-minute placement window (`ROTATION_GRACE_MS` in the token store) so the
 caller holding it does not fail while the new one is being placed; after the
 window the old material dies on its own, with no revoke. Revocation itself
-stays immediate. Both are read per request behind an mtime cache; the shared
+stays immediate. Both are read per request behind a cache keyed by the file's
+stat, which re-reads the file while that stat is younger than two seconds
+(an edit in place inside one tick of the volume's clock keeps it); the shared
 key keeps its launch-time capture. The gate
 `mcp_tokens_required` (device config key or
 `OPEN_SECOND_BRAIN_MCP_TOKENS_REQUIRED`, default `false`) makes the endpoint

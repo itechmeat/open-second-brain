@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { tmpdir } from "node:os";
 
 import {
   CLI_CHILD_LIMIT_MS,
@@ -121,12 +122,21 @@ describe("spawnWithLimit", () => {
     expect(section(message, "stderr").trimEnd()).toBe("child-note");
   });
 
+  test("the failure says whether the disk under the temp folder still answers", async () => {
+    const message = await limitError(HANGS);
+    const line = message.split("\n").find((l) => l.startsWith(`disk at the limit (${tmpdir()}): `));
+    // A slow disk is an answer too: the probe gives up at its own limit or
+    // names the error, and either line still names the folder.
+    expect(line).toMatch(/: (write and flush \d+ ms|no answer after \d+ ms|failed: .+)$/);
+  });
+
   test.skipIf(process.platform !== "win32")(
     "on Windows the failure also names the child's state from the operating system",
     async () => {
       const message = await limitError(HANGS);
       expect(message).toMatch(/^os at the limit \(/m);
       expect(message).toMatch(/^os after the kill: /m);
+      expect(message).toMatch(/^descendants at the limit \(/m);
     },
   );
 

@@ -7,7 +7,15 @@
  * record is still left out until the blob arrives, and the migration's
  * refusals still see it.
  */
-import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import {
   chmodSync,
@@ -28,6 +36,7 @@ import {
   buildEntityIndex,
   __clearEntityIndexCache,
 } from "../../../src/core/brain/entities/index-builder.ts";
+import { RACY_WINDOW_MS } from "../../../src/core/fs-stamp.ts";
 import { buildCaptureBoundary } from "../../../src/core/brain/capture-boundary.ts";
 import { BrainSettingsUnreadableError } from "../../../src/core/brain/policy/errors.ts";
 import { readBrainSettingsFromStore } from "../../../src/core/brain/policy/settings-source.ts";
@@ -54,6 +63,7 @@ import {
 import {
   dropLoadedLedger,
   ledgerPath,
+  load as loadQuarantineLedger,
   lineSha256At,
   listQuarantine,
   QUARANTINE_HASH_CAP_BYTES,
@@ -699,8 +709,12 @@ describe("a cached read that skipped a quarantined pending record", () => {
     });
     const pinned = () =>
       readEntitiesOf(inspectStore(env!.storeRoot)!).pinned.get("shared")?.content ?? null;
-    // The first read builds and stores its fingerprint with the skipped
-    // blob's absence stamp, so the next read is already a cache hit.
+    // The quarantine ledger was just written, and a stamp that recent
+    // never vouches for its bytes (`fs-stamp.ts`): move the clock past
+    // the racy window first. The read after that builds and stores its
+    // fingerprint with the skipped blob's absence stamp, so the next read
+    // is already a cache hit.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     expect(pinned()).toBeNull();
     const open = spyOn(fs, "openSync");
     const readFile = spyOn(fs, "readFileSync");
@@ -719,6 +733,7 @@ describe("a cached read that skipped a quarantined pending record", () => {
       expect(pinned()).toBe(BIG);
       expect(shardReads().length).toBeGreaterThan(0);
     } finally {
+      setSystemTime();
       open.mockRestore();
       readFile.mockRestore();
     }
@@ -736,10 +751,12 @@ describe("a cached read that skipped a quarantined pending record", () => {
     });
     const text = () =>
       [...laneStoreFold().entries.values()].find((v) => v.text === BIG)?.text ?? null;
+    // Past the racy window of the just-written quarantine ledger
+    // (`fs-stamp.ts`), the fold is stored with the skipped blob's absence
+    // stamp, so the next fold is already a cache hit.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     expect(laneStoreFold().unreadable).toEqual([]);
     expect(text()).toBeNull();
-    // The fold is stored with the skipped blob's absence stamp, so the
-    // next fold is already a cache hit.
     const open = spyOn(fs, "openSync");
     const readFile = spyOn(fs, "readFileSync");
     const shardReads = (): string[] =>
@@ -756,6 +773,7 @@ describe("a cached read that skipped a quarantined pending record", () => {
       expect(text()).toBe(BIG);
       expect(shardReads().length).toBeGreaterThan(0);
     } finally {
+      setSystemTime();
       open.mockRestore();
       readFile.mockRestore();
     }
@@ -921,6 +939,7 @@ describe("the entity index on a store-only machine", () => {
       expect(body()).toBe("e2 body");
       expect(shardReads().length).toBeGreaterThan(cold + warm);
     } finally {
+      setSystemTime();
       open.mockRestore();
       readFile.mockRestore();
     }
@@ -969,4 +988,41 @@ describe("the entity index on a store-only machine", () => {
       expect(laneStoreStamp(env!.vault)).toBe(gapped);
     },
   );
+});
+
+/** A quarantine ledger naming one line at `offset`. */
+function ledgerAt(offset: number): string {
+  return `${JSON.stringify({
+    version: 1,
+    lines: [
+      {
+        partition: "shared",
+        shard: "events/dev-a/2026-11.jsonl",
+        offset,
+        sha256: "0".repeat(64),
+        kind: "corrupt-line",
+        reason: "test",
+        quarantined_at: "2026-11-20T00:00:00Z",
+      },
+    ],
+  })}\n`;
+}
+
+describe("the cached ledger on a volume whose clock did not advance", () => {
+  test("a same-size rewrite in place with mtime put back is read again", () => {
+    // A release and a quarantine written by another process in one tick of
+    // the volume's clock can leave the ledger at the same size and mtime;
+    // ctime and the racy window must catch it (`fs-stamp.ts`), or a line
+    // released there stays skipped here.
+    env = makeStoreEnv("osb-quarantine-ledger-racy-", { legacyTree: false });
+    const path = ledgerPath(env.storeRoot);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, ledgerAt(1000));
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    expect(loadQuarantineLedger(env.storeRoot).lines.map((l) => l.offset)).toEqual([1000]);
+    writeFileSync(path, ledgerAt(2000));
+    utimesSync(path, mtime, mtime);
+    expect(loadQuarantineLedger(env.storeRoot).lines.map((l) => l.offset)).toEqual([2000]);
+  });
 });

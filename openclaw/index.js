@@ -5611,6 +5611,36 @@ var init_fold2 = __esm(() => {
   init_undo_fold();
 });
 
+// src/core/fs-stamp.ts
+import { randomUUID } from "node:crypto";
+function stampOfStats(stat, readAtMs) {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+    readAtMs
+  };
+}
+function statSettled(stat, readAtMs) {
+  const latestNs = stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs;
+  return Number(latestNs / 1000000n) <= readAtMs - RACY_WINDOW_MS;
+}
+function stampVouches(stamp, now) {
+  return sameDevIno(stamp, now) && stamp.size === now.size && stamp.mtimeNs === now.mtimeNs && stamp.ctimeNs === now.ctimeNs && statSettled(stamp, stamp.readAtMs);
+}
+function stampKey(stat, readAtMs) {
+  const key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  if (statSettled(stat, readAtMs))
+    return key;
+  return `${key}:racy-${randomUUID()}`;
+}
+var RACY_WINDOW_MS = 2000;
+var init_fs_stamp = __esm(() => {
+  init_fs_identity();
+});
+
 // src/core/store/shard-quarantine.ts
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync as closeSync6, readFileSync as readFileSync8, readSync as readSync3, statSync as statSync6 } from "node:fs";
@@ -5620,8 +5650,9 @@ function ledgerPath(root) {
   return join12(storesStateDir(), SHARD_QUARANTINE_DIR, `${key}.json`);
 }
 function stampOf(path) {
-  const stat = statSync6(path, { throwIfNoEntry: false });
-  return stat === undefined ? "absent" : `${stat.size}:${stat.mtimeMs}`;
+  const observedAtMs = Date.now();
+  const stat = statSync6(path, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function isPartition(value) {
   return STORE_PARTITIONS.includes(value);
@@ -5717,6 +5748,7 @@ var init_shard_quarantine = __esm(() => {
   init_hlc();
   init_safe_fs();
   init_store_paths();
+  init_fs_stamp();
   DAY_MS2 = 24 * 60 * 60 * 1000;
   PENDING_BLOB_QUARANTINE_AGE_MS = 7 * DAY_MS2;
   PENDING_BLOB_QUARANTINE_AGE_TEXT = `${PENDING_BLOB_QUARANTINE_AGE_MS / DAY_MS2} days`;
@@ -6463,8 +6495,9 @@ function isPartition2(value) {
   return STORE_PARTITIONS.includes(value);
 }
 function stampOf2(path) {
-  const stat = statSync8(path, { throwIfNoEntry: false });
-  return stat === undefined ? "absent" : `${stat.size}:${stat.mtimeMs}`;
+  const observedAtMs = Date.now();
+  const stat = statSync8(path, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function parseLedger(text) {
   const out = new Map;
@@ -6617,6 +6650,7 @@ function trackSeenShards(partitionRoot, scope, listed, replaced = new Set) {
 var loaded2, TRACK_LOCK_BUDGET_MS = 500, TRACK_BACKOFF_MS = 1e4, busyUntil, pending, PENDING_MAX = 1000, readOnlyDepth = 0, SEEN_SHARD_MISSING_REASON;
 var init_seen_shards = __esm(() => {
   init_fs_atomic();
+  init_fs_stamp();
   init_platform_dirs();
   init_constants();
   init_device_retirement();
@@ -6699,6 +6733,16 @@ function hashRange(path, partitionRoot, hash, from, to) {
   }
   return hash;
 }
+function keptStampHolds(path, partitionRoot, kept, tails, rel, observedAtMs) {
+  if (statSettled(kept, kept.observedAtMs))
+    return true;
+  const check = hashRange(path, partitionRoot, createHash5("sha256"), 0, kept.size);
+  if (check === null || check.digest("hex") !== kept.hash.copy().digest("hex"))
+    return false;
+  if (statSettled(kept, observedAtMs))
+    tails.set(rel, { ...kept, observedAtMs });
+  return true;
+}
 function sameStamp(a, b) {
   return sameDevIno(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
@@ -6745,12 +6789,13 @@ function isCleanPass(pass) {
 function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
   const kept = tails.get(rel);
   let base = null;
+  const observedAtMs = Date.now();
   const now = lstatSync4(path, { bigint: true });
   let hash = null;
   if (kept !== undefined) {
     const size = Number(now.size);
     if (sameDevIno(now, kept) && size >= kept.size) {
-      if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs) {
+      if (size === kept.size && now.mtimeNs === kept.mtimeNs && now.ctimeNs === kept.ctimeNs && keptStampHolds(path, partitionRoot, kept, tails, rel, observedAtMs)) {
         return {
           records: kept.records,
           compactions: kept.compactions,
@@ -6797,6 +6842,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
     mtimeNs: after.mtimeNs,
     ctimeNs: after.ctimeNs,
     hash,
+    observedAtMs,
     records: pass.records,
     compactions: pass.compactions
   });
@@ -6892,6 +6938,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
 var PREFIX_CHUNK_BYTES;
 var init_stream_read = __esm(() => {
   init_fs_identity();
+  init_fs_stamp();
   init_constants();
   init_reader();
   init_own_appends();
@@ -7726,6 +7773,7 @@ function readFreezeMarker(vault) {
     if (location.relocated)
       MARKER_PATHS.set(root, path);
   }
+  const readAtMs = Date.now();
   let stat;
   try {
     stat = statSync10(path, { bigint: true, throwIfNoEntry: false });
@@ -7737,16 +7785,11 @@ function readFreezeMarker(vault) {
     return null;
   }
   const cached = MARKER_STAMPS.get(root);
-  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeNs === stat.mtimeNs) {
+  if (cached !== undefined && stampVouches(cached.stamp, stat)) {
     return cached.marker;
   }
   const marker = parseMarker(path);
-  MARKER_STAMPS.set(root, {
-    ino: stat.ino,
-    size: stat.size,
-    mtimeNs: stat.mtimeNs,
-    marker
-  });
+  MARKER_STAMPS.set(root, { stamp: stampOfStats(stat, readAtMs), marker });
   return marker;
 }
 function vaultFrozenNotice(vault, marker) {
@@ -7766,6 +7809,7 @@ function assertVaultNotFrozen(vault) {
 }
 var FREEZE_MARKER_SCHEMA_VERSION = 1, FROZEN_MARKER_FILE = "frozen.json", SITE = "brain.freeze", FREEZE_NEXT_COMMAND = "o2b brain unfreeze", FREEZE_MARKER_UNREADABLE_REASON = "marker-unreadable", WRITE_LANE, VaultFrozenError, UNREADABLE_MARKER, MARKER_STAMPS, MARKER_PATHS, reloadCount = 0;
 var init_freeze_marker = __esm(() => {
+  init_fs_stamp();
   init_machine_state();
   init_degradation();
   init_path_constants();
@@ -8102,6 +8146,7 @@ function currentVaultId(root) {
     path = vaultIdentityPath(root);
     MARKER_PATHS2.set(root, path);
   }
+  const readAtMs = Date.now();
   let stat;
   try {
     stat = statSync12(path, { bigint: true, throwIfNoEntry: false });
@@ -8113,7 +8158,7 @@ function currentVaultId(root) {
     return null;
   }
   const cached = MARKER_STAMPS2.get(root);
-  if (cached !== undefined && cached.ino === stat.ino && cached.size === stat.size && cached.mtimeNs === stat.mtimeNs) {
+  if (cached !== undefined && stampVouches(cached.stamp, stat)) {
     return cached.vaultId;
   }
   const identity = readVaultIdentity(root);
@@ -8121,12 +8166,7 @@ function currentVaultId(root) {
     MARKER_STAMPS2.delete(root);
     return null;
   }
-  MARKER_STAMPS2.set(root, {
-    ino: stat.ino,
-    size: stat.size,
-    mtimeNs: stat.mtimeNs,
-    vaultId: identity.vault_id
-  });
+  MARKER_STAMPS2.set(root, { stamp: stampOfStats(stat, readAtMs), vaultId: identity.vault_id });
   return identity.vault_id;
 }
 function vaultMarkerAbsentNotice(vault) {
@@ -8173,6 +8213,7 @@ function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
 var VAULT_IDENTITY_SCHEMA_VERSION = 1, VAULT_IDENTITY_FILE = "vault-id.json", SITE2 = "vault-identity", VAULT_ID_FIELD2 = "vault_id", VaultIdentityMismatchError, PINNED_IDENTITIES, MARKER_STAMPS2, MARKER_PATHS2;
 var init_vault_identity = __esm(() => {
   init_fs_atomic();
+  init_fs_stamp();
   init_path_safety();
   init_degradation();
   init_stamp();

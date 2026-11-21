@@ -19,6 +19,7 @@
 import { lstatSync, readdirSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 
+import { RACY_WINDOW_MS } from "../../fs-stamp.ts";
 import {
   LEDGER_STREAM,
   STORE_STREAMS,
@@ -30,7 +31,7 @@ import { LEDGER_NAME_RE, partitionDir } from "../../store/store-paths.ts";
 import type { IndexedStore } from "./location.ts";
 
 /** A listing taken this close to its directory's mtime is re-taken next time. */
-export const RACY_LISTING_MS = 2000;
+export const RACY_LISTING_MS = RACY_WINDOW_MS;
 
 /** One shard as the metadata pass sees it. */
 export interface ShardStat {

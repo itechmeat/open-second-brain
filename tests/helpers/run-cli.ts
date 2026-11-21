@@ -17,7 +17,13 @@ import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 import { STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
 import { CLI_CHILD_LIMIT_MS, EXIT_DRAIN_GRACE_MS, KILL_REAP_MS } from "./cli-timeout.ts";
 import { DEFAULT_STORE_ROOT_ENV } from "./test-store.ts";
-import { windowsProcessAfterKill, windowsProcessState } from "./windows-process-probe.ts";
+import { diskProbeLines, stallProbeDirs } from "./stall-probe.ts";
+import {
+  OS_PROBE_LIMIT_MS,
+  windowsDescendants,
+  windowsProcessAfterKill,
+  windowsProcessState,
+} from "./windows-process-probe.ts";
 
 export interface RunResult {
   readonly stdout: string;
@@ -279,9 +285,12 @@ export interface SpawnWithLimitOptions {
  * side, and the result carries a `warning` (also written to this process's
  * stderr) naming the open pipes, so a leaked handle is seen, not hidden.
  * The readers are stopped with a limit failure too, so they never outlive
- * the call. On Windows the failure also names the child's state from the
- * operating system at the limit and whether it is gone after the kill
- * (`windows-process-probe.ts`).
+ * the call. The failure says whether the disk under each temp folder
+ * still answers a flushed write (`stall-probe.ts`): the hangs seen on the
+ * Windows runner came with a stalled disk. On Windows it also names the
+ * child's state from the operating system at the limit, its live
+ * descendants with their command lines (the processes that can hold its
+ * pipes) and whether it is gone after the kill (`windows-process-probe.ts`).
  */
 export async function spawnWithLimit(
   cmd: ReadonlyArray<string>,
@@ -340,7 +349,13 @@ export async function spawnWithLimit(
   if (outcome !== "late") return await afterExit(outcome);
   const elapsedMs = Date.now() - started;
   const windows = process.platform === "win32";
-  const atLimit = windows ? await windowsProcessState(proc.pid, started) : null;
+  // The probes run side by side, each bounded by the one probe limit the
+  // failure path has room for (`cli-timeout.ts`).
+  const [atLimit, descendants, disks] = await Promise.all([
+    windows ? windowsProcessState(proc.pid, started) : null,
+    windows ? windowsDescendants(proc.pid) : null,
+    diskProbeLines(stallProbeDirs(), OS_PROBE_LIMIT_MS),
+  ]);
   proc.kill("SIGKILL");
   await Promise.race([proc.exited, new Promise((r) => setTimeout(r, KILL_REAP_MS))]);
   const afterKill = windows
@@ -360,6 +375,8 @@ export async function spawnWithLimit(
       // kill) means a slow child, not a stuck one.
       `last output: ${lastOutput === null ? "none" : `${lastOutput - started} ms after the spawn`}`,
       ...(atLimit === null ? [] : [atLimit]),
+      ...(descendants === null ? [] : [descendants]),
+      ...disks,
       ...(afterKill === null ? [] : [afterKill]),
       `--- stdout so far (${stdout.length} chars) ---`,
       stdout,

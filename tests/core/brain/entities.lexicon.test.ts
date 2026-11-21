@@ -12,7 +12,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -151,6 +159,22 @@ describe("writeEntityLexicon / loadEntityLexicon", () => {
     atomicWriteFileSync(path, "{not json");
     __clearEntityLexiconCache();
     expect(loadEntityLexicon(vault, entityLexiconDatasetHash(vault))).toBeNull();
+    expect(resolveEntityLexicon(vault)).toBeNull();
+  });
+
+  test("a same-size rewrite of the artifact in place with mtime put back is read", () => {
+    // What a volume whose clock did not move between two writes reports:
+    // same inode, size and mtime. The memo keys on the full stat stamp,
+    // ctime included (`fs-stamp.ts`), so it does not serve the old handle.
+    writeCorpusPage("alpha.md", "the runner kept notes.");
+    rebuild();
+    const path = join(vault, ENTITY_LEXICON_ARTIFACT_REL);
+    const mtime = Math.floor(Date.now() / 1000) - 3600;
+    utimesSync(path, mtime, mtime);
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+    const text = readFileSync(path, "utf8");
+    writeFileSync(path, `{${" ".repeat(text.length - 1)}`);
+    utimesSync(path, mtime, mtime);
     expect(resolveEntityLexicon(vault)).toBeNull();
   });
 

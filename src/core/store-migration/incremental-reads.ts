@@ -22,7 +22,11 @@
  * The guarantee is the stamp's: a file whose size, mtime, ctime and inode
  * are all unchanged is taken as unchanged. ctime cannot be set back by a
  * tool (setting mtime back changes it), so a same-size rewrite that keeps
- * the mtime is still read again. A file with a problem (an unparseable
+ * the mtime is still read again, unless it lands inside the same tick of
+ * the volume's clock as the stamp (both times then stay put; FAT keeps
+ * mtime to 2 s). The legacy files are append-only, so that takes an
+ * in-place rewrite their format never made; an append always moves the
+ * size. A file with a problem (an unparseable
  * line, an item held back for a partition this machine does not hold),
  * and an original a sync conflict copy is a version of, is never skipped.
  *

@@ -1,8 +1,12 @@
 /**
  * The legacy-file watermark of the automatic transition import (task 2.4,
  * design D11a), kept in the device-local migration state: the stamp
- * (size, mtime, inode) of every legacy file a record mapping reads, as
- * they were when an import last read the tree whole.
+ * (`stampKey`, `fs-stamp.ts`: device, inode, size, mtime, ctime) of
+ * every legacy file a record mapping reads, as they were when an import
+ * last read the tree whole. A file changed so recently that its stamp
+ * cannot vouch for the bytes (a same-size rewrite in the same tick of
+ * the volume's clock keeps every field; FAT keeps mtime to 2 s) gets a
+ * key that matches nothing, so the next run reads the tree again.
  *
  * A stamp is taken BEFORE the pass that reads the files, so the content a
  * watermark describes was imported: a file that changed after its stamp
@@ -15,6 +19,7 @@
 import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
+import { stampKey } from "../fs-stamp.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue, recordDestination } from "./catalogue.ts";
 import type { Locator } from "./destinations.ts";
@@ -25,7 +30,7 @@ import { findSyncLeftovers, SYNC_COPY_RULE } from "./sync-leftovers.ts";
 const WATERMARK_FILE = "transition-watermark.json";
 
 export interface Watermark {
-  /** Vault-relative path to `size:mtimeMs:ino`. */
+  /** Vault-relative path to the file's `stampKey`. */
   readonly files: Record<string, string>;
   /** Device ids seen in legacy shard names at the last import. */
   readonly devices: ReadonlyArray<string>;
@@ -108,16 +113,17 @@ export function legacyFileStamps(vault: string): Record<string, string> {
     for (const name of names) {
       const path = join(dir, name);
       let stat;
+      // Captured before the stat; the pass that reads the files runs after.
+      const observedAtMs = Date.now();
       try {
-        stat = lstatSync(path);
+        stat = lstatSync(path, { bigint: true });
       } catch {
         continue;
       }
       if (stat.isDirectory()) {
         walk(path);
       } else if (stat.isFile() && locators.some((l) => claims(l, path, name))) {
-        out[relative(vault, path).split(sep).join("/")] =
-          `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+        out[relative(vault, path).split(sep).join("/")] = stampKey(stat, observedAtMs);
       }
     }
   };
@@ -127,8 +133,9 @@ export function legacyFileStamps(vault: string): Record<string, string> {
   for (const copy of findSyncLeftovers(vault, catalogue).copies) {
     if (copy.rule !== SYNC_COPY_RULE.rows && copy.rule !== SYNC_COPY_RULE.file) continue;
     try {
-      const stat = lstatSync(copy.path);
-      if (stat.isFile()) out[copy.rel] = `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+      const observedAtMs = Date.now();
+      const stat = lstatSync(copy.path, { bigint: true });
+      if (stat.isFile()) out[copy.rel] = stampKey(stat, observedAtMs);
     } catch {
       // gone since it was listed
     }

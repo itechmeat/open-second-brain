@@ -11,13 +11,15 @@
  * declared.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
+import { buildEntityIndex } from "../../../../src/core/brain/entities/index-builder.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { RACY_WINDOW_MS } from "../../../../src/core/fs-stamp.ts";
 import {
   EntityAmbiguityError,
   archiveEntity,
@@ -46,6 +48,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });
@@ -267,10 +270,14 @@ describe("the derived person-form index is cached per signature", () => {
     const smith = upsertPerson("Robert Smith");
     writeNicknames({ bob: ["Robert Smith"] });
 
+    // A stamp younger than the racy window never vouches for the bytes
+    // (`fs-stamp.ts`), so the clock moves past it before a hit is expected.
+    setSystemTime(new Date(Date.now() + RACY_WINDOW_MS + 1_000));
     const first = resolvePersonDerivedIndex(vault);
     expect(resolvePersonDerivedIndex(vault)).toBe(first);
+    setSystemTime();
 
-    // A nicknames edit shifts the mtime/size signature and forces a
+    // A nicknames edit shifts the stat signature and forces a
     // fresh build that answers through the new entry.
     writeNicknames({ bob: ["Robert Smith"], rob: ["Robert Smith"] });
     const second = resolvePersonDerivedIndex(vault);
@@ -291,5 +298,42 @@ describe("the derived person-form index is cached per signature", () => {
     const afterWrite = resolvePersonDerivedIndex(vault);
     expect(afterWrite).not.toBe(broken);
     expect(afterWrite.nicknameError).toBeInstanceOf(PersonNicknameConfigError);
+  });
+});
+
+/** A whole second an hour back, so `utimes` can put it back exactly. */
+function hourAgo(): number {
+  return Math.floor(Date.now() / 1000) - 3600;
+}
+
+describe("a same-size rewrite in place with mtime put back is read", () => {
+  // What a volume whose clock did not move between two writes reports
+  // (a Windows tick, 2 s on FAT): same inode, same size, same mtime. The
+  // caches key on the full stat stamp, ctime included, and never trust a
+  // stamp younger than the racy window (`fs-stamp.ts`).
+  test("the nickname file", () => {
+    const id = upsertPerson("Robert Smith");
+    writeNicknames({ bob: ["Robert Smith"] });
+    const path = join(vault, PERSON_NICKNAMES_ARTIFACT_REL);
+    const mtime = hourAgo();
+    utimesSync(path, mtime, mtime);
+    expect(getEntity(vault, { query: "Bob" })!.id).toBe(id);
+
+    writeNicknames({ zed: ["Robert Smith"] });
+    utimesSync(path, mtime, mtime);
+    expect(getEntity(vault, { query: "Bob" })).toBeNull();
+    expect(getEntity(vault, { query: "Zed" })!.id).toBe(id);
+  });
+
+  test("an entity page", () => {
+    const id = upsertPerson("Robert Smith");
+    const path = buildEntityIndex(vault).entities.find((e) => e.id === id)!.path;
+    const mtime = hourAgo();
+    utimesSync(path, mtime, mtime);
+    expect(getEntity(vault, { query: "robert smith" })!.id).toBe(id);
+
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("Robert Smith", "Robert Smyth"));
+    utimesSync(path, mtime, mtime);
+    expect(getEntity(vault, { query: "robert smyth" })?.id).toBe(id);
   });
 });

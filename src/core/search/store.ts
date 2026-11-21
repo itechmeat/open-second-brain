@@ -21,6 +21,7 @@ import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
+import { RACY_WINDOW_MS } from "../fs-stamp.ts";
 import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
 
 import { loadIntegrityConfigSafe } from "../brain/policy.ts";
@@ -138,11 +139,24 @@ export interface StoreOpenOptions {
  * fingerprint matches is proven fresh and its SQL exclusion stands; any
  * mismatch is STALE and the candidate falls through to the live filter,
  * which owns the "judged live" contract (see {@link Store.gateAttributeNarrowing}).
+ *
+ * The pair proves nothing for a file indexed within the racy window of
+ * its mtime (`fs-stamp.ts`): a same-size edit saved in the same second
+ * (or the same tick of the volume's clock) as the indexed version keeps
+ * both. A row is trusted only when the file's mtime (whose ceiling the
+ * stored floor gives) is at least {@link RACY_WINDOW_MS} older than the
+ * row's `indexed_at`; otherwise it reads as stale, the indexer re-reads
+ * and hashes the file, and its touch of an unchanged file re-arms the row.
+ * `indexed_at` is the moment the indexer observed the file, captured
+ * before its `stat` and read (`WalkedFile.observedAtMs`), never the time
+ * the row was written: a run that read the bytes, paused, and wrote the
+ * row later would otherwise vouch for an edit made during the pause.
  */
 export function indexedSnapshotStale(
-  indexed: { readonly mtime: number; readonly size: number },
+  indexed: { readonly mtime: number; readonly size: number; readonly indexedAtMs: number },
   live: { readonly mtimeMs: number; readonly size: number },
 ): boolean {
+  if (!((indexed.mtime + 1) * 1000 + RACY_WINDOW_MS <= indexed.indexedAtMs)) return true;
   return Math.floor(live.mtimeMs / 1000) !== indexed.mtime || live.size !== indexed.size;
 }
 
@@ -449,8 +463,8 @@ export class Store {
    * mtime-fastpath fallback to re-arm the stat cache after a
    * same-content touch.
    */
-  touchDocument(path: string, mtime: number, size: number): void {
-    documents.touchDocument(this.db, path, mtime, size);
+  touchDocument(path: string, mtime: number, size: number, observedAtMs: number): void {
+    documents.touchDocument(this.db, path, mtime, size, observedAtMs);
   }
 
   /**
@@ -727,9 +741,10 @@ export class Store {
     if (vault === null) return new Set();
     const placeholders = documentIds.map(() => "?").join(", ");
     const rows = this.db
-      .query<{ id: number; path: string; mtime: number; size: number }, number[]>(
-        `SELECT id, path, mtime, size FROM documents WHERE id IN (${placeholders})`,
-      )
+      .query<
+        { id: number; path: string; mtime: number; size: number; indexed_at: string },
+        number[]
+      >(`SELECT id, path, mtime, size, indexed_at FROM documents WHERE id IN (${placeholders})`)
       .all(...documentIds);
     const stale = new Set<number>();
     for (const row of rows) {
@@ -757,7 +772,7 @@ export class Store {
       }
       if (
         indexedSnapshotStale(
-          { mtime: row.mtime, size: row.size },
+          { mtime: row.mtime, size: row.size, indexedAtMs: Date.parse(row.indexed_at) },
           { mtimeMs: liveMtimeMs, size: liveSize },
         )
       ) {

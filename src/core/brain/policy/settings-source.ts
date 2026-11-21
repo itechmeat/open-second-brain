@@ -33,7 +33,9 @@
 import { readFileSync, statSync } from "node:fs";
 
 import { defaultConfigPath, discoverConfig } from "../../config.ts";
+import { stampKey } from "../../fs-stamp.ts";
 import { foldSettings } from "../../store/fold-settings.ts";
+
 import { protectionStore, StoreUnavailableError } from "../../store/read/protection-store.ts";
 import { readStreamRecords } from "../../store/read/stream-read.ts";
 import { quarantineStamp } from "../../store/shard-quarantine.ts";
@@ -232,8 +234,12 @@ const SETTINGS = { stream: "settings" } as const;
 
 function statStamp(path: string): string {
   try {
-    const stat = statSync(path);
-    return `${stat.size}:${stat.mtimeMs}`;
+    // The machine config is a small file people edit in place, and the
+    // settings shards are seldom written: a stamp too recent to vouch for
+    // the bytes never matches (`fs-stamp.ts`), at the price of a re-fold
+    // for a couple of seconds after a change.
+    const observedAtMs = Date.now();
+    return stampKey(statSync(path, { bigint: true }), observedAtMs);
   } catch {
     return "missing";
   }

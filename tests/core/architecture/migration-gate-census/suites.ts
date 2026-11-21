@@ -17,7 +17,8 @@ import {
   type ProbeCall,
 } from "../../../helpers/tool-probe-catalogue.ts";
 import type { TransportReach } from "../../../../src/core/graph/transport-reach.ts";
-import { runCli } from "../../../helpers/run-cli.ts";
+import { CLI_CHILD_LIMIT_MS } from "../../../helpers/cli-timeout.ts";
+import { runCli, spawnWithLimit } from "../../../helpers/run-cli.ts";
 import { argvFor, cliRefused, driveCli, REFUSAL_RE } from "./drive.ts";
 import {
   type CensusRun,
@@ -360,23 +361,21 @@ async function runHook(
       },
     ];
     writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
-    const proc = Bun.spawn([process.execPath, "run", join(HOOKS_DIR, `${hook}.ts`)], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ...run.env },
-      // The hook's cwd outside the run's folder: a SessionStart hook leaves a
-      // detached maintenance child behind (a self-heal reindex), which keeps
-      // its cwd, and Windows cannot remove a folder some process stands in.
-      cwd: run.dir.slice(0, run.dir.lastIndexOf(sep)),
-    });
-    proc.stdin.write(JSON.stringify(hookPayload(event, run.vault, transcript)));
-    await proc.stdin.end();
-    const [, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    // Bounded, so a hook that hangs fails with its evidence instead of a
+    // bare test timeout; the hook's exit decides, not its pipes
+    // (`spawnWithLimit`).
+    const { stderr, returncode: code } = await spawnWithLimit(
+      [process.execPath, "run", join(HOOKS_DIR, `${hook}.ts`)],
+      {
+        env: { ...process.env, ...run.env } as Record<string, string>,
+        // The hook's cwd outside the run's folder: a SessionStart hook leaves a
+        // detached maintenance child behind (a self-heal reindex), which keeps
+        // its cwd, and Windows cannot remove a folder some process stands in.
+        cwd: run.dir.slice(0, run.dir.lastIndexOf(sep)),
+        stdin: JSON.stringify(hookPayload(event, run.vault, transcript)),
+        limitMs: CLI_CHILD_LIMIT_MS,
+      },
+    );
     const result: HookResult = {
       code,
       stderrLines: stderr.split("\n").filter((line) => line.trim() !== ""),
