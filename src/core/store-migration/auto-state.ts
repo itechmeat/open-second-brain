@@ -90,6 +90,7 @@ import { isLockContention, withLocalLock } from "../store/local-lock.ts";
 import { storesStateDir } from "../store/store-paths.ts";
 import { holderLiveness, processAlive } from "./holder-liveness.ts";
 import { processStartIdentity } from "./process-identity.ts";
+import { tryCreateLockFile } from "../fs-lock.ts";
 
 /**
  * Suffix of the device-local file beside a vault's state folder that the
@@ -642,7 +643,7 @@ function underMutex<T>(
   try {
     return withLocalLock(path, fn, budgetMs);
   } catch (err) {
-    if (isLockContention(err, path)) return fallback;
+    if (isLockContention(err)) return fallback;
     throw err;
   }
 }
@@ -690,8 +691,18 @@ export function claimAutoMigrationLock(
           since: now.toISOString(),
           worker: null,
         };
-        writeFileSync(path, JSON.stringify(record), { flag: "wx" });
-        return token;
+        // On Windows the claim just unlinked, or a release by another
+        // process, can still hold the name for a moment: the create is made
+        // again over a few tens of milliseconds (`fs-lock.ts`), and a name
+        // still refused after that is a claim to try again later. A pruned
+        // folder (ENOENT) is not held and goes to the retry below. The
+        // create and the record are two steps: a record that cannot be
+        // written is not a claim someone holds, so the file the create made
+        // is removed again and the write's error is the answer.
+        const outcome = tryCreateLockFile(path, (fd) => {
+          writeFileSync(fd, JSON.stringify(record));
+        });
+        return "created" in outcome ? token : null;
       },
       null,
       claimMutexBudgetMs(judge),

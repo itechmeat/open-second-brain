@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 
 import { appendMetric } from "../brain/metrics.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { type LockCreateOutcome, tryCreateLockFile } from "../fs-lock.ts";
 import { detachedSpawnOptions, o2bCommand, spawnSelfDetached } from "../maintenance/o2b-command.ts";
 import { isWriterLockHeld } from "./store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -189,14 +190,21 @@ export function tryClaimFreshen(dir: string, nowMs: number): FreshenClaim {
   const body = JSON.stringify({ token, at: nowMs });
   const claimed = { skip: FRESHEN_SKIP.claimed } as const;
   for (let attempt = 0; attempt < 2; attempt++) {
+    // EEXIST, or Windows refusing the name while the previous claim's
+    // release goes through; anything else leaves the claim unwritable.
+    let outcome: LockCreateOutcome<void>;
     try {
-      writeFileSync(path, body, { flag: "wx" });
-      return { token };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
-        return { skip: FRESHEN_SKIP.unwritable };
-      }
+      // The create and the body are two steps: a body that cannot be
+      // written is not a claim someone holds, so the file the create made
+      // is removed again and the write's error makes the index folder
+      // unwritable, as a refused create does.
+      outcome = tryCreateLockFile(path, (fd) => {
+        writeFileSync(fd, body);
+      });
+    } catch {
+      return { skip: FRESHEN_SKIP.unwritable };
     }
+    if ("created" in outcome) return { token };
     const seen = readClaimBody(path);
     if (seen === null) continue; // released since: race the create again
     if (!claimAbandoned(path, seen, nowMs)) return claimed;

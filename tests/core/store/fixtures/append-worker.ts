@@ -11,7 +11,11 @@
  * comes ends the worker after 30 s instead of leaving it behind. A store
  * lock refusal (ELOCKED) is retried within a bound; see the append loop.
  *
- * argv: <root> <device> <stateHome> <worker> <count> <ready dir> <go file>
+ * With `small` as the last argument no record spills: every append is one
+ * short line, so the workers hand the shard lock to each other as often as
+ * they can (the Windows lock-release race).
+ *
+ * argv: <root> <device> <stateHome> <worker> <count> <ready dir> <go file> [small]
  */
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,15 +24,10 @@ import { appendRecord } from "../../../../src/core/store/appender.ts";
 import { STORE_LINE_CAP_BYTES } from "../../../../src/core/store/constants.ts";
 import { openStore } from "../../../../src/core/store/store-open.ts";
 
-const [root, device, stateHome, worker, countText, readyDir, goFile] = process.argv.slice(2) as [
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-];
+const [root, device, stateHome, worker, countText, readyDir, goFile, bodies] = process.argv.slice(
+  2,
+) as [string, string, string, string, string, string, string, string?];
+const spill = bodies !== "small";
 const store = openStore({
   root,
   device,
@@ -70,7 +69,7 @@ for (let i = 0; i < Number(countText); i++) {
         stream: "events",
         kind: "feedback",
         agent: `worker-${worker}`,
-        body: i % 3 === 0 ? { large } : { worker, i },
+        body: spill && i % 3 === 0 ? { large } : { worker, i },
       });
       break;
     } catch (err) {

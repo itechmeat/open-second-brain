@@ -46,10 +46,12 @@ import {
   WRITER_LOCK_STALE_ENV,
   type WriterLease,
 } from "../../../src/core/search/store/writer-lock.ts";
+import { LockDirectoryRefusedError } from "../../../src/core/fs-lock.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { tempDirs } from "../../helpers/temp-dir.ts";
+import { windowsRefusal } from "../../helpers/windows-lock-refusal.ts";
 
 setDefaultTimeout(30_000);
 
@@ -111,6 +113,31 @@ function runChild(name: string, source: string): string {
 }
 
 const importLease = `import { acquireWriterLeaseSync } from ${JSON.stringify(WRITER_LOCK_MODULE)};`;
+
+test("an ENOENT stat race never removes the next writer's fresh lock", () => {
+  mkdirSync(lockDir);
+  let raced = false;
+  const realStat = fs.statSync;
+  // Every other call reaches the real stat with its options intact, and
+  // the spy is undone before the test ends: other files in this process
+  // stat with `bigint` and `throwIfNoEntry`.
+  const spy = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
+    if (path === lockDir && !raced) {
+      raced = true;
+      rmSync(lockDir, { recursive: true, force: true });
+      mkdirSync(lockDir);
+      throw Object.assign(new Error("released before stat"), { code: "ENOENT" });
+    }
+    return (realStat as (...args: unknown[]) => unknown)(path, ...rest);
+  }) as typeof fs.statSync);
+  try {
+    expect(() => acquireWriterLeaseSync(dbPath)).toThrow();
+  } finally {
+    spy.mockRestore();
+  }
+  expect(raced).toBe(true);
+  expect(existsSync(lockDir)).toBe(true);
+});
 
 test("a holder blocked in a child process keeps the lock past two stale windows", () => {
   const lease = acquireWriterLeaseSync(dbPath);
@@ -336,6 +363,29 @@ test.skipIf(CHMOD_CANNOT_DENY)("a commit check that cannot read the lock refuses
   }
 });
 
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "a folder that refuses new entries is that refusal on both acquire paths, not another writer",
+  async () => {
+    const guarded = join(dir, "readonly");
+    mkdirSync(guarded);
+    const path = join(guarded, "index.sqlite");
+    chmodSync(guarded, 0o500);
+    try {
+      expect(() => acquireWriterLeaseSync(path)).toThrow(LockDirectoryRefusedError);
+      let caught: unknown;
+      try {
+        await acquireWriterLease(path);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(LockDirectoryRefusedError);
+      expect((caught as LockDirectoryRefusedError).code).toBe("EACCES");
+    } finally {
+      chmodSync(guarded, 0o700);
+    }
+  },
+);
+
 test("a lock the filesystem refuses to stamp is reported as that fault, not as another writer", async () => {
   // Whichever call stamps the directory on this platform refuses it.
   const refuse = (): never => {
@@ -514,4 +564,30 @@ test("a reindex whose lock was taken over refuses its swap and leaves the live i
   } finally {
     v.cleanup();
   }
+});
+
+test("a Windows refusal while the previous writer releases the lock is waited out", () => {
+  // Windows answers a mkdir of a directory its holder is removing with
+  // EPERM, and the name can be gone again by the time anyone looks.
+  mkdirSync(lockDir);
+  const real = fs.mkdirSync;
+  let refusals = 0;
+  const spy = spyOn(fs, "mkdirSync").mockImplementation(((
+    path: fs.PathLike,
+    options?: fs.MakeDirectoryOptions,
+  ) => {
+    if (String(path) === lockDir && refusals < 2) {
+      refusals += 1;
+      rmSync(lockDir, { recursive: true, force: true });
+      throw windowsRefusal(lockDir);
+    }
+    return real(path, options);
+  }) as typeof fs.mkdirSync);
+  try {
+    const lease = acquireWriterLeaseSync(dbPath);
+    lease.release();
+  } finally {
+    spy.mockRestore();
+  }
+  expect(refusals).toBe(2);
 });

@@ -24,7 +24,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import lockfile from "proper-lockfile";
 
 import { renameWithRetry } from "../../fs-atomic.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
@@ -46,6 +45,8 @@ import { restrictToOwner } from "./owner-acl.ts";
 import { machineStatePath } from "../../state/machine-state.ts";
 import { copyOwnerOnly, ensureOwnerOnlyRoot } from "../../store-migration/owner-only-copy.ts";
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
+import { lockDirSync } from "../../fs-lock.ts";
+import { sleepSync } from "../../fs-atomic.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
 
@@ -194,11 +195,11 @@ export function withSecretsLock<T>(vault: string, fn: () => T): T {
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts && release === null; attempt++) {
     try {
-      release = lockfile.lockSync(secretsDir(vault), { stale: 10_000, realpath: false });
+      release = lockDirSync(secretsDir(vault), { stale: 10_000 });
     } catch (exc) {
       if ((exc as NodeJS.ErrnoException).code !== "ELOCKED") throw exc;
       lastError = exc;
-      if (attempt < maxAttempts - 1) Bun.sleepSync(25);
+      if (attempt < maxAttempts - 1) sleepSync(25);
     }
   }
   if (release === null) {

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import lockfile from "proper-lockfile";
+import { lockDir } from "../fs-lock.ts";
 
 export interface FileLockOptions {
   readonly staleMs?: number;
@@ -28,15 +28,14 @@ export async function withFileLock<T>(
 
   let release: (() => Promise<void>) | null = null;
   try {
-    release = await lockfile.lock(targetPath, {
+    // A held lock (Windows' delete-pending answer included) is retried;
+    // any other failure, a directory refusing new entries among them,
+    // ends the wait at once.
+    release = await lockDir(targetPath, {
       stale: opts.staleMs ?? 30_000,
-      realpath: false,
-      retries: {
-        retries: opts.retries ?? 3,
-        factor: 1,
-        minTimeout: opts.retryDelayMs ?? 250,
-        maxTimeout: opts.retryDelayMs ?? 250,
-      },
+      retries: opts.retries ?? 3,
+      minTimeoutMs: opts.retryDelayMs ?? 250,
+      maxTimeoutMs: opts.retryDelayMs ?? 250,
     });
   } catch (error) {
     throw new FileLockError(targetPath, (error as Error).message ?? String(error));

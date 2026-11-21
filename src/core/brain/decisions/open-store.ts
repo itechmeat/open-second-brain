@@ -41,8 +41,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
@@ -54,6 +52,7 @@ import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { recordDecision, resolveDecisionSlug } from "./record.ts";
 import { appendDecisionChangeReceipt, DECISION_CHANGE_REASON } from "./receipts.ts";
+import { lockDirSync } from "../../fs-lock.ts";
 import {
   assertLaneWrite,
   lanePageExists,
@@ -590,7 +589,7 @@ function withOpenDirLock<T>(vault: string, body: () => T): T {
   // and no decisions directory land in the vault.
   if (lanePagesInStore(vault)) return withLaneLock(vault, dir, body);
   mkdirSync(dir, { recursive: true });
-  const release = lockfile.lockSync(dir, { stale: OPEN_LOCK_STALE_MS, realpath: false });
+  const release = lockDirSync(dir, { stale: OPEN_LOCK_STALE_MS });
   try {
     return body();
   } finally {

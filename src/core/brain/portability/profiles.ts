@@ -15,9 +15,8 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { lockDirSync } from "../../fs-lock.ts";
 
 /** Bounded-retry budget for the registry lock: 10 x 50ms ~ 500ms. */
 const LOCK_MAX_ATTEMPTS = 10;
@@ -152,7 +151,7 @@ function withRegistryLock<T>(configPath: string, mutate: () => T): T {
   let lastError: unknown;
   for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt++) {
     try {
-      release = lockfile.lockSync(dir, { stale: LOCK_STALE_MS, realpath: false });
+      release = lockDirSync(dir, { stale: LOCK_STALE_MS });
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;

@@ -5,7 +5,17 @@
  * txn layer maps that to a `BrainCollisionError({ kind: 'SourceLock' })`.
  */
 
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  setDefaultTimeout,
+  spyOn,
+  test,
+} from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   lstatSync,
@@ -25,11 +35,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { IS_WINDOWS } from "../../helpers/platform.ts";
+import { windowsRefusal } from "../../helpers/windows-lock-refusal.ts";
 
 import {
   acquireLockSync,
   acquireLockSyncWithRetry,
-  isWindowsDeletePending,
   LOCK_WAIT_BUDGET_MS,
   LOCK_WAIT_INTERACTIVE_MS,
   lockScanRoots,
@@ -200,32 +210,73 @@ describe("exit sweep after a stale handle's release", () => {
   });
 });
 
-describe("isWindowsDeletePending", () => {
-  const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" }) as NodeJS.ErrnoException;
-  const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
-  const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" }) as NodeJS.ErrnoException;
+/** Refuse the exclusive create of `lockPath` `times` times, running `onCall` first. */
+function refuseLockOpen(lockPath: string, times: number, onCall: () => void = () => {}) {
+  const real = fs.openSync;
+  let calls = 0;
+  spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
+    if (String(path) === lockPath && calls < times) {
+      calls += 1;
+      onCall();
+      throw windowsRefusal(lockPath, "EPERM", "open");
+    }
+    return (real as (...args: unknown[]) => number)(path, ...rest);
+  }) as typeof fs.openSync);
+  return { calls: () => calls };
+}
 
-  test("win32 EPERM / EACCES on a name something holds is contention", () => {
-    expect(isWindowsDeletePending(eperm, "x.lock", "win32", () => true)).toBe(true);
-    expect(isWindowsDeletePending(eacces, "x.lock", "win32", () => true)).toBe(true);
+describe("a lock file another writer is releasing on Windows", () => {
+  afterEach(() => mock.restore());
+
+  test("EPERM after the holder's file is gone, several times in a row, is waited out", () => {
+    const target = join(tmpRoot, "pref-race.md");
+    const lockPath = `${target}.lock`;
+    writeFileSync(lockPath, "");
+    // Each refused create is the moment a releasing holder's file is still
+    // delete-pending; by the time the waiter looks the name is free again.
+    const refusals = refuseLockOpen(lockPath, 3, () => rmSync(lockPath, { force: true }));
+    const started = Date.now();
+    const handle = acquireLockSyncWithRetry(target, 2_000);
+    handle.release();
+    expect(refusals.calls()).toBe(3);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
-  test("win32 EPERM with nothing at the name is a directory that refuses creates", () => {
-    // An ACL or Controlled Folder Access: waiting the whole budget and then
-    // saying "lock busy" would hide the real reason for five seconds.
-    expect(isWindowsDeletePending(eperm, "x.lock", "win32", () => false)).toBe(false);
+  test("a single attempt reports the refusal as a held lock", () => {
+    const target = join(tmpRoot, "pref-held.md");
+    writeFileSync(`${target}.lock`, "");
+    refuseLockOpen(`${target}.lock`, 1);
+    let caught: unknown;
+    try {
+      acquireLockSync(target);
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as NodeJS.ErrnoException).code).toBe("ELOCKED");
+    expect(((caught as Error).cause as NodeJS.ErrnoException).code).toBe("EPERM");
   });
 
-  test("never on POSIX, and never for another code", () => {
-    expect(isWindowsDeletePending(eperm, "x.lock", "linux", () => true)).toBe(false);
-    expect(isWindowsDeletePending(eexist, "x.lock", "win32", () => true)).toBe(false);
+  test("a refused name that is already free is reopened at once, even with no wait budget", () => {
+    const target = join(tmpRoot, "pref-free.md");
+    // The holder's release went through between the refusal and the look.
+    const refusals = refuseLockOpen(`${target}.lock`, 1);
+    const handle = acquireLockSyncWithRetry(target, 0);
+    handle.release();
+    expect(refusals.calls()).toBe(1);
   });
 
-  test("the default probe reads the real filesystem", () => {
-    const held = join(tmpRoot, "held.lock");
-    writeFileSync(held, "");
-    expect(isWindowsDeletePending(eperm, held, "win32")).toBe(true);
-    expect(isWindowsDeletePending(eperm, join(tmpRoot, "absent.lock"), "win32")).toBe(false);
+  test("a refusal that outlasts the wait is a busy lock within the budget", () => {
+    const target = join(tmpRoot, "pref-busy.md");
+    writeFileSync(`${target}.lock`, "");
+    // The planted file makes a real `EEXIST` collision if the spy is
+    // bypassed, and the test would still see "lock busy" within its limit,
+    // so the refusals the spy injected are counted: more than one means
+    // the waiter retried the refusal before it gave up.
+    const refusals = refuseLockOpen(`${target}.lock`, Number.MAX_SAFE_INTEGER);
+    const started = Date.now();
+    expect(() => acquireLockSyncWithRetry(target, 200)).toThrow("lock busy");
+    expect(refusals.calls()).toBeGreaterThan(1);
+    expect(Date.now() - started).toBeLessThan(1_500);
   });
 });
 

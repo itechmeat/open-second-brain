@@ -27,9 +27,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import lockfile from "proper-lockfile";
-
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { lockDir } from "../fs-lock.ts";
 import type { ParsedMarker } from "./inline.ts";
 
 export interface RewriteOp {
@@ -52,10 +51,16 @@ export async function rewriteMarkers(path: string, ops: ReadonlyArray<RewriteOp>
   const parent = dirname(path);
   mkdirSync(parent, { recursive: true });
 
-  const release = await lockfile.lock(parent, {
-    retries: { retries: 30, factor: 1.2, minTimeout: 30, maxTimeout: 500 },
+  const release = await lockDir(parent, {
+    retries: 30,
+    factor: 1.2,
+    minTimeoutMs: 30,
+    maxTimeoutMs: 500,
     stale: 10_000,
-    realpath: false,
+    // A transient fault (an I/O error on the create, or on the look at a
+    // refused name) is retried within the same budget; `lockDir` keeps a
+    // named fault of the directory immediate.
+    retryOnError: () => true,
   });
   try {
     const original = readFileSync(path, "utf8");
