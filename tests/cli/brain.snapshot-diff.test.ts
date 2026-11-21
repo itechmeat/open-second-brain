@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -298,3 +298,67 @@ pinned: false
 
 // Silence the unused-import warning when test fixtures change.
 void readFileSync;
+
+describe("brain rollback --dry-run outside the preference folders", () => {
+  test("lists every file a restore would put back, change or remove under Brain/", async () => {
+    await bootstrap();
+    // Files outside preferences/ and retired/, names in several scripts and
+    // one in a nested folder: a real rollback restores every one of them.
+    const probe = join(vault, "Brain", "probe-names");
+    const nested = join(probe, "папка-文件夹");
+    mkdirSync(nested, { recursive: true });
+    const names = [
+      "кириллица.md",
+      "中文.md",
+      `${"й".repeat(100)}.md`,
+      "café.md",
+      "cafe\u0301-nfd.md",
+      "\u0439\u043e\u0434-nfc.md",
+      "\u0438\u0306\u043e\u0434-nfd.md",
+      "한국어.md",
+    ];
+    for (const name of names) writeFileSync(join(probe, name), `${name}\n`);
+    writeFileSync(join(nested, "🦦.md"), "otter\n");
+    const runId = await seedDream();
+
+    rmSync(join(probe, names[0]!));
+    rmSync(join(probe, names[1]!));
+    rmSync(join(probe, names[4]!));
+    rmSync(join(probe, names[6]!));
+    rmSync(nested, { recursive: true });
+    writeFileSync(join(probe, names[2]!), "overwritten\n");
+    writeFileSync(join(probe, "new-after.md"), "new\n");
+
+    const r = await runCli(["brain", "rollback", runId, "--dry-run", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain(`Brain/probe-names/${names[0]}`);
+    expect(r.stdout).toContain(`Brain/probe-names/${names[1]}`);
+    expect(r.stdout).toContain("Brain/probe-names/папка-文件夹/🦦.md");
+    expect(r.stdout).toContain(`Brain/probe-names/${names[2]}`);
+    expect(r.stdout).toContain("Brain/probe-names/new-after.md");
+    expect(r.stdout).toContain(`Brain/probe-names/${names[4]}`);
+    expect(r.stdout).toContain(`Brain/probe-names/${names[6]}`);
+    // The unchanged file is not listed.
+    expect(r.stdout).not.toContain(`Brain/probe-names/${names[3]}`);
+    // What the list leaves out is said, with why: the derived store a real
+    // rollback reports on its own line, the folders it leaves in place,
+    // and the links the differ never reads.
+    const notListed = r.stdout.slice(r.stdout.indexOf("## Not listed"));
+    expect(notListed).toStartWith("## Not listed");
+    expect(notListed).toContain(".snapshots/ and .artifacts/");
+    expect(notListed).toContain("Symbolic links");
+    expect(notListed).toMatch(/Derived store \(search index\): (included|excluded|unknown)/);
+
+    const json = await runCli(
+      ["brain", "rollback", runId, "--dry-run", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(json.returncode).toBe(0);
+    const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+    expect(payload).toHaveProperty("added");
+    expect(payload).toHaveProperty("derived_store");
+    expect(payload["not_listed"]).toEqual([".snapshots/", ".artifacts/", "symbolic links"]);
+  });
+});

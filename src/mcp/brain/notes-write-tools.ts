@@ -51,6 +51,7 @@ import {
   type WritePathAdvisoryField,
 } from "../../core/brain/write-path-advisory.ts";
 import { rethrowVaultFrozen } from "../frozen-refusal.ts";
+import { rethrowVaultUnreadable } from "../vault-unreachable.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "../coerce.ts";
@@ -196,6 +197,10 @@ export async function toolBrainCreateNote(
       });
     }
     rethrowVaultFrozen(err);
+    // A vault that is not there, or cannot be examined: the write guard
+    // raised it, and it keeps its class, so the refusal is the named
+    // `vault_unreadable` it is.
+    rethrowVaultUnreadable(err);
     // An answer already shaped for the wire (the `vault_required` refusal
     // of a server with no vault) keeps its code.
     if (err instanceof MCPError) throw err;

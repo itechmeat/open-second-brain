@@ -53,6 +53,7 @@ import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { GATE_MODE } from "../../integrity/stamp.ts";
 import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
+import { assertVaultPresent } from "../../vault-unexaminable.ts";
 import {
   ORIGIN_CHANNEL_FIELD,
   originChannelStamp,
@@ -427,6 +428,11 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   // Before any normalisation reads the string: refuse a separator this
   // host would not read the way the caller wrote it. See the function.
   assertHostPathSeparators(path);
+  // The vault must be THERE. This envelope is the one every caller-named
+  // note write shares - the create below and the batch core's create /
+  // update / append arms - so the rule is stated once: the parents
+  // inside a vault that exists may be created, the vault itself never.
+  assertVaultPresent(vault);
 
   // inspectPath normalises the relative path and throws on `..` traversal;
   // an absolute path also has no place here. Translate both into a typed

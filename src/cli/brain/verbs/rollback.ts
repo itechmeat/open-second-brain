@@ -35,6 +35,8 @@ import {
 import {
   renderDerivedStoreCoverage,
   renderDerivedStoreRestore,
+  renderRollbackDryRunNotListed,
+  ROLLBACK_DRY_RUN_NOT_LISTED,
   renderSnapshotListingFailure,
   renderSnapshotListingSkips,
   renderSnapshotReason,
@@ -157,10 +159,21 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     try {
       const liveBrain = brainDirs(vault).brain;
       const diff = diffBrainTrees(liveBrain, ext.brainRoot);
-      const out = flags["json"]
-        ? JSON.stringify(renderDiffJson(diff), null, 2) + "\n"
-        : renderDiffMarkdown(diff, { aLabel: "live", bLabel: runId });
-      process.stdout.write(out + (out.endsWith("\n") ? "" : "\n"));
+      // The list covers every file under `Brain/` a restore replaces; what
+      // it leaves out is named after it, with the derived store's coverage.
+      if (flags["json"]) {
+        const payload = {
+          ...renderDiffJson(diff),
+          derived_store: target.derived_store,
+          not_listed: ROLLBACK_DRY_RUN_NOT_LISTED,
+        };
+        process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+        return 0;
+      }
+      const out = renderDiffMarkdown(diff, { aLabel: "live", bLabel: runId });
+      process.stdout.write(
+        `${out}${out.endsWith("\n") ? "" : "\n"}\n${renderRollbackDryRunNotListed(target.derived_store)}`,
+      );
       return 0;
     } finally {
       ext.cleanup();
