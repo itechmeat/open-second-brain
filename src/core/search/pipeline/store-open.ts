@@ -424,29 +424,37 @@ export async function openReadOrSelfHeal(
   // An older schema is migrated in place, keeping every stored vector and
   // its recorded identity (#256). A condemned or absent index, a newer
   // schema, and one the migration did not make readable still rebuild.
-  if (openFailure.code === "SCHEMA_MISMATCH" && heal.inspectIndex(config) !== "rebuild") {
-    let upgraded = true;
-    try {
-      // A concurrent healer may already have made it current; the
-      // re-inspection skips a pointless write open.
-      if (heal.inspectIndex(config) === "older-schema") await heal.upgradeIndexInPlace(config);
-    } catch (e) {
-      upgraded = false;
-      if (e instanceof SearchError && e.code === "INDEX_LOCKED") {
-        // Another writer holds the index; a rebuild would only queue behind
-        // it to discard its work. Reported with the symptom if the final
-        // retry fails.
-        healFailure = e.message;
-        rebuild = false;
-      }
-      // Any other failure (a migration rolled back) falls back to a rebuild.
-    }
-    if (upgraded) {
+  //
+  // The plan is the ONE decision about what a stale index needs (see
+  // `planIndexRepair`): the status surface and the post-upgrade
+  // maintenance read the same one, so none of them can tell the user to
+  // rebuild what a read upgrades in place.
+  if (openFailure.code === "SCHEMA_MISMATCH") {
+    const plan = heal.planIndexRepair(config);
+    if (plan.kind !== "rebuild") {
+      let upgraded = true;
       try {
-        return await Store.open(config, { mode: "read" });
+        // A concurrent healer may already have made it current; the
+        // re-inspection skips a pointless write open.
+        if (plan.kind === "upgrade-in-place") await heal.upgradeIndexInPlace(config);
       } catch (e) {
-        if (!(e instanceof SearchError) || !SELF_HEALABLE_CODES.has(e.code)) throw e;
-        openFailure = e;
+        upgraded = false;
+        if (!heal.rebuildRepairsUpgradeFailure(e)) {
+          // Another writer holds the index; a rebuild would only queue behind
+          // it to discard its work. Reported with the symptom if the final
+          // retry fails.
+          healFailure = e instanceof Error ? e.message : String(e);
+          rebuild = false;
+        }
+        // Any other failure (a migration rolled back) falls back to a rebuild.
+      }
+      if (upgraded) {
+        try {
+          return await Store.open(config, { mode: "read" });
+        } catch (e) {
+          if (!(e instanceof SearchError) || !SELF_HEALABLE_CODES.has(e.code)) throw e;
+          openFailure = e;
+        }
       }
     }
   }

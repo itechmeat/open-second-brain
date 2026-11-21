@@ -11,6 +11,7 @@ import { admitIndexRefs, resolvePoolFilters } from "./pipeline/pool-filters.ts";
 import { isPathOwnerVisible, isPathReadableAtReach } from "./result-filters.ts";
 import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { markWindow, matchOffset, toCodePointOffset, windowStartWithin } from "./snippet-window.ts";
+import { openReadWithUpgrade } from "./self-heal.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -154,7 +155,9 @@ export async function expandHit(
   }
   const agentScope = normalizeAgentScope(input.agentScope);
   const reach = resolvedTransportReach(input.transportReach);
-  const store = await Store.open(config, { mode: "read" });
+  // The same in-place upgrade the query path performs: an older schema
+  // is upgraded here rather than reported as a rebuild to do.
+  const store = await openReadWithUpgrade(config);
   try {
     const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);
     if (hit === undefined) {

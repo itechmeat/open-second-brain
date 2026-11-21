@@ -1471,7 +1471,16 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   the rebuild refuses with `INDEX_LOCKED` and removes neither; the
   message names the unreadable parked file and says to move it out of
   the index folder (or make it readable again), after which the next
-  rebuild parks the live index at the freed name. When the check after the swap cannot complete (on
+  rebuild parks the live index at the freed name. That refusal is
+  decided before the build whenever it can be: the parked names and
+  their readability are known up front, so the operator gets the answer
+  without a full build and no staging index of the full size is written
+  for a build that could not be swapped in. The preflight refuses only
+  what the swap would refuse: a live index that fails its integrity
+  check is left to the swap, which puts the parked `.old` back over it
+  and frees the name it needs, and whether a removal succeeds stays at
+  the swap too. A staging index a late refusal leaves behind is the one
+  a later resumed rebuild uses. When the check after the swap cannot complete (on
   POSIX a search still holding the renamed file keeps its log beside
   it), the rebuild still succeeds: it says so on stderr and in
   `swap_unverified` of `o2b search reindex --json`, names where the
@@ -1490,7 +1499,12 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   whose entities were extracted by the older rules (chunker version 3)
   is served as it is and brought current by the background heal: rebuilt
   when it holds no stored embeddings, its entities re-extracted in place
-  when it does. On a brain store of 400,000 records the index takes
+  when it does. An index on an older schema is upgraded in place by the
+  read that meets it - the command line and the MCP server the same way
+  - and the background heal still runs for an index that owes a repair
+  beyond that upgrade (entity rows of the older rule, chunks of older
+  rules): it upgrades the schema, re-plans and repairs, so such an index
+  ends current on both counts. On a brain store of 400,000 records the index takes
   517 MB; `o2b search status` and the migration's dry run estimate the
   size and build time from 401 bytes per store record, 1,777 bytes per
   indexed document, 0.15 ms per record and 20 ms per note file. The
