@@ -34,6 +34,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendLogEvent } from "./log.ts";
+import { memoryIdOfStoreRef } from "./lifecycle/memory-target.ts";
 import { routeSignalState, signalsStoreOnly, storeSignal } from "./signal-state.ts";
 import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
@@ -104,7 +105,9 @@ export function retireSignal(
   id: string,
   opts: RetireSignalOptions,
 ): RetireSignalResult {
-  const trimmed = id.trim();
+  // The id in any form the lifecycle verbs take (`store:<id>`, a wikilink,
+  // the page path); the basename is what the id checks below judge.
+  const trimmed = memoryIdOfStoreRef(id);
 
   // A `ret-*` id is already a retired artifact - retiring it is a no-op we
   // refuse loudly.

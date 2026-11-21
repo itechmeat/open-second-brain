@@ -75,7 +75,7 @@ import {
   type StaleDependencyState,
 } from "./doctor/stale-dependency-check.ts";
 import { readLifecycleState } from "./lifecycle/tombstone-read.ts";
-import { boundaryToMs, VALID_UNTIL_KEY } from "./lifecycle/temporal-replace.ts";
+import { boundaryToMs, VALID_UNTIL_KEY } from "./lifecycle/validity.ts";
 import { brainDirs } from "./paths.ts";
 import { MS_PER_DAY } from "./time.ts";
 import { toPosix } from "../path-safety.ts";

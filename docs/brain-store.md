@@ -871,7 +871,23 @@ A record whose entity no reader shows any more (a forgotten signal, a
 removed preference or lane entry, an entity marked `_status:
 tombstoned` before or after the migration) is never indexed, and a
 search refuses one an index still holds. A signal waiting for write
-approval is kept out the same way until it is approved.
+approval is kept out the same way until it is approved. A log event
+that references such a record (by its id, its page path or a link to it:
+its `feedback` event, its `tombstone` event) is left out of every search
+answer too, so a forgotten record's name is not found through the log; a
+bare word an event shares with a forgotten page's name hides nothing; the log itself
+keeps the event as the audit trail.
+
+To forget one record on a switched machine, tombstone it: `o2b brain
+lifecycle tombstone <target> --reason <text>` (or the `brain_lifecycle`
+tool), where the target is the record's legacy path, its bare id or
+`store:<id>`. The tombstone is a field change of the store record, never
+a write to the legacy tree (still on disk or not, and whatever the path's
+case, Unicode form or separators, or a link that leads into the tree), and every reader drops
+the record at once; `supersede`, `temporal-replace` and `correct` write
+the store record the same way. A target the store does not hold is
+refused. `o2b brain signal retire` is not a way to forget: a retired
+signal leaves the dream pass and stays searchable as history.
 
 From now on this machine writes only to the store. Render the view twice
 (the first render after the claim only catches up), and check doctor:

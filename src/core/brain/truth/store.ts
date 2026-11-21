@@ -36,7 +36,7 @@ import {
   shardedFileName,
 } from "../ledger-shards.ts";
 import { normalizeEntityName } from "../entities/canonical.ts";
-import { VALID_FROM_KEY, VALID_UNTIL_KEY } from "../lifecycle/temporal-replace.ts";
+import { VALID_FROM_KEY, VALID_UNTIL_KEY } from "../lifecycle/validity.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "../wikilink.ts";
 import { computeTruthState } from "./fold.ts";

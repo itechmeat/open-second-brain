@@ -68,6 +68,17 @@ function signalRetire(argv: string[]): number {
       });
     } else {
       ok(`retired: ${res.id}`);
+      // Retiring keeps the signal as history: it leaves the dream pass, not
+      // search. Say so, on stderr beside the other notices, so "retired" is
+      // never read as "forgotten".
+      // The vault the retire was told to use goes into the command, quoted
+      // for a POSIX shell, so the command acts on the same vault.
+      const chosen = normalizeFlagString(flags["vault"]);
+      const vaultArg = chosen === null ? "" : ` --vault '${chosen.replaceAll("'", "'\\''")}'`;
+      process.stderr.write(
+        `note: a retired signal stays searchable as history; to forget it, ` +
+          `run \`o2b brain lifecycle tombstone ${res.id} --reason <text>${vaultArg}\`\n`,
+      );
     }
     return 0;
   } catch (exc) {

@@ -2973,3 +2973,13 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `o2b brain validate --paths <page>... | --dirty [--strict]` - the same
   write-receipt lint the write path enforces, with the doctor's exit
   contract (errors 1, `--strict` warnings 2, clean 0) as the product.
+- On a vault switched to the brain store, `brain_lifecycle` `tombstone`,
+  `supersede`, `temporal-replace` and `correct` change the record in the
+  store, never a legacy page (whether the legacy tree is still on disk or
+  not), and take the record's legacy path, its bare id or `store:<id>` (the
+  form `brain_feedback` answers on such a machine). A tombstoned record
+  leaves every read surface at once, and `brain_search` also leaves out
+  the log events that name it. A target the store does not hold is refused
+  with `note does not exist`, and a change a write of higher authority
+  outranks (a human decision beside an agent's tombstone) is refused as
+  not applied.

@@ -99,6 +99,34 @@ export function normalizeChainLink(raw: string): string {
   return value;
 }
 
+/**
+ * The bare memory id a caller's reference names, whichever form it takes:
+ * `store:<id>` (how a store-only writer names a record), a wikilink, or a
+ * legacy page path (`Brain/inbox/sig-x.md`). For the verbs addressed by
+ * id (retire, reject, expire), so each takes the same forms the
+ * lifecycle verbs take.
+ */
+export function memoryIdOfRef(raw: string): string {
+  let value = raw.trim().normalize("NFC");
+  const fence = /^\[\[([^\]]+)\]\]$/.exec(value);
+  if (fence) value = fence[1]!.trim();
+  const bare = (value.startsWith("store:") ? value.slice("store:".length) : value).replaceAll(
+    "\\",
+    "/",
+  );
+  // A path names its own record: only a page path of a memory folder
+  // (any case, `.md` or not) is the record of its basename. Any other path
+  // (`Notes/sig-x.md`) names another file, and is returned as written so
+  // the verb refuses it instead of acting on a namesake.
+  const slash = bare.lastIndexOf("/");
+  if (slash >= 0) {
+    const dir = bare.slice(0, slash).toLowerCase();
+    const isMemoryFolder = MEMORY_FOLDERS.some((f) => memoryFolderRel(f).toLowerCase() === dir);
+    if (!isMemoryFolder) return bare;
+  }
+  return normalizeChainLink(bare);
+}
+
 // ----- Chain resolution -----------------------------------------------------
 
 export interface ChainLookupEntry {
@@ -285,5 +313,11 @@ export function resolveChainTipInVault(
     readonly readable?: (rel: string) => boolean;
   } = {},
 ): ResolveChainTipResult {
-  return resolveChainTip(start, buildChainLookup(vault, opts.readable), opts);
+  // `store:<id>` names a store-only record by its id, as the writers
+  // answer; the wikilink fence goes first, so `[[store:<id>]]` does too.
+  let id = start.trim();
+  const fence = /^\[\[([^\]]+)\]\]$/.exec(id);
+  if (fence) id = fence[1]!.trim();
+  if (id.startsWith("store:")) id = id.slice("store:".length);
+  return resolveChainTip(id, buildChainLookup(vault, opts.readable), opts);
 }

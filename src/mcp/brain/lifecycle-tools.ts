@@ -224,7 +224,8 @@ export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         path: {
           type: "string",
-          description: "tombstone: vault-relative path of the target memory file.",
+          description:
+            "tombstone: the target memory: its vault-relative path, bare id or store:<id> (the store record once the vault is switched).",
         },
         reason: {
           type: "string",
@@ -237,12 +238,12 @@ export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         predecessor: {
           type: "string",
           description:
-            "supersede/temporal-replace: vault-relative path of the predecessor being replaced.",
+            "supersede/temporal-replace: the predecessor being replaced: path, bare id or store:<id>.",
         },
         successor: {
           type: "string",
           description:
-            "supersede: successor id/wikilink. temporal-replace: successor path. correct: successor id/wikilink for the superseded_by pointer and retarget.",
+            "supersede: successor id/wikilink. temporal-replace: successor path, bare id or store:<id>. correct: successor id/wikilink for the superseded_by pointer and retarget.",
         },
         at: {
           type: "string",
@@ -257,7 +258,7 @@ export const LIFECYCLE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         target: {
           type: "string",
-          description: "correct: vault-relative path of the record being corrected.",
+          description: "correct: the record being corrected: path, bare id or store:<id>.",
         },
         value: {
           type: "string",
