@@ -8,7 +8,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
@@ -34,12 +34,19 @@ import {
 import { loadVecExtension } from "./vectors.ts";
 import {
   acquireWriterLease,
-  acquireWriterLockSync,
+  acquireWriterLeaseSync,
   keepWriterLeasesFresh,
   WRITER_LEASE_BLOCKING_BUDGET_MS,
+  type WriterLease,
 } from "./writer-lock.ts";
 import { closeDatabase } from "../../sqlite-close.ts";
-import { renameWithRetry } from "../../fs-atomic.ts";
+import {
+  atomicWriteFileSync,
+  unlinkWithRetry,
+  WINDOWS_RENAME_RETRY_BUDGET_MS,
+} from "../../fs-atomic.ts";
+import { SQLITE_SIBLING_SUFFIXES, unparkSqliteFileSet } from "../../sqlite-file-set.ts";
+import { STORE_PARK_MARKER_SUFFIX } from "../store-family.ts";
 import {
   probeVaultBacking,
   VAULT_BACKING_REMOTENESS,
@@ -164,13 +171,128 @@ function busySwitchWarning(dbPath: string, journalMode: JournalMode): string {
   );
 }
 
+/** The parked previous index, newest first: `.old` is parked over an older, embedding-richer `.bak`. */
+const PARKED_INDEX_SUFFIXES: ReadonlyArray<string> = Object.freeze([".old", ".bak"]);
+
 /**
- * Crash-recovery preamble shared by every `Store.open`: if the live
- * index file is absent but a `.bak` from a `reindex` rename swap is present,
- * restore it. Guarded by the SAME writer lock `reindexVault` holds across
- * its swap, so a read that opens during the swap's brief db-absent window
- * cannot mistake it for a crashed reindex and clobber the freshly built
- * index with the stale `.bak` (the silent-data-loss race, A.2).
+ * Put a parked previous index back at the live path when there is no live
+ * index: what a rebuild leaves when it dies between the renames of its
+ * swap (`sqlite-file-set.ts` moves a set one file at a time, so the parked
+ * main file and its journals may be split between the two names). The
+ * newest parked set (`.old`) is preferred, and its siblings come back
+ * before its main file. The caller holds the writer lock. Returns the
+ * parked path restored from, or null when there was nothing to restore.
+ *
+ * Nothing parked is ever deleted here, also beside a live index: a parked
+ * set is the previous index until a rebuild has verified one that
+ * supersedes it, and only that rebuild removes it (`reindexVault`).
+ *
+ * `lease` is the writer lock the caller holds. On Windows each rename may
+ * retry for seconds, so the lease is kept fresh through the moves, and
+ * ownership is proven before every rename, every undo and the marker
+ * clear: once another writer has taken the lock over, this recovery
+ * renames nothing more and leaves the marker for that holder, whose own
+ * restore finishes the job by it. Throws then: `INDEX_LOCKED`, or the
+ * move's error naming what stayed where when the loss came mid-move.
+ */
+export function restoreParkedIndexUnderLock(dbPath: string, lease: WriterLease): string | null {
+  return keepWriterLeasesFresh(PARKED_RESTORE_LEASE_BUDGET_MS, () => {
+    lease.assertHeld();
+    if (existsSync(dbPath)) {
+      // A live index is in place: whatever swap wrote the marker finished
+      // or never moved the main file, and the marker names nothing.
+      clearParkMarker(dbPath);
+      return null;
+    }
+    const marked = readParkMarker(dbPath);
+    const order =
+      marked === null
+        ? PARKED_INDEX_SUFFIXES
+        : [marked, ...PARKED_INDEX_SUFFIXES.filter((s) => s !== marked)];
+    for (const suffix of order) {
+      const source = dbPath + suffix;
+      if (!existsSync(source)) continue;
+      unparkSqliteFileSet(source, dbPath, undefined, () => lease.assertHeld());
+      lease.assertHeld();
+      clearParkMarker(dbPath);
+      return source;
+    }
+    return null;
+  });
+}
+
+/**
+ * How long a parked-index restore keeps the lease fresh: every rename of
+ * the set and every undo of it, each at its full Windows retry budget, and
+ * a margin.
+ */
+const PARKED_RESTORE_LEASE_BUDGET_MS =
+  2 * (SQLITE_SIBLING_SUFFIXES.length + 1) * WINDOWS_RENAME_RETRY_BUDGET_MS + 10_000;
+
+/**
+ * The marker a swap writes beside the index at `dbPath` before it parks
+ * the live set. Suffix order alone cannot tell which parked main a split
+ * set's journals at the live path belong to: once a verified rebuild has
+ * kept `.old` and removed `.bak`, the next swap parks the newer index at
+ * `.bak`, and a stop between its renames leaves that main beside the
+ * older `.old`. The marker names the parked name the interrupted swap
+ * used, so the crash restore reunites that set first. It is read only
+ * while the live main file is absent, and cleared under the writer lock
+ * once a live index is in place.
+ */
+export function parkMarkerPath(dbPath: string): string {
+  return dbPath + STORE_PARK_MARKER_SUFFIX;
+}
+
+/**
+ * Record, durably, that the set at `dbPath` is about to be parked at
+ * `parkedPath` (one of the parked names). The caller holds the writer lock.
+ */
+export function writeParkMarker(dbPath: string, parkedPath: string): void {
+  const suffix = parkedPath.slice(dbPath.length);
+  if (!parkedPath.startsWith(dbPath) || !PARKED_INDEX_SUFFIXES.includes(suffix)) {
+    throw new Error(`${parkedPath} is not a parked name of ${dbPath}`);
+  }
+  // Written to a synced temporary file and renamed in, so a stop leaves
+  // either no marker or a whole one.
+  atomicWriteFileSync(parkMarkerPath(dbPath), `${suffix}\n`);
+}
+
+/** Remove the park marker of `dbPath`. The caller holds the writer lock. */
+export function clearParkMarker(dbPath: string): void {
+  try {
+    unlinkWithRetry(parkMarkerPath(dbPath));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw err;
+  }
+}
+
+/**
+ * The parked suffix the marker names, or null when there is none or it is
+ * not one. A record that cannot be read (an I/O error, a format from a
+ * newer release) also reads as null, so the restore falls back to suffix
+ * order, the behaviour before the record existed: the product writes the
+ * record atomically and never leaves a torn one, and the fallback deletes
+ * nothing parked.
+ */
+function readParkMarker(dbPath: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(parkMarkerPath(dbPath), "utf8").trim();
+  } catch {
+    return null;
+  }
+  return PARKED_INDEX_SUFFIXES.includes(text) ? text : null;
+}
+
+/**
+ * Crash-recovery preamble shared by every `Store.open` (and the self-heal
+ * inspection): if the live index file is absent but a parked previous
+ * index is present, restore it ({@link restoreParkedIndexUnderLock}).
+ * Guarded by the SAME writer lock `reindexVault` holds across its swap,
+ * so a read that opens during the swap's brief db-absent window cannot
+ * mistake it for a crashed reindex and clobber the freshly built index
+ * with the stale `.bak` (the silent-data-loss race, A.2).
  *
  * Lock semantics distinguish the two cases without a heuristic:
  *   - a live reindex mid-swap holds a heartbeated (non-stale) lock, so we
@@ -179,46 +301,35 @@ function busySwitchWarning(dbPath: string, journalMode: JournalMode): string {
  *     within the stale window, after which we restore.
  * If the lock cannot be taken at all we skip the restore rather than risk a
  * clobber; the caller's open path then re-evaluates existence and reports
- * honestly (INDEX_MISSING). The `.bak` restore of a genuine crash is
- * unaffected: with no live holder the lock is acquired immediately.
+ * honestly (INDEX_MISSING).
  *
- * A swap that keeps an embedding-richer `.bak` parks the live index at
- * `.old` instead (reindexVault). A crash between its renames leaves the
- * live index at `.old` and the OLDER index at `.bak`, so `.old` is
- * restored first - restoring `.bak` would roll back past the live index.
- * A `.old` beside a present live index is the leftover of a swap that
- * completed but crashed before removing it, and is deleted.
+ * A parked set beside a present live index is left alone: the live index
+ * may be one a rebuild swapped in and died before verifying, so the
+ * parked set is still the last index known to be good.
  */
 export function restoreFromBakIfMissing(dbPath: string): void {
-  const bak = dbPath + ".bak";
-  const old = dbPath + ".old";
-  if (!existsSync(old) && (existsSync(dbPath) || !existsSync(bak))) return;
-  let release: (() => void) | null = null;
+  if (existsSync(dbPath)) return;
+  if (!PARKED_INDEX_SUFFIXES.some((suffix) => existsSync(dbPath + suffix))) return;
+  let lease: WriterLease;
   try {
-    release = acquireWriterLockSync(dbPath);
+    lease = acquireWriterLeaseSync(dbPath);
   } catch {
     // A live writer holds the lock (mid-swap). Do not restore — the swap
     // will place the fresh index; the open path re-checks existence.
     return;
   }
   try {
-    // Re-check under the lock: the swap may have completed while we waited,
-    // or another opener may have already restored.
-    if (existsSync(dbPath)) {
-      if (existsSync(old)) unlinkSync(old);
-      return;
+    // Re-checked under the lock: the swap may have completed while we
+    // waited, or another opener may have already restored.
+    const source = restoreParkedIndexUnderLock(dbPath, lease);
+    if (source !== null) {
+      // eslint-disable-next-line no-console
+      console.error(`restored search index from ${source} (previous reindex crash)`);
     }
-    let source: string | null = null;
-    if (existsSync(old)) source = old;
-    else if (existsSync(bak)) source = bak;
-    if (source === null) return;
-    renameWithRetry(source, dbPath);
-    // eslint-disable-next-line no-console
-    console.error(`restored search index from ${source} (previous reindex crash)`);
   } catch {
     /* fall through — open path below will report INDEX_MISSING */
   } finally {
-    release();
+    lease.release();
   }
 }
 
@@ -302,18 +413,43 @@ const QUICK_CHECK_MAX_ERRORS = 5;
  */
 const INTEGRITY_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-/** The outcome of a completed full structural scan. */
+/**
+ * The outcome of a full structural scan. `inconclusive` marks a scan that
+ * could not complete for an operational reason (an I/O error, a busy or
+ * locked file, memory): it is not a pass, and it is not evidence of damage
+ * either, so no caller condemns, records or discards anything on it.
+ */
 export type IntegrityVerdict =
   | { readonly ok: true }
-  | { readonly ok: false; readonly fault: string };
+  | { readonly ok: false; readonly fault: string; readonly inconclusive?: true };
+
+/**
+ * SQLite result codes that mean the file itself is damaged, as opposed to
+ * a scan that could not run: corruption found mid-scan, or a file that is
+ * not a database at all.
+ */
+const STRUCTURAL_ERROR_CODES: ReadonlyArray<string> = Object.freeze([
+  "SQLITE_CORRUPT",
+  "SQLITE_NOTADB",
+]);
+
+/** Whether a raised scan error reports damage to the file (by its SQLite code). */
+function isStructuralScanError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code !== "string") return false;
+  return STRUCTURAL_ERROR_CODES.some((c) => code === c || code.startsWith(`${c}_`));
+}
 
 /**
  * Run `PRAGMA quick_check` and classify the result.
  *
  * Three outcomes collapse to "faulty", and deliberately so: a verdict
- * other than `ok`, a scan that raises SQLITE_CORRUPT because the damage
- * stops it completing, and a scan that returns no verdict row at all.
- * None of them is evidence of a healthy file, so none of them may pass.
+ * other than `ok`, a scan that raises SQLITE_CORRUPT (or SQLITE_NOTADB)
+ * because the damage stops it completing, and a scan that returns no
+ * verdict row at all. None of them is evidence of a healthy file, so none
+ * of them may pass. Any other raised error (an I/O error, SQLITE_BUSY,
+ * out of memory) is `inconclusive`: the scan did not run to a verdict,
+ * which is no more evidence of damage than of health.
  */
 export function runIntegrityCheck(db: Database): IntegrityVerdict {
   let rows: ReadonlyArray<{ quick_check: string }>;
@@ -322,7 +458,10 @@ export function runIntegrityCheck(db: Database): IntegrityVerdict {
       .query<{ quick_check: string }, []>(`PRAGMA quick_check(${QUICK_CHECK_MAX_ERRORS})`)
       .all();
   } catch (e) {
-    return { ok: false, fault: e instanceof Error ? e.message : String(e) };
+    const fault = e instanceof Error ? e.message : String(e);
+    return isStructuralScanError(e)
+      ? { ok: false, fault }
+      : { ok: false, fault, inconclusive: true };
   }
   if (rows.length === 0) return { ok: false, fault: "quick_check returned no verdict" };
   const verdict = rows.map((r) => r.quick_check).join("; ");
@@ -429,6 +568,15 @@ function runWriteOpenIntegrityGate(db: Database, dbPath: string): void {
   const verdict = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
     runIntegrityCheck(db),
   );
+  if (!verdict.ok && verdict.inconclusive === true) {
+    // Neither stamped nor recorded: the next write open scans again, and
+    // the file is not condemned (a rebuild would discard a sound index).
+    throw new SearchError(
+      "INDEX_LOCKED",
+      `the integrity check of the search index at ${dbPath} could not complete ` +
+        `(${verdict.fault}); nothing was recorded, and the next write open checks again`,
+    );
+  }
   try {
     setState(db, INTEGRITY_CHECKED_AT_STATE_KEY, nowIso());
     if (verdict.ok) deleteState(db, INTEGRITY_FAULT_STATE_KEY);
@@ -567,7 +715,10 @@ export async function openWriteDatabase(
       // eslint-disable-next-line no-console
       console.error(decision.warning);
     }
-    applyMigrations(db, { ftsTokenize: config.ftsTokenize });
+    applyMigrations(db, {
+      ftsTokenize: config.ftsTokenize,
+      trigram: config.recall.trigramPrefilterEnabled,
+    });
     runWriteOpenIntegrityGate(db, config.dbPath);
     ensureFts5(db);
     return { db, vecVersion: loadVec ? loadVecExtension(db) : null, release };
@@ -596,17 +747,23 @@ export async function abandonWriteDatabase(
  * matters for `reindexVault`: after the temp-file rename swap, any
  * orphan `*-wal` next to the new main would trigger
  * SQLITE_IOERR_SHORT_READ on the next open.
+ *
+ * A switch another open connection blocks (SQLITE_BUSY or SQLITE_LOCKED:
+ * a search still reading, as on the first search after an in-place
+ * upgrade) is not a failure: the index stays in WAL mode, which every
+ * connection reads correctly, SQLite's automatic checkpoint keeps the log
+ * bounded, the swap moves the log with its database
+ * (`sqlite-file-set.ts`), and the next write close finishes the switch.
+ * Any other failure does not fail the close either, but is reported.
  */
 export function consolidateWal(db: Database): void {
   try {
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     db.exec("PRAGMA journal_mode = DELETE");
   } catch (e) {
-    // Don't fail the close, but make the failure visible — an
-    // unconsolidated WAL is the exact thing that triggers
-    // SQLITE_IOERR_SHORT_READ after a `reindexVault` rename swap.
+    if (isBusyError(e)) return;
     const msg = e instanceof Error ? e.message : String(e);
     // eslint-disable-next-line no-console
-    console.error(`search store: WAL consolidation failed on close: ${msg}`);
+    console.error(`search index: WAL consolidation failed on close: ${msg}`);
   }
 }

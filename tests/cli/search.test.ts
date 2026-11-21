@@ -71,6 +71,12 @@ test("search status --json after an index returns documents count", async () => 
   expect(obj.exists).toBe(true);
   expect(obj.documents).toBe(2);
   expect(obj.schema_version).toBe(LATEST_SCHEMA_VERSION);
+  // The size on disk and what a rebuild of it is expected to take.
+  expect(obj.size_on_disk_bytes).toBeGreaterThan(0);
+  expect(obj.rebuild_estimate).toMatchObject({ documents: 2, note_files: 2, store_records: 0 });
+  const human = await runCli(["search", "status"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  expect(human.stdout).toMatch(/size_on_disk: +\d/u);
+  expect(human.stdout).toMatch(/rebuild_estimate: +about .* built in /u);
 });
 
 test("search query returns a human-readable hit for indexed content", async () => {
@@ -203,7 +209,9 @@ test("search reindex rebuilds the index atomically", async () => {
   });
   expect(out.returncode).toBe(0);
   expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite"))).toBe(true);
-  expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite.bak"))).toBe(true);
+  // The previous index is removed once the new one is live and verified.
+  expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite.bak"))).toBe(false);
+  expect(existsSync(join(vault, ".open-second-brain", "brain.sqlite.new"))).toBe(false);
 });
 
 test("unknown flag exits with code 2", async () => {

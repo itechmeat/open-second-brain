@@ -75,7 +75,9 @@ let db: Database;
 
 beforeEach(() => {
   db = new Database(":memory:");
-  applyMigrations(db);
+  // The trigram lane is probed below; its shadow is built only for an
+  // opener that reads it (schema v18).
+  applyMigrations(db, { trigram: true });
   if (VEC_AVAILABLE) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const vec = require("sqlite-vec") as { getLoadablePath(): string };
@@ -91,7 +93,7 @@ beforeEach(() => {
       .get(doc.path, `hash-${doc.path}`, 0, 0, NOW, NOW, NOW)!.id;
     const row = db
       .query<{ id: number }, [number, string, string, string, string, string]>(
-        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+        "INSERT INTO chunks(document_id, chunk_index, content, fts_override, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
           "VALUES (?, 0, ?, ?, ?, 1, 1, 3, ?, ?) RETURNING id",
       )
       .get(docId, doc.chunkText, doc.chunkText, `chash-${doc.path}`, NOW, NOW)!;
@@ -207,7 +209,7 @@ describe("trigram lane prefix pushdown", () => {
       )
       .get("\u{10FFFF}\u{10FFFF}sentinel.md", "hash-sentinel", 0, 0, NOW, NOW, NOW)!.id;
     db.query(
-      "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+      "INSERT INTO chunks(document_id, chunk_index, content, fts_override, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
         "VALUES (?, 0, 'apple sentinel rind', 'apple sentinel rind', 'chash-sentinel', 1, 1, 3, ?, ?)",
     ).run(docId, NOW, NOW);
 

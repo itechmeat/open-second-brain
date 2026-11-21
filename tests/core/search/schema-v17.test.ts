@@ -62,15 +62,14 @@ function rewindToV16(): void {
 }
 
 describe("schema v17", () => {
-  test("is the latest migration", () => {
-    expect(LATEST_SCHEMA_VERSION).toBe(17);
-    expect(MIGRATIONS[MIGRATIONS.length - 1]!.version).toBe(17);
+  test("is a released migration", () => {
+    expect(MIGRATIONS.some((m) => m.version === 17)).toBe(true);
   });
 
   test("a fresh index carries the store tables and an index generation", () => {
     const db = new Database(":memory:");
     try {
-      expect(applyMigrations(db)).toBe(17);
+      expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
       const present = tables(db);
       expect(present.has("records")).toBe(true);
       expect(present.has("store_watermarks")).toBe(true);
@@ -111,12 +110,12 @@ describe("schema v17", () => {
     const db = new Database(dbPath);
     try {
       expect(readSchemaVersion(db)).toBe(16);
-      expect(applyMigrations(db)).toBe(17);
+      expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
       expect(tables(db).has("records")).toBe(true);
       expect(sourceOf(db, "notes/heron.md")).toBe("note");
       expect(sourceOf(db, "Brain/signals/sig-1.md")).toBe("brain");
       // Running it again changes nothing.
-      expect(applyMigrations(db)).toBe(17);
+      expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
     } finally {
       db.close();
     }

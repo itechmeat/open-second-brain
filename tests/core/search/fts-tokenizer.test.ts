@@ -92,7 +92,10 @@ describe("applyMigrations tokenizer wiring", () => {
 
   test("the CJK trigram path stays trigram regardless of the tokenizer config", () => {
     const db = new Database(":memory:");
-    applyMigrations(db, { ftsTokenize: buildFtsTokenize({ stemmer: "porter", diacritics: "0" }) });
+    applyMigrations(db, {
+      ftsTokenize: buildFtsTokenize({ stemmer: "porter", diacritics: "0" }),
+      trigram: true,
+    });
     expect(ftsSql(db, "chunk_trigram")).toContain("tokenize='trigram'");
     expect(ftsSql(db, "chunk_trigram")).not.toContain("porter");
     db.close();

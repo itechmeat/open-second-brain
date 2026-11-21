@@ -25,6 +25,8 @@
  * It never writes: no store, no index, no cache, no lock, no log event.
  */
 
+import { SEARCHABLE_STORE_STREAMS } from "../search/brain-store/constants.ts";
+import { estimateIndexBuild } from "../search/index-estimate.ts";
 import { join, relative, sep } from "node:path";
 
 import { DIGEST_ROSTER_WINDOW_DAYS } from "../store/constants.ts";
@@ -86,6 +88,8 @@ export interface SurfaceReport {
   readonly files: number;
   readonly bytes: number;
   readonly items: number;
+  /** Store records sent to the search index's document stream. */
+  readonly searchable_documents: number;
   /** Per-partition item counts; null for a surface that is not a stream. */
   readonly partitions: PartitionCounts | null;
   readonly unparseable: number;
@@ -140,11 +144,28 @@ export interface MigrationDryRun {
   readonly unparseable_not_listed: number;
   readonly unmapped: ReadonlyArray<UnmappedEntry>;
   /** What the sync tool's conflict copies and temp files would become. */
-  readonly sync_copies: SyncCopyReport;
+  readonly sync_copies: SyncCopyReport & {
+    readonly store_records_imported: number;
+    readonly searchable_documents_imported: number;
+  };
   readonly totals: {
     readonly items: number;
     readonly unparseable: number;
     readonly unmapped: number;
+  };
+  /**
+   * What the search index built from the store after the switch is
+   * expected to take (`search/index-estimate.ts`): the records the items
+   * of a stream or blob surface become (an item of a dropped, backed-up,
+   * device-local or vault-file surface becomes none, so `store_records`
+   * can be below `totals.items`), and the items of a searchable stream an
+   * indexed document. The vault's notes are not counted and come on top.
+   */
+  readonly search_index_estimate: {
+    readonly store_records: number;
+    readonly documents: number;
+    readonly bytes: number;
+    readonly seconds: number;
   };
 }
 
@@ -173,8 +194,10 @@ function scanEntry(
   entry: CatalogueEntry,
   families: ReadonlyMap<string, Set<string>>,
   chunk: () => void,
-): { tally: ScanTally; partitions: PartitionCounts | null } {
+): { tally: ScanTally; partitions: PartitionCounts | null; records: number; documents: number } {
   const tally = emptyTally();
+  let records = 0;
+  let documents = 0;
   // Every item the scan reaches counts toward the chunk, as in the pass.
   tally.onVisit = chunk;
   const destination = recordDestination(entry);
@@ -183,12 +206,14 @@ function scanEntry(
   for (const locator of entry.locators) {
     scanLocator(locator, tally, (item) => {
       if (destination === null || partitions === null) return;
-      const records = itemRecords(vault, destination, item);
-      partitions[itemPartition(records)] += 1;
-      families.get(item.path)?.add(recordsSignature(records));
+      const built = itemRecords(vault, destination, item);
+      partitions[itemPartition(built)] += 1;
+      families.get(item.path)?.add(recordsSignature(built));
+      records += built.length;
+      if (isSearchableDestination(destination)) documents += built.length;
     });
   }
-  return { tally, partitions };
+  return { tally, partitions, records, documents };
 }
 
 /**
@@ -202,8 +227,13 @@ function planSyncCopies(
   leftovers: SyncLeftovers,
   families: ReadonlyMap<string, Set<string>>,
   onProblem: (surface: string, problem: ScanTally["problems"][number]) => void,
-): SyncCopyReport {
+): SyncCopyReport & {
+  readonly store_records_imported: number;
+  readonly searchable_documents_imported: number;
+} {
   const copies = new SyncCopyTally(leftovers.temps, leftovers.inFolders);
+  let storeRecordsImported = 0;
+  let searchableDocumentsImported = 0;
   const fileVerdicts = fileCopyVerdicts(leftovers.copies);
   for (const copy of leftovers.copies) {
     copies.copy(copy);
@@ -219,13 +249,16 @@ function planSyncCopies(
       // Matched against the original and the earlier copies, as the pass does.
       const mine: string[] = [];
       scanCopyLines(copy.locator, copy.path, copy.original, tally, (item) => {
-        const signature = recordsSignature(itemRecords(vault, destination, item));
+        const built = itemRecords(vault, destination, item);
+        const signature = recordsSignature(built);
         if (family.has(signature)) {
           copies.identical(copy);
           return;
         }
         mine.push(signature);
         copies.imported(copy);
+        storeRecordsImported += built.length;
+        if (isSearchableDestination(destination)) searchableDocumentsImported += built.length;
       });
       for (const signature of mine) family.add(signature);
       for (const problem of tally.problems) onProblem(copy.entry.id, problem);
@@ -240,14 +273,27 @@ function planSyncCopies(
     else if (destination === null) copies.kept(copy, "its original is gone");
     else {
       try {
-        itemRecords(vault, destination, verdict.item);
+        const built = itemRecords(vault, destination, verdict.item);
         copies.imported(copy);
+        storeRecordsImported += built.length;
+        if (isSearchableDestination(destination)) searchableDocumentsImported += built.length;
       } catch (error) {
         copies.kept(copy, (error as Error).message);
       }
     }
   }
-  return copies.report();
+  return {
+    ...copies.report(),
+    store_records_imported: storeRecordsImported,
+    searchable_documents_imported: searchableDocumentsImported,
+  };
+}
+
+function isSearchableDestination(destination: ReturnType<typeof recordDestination>): boolean {
+  return (
+    destination?.to === DESTINATION_KIND.stream &&
+    SEARCHABLE_STORE_STREAMS.has(destination.stream as never)
+  );
 }
 
 export interface MigrationDryRunOptions {
@@ -275,6 +321,7 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
   let problems = 0;
   const unreadableFolders = new Set<string>();
   let items = 0;
+  let storeRecords = 0;
 
   const catalogue = migrationCatalogue(vault);
   const leftovers = findSyncLeftovers(vault, catalogue);
@@ -291,7 +338,8 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
   };
   for (const entry of catalogue) {
     allLocators.push(...entry.locators);
-    const { tally, partitions } = scanEntry(vault, entry, families, chunk);
+    const { tally, partitions, records, documents } = scanEntry(vault, entry, families, chunk);
+    storeRecords += records;
     for (const [device, seen] of tally.devices) {
       const total = devices.get(device) ?? { files: 0, items: 0, lastSeenMs: 0 };
       total.files += seen.files;
@@ -322,6 +370,7 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
       files: tally.files,
       bytes: tally.bytes,
       items: tally.items,
+      searchable_documents: documents,
       partitions,
       unparseable: tally.problems.length,
     });
@@ -370,5 +419,24 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
     unmapped,
     sync_copies: syncCopies,
     totals: { items, unparseable: problems, unmapped: unmapped.length },
+    search_index_estimate: searchIndexEstimate(
+      storeRecords + syncCopies.store_records_imported,
+      surfaces.reduce((sum, surface) => sum + surface.searchable_documents, 0) +
+        syncCopies.searchable_documents_imported,
+    ),
+  };
+}
+
+/** The dry run's estimate of the index the switch rebuilds from the store. */
+function searchIndexEstimate(
+  storeRecords: number,
+  documents: number,
+): MigrationDryRun["search_index_estimate"] {
+  const estimate = estimateIndexBuild({ storeRecords, documents, noteFiles: null });
+  return {
+    store_records: storeRecords,
+    documents,
+    bytes: estimate.bytes,
+    seconds: estimate.seconds,
   };
 }

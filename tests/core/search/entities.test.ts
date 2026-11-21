@@ -81,12 +81,28 @@ test("a long unbroken letter run does not make extraction backtrack catastrophic
   );
 });
 
-test("making the letter run atomic changed no extraction result", () => {
-  // The guard above only says the regex is fast. This says it is the same
-  // regex: every shape the mixed-script alternatives exist to catch still
-  // comes back, across scripts.
+test("the mixed-script rule still catches every shape it exists for", () => {
+  // The guard above only says the regex is fast. This says what it
+  // matches: every shape the mixed-script alternatives exist to catch
+  // still comes back, across scripts, as one whole token.
   expect(extractEntities("H2O and GPT4 and v2 and NASA")).toEqual(["h2o", "gpt4", "nasa", "v2"]);
   expect(extractEntities("東京2020 and 2020東京")).toEqual(["東京2020", "2020東京"]);
   expect(extractEntities("тест2 and 2тест")).toEqual(["тест2", "2тест"]);
-  expect(extractEntities("abc123def456")).toEqual(["abc123", "def456"]);
+  expect(extractEntities("abc123def456")).toEqual(["abc123def456"]);
+});
+
+test("a rule never starts inside a token, so ids and timestamps give no fragments", () => {
+  // A brain store record carries a device id, hook names and timestamps in
+  // every chunk. Matched from inside the token they gave `a9`, `dc68`,
+  // `serpromptsubmit` and `t12`: a third of all entity rows on a
+  // real-size store, each bridging tens of thousands of records.
+  const e = extractEntities(
+    "device: a9dc68ab\nhook: UserPromptSubmit then SubagentStop\ntimestamp: 2026-05-20T12:45:59Z",
+  );
+  expect(e).toContain("a9dc68ab");
+  expect(e).toContain("userpromptsubmit");
+  expect(e).toContain("subagentstop");
+  for (const fragment of ["a9", "dc68", "serpromptsubmit", "ubagentstop", "t12"]) {
+    expect(e).not.toContain(fragment);
+  }
 });

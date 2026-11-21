@@ -304,7 +304,7 @@ describe("kind pushdown on the keyword lane", () => {
         [1, "lattice delta payload section", "section"],
       ] as const) {
         db.query(
-          "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+          "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_override, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
             "VALUES (?, ?, ?, ?, ?, ?, 1, 1, 3, 'n', 'n')",
         ).run(docId, index, kind, text, text, `h${index}`);
       }
@@ -346,7 +346,7 @@ describe.skipIf(!VEC_AVAILABLE)("kind and pushdown on the semantic lane", () => 
           .get(path, type)!.id;
         const row = db
           .query<{ id: number }, [number]>(
-            "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+            "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_override, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
               "VALUES (?, 0, 'page', 'x', 'x', 'h', 1, 1, 1, 'n', 'n') RETURNING id",
           )
           .get(docId)!;
@@ -773,7 +773,7 @@ describe("the unpromoted attribute narrowing (document_attributes)", () => {
           "VALUES (?, 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
       );
       const insertChunk = db.query(
-        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+        "INSERT INTO chunks(document_id, chunk_index, content, fts_override, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
           "VALUES (?, 0, ?, ?, 'h', 1, 1, 3, 'n', 'n')",
       );
       const insertAttr = db.query(

@@ -71,6 +71,9 @@ test("enabled trigram prefilter surfaces a substring match the keyword lane miss
     trigramPrefilterEnabled: true,
     trigramPrefilterMinChunks: 0,
   });
+  // Turning the prefilter on takes effect at the next index run, which
+  // builds the trigram shadow over the chunks already indexed (schema v18).
+  await indexVault(enabledCfg, {});
   const enabled = await search(enabledCfg, { query: "index", limit: 10 });
 
   const disabledPaths = new Set(disabled.results.map((r) => r.path));

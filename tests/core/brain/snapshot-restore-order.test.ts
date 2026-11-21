@@ -443,26 +443,50 @@ describe("a failure in the middle of the swap", () => {
     );
   });
 
-  test("a -wal that cannot be removed after the store swap undoes the whole restore", () => {
+  test("a -wal that cannot be moved aside with the live store undoes the whole restore", () => {
     snapshotThenDiverge();
     // A log left beside the live store, held open the way a Windows
-    // reader holds it: the removal fails on every attempt.
+    // reader holds it: moving it fails on every attempt.
     const wal = `${dbPath}-wal`;
     writeFileSync(wal, "");
-    const realUnlink = fs.unlinkSync;
-    const spy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
-      if (String(path) === wal) throw fsError("EBUSY", wal);
-      realUnlink(path);
+    expectUntouchedOnDisk(
+      () =>
+        withFailingRename(
+          (from) => from === wal,
+          () => restoreSnapshot(vault, RUN_ID),
+        ),
+      /could not move the write-ahead log file .*-wal aside .*the restored store must not open beside it.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
+    );
+    expect(existsSync(wal)).toBe(true);
+  });
+
+  test("the outgoing store's -wal moves to .bak with it, so a committed frame is not replayed into the restored store", () => {
+    snapshotThenDiverge();
+    const wal = `${dbPath}-wal`;
+    writeFileSync(wal, "frames of the pre-restore store\n");
+
+    restoreSnapshot(vault, RUN_ID);
+
+    expect(existsSync(wal)).toBe(false);
+    expect(readFileSync(`${dbPath}.bak-wal`, "utf8")).toBe("frames of the pre-restore store\n");
+  });
+
+  test("a lone -shm beside the restored store does not block the snapshot swap", () => {
+    snapshotThenDiverge();
+    const realRename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      realRename(from, to);
+      if (String(from) === dbPath && String(to) === `${dbPath}.bak`) {
+        writeFileSync(`${dbPath}-shm`, "orphan shared-memory index");
+      }
     });
     try {
-      expectUntouched(
-        () => restoreSnapshot(vault, RUN_ID),
-        /could not remove .*-wal .*the store swap was undone.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
-      );
+      restoreSnapshot(vault, RUN_ID);
     } finally {
       spy.mockRestore();
     }
-    expect(existsSync(wal)).toBe(true);
+    expect(existsSync(dbPath)).toBe(true);
+    expect(markerTableExists()).toBe(false);
   });
 });
 
@@ -853,30 +877,41 @@ describe("the gated restore holds the store lock from the recovery point through
   });
 });
 
-describe("a -wal removal failure with no live store before the restore", () => {
-  test("does not claim a pre-restore store was put back", () => {
+describe("a -wal with no live store before the restore", () => {
+  test("moves aside with nothing else, and the restore lands", () => {
+    snapshotThenDiverge();
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    const wal = `${dbPath}-wal`;
+    writeFileSync(wal, "orphan log\n");
+
+    restoreSnapshot(vault, RUN_ID);
+
+    expect(existsSync(dbPath)).toBe(true);
+    expect(existsSync(wal)).toBe(false);
+    expect(readFileSync(`${dbPath}.bak-wal`, "utf8")).toBe("orphan log\n");
+    expect(existsSync(`${dbPath}.bak`)).toBe(false);
+  });
+
+  test("that cannot be moved does not claim a pre-restore store was put back", () => {
     snapshotThenDiverge();
     for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
     const wal = `${dbPath}-wal`;
     writeFileSync(wal, "");
-    const realUnlink = fs.unlinkSync;
-    const spy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
-      if (String(path) === wal) throw fsError("EBUSY", wal);
-      realUnlink(path);
-    });
     let threw: unknown = null;
     try {
-      restoreSnapshot(vault, RUN_ID);
+      withFailingRename(
+        (from) => from === wal,
+        () => restoreSnapshot(vault, RUN_ID),
+      );
     } catch (err) {
       threw = err;
-    } finally {
-      spy.mockRestore();
     }
     expect(threw).toBeInstanceOf(BrainSnapshotError);
     const message = (threw as Error).message;
-    expect(message).toMatch(/the store swap was undone, and no store was live before it/u);
-    expect(message).not.toMatch(/back in place/u);
+    expect(message).toMatch(/could not move the write-ahead log file/u);
+    expect(message).not.toMatch(/back in place|pre-restore store is at/u);
     expect(existsSync(dbPath)).toBe(false);
+    expect(existsSync(wal)).toBe(true);
   });
 });
 
@@ -914,6 +949,60 @@ describe("the recovery point archives exactly the store the restore replaces", (
     // The discarded override store comes back from the recovery point.
     restoreSnapshot(vault, res.recoveryPoint.runId, store);
     expect(tablesOf(store.derivedStorePath)).toContain("override_marker");
+  });
+
+  test("a committed restore whose recovery point holds the replaced store leaves no .bak copy", () => {
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    addTable(dbPath, "late_marker");
+
+    const res = restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+
+    expect(tablesOf(dbPath)).not.toContain("late_marker");
+    expect(recordedStore(res.recoveryPoint.runId).included).toBe(true);
+    expect(existsSync(`${dbPath}.bak`)).toBe(false);
+    // The recovery point is the copy, and it still brings the store back.
+    restoreSnapshot(vault, res.recoveryPoint.runId);
+    expect(tablesOf(dbPath)).toContain("late_marker");
+  });
+
+  for (const damage of ["missing", "altered"] as const) {
+    test(`a recovery point whose store archive is ${damage} keeps the replaced store at .bak`, () => {
+      createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+      addTable(dbPath, "late_marker");
+      const snapshots = brainDirs(vault).snapshots;
+      const ownArchive = `${RUN_ID}.store.sqlite.zst`;
+      const realRename = fs.renameSync;
+      const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        realRename(from, to);
+        // The restored store has just gone live: the recovery point's
+        // archive of the replaced store is lost or damaged before cleanup.
+        if (String(to) === dbPath && String(from).startsWith(`${dbPath}.restore-`)) {
+          for (const name of readdirSync(snapshots)) {
+            if (!name.endsWith(".store.sqlite.zst") || name === ownArchive) continue;
+            const path = join(snapshots, name);
+            if (damage === "missing") fs.rmSync(path);
+            else writeFileSync(path, "not the archive that was recorded");
+          }
+        }
+      });
+      try {
+        restoreSnapshotWithRecoveryPoint(vault, RUN_ID);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(tablesOf(dbPath)).not.toContain("late_marker");
+      expect(tablesOf(`${dbPath}.bak`)).toContain("late_marker");
+    });
+  }
+
+  test("a restore without a recovery point keeps the replaced store at .bak", () => {
+    createSnapshot(vault, RUN_ID, { reason: DREAM, derivedStore: COVERED });
+    addTable(dbPath, "late_marker");
+
+    restoreSnapshot(vault, RUN_ID);
+
+    expect(tablesOf(`${dbPath}.bak`)).toContain("late_marker");
   });
 
   test("a store the restore replaces is archived even when the policy leaves it out", () => {
@@ -1352,6 +1441,7 @@ describe("the store family kept out of the tree swap is a closed list", () => {
       "index.sqlite.restore-4242-0a1b2c3d",
       "index.sqlite.restore-4242-0a1b2c3d-wal",
       "index.sqlite.building.json",
+      "index.sqlite.parking",
       "index.sqlite.building.reader-4242-0a1b2c3d",
     ];
     for (const name of family)
@@ -1369,6 +1459,7 @@ describe("the store family kept out of the tree swap is a closed list", () => {
       "index.sqlite.takeover",
       "index.sqlite.1234.tmp",
       "index.sqlite.building.json-wal",
+      "index.sqlite.parking-wal",
     ];
     for (const name of content) {
       expect(isStoreFamilyEntry(name, "index.sqlite", false, "linux")).toBe(false);
@@ -1581,6 +1672,28 @@ describe("the outgoing store's rollback journal moves with it", () => {
       /could not move the rollback journal .*the restored store must not open beside it.*every Brain\/ rename was undone, so Brain\/ and the derived store are as they were/u,
     );
     expect(readFileSync(journal, "utf8")).toBe(HOT_JOURNAL);
+  });
+
+  test("a park whose undo fails too is reported as a torn store, naming where the store was left", () => {
+    snapshotThenDiverge();
+    const journal = `${dbPath}-journal`;
+    const backup = `${dbPath}.bak`;
+    writeFileSync(journal, HOT_JOURNAL);
+    const before = liveState();
+    const message = refusal(() =>
+      withFailingRename(
+        (from, to) => from === journal || (from === backup && to === dbPath),
+        () => restoreSnapshot(vault, RUN_ID),
+      ),
+    );
+    expect(message).toMatch(/could not move the rollback journal/u);
+    expect(message).toContain(`stays at ${backup}`);
+    expect(message).toMatch(
+      /Brain\/ is as it was before the restore, but the derived store is not/u,
+    );
+    expect(treeOf(brainDirs(vault).brain)).toEqual(before.brain);
+    expect(existsSync(dbPath)).toBe(false);
+    expect(sha256Hex(readFileSync(backup))).toBe(before.store);
   });
 
   test("a journal that cannot be put back is reported as a torn store, with Brain/ undone", () => {

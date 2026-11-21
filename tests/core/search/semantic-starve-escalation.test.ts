@@ -49,7 +49,7 @@ function seedStarvedStore(nearSections: number): Database {
       "VALUES (?, 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
   );
   const insertChunk = db.query<{ id: number }, [number, string]>(
-    "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, " +
+    "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_override, content_hash, " +
       "start_line, end_line, token_count, created_at, updated_at) " +
       "VALUES (?, 0, ?, 'x', 'x', 'h', 1, 1, 1, 'n', 'n') RETURNING id",
   );
@@ -76,7 +76,7 @@ function seedPageChunk(db: Database): void {
     .get()!.id;
   const rowId = db
     .query<{ id: number }, [number]>(
-      "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, " +
+      "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_override, content_hash, " +
         "start_line, end_line, token_count, created_at, updated_at) " +
         "VALUES (?, 0, 'page', 'x', 'x', 'h', 1, 1, 1, 'n', 'n') RETURNING id",
     )

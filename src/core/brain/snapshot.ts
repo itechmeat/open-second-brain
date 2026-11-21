@@ -124,7 +124,12 @@ import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { compareKey, foldsCase, isStoreFamilyEntry } from "../search/store-family.ts";
 
 export { isStoreFamilyEntry };
-import { runIntegrityCheck } from "../search/store/lifecycle.ts";
+import {
+  clearParkMarker,
+  restoreParkedIndexUnderLock,
+  runIntegrityCheck,
+  writeParkMarker,
+} from "../search/store/lifecycle.ts";
 import {
   acquireWriterLeaseSync,
   acquireWriterLockSync,
@@ -161,6 +166,13 @@ import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 import { closeDatabase } from "../sqlite-close.ts";
+import {
+  parkSqliteFileSet,
+  sqliteJournalsPresent,
+  SQLITE_SIBLING_SUFFIXES,
+  SqliteFileSetMoveError,
+  unparkSqliteFileSet,
+} from "../sqlite-file-set.ts";
 import { machineStateRoot } from "../state/machine-state.ts";
 
 // ----- Errors ---------------------------------------------------------------
@@ -1424,8 +1436,12 @@ function assertStoreIsSound(sourcePath: string, runId: string): void {
   try {
     const verdict = runIntegrityCheck(db);
     if (!verdict.ok) {
+      // A scan that could not complete vouches for nothing either: the
+      // store is not archived, but it is not called damaged.
       throw new BrainSnapshotStoreError(
-        `${sourcePath} failed a structural integrity check: ${verdict.fault}`,
+        verdict.inconclusive === true
+          ? `${sourcePath} could not be checked for integrity: ${verdict.fault}`
+          : `${sourcePath} failed a structural integrity check: ${verdict.fault}`,
         runId,
         SNAPSHOT_STORE_EXCLUSION.integrity_fault,
       );
@@ -2673,10 +2689,15 @@ export function restoreSnapshot(
     // holding it is a refusal like any other, and it must arrive while
     // nothing has been replaced yet.
     const lock = store === null ? null : acquireStoreLockForRestore(store.target, runId);
+    // A rebuild that died between the renames of its swap left the index
+    // parked with no live file: it is put back before anything reads the
+    // live store, so the recovery point archives it and the swap below
+    // parks it, instead of treating it as an earlier `.bak` to replace.
     let evidence: RecoveryPointEvidence | null = null;
     let committed = false;
     let primary: { readonly err: unknown } | null = null;
     try {
+      if (store !== null && lock !== null) restoreParkedIndexUnderLock(store.target, lock.lease);
       // The last moment at which the live state still exists. A throw
       // here propagates and nothing has been replaced yet, which is the
       // same abort-before-the-operation rule the destructive gate applies.
@@ -2768,10 +2789,30 @@ export function restoreSnapshot(
       const swap = held.swap;
       if (swap === undefined)
         throw new BrainSnapshotError("restore: the Brain/ swap did not run", runId);
+      let outgoingStore: string | null = null;
       if (store !== null) {
+        const stagedStore = store;
         try {
-          commitDerivedStoreSwap(store);
+          const commit = (): string => {
+            if (lock !== null) assertStoreLeaseHeld(lock.lease, runId);
+            return commitDerivedStoreSwap(stagedStore, () => {
+              if (lock !== null) assertStoreLeaseHeld(lock.lease, runId);
+            });
+          };
+          outgoingStore =
+            lock === null
+              ? commit()
+              : keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, commit);
         } catch (err) {
+          // Two failures here can come after the restored store was renamed
+          // in: removing the park record (a file this swap just wrote) and
+          // the lease check `keepWriterLeasesFresh` makes when `commit`
+          // returns (a takeover needs the lock gone stale while the worker
+          // refreshed it). Neither is reachable without outside tampering or
+          // a suspended process, and either stays on the safe side: the
+          // restore reports failure, the pre-restore store stays at its
+          // parked name, nothing is deleted, and a recovery point taken for
+          // this restore holds a copy of it.
           throw swap.fail(`the derived store swap failed (${errorText(err)})`, err, {
             storeIntact: !(err instanceof StoreSwapTornError),
           });
@@ -2779,6 +2820,25 @@ export function restoreSnapshot(
       }
       committed = true;
       swap.finish();
+      if (store !== null && evidence !== null && outgoingStore !== null) {
+        const committedStore = store;
+        const committedEvidence = evidence;
+        const committedOutgoing = outgoingStore;
+        const cleanup = (): void => {
+          if (lock !== null) assertStoreLeaseHeld(lock.lease, runId);
+          discardCoveredOutgoingStore(
+            vault,
+            committedEvidence,
+            committedStore.target,
+            committedOutgoing,
+            () => {
+              if (lock !== null) assertStoreLeaseHeld(lock.lease, runId);
+            },
+          );
+        };
+        if (lock === null) cleanup();
+        else keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, cleanup);
+      }
     } catch (err) {
       primary = { err };
       throw err;
@@ -3334,24 +3394,15 @@ function stageDerivedStore(
   }
 
   const archive = snapshotStorePath(vault, runId);
-  if (!existsSync(archive)) {
-    // Unreachable through `restoreSnapshot`, which refuses this in its
-    // pre-flight. Kept because a store swap must never begin against an
-    // archive that is not there.
+  // An absent archive is unreachable through `restoreSnapshot`, which
+  // refuses it in its pre-flight; kept because a store swap must never
+  // begin against an archive that is not there.
+  const archiveProblem = derivedStoreArchiveProblem(vault, runId, record);
+  if (archiveProblem !== null) {
     throw new BrainSnapshotError(
-      `manifest records a derived-store archive but ${archive} is absent`,
+      `${archiveProblem}; refusing before the Brain tree is touched`,
       runId,
     );
-  }
-  if (record.archive_sha256 !== null) {
-    const actual = sha256Hex(readFileSync(archive));
-    if (actual !== record.archive_sha256) {
-      throw new BrainSnapshotError(
-        `the derived-store archive ${archive} does not match the digest its manifest recorded ` +
-          `(${record.archive_sha256}, found ${actual}); refusing before the Brain tree is touched`,
-        runId,
-      );
-    }
   }
   mkdirSync(dirname(target), { recursive: true });
   // A name of this process's own: two restores staging at once must not
@@ -3501,6 +3552,75 @@ function assertRecoveryPointCoversTarget(
 }
 
 /**
+ * Remove the outgoing store a committed restore parked at `.bak` when the
+ * recovery point holds a copy of it: the manifest records the store as
+ * included, from this very path, and the archive is on disk and matches
+ * its recorded digest (`derivedStoreArchiveProblem`). The `.bak`
+ * is then a second copy of an index that can be the size of the vault's
+ * whole brain store, and the recovery point is the one that restores it
+ * together with the `Brain/` tree it belongs to. Without such a recovery
+ * point the `.bak` is the only copy, and it stays. Best effort: the
+ * restore has committed, and a file that cannot be removed now (a reader
+ * holding it on Windows) is removed by the next rebuild of the index.
+ */
+function discardCoveredOutgoingStore(
+  vault: string,
+  evidence: RecoveryPointEvidence,
+  target: string,
+  outgoing: string,
+  assertOwnership: () => void,
+): void {
+  const record = readManifestSidecar(vault, evidence.runId)?.derived_store ?? null;
+  if (record === null || !record.included || record.source_path !== target) return;
+  if (!existsSync(evidence.path)) return;
+  // The copy is the derived-store archive, checked as a restore of the
+  // recovery point would check it; one that is missing or does not match
+  // its digest is no copy, and the outgoing store stays.
+  if (derivedStoreArchiveProblem(vault, evidence.runId, record) !== null) return;
+  for (const suffix of [...SQLITE_SIBLING_SUFFIXES, ""]) {
+    try {
+      assertOwnership();
+      rmSync(outgoing + suffix, { force: true });
+    } catch {
+      // Left for the next rebuild, which removes a `.bak` it does not need.
+      // A sibling left here without its main file is never adopted: every
+      // swap removes the siblings at a free parked name before it parks
+      // there, and refuses when it cannot.
+    }
+  }
+}
+
+/**
+ * Why the derived-store archive of `runId` cannot stand for the store its
+ * manifest record names, or null when it can: the archive is on disk and,
+ * when the record carries a digest, matches it. The one check both a
+ * restore (before it swaps the archive in) and a committed restore (before
+ * it removes the outgoing store the archive copies) rely on.
+ */
+function derivedStoreArchiveProblem(
+  vault: string,
+  runId: string,
+  record: { readonly archive_sha256: string | null },
+): string | null {
+  const archive = snapshotStorePath(vault, runId);
+  if (!existsSync(archive)) {
+    return `manifest records a derived-store archive but ${archive} is absent`;
+  }
+  if (record.archive_sha256 === null) return null;
+  let actual: string;
+  try {
+    actual = sha256Hex(readFileSync(archive));
+  } catch (err) {
+    return `the derived-store archive ${archive} could not be read (${errorText(err)})`;
+  }
+  if (actual === record.archive_sha256) return null;
+  return (
+    `the derived-store archive ${archive} does not match the digest its manifest recorded ` +
+    `(${record.archive_sha256}, found ${actual})`
+  );
+}
+
+/**
  * Release the writer lock {@link acquireStoreLockForRestore} took.
  *
  * A failed release must not hide what happened before it. When the
@@ -3569,165 +3689,153 @@ class StoreSwapTornError extends Error {
  * Rename the staged store over the live one. The caller holds the writer
  * lock.
  *
- * The same swap discipline `reindexVault` uses: the outgoing file is kept
- * as `.bak`, then a single atomic rename puts the replacement in place.
- * If that second rename fails, the `.bak` is renamed back, so the live
- * store is untouched; a {@link StoreSwapTornError} means even that failed.
- *
- * A rollback journal (`-journal`, DELETE journal mode, which the store
- * uses on remote filesystems and SQLite leaves hot after a crash) belongs
- * to the database it was written for and travels with it: it is moved to
- * `.bak-journal` right after the outgoing store moves to `.bak`, and back
- * before the store on every undo. Left at the live path, SQLite would
- * replay the old database's journal over the replacement on its next
- * open, which is the database/journal mismatch it documents as a cause of
- * corruption. A journal with no live store beside it moves the same way.
- * A journal that cannot be moved undoes the swap like any other failed
- * step, so the replacement never lands beside it.
- *
- * The WAL siblings of the OUTGOING file are removed after the swap. The
- * decompressed archive came from `VACUUM INTO` and is a complete
- * database on its own; an orphan `-wal` from the file it replaced would
- * make the next open fail with SQLITE_IOERR_SHORT_READ, which is the
- * exact failure `consolidateWal` exists to prevent on the reindex path.
- * A removal that still fails after the Windows retry budget (a reader
- * holding the file) is not a warning: the swap is undone, the new store
- * back at its staging name and the `.bak` back at the live path, and the
- * error is thrown so the caller undoes the Brain/ renames too.
+ * The swap discipline every rename of one SQLite database over another
+ * follows (`sqlite-file-set.ts`, shared with `reindexVault`): the live
+ * store moves aside to `.bak` as a set - main file, then its `-wal`,
+ * `-shm` and `-journal` - and the replacement is renamed in only over a
+ * live path that has no sibling left. A sibling belongs to the database
+ * whose name it carries: an outgoing `-wal` with committed frames, or a
+ * hot rollback journal (DELETE journal mode, which the store uses on
+ * remote filesystems), left at the live path would be replayed or rolled
+ * back over the replacement on its next open, which corrupts it. Moved
+ * with the store instead, the `.bak` keeps its own last commits. A
+ * sibling with no live store beside it moves the same way. Any step that
+ * fails undoes the swap, so the live store is untouched and the caller
+ * undoes the Brain/ renames too; a {@link StoreSwapTornError} means even
+ * the undo failed.
  */
-function commitDerivedStoreSwap(store: StagedDerivedStore): void {
+function commitDerivedStoreSwap(store: StagedDerivedStore, assertOwnership: () => void): string {
   const { target, incoming } = store;
-  const outgoing = `${target}${RESTORE_BACKUP_SUFFIX}`;
-  const journal = `${target}${ROLLBACK_JOURNAL_SUFFIX}`;
-  const outgoingJournal = `${outgoing}${ROLLBACK_JOURNAL_SUFFIX}`;
-  const moved: MovedOutgoing = { target, outgoing, store: false, journal: false };
-  try {
-    // A `.bak` and its journal from an earlier swap are replaced together:
-    // the earlier journal must not end up beside the store moved aside now.
-    rmSync(outgoing, { force: true });
-    rmSync(outgoingJournal, { force: true });
-    if (existsSync(target)) {
-      try {
-        renameWithRetry(target, outgoing);
-      } catch (err) {
-        throw new Error(
-          `could not move the live store ${target} aside to ${outgoing}: ${errorText(err)}; ` +
-            "the live store was not touched",
-          { cause: err },
-        );
-      }
-      moved.store = true;
-    }
-    if (existsSync(journal)) {
-      try {
-        renameWithRetry(journal, outgoingJournal);
-      } catch (err) {
-        throw new Error(
-          `could not move the rollback journal ${journal} aside to ${outgoingJournal}: ` +
-            `${errorText(err)}; the restored store must not open beside it`,
-          { cause: err },
-        );
-      }
-      moved.journal = true;
-    }
-    renameWithRetry(incoming, target);
-  } catch (err) {
-    putBackOutgoingStore(moved, errorText(err), err);
-    throw err;
+  const outgoing = outgoingStorePath(target);
+  // A free parked name holds no main file; journals of nothing found there
+  // would be adopted by the store moved aside now, so they go first. An
+  // earlier parked index is never replaced: it may be the only copy of
+  // stored embeddings a rebuild could not recompute.
+  for (const path of SQLITE_SIBLING_SUFFIXES.map((s) => outgoing + s)) {
+    assertOwnership();
+    rmSync(path, { force: true });
   }
+  const hadStore = existsSync(target);
+  // The same durable park record the reindex swap writes: a stop between
+  // the renames below is reunited by it, not by parked-name order.
+  assertOwnership();
+  writeParkMarker(target, outgoing);
   try {
-    removeWalSiblings(target);
+    parkSqliteFileSet(target, outgoing, undefined, assertOwnership);
   } catch (err) {
-    const what =
-      `could not remove ${errorText(err)} beside the restored store, and an orphan ` +
-      "write-ahead log would corrupt the next open";
-    try {
-      renameWithRetry(target, incoming);
-    } catch (backErr) {
+    const stranded = err instanceof SqliteFileSetMoveError ? err.stranded : [];
+    if (stranded.length === 0) clearParkMarker(target);
+    if (stranded.length > 0) {
+      // The undo of the park failed too: the live store is not whole.
       throw new StoreSwapTornError(
-        `${what}; the restored store could not be moved back off ${target} either ` +
-          `(${errorText(backErr)})` +
-          (moved.store ? `, and the pre-restore store is at ${outgoing}` : "") +
-          (moved.journal ? `, its rollback journal at ${outgoingJournal}` : ""),
+        `${parkFailureMessage(err, target, outgoing)}; moving it back failed too, and ` +
+          `${stranded.join(", ")} stays at ${stranded.length === 1 ? "that path" : "those paths"}` +
+          (stranded.includes(outgoing)
+            ? `: the pre-restore store stays at ${outgoing}, where the next store open restores it`
+            : ""),
         { cause: err },
       );
     }
-    putBackOutgoingStore(moved, what, err);
-    throw new Error(
-      `${what}; the store swap was undone` +
-        (moved.store
-          ? ", the pre-restore store is back in place"
-          : ", and no store was live before it"),
-      { cause: err },
-    );
+    throw new Error(parkFailureMessage(err, target, outgoing), { cause: err });
   }
-}
-
-/** What {@link commitDerivedStoreSwap} has moved aside so far. */
-interface MovedOutgoing {
-  readonly target: string;
-  readonly outgoing: string;
-  /** The live store is at `.bak`. */
-  store: boolean;
-  /** The live store's rollback journal is at `.bak-journal`. */
-  journal: boolean;
+  try {
+    const stray = sqliteJournalsPresent(target);
+    if (stray.length > 0) {
+      throw new Error(
+        `${stray.join(", ")} appeared beside the live store after it was moved aside; ` +
+          "the restored store must not open beside it",
+      );
+    }
+    assertOwnership();
+    renameWithRetry(incoming, target);
+  } catch (err) {
+    putBackOutgoingStore(target, outgoing, hadStore, errorText(err), err, assertOwnership);
+    clearParkMarker(target);
+    throw err;
+  }
+  clearParkMarker(target);
+  return outgoing;
 }
 
 /**
- * Put what a failed swap step moved aside back at the live path, or throw
- * a {@link StoreSwapTornError} naming where it was left.
- *
- * The journal goes back first. A crash between the two renames then
- * leaves the journal at the live path with no store and the store at
- * `.bak`, which the crash-recovery preamble of every `Store.open` puts
- * back beside it; the other order would leave the old store live without
- * the journal it needs to roll back.
+ * Where the restore parks the live store: `.bak`, or `.old` when an
+ * earlier parked index holds `.bak` (the rebuild's naming, which its crash
+ * restore reads newest first). Both taken refuses before anything moves.
  */
-function putBackOutgoingStore(moved: MovedOutgoing, what: string, cause: unknown): void {
-  const { target, outgoing } = moved;
-  if (moved.journal) {
-    const journal = `${target}${ROLLBACK_JOURNAL_SUFFIX}`;
-    const outgoingJournal = `${outgoing}${ROLLBACK_JOURNAL_SUFFIX}`;
-    try {
-      renameWithRetry(outgoingJournal, journal);
-    } catch (backErr) {
+function outgoingStorePath(target: string): string {
+  for (const suffix of [RESTORE_BACKUP_SUFFIX, ".old"]) {
+    if (!existsSync(target + suffix)) return target + suffix;
+  }
+  throw new Error(
+    `could not move the live store ${target} aside: earlier indexes are parked at both ` +
+      `${target}${RESTORE_BACKUP_SUFFIX} and ${target}.old; the live store was not touched`,
+  );
+}
+
+/**
+ * The message of a live store set that could not be moved aside: which
+ * file failed and why. The caller adds what an undo that failed too left
+ * moved ({@link SqliteFileSetMoveError.stranded}).
+ */
+function parkFailureMessage(err: unknown, target: string, outgoing: string): string {
+  const failed = err instanceof SqliteFileSetMoveError ? err.failedPath : target;
+  const cause = errorText(err instanceof Error && err.cause !== undefined ? err.cause : err);
+  if (failed === target) {
+    return (
+      `could not move the live store ${target} aside to ${outgoing}: ${cause}; ` +
+      "the live store was not touched"
+    );
+  }
+  const suffix = failed.slice(target.length);
+  const what =
+    suffix === ROLLBACK_JOURNAL_SUFFIX ? "the rollback journal" : "the write-ahead log file";
+  return (
+    `could not move ${what} ${failed} aside to ${outgoing}${suffix}: ${cause}; ` +
+    "the restored store must not open beside it"
+  );
+}
+
+/**
+ * Put the store set a failed swap step moved aside back at the live path
+ * (siblings first, main file last, so the live path never holds the store
+ * without its journal), or throw a {@link StoreSwapTornError} naming
+ * where it was left.
+ */
+function putBackOutgoingStore(
+  target: string,
+  outgoing: string,
+  hadStore: boolean,
+  what: string,
+  cause: unknown,
+  assertOwnership: () => void,
+): void {
+  try {
+    unparkSqliteFileSet(outgoing, target, undefined, assertOwnership);
+  } catch (backErr) {
+    const moveError = backErr instanceof SqliteFileSetMoveError ? backErr : null;
+    const failed = moveError?.failedPath ?? outgoing;
+    const stranded = moveError?.stranded ?? [];
+    const reason = errorText(
+      backErr instanceof Error && backErr.cause !== undefined ? backErr.cause : backErr,
+    );
+    if (failed === outgoing) {
       throw new StoreSwapTornError(
-        `${what}; the rollback journal of the pre-restore store could not be renamed back ` +
-          `(${errorText(backErr)}) and is at ${outgoingJournal}` +
-          (moved.store ? `; the pre-restore store is at ${outgoing}` : ""),
+        `${what}; the pre-restore store could not be renamed back either ` +
+          `(${reason}) and is at ${outgoing}, where the next store open restores it` +
+          (stranded.length > 0 ? `; stranded paths: ${stranded.join(", ")}` : ""),
         { cause },
       );
     }
-  }
-  if (!moved.store) return;
-  try {
-    renameWithRetry(outgoing, target);
-  } catch (backErr) {
+    const kind = failed.endsWith(ROLLBACK_JOURNAL_SUFFIX)
+      ? "the rollback journal"
+      : "the write-ahead log file";
     throw new StoreSwapTornError(
-      `${what}; the pre-restore store could not be renamed back either ` +
-        `(${errorText(backErr)}) and is at ${outgoing}, where the next store open restores it`,
+      `${what}; ${kind} of the pre-restore store could not be renamed back ` +
+        `(${reason}) and is at ${failed}` +
+        (hadStore ? `; the pre-restore store is at ${outgoing}` : "") +
+        (stranded.length > 0 ? `; stranded paths: ${stranded.join(", ")}` : ""),
       { cause },
     );
-  }
-}
-
-/**
- * Remove the WAL siblings the outgoing store left at `target`, throwing
- * the path that could not be removed.
- *
- * `-shm` goes first: it is only an index of the `-wal` and SQLite
- * rebuilds it, so when the `-wal` removal then fails, the swap can still
- * be undone in full - the pre-restore store returns beside its own log.
- */
-function removeWalSiblings(target: string): void {
-  for (const sidecar of ["-shm", "-wal"] as const) {
-    const path = `${target}${sidecar}`;
-    try {
-      unlinkWithRetry(path);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") continue;
-      throw new Error(`${path} (${errorText(err)})`, { cause: err });
-    }
   }
 }
 

@@ -23,6 +23,7 @@
  * failed or found a verification gap, 2 for a usage error.
  */
 
+import { describeIndexEstimate } from "../../../core/search/index-estimate.ts";
 import { PERMISSIONS_DOCUMENT_REL } from "../../../core/brain/permissions/document.ts";
 import {
   planMigrationDryRun,
@@ -410,6 +411,16 @@ export function renderDryRun(plan: MigrationDryRun): string {
     out.push(`Surfaces with no data here: ${absent.map((s) => s.id).join(", ")}`);
   }
   out.push("");
+
+  const estimate = plan.search_index_estimate;
+  out.push(
+    `Search index after the switch (rebuilt from the store): ${describeIndexEstimate({
+      storeRecords: estimate.store_records,
+      documents: estimate.documents,
+      noteFiles: null,
+    })}`,
+    "",
+  );
 
   out.push(`Unparseable items: ${plan.totals.unparseable}`);
   for (const p of plan.unparseable) {

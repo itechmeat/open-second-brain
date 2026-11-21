@@ -115,6 +115,12 @@ export interface DiagnosticSignal {
  */
 export const SEARCH_INDEX_MISSING_CODE = "search-index-missing";
 export const SEARCH_INDEX_CORRUPT_CODE = "search-index-corrupt";
+/**
+ * A structural scan that could not complete (a busy or locked file, an
+ * I/O error): no verdict on the file, so its exit is the scan again, never
+ * the rebuild a corrupt index needs.
+ */
+export const SEARCH_INDEX_SCAN_INCOMPLETE_CODE = "search-index-scan-incomplete";
 
 /**
  * The two attest-CLI states named here so the verb and the registry
@@ -499,6 +505,12 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: SEARCH_INDEX_CORRUPT_CODE,
         issueClass: "search index failed a structural integrity check",
         nextCommand: "o2b search reindex",
+        autoRepairable: false,
+      },
+      {
+        code: SEARCH_INDEX_SCAN_INCOMPLETE_CODE,
+        issueClass: "search index integrity scan did not complete",
+        nextCommand: "o2b search check --integrity",
         autoRepairable: false,
       },
       // --- Semantic capability tiers (provenance-at-the-boundary, F1) ---

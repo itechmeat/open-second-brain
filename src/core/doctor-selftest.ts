@@ -406,13 +406,19 @@ const storeOpenStage: SelftestStageSpec = {
   name: "store-open",
   fix: SELFTEST_FIX_STORE,
   run: async (ctx) => {
-    const config = resolveSearchConfig({
+    const resolved = resolveSearchConfig({
       vault: ctx.vault,
       configPath: ctx.configPath,
       overrides: {
         dbPath: ctx.dbPath,
         semantic: { enabled: false },
       },
+    });
+    // The query stage probes the trigram lane, whose shadow an index
+    // carries only for an opener that reads it (schema v18).
+    const config: ResolvedSearchConfig = Object.freeze({
+      ...resolved,
+      recall: Object.freeze({ ...resolved.recall, trigramPrefilterEnabled: true }),
     });
     ctx.config = config;
     const store = await Store.open(config, { mode: "write" });

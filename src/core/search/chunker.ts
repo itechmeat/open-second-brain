@@ -44,8 +44,19 @@
  *       (issue #272). Cut placement keeps `[[...]]` wikilinks whole
  *       whenever any alternative cut exists, because links are extracted
  *       per chunk.
+ *   4 - the chunks of version 3, with entities extracted from whole
+ *       tokens only (`entities.ts`). An index at version 3 holds the same
+ *       chunks, so the self-heal re-extracts its entities in place when the
+ *       index holds stored embeddings a rebuild would drop, and rebuilds
+ *       it otherwise (`self-heal.ts`, `entity-refresh.ts`).
  */
-export const CHUNKER_VERSION = 3;
+export const CHUNKER_VERSION = 4;
+
+/**
+ * The recorded chunker versions whose chunks are this version's: only the
+ * entity rows differ, and re-extracting them brings the index current.
+ */
+export const ENTITY_ONLY_CHUNKER_VERSIONS: ReadonlySet<string> = Object.freeze(new Set(["3"]));
 
 /**
  * Token budget of one chunk when the caller names none. Exported so a

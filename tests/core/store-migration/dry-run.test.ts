@@ -65,6 +65,48 @@ describe("planMigrationDryRun", () => {
     expect(surface("signals").items).toBe(3);
   });
 
+  test("estimates the search index the switch rebuilds, from the records it would hold", () => {
+    const estimate = plan.search_index_estimate;
+    // Items of a surface that is not turned into records (dropped, kept
+    // device-local, backed up) are scanned but become no store record.
+    const plain = plan.surfaces
+      .filter((s) => s.partitions === null)
+      .reduce((n, s) => n + s.items, 0);
+    expect(plain).toBeGreaterThan(0);
+    expect(estimate.store_records).toBe(
+      plan.totals.items - plain + plan.sync_copies.store_records_imported,
+    );
+    // Ledger rows and settings are records, not indexed documents. A page
+    // that creates multiple searchable records contributes one document per record.
+    expect(estimate.documents).toBeGreaterThan(0);
+    expect(estimate.documents).toBe(
+      plan.surfaces.reduce((n, s) => n + s.searchable_documents, 0) +
+        plan.sync_copies.searchable_documents_imported,
+    );
+    expect(estimate.documents).toBeLessThanOrEqual(estimate.store_records);
+    expect(estimate.bytes).toBe(estimate.store_records * 401 + estimate.documents * 1_777);
+    expect(estimate.seconds).toBeGreaterThanOrEqual(0);
+  });
+
+  test("counts records imported only from a searchable conflict-copy shard", () => {
+    const before = plan.search_index_estimate;
+    fx.write(
+      "Brain/log/2026-11-01.dev-a.sync-conflict-20261120-120000-ABCDEFG.jsonl",
+      `${JSON.stringify({
+        ts: "2026-11-20T12:00:00Z",
+        kind: "note",
+        payload: { text: "only in conflict copy" },
+        prev: null,
+        h: "1".repeat(64),
+      })}\n`,
+    );
+    plan = planMigrationDryRun(fx.vault);
+    expect(plan.sync_copies.store_records_imported).toBe(1);
+    expect(plan.sync_copies.searchable_documents_imported).toBe(1);
+    expect(plan.search_index_estimate.store_records).toBe(before.store_records + 1);
+    expect(plan.search_index_estimate.documents).toBe(before.documents + 1);
+  });
+
   test("states the planned destination of non-stream surfaces", () => {
     expect(surface("secret_custody").destination.to).toBe("backup");
     expect(surface("secret_custody").present).toBe(true);

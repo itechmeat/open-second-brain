@@ -24,10 +24,11 @@ import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
 
 import { closeDatabase } from "../sqlite-close.ts";
-import { CHUNKER_VERSION } from "./chunker.ts";
+import { CHUNKER_VERSION, ENTITY_ONLY_CHUNKER_VERSIONS } from "./chunker.ts";
+import { refreshEntitiesInPlace } from "./entity-refresh.ts";
 import { countStoredEmbeddings, reindexVaultUnless, type IndexVaultOptions } from "./indexer.ts";
 import { findSchemaGaps, LATEST_SCHEMA_VERSION, readSchemaVersion } from "./schema.ts";
-import { consolidateWal, openWriteDatabase } from "./store/lifecycle.ts";
+import { consolidateWal, openWriteDatabase, restoreFromBakIfMissing } from "./store/lifecycle.ts";
 import { CHUNKER_VERSION_STATE_KEY, INTEGRITY_FAULT_STATE_KEY } from "./store/state.ts";
 import { SearchError, type IndexStats, type ResolvedSearchConfig } from "./types.ts";
 
@@ -35,11 +36,18 @@ import { SearchError, type IndexStats, type ResolvedSearchConfig } from "./types
  * What a cheap read-only look at the index file says:
  * - `current`: nothing to do.
  * - `older-schema`: a migratable older schema with current chunks.
+ * - `entities-stale`: current chunks whose entity rows were extracted by
+ *   older rules (chunker version 3): refreshed in place when the index
+ *   holds stored embeddings, rebuilt otherwise.
  * - `rebuild`: absent, unreadable, newer than this build, chunked by
  *   older rules, condemned by a recorded integrity fault, or stamped
  *   current with tables or columns missing.
+ *
+ * An older schema is `older-schema` whatever its chunks: it is upgraded in
+ * place first, so a search answers from it at once, and what the upgraded
+ * index still needs (a refresh or a rebuild) is the background heal's.
  */
-export type IndexCondition = "current" | "older-schema" | "rebuild";
+export type IndexCondition = "current" | "older-schema" | "entities-stale" | "rebuild";
 
 /**
  * Whether the index holds chunks cut by older chunking rules: documents
@@ -47,12 +55,15 @@ export type IndexCondition = "current" | "older-schema" | "rebuild";
  * was never recorded). An unchanged file is never re-chunked by an
  * incremental run, so only a rebuild replaces those chunks.
  */
-function chunksAreStale(db: Database): boolean {
+function chunkState(db: Database): "current" | "entities-stale" | "stale" {
   const row = db
     .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ? LIMIT 1")
     .get(CHUNKER_VERSION_STATE_KEY);
-  if (row?.value === String(CHUNKER_VERSION)) return false;
-  return db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() !== null;
+  if (row?.value === String(CHUNKER_VERSION)) return "current";
+  if (db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() === null) {
+    return "current";
+  }
+  return row !== null && ENTITY_ONLY_CHUNKER_VERSIONS.has(row.value) ? "entities-stale" : "stale";
 }
 
 /** Whether a completed integrity check recorded a fault against the file. */
@@ -64,8 +75,15 @@ function hasRecordedIntegrityFault(db: Database): boolean {
   );
 }
 
-/** Classify the index at `config.dbPath` with read-only queries. */
+/**
+ * Classify the index at `config.dbPath` with read-only queries, after the
+ * crash restore every open runs: a rebuild that died between the renames
+ * of its swap leaves the previous index parked with no live index, and
+ * that index is put back rather than judged absent (and then rebuilt over
+ * with its stored embeddings uncounted).
+ */
 export function inspectIndex(config: ResolvedSearchConfig): IndexCondition {
+  restoreFromBakIfMissing(config.dbPath);
   if (!existsSync(config.dbPath)) return "rebuild";
   let db: Database;
   try {
@@ -75,12 +93,14 @@ export function inspectIndex(config: ResolvedSearchConfig): IndexCondition {
   }
   try {
     const version = readSchemaVersion(db);
-    if (version > LATEST_SCHEMA_VERSION || chunksAreStale(db)) return "rebuild";
+    if (version > LATEST_SCHEMA_VERSION) return "rebuild";
     // A file a completed integrity check condemned refuses every open, so
     // it is not current whatever its schema says; the rebuild is its exit.
     if (hasRecordedIntegrityFault(db)) return "rebuild";
     if (version < LATEST_SCHEMA_VERSION) return "older-schema";
-    return findSchemaGaps(db).length > 0 ? "rebuild" : "current";
+    if (findSchemaGaps(db).length > 0) return "rebuild";
+    const chunks = chunkState(db);
+    return chunks === "stale" ? "rebuild" : chunks;
   } catch {
     return "rebuild"; // corrupt / non-Open Second Brain file
   } finally {
@@ -100,8 +120,8 @@ export async function upgradeIndexInPlace(config: ResolvedSearchConfig): Promise
   const opened = await openWriteDatabase(config, true);
   try {
     consolidateWal(opened.db);
-    closeDatabase(opened.db);
   } finally {
+    closeDatabase(opened.db);
     await opened.release();
   }
 }
@@ -126,13 +146,30 @@ export async function rebuildIndexForSelfHeal(
   const before = countStoredEmbeddings(config.dbPath);
   const stats = await reindexVaultUnless(config, () => inspectIndex(config) === "current", opts);
   if (stats === null) return null;
-  if (before > 0) {
-    const dropped = before - countStoredEmbeddings(config.dbPath);
-    if (dropped > 0) {
+  // An unknown count before is not zero: the rebuild kept the previous
+  // index (it never removes one it cannot count), and the notice says so.
+  if (before === null || before > 0) {
+    const after = countStoredEmbeddings(config.dbPath) ?? 0;
+    // A verified rebuild keeps the richer parked index under the name it
+    // was parked at, `.bak` or `.old`: the notice names what is there.
+    const kept =
+      [".bak", ".old"]
+        .map((s) => config.dbPath + s)
+        .filter((p) => existsSync(p))
+        .join(" and ") || `${config.dbPath}.bak`;
+    const dropped = before === null ? null : before - after;
+    if (dropped === null) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "search index rebuilt: the stored embeddings of the previous index could not be counted, " +
+          `so it is kept at ${kept}; if it held any, restore them with: ` +
+          "o2b search index --embeddings",
+      );
+    } else if (dropped > 0) {
       // eslint-disable-next-line no-console
       console.error(
         `search index rebuilt: ${dropped} stored embedding(s) were not carried over ` +
-          `(the previous index is kept at ${config.dbPath}.bak until the next rebuild); ` +
+          `(the previous index, which still holds them, is kept at ${kept}); ` +
           `restore them with: o2b search index --embeddings`,
       );
     }
@@ -175,6 +212,15 @@ export async function healIndex(
     }
     condition = inspectIndex(config);
     if (condition === "current") return { kind: "migrated" };
+  }
+  // Entity rows of older rules over current chunks: a refresh in place keeps
+  // every stored embedding, which a keyword-only rebuild would drop; an
+  // index with none is rebuilt, which also writes the compact layout.
+  // A count that cannot be read may hide vectors: refreshed in place too.
+  const vectors = condition === "entities-stale" ? countStoredEmbeddings(config.dbPath) : 0;
+  if (condition === "entities-stale" && (vectors === null || vectors > 0)) {
+    await refreshEntitiesInPlace(config);
+    if (inspectIndex(config) === "current") return { kind: "migrated" };
   }
   const stats = await rebuildIndexForSelfHeal(config, opts);
   return stats === null ? { kind: "current" } : { kind: "rebuilt", stats };

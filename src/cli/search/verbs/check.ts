@@ -71,6 +71,7 @@ import { existsSync, statSync } from "node:fs";
 
 import {
   SEARCH_INDEX_CORRUPT_CODE,
+  SEARCH_INDEX_SCAN_INCOMPLETE_CODE,
   SEARCH_INDEX_MISSING_CODE,
 } from "../../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
@@ -352,6 +353,14 @@ async function scanIntegrity(config: ResolvedSearchConfig): Promise<IntegrityRep
         runIntegrityCheck(db),
       );
       const elapsedMs = Math.round(performance.now() - startedAt);
+      // A scan that could not complete (an I/O error, a busy file) is not
+      // a verdict: nothing is recorded, and the file is not called faulty.
+      if (!verdict.ok && verdict.inconclusive === true) {
+        return scanDidNotRun(
+          `the scan of ${dbPath} could not complete: ${verdict.fault}`,
+          SEARCH_INDEX_SCAN_INCOMPLETE_CODE,
+        );
+      }
 
       // `quick_check` passes any well-formed sqlite file, including one
       // that is not a search index at all. A PASS therefore needs the

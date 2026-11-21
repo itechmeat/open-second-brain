@@ -150,7 +150,7 @@ test("a chunk whose stored full-text form is out of date is rewritten, not kept"
   // leave behind: same content and hash, a different stored FTS form.
   const db = new Database(dbPath);
   db.run(
-    "UPDATE chunks SET fts_content = 'stale-form' WHERE chunk_index = 0 AND document_id = " +
+    "UPDATE chunks SET fts_override = 'stale-form' WHERE chunk_index = 0 AND document_id = " +
       "(SELECT id FROM documents WHERE path = ?)",
     [LOG],
   );
