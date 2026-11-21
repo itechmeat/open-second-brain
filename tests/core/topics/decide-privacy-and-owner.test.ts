@@ -322,7 +322,7 @@ describe("the decide pass on the planner's topic rules", () => {
           return "rec-1";
         },
         fold: foldTopics([]),
-        plan: { routes: [], creates: [], splits: [], merges: [], quiet: [] },
+        plan: { routes: [], creates: [], splits: [], merges: [], quiet: [], shortfalls: [] },
         candidatesById: new Map(),
         verdicts,
         counts,

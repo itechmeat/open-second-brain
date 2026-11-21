@@ -29,6 +29,7 @@ import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { catchUpWhere, partitionRecords } from "../view/catch-up.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import { isTopicPlanningInput, topicCandidates } from "./candidates.ts";
+import { decisionTitlesOfCatchUp } from "./decision-titles.ts";
 import { foldTopics } from "./fold.ts";
 import { planTopics } from "./plan.ts";
 import { writerGate } from "./planning.ts";
@@ -88,7 +89,8 @@ export async function decideTopicPlan(
   const sharedRecords: ReadonlyArray<StoreRecord> = partitionRecords(read, "shared");
   const privateIds = new Set(partitionRecords(read, "private").map((r) => r.id));
   const fold = foldTopics(records, { privateIds });
-  const candidates = topicCandidates(records, privateIds);
+  // Decision page titles of this read: none when it missed a page version.
+  const candidates = topicCandidates(records, privateIds, decisionTitlesOfCatchUp(read));
   const shared = foldSettings(partitionRecords(read, "shared"));
   const plan = planTopics(
     fold,

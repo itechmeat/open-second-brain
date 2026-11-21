@@ -32,6 +32,13 @@ export interface ViewCatchUp {
   readonly records: ReadonlyMap<StorePartition, ReadonlyArray<StoreRecord>>;
   /** Shards that could not be read; the pass must not render over an incomplete read. */
   readonly unreadable: ReadonlyArray<UnreadableShard & { partition: StorePartition }>;
+  /**
+   * By partition, the envelope kinds of the records left out because their
+   * body has not arrived (a pending blob, quarantined or not), counted.
+   * Absent when the read did not count them: a reader that must know
+   * whether a record of some kind is missing takes it as incomplete.
+   */
+  readonly pendingKinds?: ReadonlyMap<StorePartition, ReadonlyMap<string, number>>;
 }
 
 /** Read the held partitions and observe their newest clock. */
@@ -73,15 +80,21 @@ export function catchUpWhere(
 ): ViewCatchUp {
   const records = new Map<StorePartition, ReadonlyArray<StoreRecord>>();
   const unreadable: Array<UnreadableShard & { partition: StorePartition }> = [];
+  const pendingKinds = new Map<StorePartition, Map<string, number>>();
   let newest: StoreRecord | undefined;
   for (const partition of store.partitions) {
     const kept: StoreRecord[] = [];
+    const pendingHere = new Map<string, number>();
+    pendingKinds.set(partition, pendingHere);
     forEachPartitionRecord(
       partitionDir(store.root, partition),
       { onUnreadable: (shard) => unreadable.push({ ...shard, partition }) },
       {
         record: (shard, record, pending) => {
-          if (pending) return;
+          if (pending) {
+            pendingHere.set(record.kind, (pendingHere.get(record.kind) ?? 0) + 1);
+            return;
+          }
           if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
           if (keep(record, shard.stream)) kept.push(record);
         },
@@ -92,7 +105,7 @@ export function catchUpWhere(
   if (newest !== undefined) {
     observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
   }
-  return { records, unreadable };
+  return { records, unreadable, pendingKinds };
 }
 
 /** Every record read, all partitions together, in fold order. */
@@ -119,7 +132,11 @@ export function withOwnRecord(
 ): ViewCatchUp {
   const records = new Map(read.records);
   records.set(partition, [...(records.get(partition) ?? []), record]);
-  return { records, unreadable: read.unreadable };
+  return {
+    records,
+    unreadable: read.unreadable,
+    ...(read.pendingKinds !== undefined ? { pendingKinds: read.pendingKinds } : {}),
+  };
 }
 
 /**

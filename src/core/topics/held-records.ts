@@ -64,6 +64,7 @@ import {
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import type { StoreInspection } from "../store/store-open.ts";
 import { isHoldableRecord, topicCandidates } from "./candidates.ts";
+import { decisionTitlesOf, isDecisionPageInput, pageReadComplete } from "./decision-titles.ts";
 import type { TopicFold } from "./fold.ts";
 
 /** The ids of the records `topicId` holds, in id order. */
@@ -327,6 +328,53 @@ export function readHeldRecords(
   const withheld: Partial<Record<HeldWithheldReason, number>> = {};
   const found = new Set<string>();
 
+  // The held signal captures and the decision pages, from one read of the
+  // `events` stream per partition: a decision event written before events
+  // carried a title is named by its page's (`decision-titles.ts`), a
+  // private page's only for a private event. Captures are read from every
+  // partition (the entity verdict below decides what is shown); pages at
+  // the caller's reach.
+  const captures: StoreRecord[] = [];
+  const pages: StoreRecord[] = [];
+  const privatePages = new Set<string>();
+  // Whether that read held every page version at the caller's reach: a
+  // shard read only in part, or a lane entry whose body has not arrived,
+  // can hide the version that wins, so no page title is used then.
+  let pagesUnreadable = 0;
+  const pagesPending: Array<[string, number]> = [];
+  for (const partition of [...store.partitions] as StorePartition[]) {
+    const pagesHere = !(withhold && partition !== "shared");
+    const read = readStreamRecords(
+      store.root,
+      partition,
+      { stream: "events" },
+      {
+        keep: (r) =>
+          (wanted.has(r.id) && r.kind === SIGNAL_KIND) || (pagesHere && isDecisionPageInput(r)),
+      },
+    );
+    if (pagesHere) {
+      pagesUnreadable += read.unreadable.length;
+      pagesPending.push(...read.pendingKinds);
+      unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
+    }
+    for (const record of read.records) {
+      if (record.kind === SIGNAL_KIND) {
+        captures.push(record);
+        continue;
+      }
+      // Every version of a page goes into the fold: privacy is judged on the
+      // version that wins (`decision-titles.ts`), never by dropping one first.
+      pages.push(record);
+      if (partition === "private") privatePages.add(record.id);
+    }
+  }
+  const titles = decisionTitlesOf({
+    records: pages,
+    privateIds: privatePages,
+    complete: pageReadComplete(pagesUnreadable, pagesPending),
+  });
+
   // Log events: their own record decides.
   const logRecords: StoreRecord[] = [];
   const privateLog = new Set<string>();
@@ -344,7 +392,7 @@ export function readHeldRecords(
       if (partition === "private") privateLog.add(record.id);
     }
   }
-  for (const candidate of topicCandidates(logRecords, privateLog)) {
+  for (const candidate of topicCandidates(logRecords, privateLog, titles)) {
     found.add(candidate.id);
     if (withhold && candidate.private) continue;
     const record = logRecords.find((r) => r.id === candidate.id)!;
@@ -361,18 +409,9 @@ export function readHeldRecords(
   // Signals: the entity reader's verdict, failing closed.
   const lifecycles = readSignalLifecycles(store);
   unreadable.push(...lifecycles.unreadable);
-  // The held captures the store holds at all (forgotten ones included), so
-  // a forgotten capture is told from one not here yet.
-  const captures: StoreRecord[] = [];
-  for (const partition of [...store.partitions] as StorePartition[]) {
-    const read = readStreamRecords(
-      store.root,
-      partition,
-      { stream: "events" },
-      { keep: (r) => wanted.has(r.id) && r.kind === SIGNAL_KIND },
-    );
-    captures.push(...read.records);
-  }
+  // `captures` (read above) are the held captures the store holds at all
+  // (forgotten ones included), so a forgotten capture is told from one not
+  // here yet.
   const counted = new Set<string>();
   for (const capture of captures) {
     if (counted.has(capture.id)) continue;
@@ -415,5 +454,11 @@ export function readHeldRecords(
 
   records.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.id < b.id ? -1 : 1));
   // A forgotten record is not "missing": it is gone on purpose.
-  return { records, missing: wanted.size - found.size, unreadable, withheld };
+  // An `events` shard can be named by the page read and by the signal read.
+  return {
+    records,
+    missing: wanted.size - found.size,
+    unreadable: [...new Set(unreadable)],
+    withheld,
+  };
 }
