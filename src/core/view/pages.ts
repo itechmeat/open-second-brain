@@ -19,7 +19,8 @@
  *
  *  - about-me: confirmed preferences, grouped by their scope (the subject);
  *  - decisions: `decision-record` and `decision-resolved` log events, newest first,
- *    each as "<title>: <choice>";
+ *    each as "<title>: <choice>" (an older event without a title is named by
+ *    its decision page's);
  *  - history: per ISO week (UTC), day by day, the notes (`note` log events),
  *    decisions, and the rules confirmed that day.
  *
@@ -39,6 +40,7 @@ import { parseHlc } from "../store/hlc.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { compareCodeUnits } from "../store/compare.ts";
 import { isDecisionEvent } from "../topics/held-decisions.ts";
+import { decisionEventTitle, type DecisionTitles } from "../topics/decision-titles.ts";
 import {
   VIEW_ABOUT_ME_PAGE,
   VIEW_DECISIONS_PAGE,
@@ -221,13 +223,22 @@ function textField(body: unknown, field: string): string | null {
  * The text of a decision entry: "<title>: <choice>", since the option
  * chosen alone ("one markdown page") does not say what was decided. The
  * title is the event's own `title` field; an event written before decision
- * events carried one reads as its choice. A title that ends in its own
- * punctuation (a question) gets no colon. Topic pages name a held decision
- * by the same rule.
+ * events carried one is named by the title of the decision page it links,
+ * a shared one (`topics/decision-titles.ts`), and reads as its choice only
+ * when no such page is held. A title that ends in its own punctuation (a
+ * question) gets no colon. Topic pages name a held decision by the same
+ * rule.
  */
-function decisionEntryText(payload: unknown, choiceField: string): string | null {
+function decisionEntryText(
+  payload: unknown,
+  choiceField: string,
+  titles: DecisionTitles,
+): string | null {
   const choice = textField(payload, choiceField);
-  const title = textField(payload, "title");
+  const fields =
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  const named = decisionEventTitle(fields, titles, false);
+  const title = named === null || plainText(named) === "" ? null : plainText(named);
   if (choice === null || title === null) return choice;
   return /[?:!.]$/u.test(title) ? `${title} ${choice}` : `${title}: ${choice}`;
 }
@@ -271,6 +282,12 @@ function historyHiddenNotes(shared: ReadonlyArray<StoreRecord>): Set<string> {
 export function viewEntries(
   shared: ReadonlyArray<StoreRecord>,
   prefs: ReadonlyArray<PreferenceState>,
+  /**
+   * The decision page titles of the same read (`decision-titles.ts`, every
+   * shared version folded, none when the read missed a version): an older
+   * decision event is named by its page's title.
+   */
+  titles: DecisionTitles,
 ): ViewEntry[] {
   const entries: ViewEntry[] = [];
   const hiddenNotes = historyHiddenNotes(shared);
@@ -287,7 +304,11 @@ export function viewEntries(
         entries.push({ key, day, kind: "note", text, order: record, at });
       }
     } else if (type === DECISION_RECORD_EVENT || type === DECISION_RESOLVED_EVENT) {
-      const text = decisionEntryText(payload, type === DECISION_RECORD_EVENT ? "chosen" : "choice");
+      const text = decisionEntryText(
+        payload,
+        type === DECISION_RECORD_EVENT ? "chosen" : "choice",
+        titles,
+      );
       if (text === null) continue;
       const review = textField(payload, "review_date") ?? undefined;
       entries.push({

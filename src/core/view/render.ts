@@ -100,6 +100,7 @@ import { pageFileInside } from "./page-path.ts";
 import { retirePages, type RetireContext } from "./retire.ts";
 import { topicPages } from "./topic-pages.ts";
 import { withHeldDecisions } from "../topics/held-decisions.ts";
+import { decisionTitlesOfCatchUp } from "../topics/decision-titles.ts";
 import { foldViewWriter } from "./writer-fold.ts";
 
 export interface ViewPassOptions extends RecordOptions {
@@ -146,14 +147,18 @@ export function buildPages(store: StoreHandle, read: ViewCatchUp): Map<string, P
   const strings = viewStrings(typeof lang === "string" ? lang : null);
   const all = sharedPreferences(shared);
   const prefs = confirmedPreferences(all);
-  const entries = viewEntries(shared, all);
+  // The decision page titles of this read, for every page that names a
+  // decision: every shared version folded, none when the read missed one
+  // (`topics/decision-titles.ts`).
+  const titles = decisionTitlesOfCatchUp(read, ["shared"]);
+  const entries = viewEntries(shared, all, titles);
   const corrections = foldCorrections(shared);
   // Topic records that carry a `<private>` region stay off the pages, as
   // every other record family's do.
   const plain = shared.filter((r) => !valueCarriesPrivateRegion(r.body));
   // A topic shows the decisions it holds as decision items, derived from
   // the same shared records (`topics/held-decisions.ts`).
-  const topics = withHeldDecisions(foldTopics(plain), plain);
+  const topics = withHeldDecisions(foldTopics(plain), plain, new Set(), titles);
   const models = [
     aboutMePage(store.storeId, prefs, strings),
     decisionsPage(store.storeId, entries, strings),

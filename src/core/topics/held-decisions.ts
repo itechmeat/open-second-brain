@@ -42,6 +42,12 @@ import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { readStreamRecords } from "../store/read/stream-read.ts";
 import type { StoreInspection } from "../store/store-open.ts";
 import { topicCandidates, withoutPrivateRegions } from "./candidates.ts";
+import {
+  decisionTitlesOf,
+  isDecisionPageInput,
+  pageReadComplete,
+  type DecisionTitles,
+} from "./decision-titles.ts";
 import type { TopicFold, TopicItem, TopicState } from "./fold.ts";
 
 const DECISION_RECORD = "decision-record";
@@ -81,13 +87,19 @@ interface Group {
 
 /**
  * `fold` with the decision items its topics' held decision events give.
- * `records` are the log events the reader holds (others are ignored);
- * `privateIds` names those of the `private` partition.
+ * `records` are the log events the reader holds, with the decision pages
+ * it holds (an event written before events carried a title is named by
+ * its page's, `decision-titles.ts`); others are ignored. `privateIds`
+ * names those of the `private` partition. `titles` are the decision page
+ * titles of the caller's read (`decision-titles.ts`: every version folded,
+ * none when that read missed a version), so each caller states the
+ * completeness of its own read.
  */
 export function withHeldDecisions(
   fold: TopicFold,
   records: ReadonlyArray<StoreRecord>,
-  privateIds: ReadonlySet<string> = new Set(),
+  privateIds: ReadonlySet<string>,
+  titles: DecisionTitles,
 ): TopicFold {
   if (fold.assignments.size === 0) return fold;
   const events = records.filter(isDecisionEvent).toSorted(compareRecords);
@@ -95,6 +107,7 @@ export function withHeldDecisions(
     topicCandidates(
       events.filter((r) => r.body["event_type"] !== DECISION_OUTCOME),
       privateIds,
+      titles,
     ).map((c) => [c.id, c]),
   );
   const groups = new Map<string, Group>();
@@ -208,36 +221,58 @@ function derivedItem(
  * The decision events of `store` the caller of the work running now may
  * read: the `log` stream of every partition this machine holds, `shared`
  * alone below local reach (where a record with a `<private>` region is
- * left out too). Reads every `log` shard through the stream reader, so a
- * shard that cannot be read, or that vanished since this machine read it,
- * is named in `unreadable` (the same reader and rules the held listing's
- * log records go through, `held-records.ts`), keeping only decision
- * events, so it holds no more than those in memory.
+ * left out too), with the decision pages of the `events` stream read by
+ * the same rule, which name an event that carries no title. Reads every
+ * shard of both streams through the stream reader, so a shard that cannot
+ * be read, or that vanished since this machine read it, is named in
+ * `unreadable` (the same reader and rules the held listing's log records
+ * go through, `held-records.ts`), keeping only decision events and
+ * decision pages, so it holds no more than those in memory.
  */
 export function readDecisionEvents(store: StoreInspection): {
   readonly records: StoreRecord[];
   readonly privateIds: Set<string>;
-  /** Partition-relative paths of `log` shards not read in full. */
+  /** Partition-relative paths of `log` and `events` shards not read in full. */
   readonly unreadable: ReadonlyArray<string>;
+  /**
+   * The decision page titles of this read: none when an `events` shard
+   * was not read in full or a lane entry's body has not arrived
+   * (`complete: false`, which the caller reports as incomplete).
+   */
+  readonly titles: DecisionTitles;
 } {
   const withhold = privateWithheld();
   const partitions = [...store.partitions].filter((p) => !withhold || p === "shared");
   const records: StoreRecord[] = [];
   const privateIds = new Set<string>();
   const unreadable: string[] = [];
+  let pagesUnreadable = 0;
+  const pagesPending: Array<[string, number]> = [];
   for (const partition of partitions as StorePartition[]) {
-    const read = readStreamRecords(
-      store.root,
-      partition,
-      { stream: "log" },
-      { keep: isDecisionEvent },
-    );
-    unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
-    for (const record of read.records) {
-      if (withhold && valueCarriesPrivateRegion(record.body)) continue;
-      records.push(record);
-      if (partition === "private") privateIds.add(record.id);
+    for (const [stream, keep] of [
+      ["log", isDecisionEvent],
+      ["events", isDecisionPageInput],
+    ] as const) {
+      const read = readStreamRecords(store.root, partition, { stream }, { keep });
+      unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
+      if (stream === "events") {
+        pagesUnreadable += read.unreadable.length;
+        pagesPending.push(...read.pendingKinds);
+      }
+      for (const record of read.records) {
+        // A decision page stays whatever it carries: privacy is judged on
+        // the version the fold lets win (`decision-titles.ts`), and
+        // dropping a private later version would let an older one win.
+        if (stream === "log" && withhold && valueCarriesPrivateRegion(record.body)) continue;
+        records.push(record);
+        if (partition === "private") privateIds.add(record.id);
+      }
     }
   }
-  return { records, privateIds, unreadable };
+  const titles = decisionTitlesOf({
+    records,
+    privateIds,
+    complete: pageReadComplete(pagesUnreadable, pagesPending),
+  });
+  return { records, privateIds, unreadable, titles };
 }

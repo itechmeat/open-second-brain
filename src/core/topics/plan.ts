@@ -30,7 +30,7 @@
 import { compareCodeUnits } from "../store/compare.ts";
 import { DAY_MS } from "../store/constants.ts";
 import { TOPIC_PERSONAL_SCOPE, TOPIC_PROJECT_SCOPE_PREFIX } from "./constants.ts";
-import { subjectTokens, type TopicCandidate } from "./candidates.ts";
+import { subjectTokens, type TopicCandidate, type TopicCandidateKind } from "./candidates.ts";
 import { TOPIC_TITLE_MAX } from "./records.ts";
 import { routeKey, type TopicFold, type TopicHeadField, type TopicState } from "./fold.ts";
 import { topicGroupKey, type TopicVerdictBody, type TopicVerdicts } from "./verdicts.ts";
@@ -94,10 +94,41 @@ export interface TopicReview {
   readonly quiet: ReadonlyArray<QuietPrompt>;
 }
 
+/**
+ * Why a project whose records no topic holds got no topic this pass: the
+ * counts a person needs to tell a threshold not yet reached from records
+ * held back, without reading the store.
+ */
+export interface ProjectShortfall {
+  readonly project: string;
+  /** Records of the project that no topic holds, none ever held and no route took. */
+  readonly free: number;
+  /**
+   * The group of those records closest to a topic (the fewest records and
+   * sessions short of the thresholds, then the most records): its size,
+   * sessions and kinds. Zero records when none is free.
+   */
+  readonly closest: {
+    readonly records: number;
+    readonly sessions: number;
+    readonly kinds: Readonly<Record<TopicCandidateKind, number>>;
+  };
+  /**
+   * Records of the project no topic holds that an `assign`, `unassign` or
+   * `split` once named (an undone topic, a record taken back): routed when
+   * a topic fits, never grouped again.
+   */
+  readonly heldBack: number;
+  /** Groups of the project that qualified and a decision model vetoed this pass (`topic_new`). */
+  readonly vetoed: number;
+}
+
 export interface TopicPlan extends TopicReview {
   readonly routes: ReadonlyArray<PlannedRoute>;
   readonly creates: ReadonlyArray<PlannedCreate>;
   readonly splits: ReadonlyArray<SplitProposal>;
+  /** The projects with records no topic holds that got no topic this pass, most free records first. */
+  readonly shortfalls: ReadonlyArray<ProjectShortfall>;
 }
 
 const isActive = (t: TopicState): boolean => t.mergedInto === null && t.status === "active";
@@ -202,6 +233,41 @@ function groups(candidates: ReadonlyArray<TopicCandidate>): Group[] {
     for (const w of words) group.words.set(w, (group.words.get(w) ?? 0) + 1);
   }
   return out;
+}
+
+/**
+ * The group closest to becoming a topic, summed up: the fewest records and
+ * sessions short of `settings` (the two shortfalls added), then the most
+ * records, then the most sessions, the first on a tie. Not simply the
+ * largest: a 6-record group from one session is further from a topic at
+ * 5/2 than a 4-record group from two sessions, which one more record makes.
+ */
+function closestGroup(
+  made: ReadonlyArray<Group>,
+  settings: PlanSettings,
+): ProjectShortfall["closest"] {
+  let best: { short: number; records: number; sessions: number; group: Group | null } = {
+    short: Number.POSITIVE_INFINITY,
+    records: 0,
+    sessions: 0,
+    group: null,
+  };
+  for (const group of made) {
+    const records = group.members.length;
+    const sessions = new Set(group.members.map((m) => m.session)).size;
+    const short =
+      Math.max(0, settings.minRecords - records) + Math.max(0, settings.minSessions - sessions);
+    if (
+      short < best.short ||
+      (short === best.short &&
+        (records > best.records || (records === best.records && sessions > best.sessions)))
+    ) {
+      best = { short, records, sessions, group };
+    }
+  }
+  const kinds: Record<TopicCandidateKind, number> = { note: 0, signal: 0, decision: 0 };
+  for (const member of best.group?.members ?? []) kinds[member.kind] += 1;
+  return { records: best.records, sessions: best.sessions, kinds };
 }
 
 function qualifies(group: Group, settings: PlanSettings): boolean {
@@ -446,6 +512,7 @@ export function planTopics(
     .map((topic) => ({ topic, tokens: headTokens(topic, false), all: headTokens(topic, true) }));
   const routes: PlannedRoute[] = [];
   const free: TopicCandidate[] = [];
+  const heldBack = new Map<string, number>();
   for (const candidate of ordered) {
     if (holder(fold, candidate) !== null) continue;
     // The model's route (D10): a verdict that no longer matches this
@@ -487,12 +554,21 @@ export function planTopics(
     } else if (candidate.project !== null && !fold.touched.has(candidate.id)) {
       // A model `none` verdict also leaves the record free for grouping.
       free.push(candidate);
+    } else if (candidate.project !== null) {
+      heldBack.set(candidate.project, (heldBack.get(candidate.project) ?? 0) + 1);
     }
   }
   const creates: PlannedCreate[] = [];
-  const projects = [...new Set(free.map((c) => c.project!))].toSorted(compareCodeUnits);
+  const shortfalls: ProjectShortfall[] = [];
+  const projects = [...new Set([...free.map((c) => c.project!), ...heldBack.keys()])].toSorted(
+    compareCodeUnits,
+  );
   for (const project of projects) {
-    for (const group of groups(free.filter((c) => c.project === project))) {
+    const own = free.filter((c) => c.project === project);
+    const made = groups(own);
+    let createdHere = 0;
+    let vetoed = 0;
+    for (const group of made) {
       if (!qualifies(group, settings)) continue;
       // `topic_new` (D10): a model veto skips the creation this pass
       // only - the group is held in memory, the next pass asks again -
@@ -501,7 +577,11 @@ export function planTopics(
       // never create a group that does not qualify.
       const key = topicGroupKey(group.members.map((m) => m.id));
       const verdictEntry = verdicts?.vetoes.get(key);
-      if (verdictEntry !== undefined && verdictEntry.veto) continue;
+      if (verdictEntry !== undefined && verdictEntry.veto) {
+        vetoed += 1;
+        continue;
+      }
+      createdHere += 1;
       creates.push({
         title: draftTitle(group),
         goal: draftGoal(group),
@@ -510,6 +590,15 @@ export function planTopics(
         members: group.members.map((m) => m.id),
         sessions: new Set(group.members.map((m) => m.session)).size,
         ...(verdictEntry !== undefined ? { verdict: verdictEntry.verdict } : {}),
+      });
+    }
+    if (createdHere === 0) {
+      shortfalls.push({
+        project,
+        free: own.length,
+        closest: closestGroup(made, settings),
+        heldBack: heldBack.get(project) ?? 0,
+        vetoed,
       });
     }
   }
@@ -526,6 +615,10 @@ export function planTopics(
     routes,
     creates,
     splits,
+    shortfalls: shortfalls.toSorted(
+      (a, b) =>
+        b.free - a.free || b.heldBack - a.heldBack || compareCodeUnits(a.project, b.project),
+    ),
     merges: applySameVerdicts(fold, [...review.merges], verdicts?.sameTopics),
     quiet: review.quiet,
   };

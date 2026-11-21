@@ -411,9 +411,14 @@ function withHeldDecisionsOf(
   if (store === null) return { read, incomplete: false };
   const events = readDecisionEvents(store);
   return {
-    read: { ...read, fold: withHeldDecisions(read.fold, events.records, events.privateIds) },
-    // A `log` shard not read in full may hold a decision of the topic.
-    incomplete: events.unreadable.length > 0,
+    read: {
+      ...read,
+      fold: withHeldDecisions(read.fold, events.records, events.privateIds, events.titles),
+    },
+    // A `log` shard not read in full may hold a decision of the topic; an
+    // `events` read that missed a page version named no decision by its
+    // page's title.
+    incomplete: events.unreadable.length > 0 || !events.titles.complete,
   };
 }
 

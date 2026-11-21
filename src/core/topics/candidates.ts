@@ -8,7 +8,8 @@
  *    event (`decision-record`, `decision-resolved`) the decision's title
  *    with the option chosen, so a decision groups and routes by its
  *    subject like any note of the project, and its item says what was
- *    decided.
+ *    decided. An event written before events carried the title takes it
+ *    from the decision's page (`decision-titles.ts`).
  *  - **Project.** The `project` the record names (a signal's frontmatter,
  *    a log event's body), read by the rule that wrote it
  *    (`brain/record-origin.ts` `recordProjectOf`, the scoped-rules key):
@@ -46,6 +47,12 @@ import { SIGNAL_REMOVED_KIND } from "../store/fold-signals.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { valueCarriesPrivateRegion } from "../store/private-region.ts";
 import { LEGACY_DEVICE_FIELD, migratedMark } from "../store-migration/migration-records.ts";
+import {
+  decisionEventTitle,
+  isDecisionPageRecord,
+  NO_DECISION_TITLES,
+  type DecisionTitles,
+} from "./decision-titles.ts";
 
 /** The record a `human_readable` verdict stores about a note (`verdict-writes.ts`). */
 const HISTORY_VERDICT_KIND = "history-verdict";
@@ -65,13 +72,19 @@ const DECISION_LINK_RE = /^\[\[decision-(.+)\]\]$/u;
 
 /**
  * The title a decision event names: its `title` (written since decision
- * events carry one), else the words of the slug of the page it links
+ * events carry one), else the title of the decision page it links, when
+ * the reader holds that page (`decision-titles.ts`; a private page's
+ * title only for a private record), else the words of the page's slug
  * (`[[decision-release-page-format]]` reads "release page format"), so an
  * older event still says what was decided. A slug that is the fallback
- * hash of a title with no letter says nothing and is left out.
+ * hash of a title with no usable letter says nothing and is left out.
  */
-function decisionTitleOf(meta: Record<string, unknown>): string | null {
-  const title = str(meta["title"]);
+function decisionTitleOf(
+  meta: Record<string, unknown>,
+  titles: DecisionTitles,
+  withPrivate: boolean,
+): string | null {
+  const title = str(decisionEventTitle(meta, titles, withPrivate));
   if (title !== null) return title;
   const slug = DECISION_LINK_RE.exec(str(meta["decision"]) ?? "")?.[1];
   if (slug === undefined || /^unnamed-[0-9a-f]+$/u.test(slug)) return null;
@@ -85,15 +98,25 @@ function decisionTitleOf(meta: Record<string, unknown>): string | null {
  * with the notes and signals of its subject; the title does both. A title
  * that ends in its own punctuation (a question) is not given a colon.
  */
-function decisionEventText(meta: Record<string, unknown>, choiceField: string): string | null {
+function decisionEventText(
+  meta: Record<string, unknown>,
+  choiceField: string,
+  titles: DecisionTitles,
+  withPrivate: boolean,
+): string | null {
   const choice = str(meta[choiceField]);
-  const title = decisionTitleOf(meta);
+  const title = decisionTitleOf(meta, titles, withPrivate);
   if (title === null || choice === null) return choice ?? title;
   return /[?:!.]$/u.test(title) ? `${title} ${choice}` : `${title}: ${choice}`;
 }
 
+/** What a candidate record is: a note, a signal or a decision event. */
+export type TopicCandidateKind = "note" | "signal" | "decision";
+
 export interface TopicCandidate {
   readonly id: string;
+  /** A note, a signal, or a decision event (`decision-record`, `decision-resolved`). */
+  readonly kind: TopicCandidateKind;
   readonly text: string;
   /** The project the record names, or `null`. */
   readonly project: string | null;
@@ -155,10 +178,15 @@ function fallbackSession(record: StoreRecord, origin: ReturnType<typeof originOf
   return `${origin.device}/${record.agent}/${new Date(origin.at).toISOString().slice(0, 10)}`;
 }
 
-function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | null {
+function candidateOf(
+  record: StoreRecord,
+  isPrivate: boolean,
+  titles: DecisionTitles,
+): TopicCandidate | null {
   const origin = originOf(record);
   let text: string | null = null;
   let meta: Record<string, unknown> = {};
+  let kind: TopicCandidateKind = "signal";
   if (record.kind === SIGNAL_KIND) {
     meta = obj(record.body["frontmatter"]);
     text = str(meta["principle"]) ?? str(record.body["raw"]);
@@ -168,8 +196,9 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
     if (!Object.hasOwn(READABLE_EVENTS, type)) return null;
     const fields = READABLE_EVENTS[type]!;
     meta = obj(record.body["body"]);
+    kind = DECISION_EVENTS.has(type) ? "decision" : "note";
     text = DECISION_EVENTS.has(type)
-      ? decisionEventText(meta, fields[0]!)
+      ? decisionEventText(meta, fields[0]!, titles, isPrivate)
       : (fields.map((f) => str(meta[f])).find((t) => t !== null) ?? null);
   }
   if (text !== null) text = withoutPrivateRegions(text);
@@ -177,6 +206,7 @@ function candidateOf(record: StoreRecord, isPrivate: boolean): TopicCandidate | 
   const scope = scopeFromFrontmatter(meta);
   return {
     id: record.id,
+    kind,
     text,
     project: recordProjectOf(meta["project"]),
     session: scope.session ?? str(meta["session_ref"]) ?? fallbackSession(record, origin),
@@ -209,6 +239,8 @@ export function isTopicPlanningInput(record: StoreRecord, stream: StoreStream): 
   if (stream === "topics" || stream === "settings") return true;
   if (record.kind === HISTORY_VERDICT_KIND) return true;
   if (record.kind === SIGNAL_KIND || record.kind === SIGNAL_REMOVED_KIND) return true;
+  // A decision page names an older decision event's decision (its title).
+  if (isDecisionPageRecord(record)) return true;
   if (record.kind !== LOG_EVENT_KIND) return false;
   return Object.hasOwn(READABLE_EVENTS, String(record.body["event_type"]));
 }
@@ -228,10 +260,17 @@ export function isHoldableRecord(record: StoreRecord): boolean {
   );
 }
 
-/** The candidates among `records`; `privateIds` names those of the `private` partition. */
+/**
+ * The candidates among `records`; `privateIds` names those of the
+ * `private` partition. `titles` are the decision page titles a decision
+ * event without its own title is named by (`decision-titles.ts`, from the
+ * caller's read with its completeness); by default none, so a caller that
+ * states no read names a decision by what its event says.
+ */
 export function topicCandidates(
   records: ReadonlyArray<StoreRecord>,
   privateIds: ReadonlySet<string>,
+  titles: DecisionTitles = NO_DECISION_TITLES,
 ): TopicCandidate[] {
   const removed = new Set(
     records.filter((r) => r.kind === SIGNAL_REMOVED_KIND).map((r) => String(r.body["signal"])),
@@ -242,7 +281,7 @@ export function topicCandidates(
     // A shared record that carries a `<private>` region (a legacy or
     // foreign writer) counts as private: its text must not seed a shared topic.
     const isPrivate = privateIds.has(record.id) || valueCarriesPrivateRegion(record.body);
-    const candidate = candidateOf(record, isPrivate);
+    const candidate = candidateOf(record, isPrivate, titles);
     if (candidate !== null) out.push(candidate);
   }
   return out;
