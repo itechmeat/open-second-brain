@@ -24,6 +24,7 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -34,6 +35,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
+import { Database } from "bun:sqlite";
 
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -562,6 +564,72 @@ test("a reindex whose lock was taken over refuses its swap and leaves the live i
     expect((refused as SearchError | null)?.code).toBe("INDEX_LOCKED");
     expect(statSync(v.dbPath).ino).toBe(liveIno);
     expect(readFileSync(v.dbPath).equals(live)).toBe(true);
+  } finally {
+    v.cleanup();
+  }
+});
+
+test("the rebuild keeps its writer lease fresh through the parked-name preflight", async () => {
+  const v = createTempVault("lease-preflight");
+  try {
+    writeMd(v.vault, "note.md", "# Note\n\nbody text\n");
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    await indexVault(config);
+    // Both parked names are held and the prune can free neither: a parked
+    // index richer in stored vectors than the live one (the prune keeps it)
+    // and a parked index that cannot be read (the prune keeps it too). The
+    // preflight therefore weighs them, checks the live index - the same
+    // check the swap runs - and refuses.
+    copyFileSync(v.dbPath, `${v.dbPath}.old`);
+    const parked = new Database(`${v.dbPath}.old`);
+    try {
+      parked.run(
+        "INSERT INTO embeddings(chunk_id, model, dimension, embedding_hash, created_at, updated_at) " +
+          "SELECT id, 'probe', 4, 'h', '', '' FROM chunks LIMIT 5",
+      );
+    } finally {
+      parked.close(true);
+    }
+    writeFileSync(`${v.dbPath}.bak`, Buffer.from("not a database, only bytes. ".repeat(400)));
+
+    // The check blocks this thread for longer than the stale window, the
+    // way a scan of a large index does: the lease must be kept fresh off
+    // it, the way the swap keeps it fresh through the same check.
+    let lockAgeMs = -1;
+    let slowed = false;
+    const realQuery = Database.prototype.query;
+    const spy = spyOn(Database.prototype, "query").mockImplementation(function (
+      this: Database,
+      sql: string,
+      ...rest: unknown[]
+    ) {
+      const stmt = (realQuery as unknown as (...a: unknown[]) => unknown).apply(this, [
+        sql,
+        ...rest,
+      ]);
+      if (typeof sql === "string" && sql.includes("quick_check") && !slowed) {
+        slowed = true;
+        const realAll = (stmt as { all: (...a: unknown[]) => unknown }).all.bind(stmt);
+        (stmt as { all: unknown }).all = (...a: unknown[]) => {
+          Bun.sleepSync(2 * STALE_MS);
+          lockAgeMs = Date.now() - statSync(`${v.dbPath}.lock`).mtimeMs;
+          return realAll(...a);
+        };
+      }
+      return stmt;
+    } as unknown as typeof Database.prototype.query);
+    try {
+      // The preflight refuses before the build: nothing is written.
+      await expect(reindexVault(config)).rejects.toThrow(/could not be read/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The lock is younger than the stale window: it was refreshed while
+    // the check ran, so no other writer could take it over and the rebuild
+    // could not lose its lease between the preflight and the swap.
+    expect(lockAgeMs).toBeGreaterThanOrEqual(0);
+    expect(lockAgeMs).toBeLessThan(STALE_MS);
   } finally {
     v.cleanup();
   }

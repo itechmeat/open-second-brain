@@ -154,6 +154,68 @@ test("a parked index whose stored vectors cannot be counted is kept by a keyword
   expect(quickCheck(dbPath)).toBe("ok");
 });
 
+test("both parked names held by two unreadable indexes: the refusal comes before the build and writes no staging index", async () => {
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  // Both parked names are held and neither can be read: a rebuild never
+  // removes a parked index it cannot read, so no name can be freed.
+  const unreadable = Buffer.from("not a database, only bytes. ".repeat(400));
+  writeFileSync(dbPath + ".bak", unreadable);
+  writeFileSync(dbPath + ".old", Buffer.from("also not a database, only bytes. ".repeat(400)));
+
+  let refusal: unknown = null;
+  try {
+    await reindexVault(cfg);
+  } catch (err) {
+    refusal = err;
+  }
+
+  expect((refusal as { code?: string } | null)?.code).toBe("INDEX_LOCKED");
+  const message = (refusal as Error).message;
+  expect(message).toContain("found earlier indexes parked at both");
+  expect(message).toContain("could not be read");
+  // The refusal was decided before the build: no staging index of the
+  // full size was written for a build that could not be swapped in.
+  expect(existsSync(`${dbPath}.new`)).toBe(false);
+  // Nothing parked was removed.
+  expect(readFileSync(dbPath + ".bak").equals(unreadable)).toBe(true);
+  expect(
+    readFileSync(dbPath + ".old").equals(
+      Buffer.from("also not a database, only bytes. ".repeat(400)),
+    ),
+  ).toBe(true);
+});
+
+test("both parked names held, a recoverable .old and a corrupt live index: the rebuild restores as it did before", async () => {
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  // A parked index richer in vectors than the live one (the prune keeps
+  // it) and a parked index that cannot be read (the prune keeps it too):
+  // no parked name can be freed by the prune.
+  copyFileSync(dbPath, dbPath + ".old");
+  withVectors(dbPath + ".old", 5);
+  const unreadable = Buffer.from("not a database, only bytes. ".repeat(400));
+  writeFileSync(dbPath + ".bak", unreadable);
+  // Damage the live file's later pages: it still opens and its stored
+  // embeddings can still be counted, but it fails its integrity check -
+  // the state the swap restores the parked .old over.
+  const size = statSync(dbPath).size;
+  const fd = openSync(dbPath, "r+");
+  writeSync(fd, Buffer.alloc(8192, 0xa5), 0, 8192, Math.floor(size / 2 / 4096) * 4096);
+  closeSync(fd);
+  expect(quickCheck(dbPath)).not.toBe("ok");
+
+  // The rebuild goes on: the swap restores the parked .old over the live
+  // index that fails its check, which frees the name it needs.
+  await reindexVault(cfg);
+
+  expect(quickCheck(dbPath)).toBe("ok");
+  // The restored index is parked again by the swap, and the unreadable
+  // parked file is still there - nothing was removed.
+  expect(vectorsIn(dbPath + ".old")).toBe(5);
+  expect(readFileSync(dbPath + ".bak").equals(unreadable)).toBe(true);
+});
+
 test("an entity refresh refuses an index another writer stamped with chunks of another version", async () => {
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);

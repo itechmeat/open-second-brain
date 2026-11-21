@@ -58,6 +58,12 @@ export interface SearchErrorOptions {
   readonly status?: number;
   /** Parsed `Retry-After` delay in milliseconds. */
   readonly retryAfterMs?: number;
+  /**
+   * The failure underneath this one, kept so it is not lost. A refusal that
+   * answers a failure of its own repair carries that failure here: the
+   * refusal says what to do, the cause says why the repair did not work.
+   */
+  readonly cause?: unknown;
 }
 
 export class SearchError extends Error {
@@ -67,7 +73,7 @@ export class SearchError extends Error {
   /** Parsed `Retry-After` delay in milliseconds when the provider supplied one. */
   readonly retryAfterMs?: number;
   constructor(code: SearchErrorCode, message: string, opts?: SearchErrorOptions) {
-    super(message);
+    super(message, opts?.cause === undefined ? undefined : { cause: opts.cause });
     this.name = "SearchError";
     this.code = code;
     if (opts?.status !== undefined) this.status = opts.status;

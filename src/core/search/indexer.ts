@@ -1589,6 +1589,33 @@ async function reindexInto(
   let recorder: IndexBuildRecorder | null = null;
   try {
     if (stillCurrent !== null && stillCurrent()) return null;
+    // The refusal the swap would end in, decided BEFORE the build: both
+    // parked names held and neither of them releasable is knowable now -
+    // the parked names and their readability are known up front - and
+    // deciding it here means the operator gets the answer in a second and
+    // no staging index of the full size is written for a build that
+    // cannot be swapped in. The swap keeps its own check for the two
+    // things only it can know (the live index's integrity verdict, and
+    // whether a removal succeeds).
+    //
+    // The preflight counts the stored embeddings and runs the same
+    // integrity check the swap runs, and both read the index in full: on a
+    // large one they block this thread for longer than a heartbeat can
+    // wait, and the lease would go stale under the rebuild that holds it.
+    // The lease is kept fresh off this thread for the same work the swap
+    // keeps it fresh through, so a writer that took the lock over in the
+    // meantime is refused before the build, not at the swap.
+    const parkRefusal = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+      preflightParkNames(config.dbPath),
+    );
+    if (parkRefusal !== null) {
+      throw new SearchError(
+        "INDEX_LOCKED",
+        `the rebuild of ${config.dbPath} found earlier indexes parked at both ` +
+          `${config.dbPath}.bak and ${config.dbPath}.old, so it swapped nothing in and removed ` +
+          `neither: ${parkRefusal}`,
+      );
+    }
     recorder = new IndexBuildRecorder(config.dbPath, Date.now, () => leaseStillHeld(lease));
     sweepStagingClaims(config.dbPath);
     // Build into the temp file with an override config.
@@ -2161,6 +2188,25 @@ function pruneParkedIndexes(dbPath: string, liveVectors: number | null, lease: W
   const parked = parkedPaths(dbPath)
     .filter((p) => existsSync(p))
     .map((path) => ({ path, vectors: countStoredEmbeddings(path) }));
+  const keep = new Set<string>(parkedIndexesToKeep(parked, liveVectors).map((p) => p.path));
+  for (const p of parked) {
+    if (keep.has(p.path)) continue;
+    lease.assertHeld();
+    discardQuietlySet(p.path, lease);
+  }
+}
+
+/**
+ * The parked indexes {@link pruneParkedIndexes} would KEEP, given the
+ * parked set and the live index's stored-embedding count: the ones whose
+ * count cannot be read, every one of them while the live count cannot be
+ * read, and the one holding more stored embeddings than the live index.
+ * Every other parked index is removed, which frees its name.
+ */
+function parkedIndexesToKeep(
+  parked: ReadonlyArray<{ readonly path: string; readonly vectors: number | null }>,
+  liveVectors: number | null,
+): ReadonlyArray<{ readonly path: string; readonly vectors: number | null }> {
   const keep = new Set<string>(
     parked.filter((p) => p.vectors === null || liveVectors === null).map((p) => p.path),
   );
@@ -2173,11 +2219,75 @@ function pruneParkedIndexes(dbPath: string, liveVectors: number | null, lease: W
   if (richest !== null && liveVectors !== null && richest.vectors > liveVectors) {
     keep.add(richest.path);
   }
-  for (const p of parked) {
-    if (keep.has(p.path)) continue;
-    lease.assertHeld();
-    discardQuietlySet(p.path, lease);
+  return parked.filter((p) => keep.has(p.path));
+}
+
+/**
+ * Whether the swap could park the live index at a free parked name -
+ * decided BEFORE the build, because the parked names and their readability
+ * are known up front. Null when the swap can park it (a name is free, or
+ * the swap's prune would free one), else why it cannot: the same wording
+ * the swap's own refusal uses, for the same state.
+ *
+ * Nothing is removed here. The prune itself stays at the swap, where the
+ * live index has been verified - nothing parked is removed before a
+ * verified successor exists - and where a removal that fails is reported.
+ *
+ * The preflight refuses only what the swap would refuse, and says only
+ * what it has established:
+ *
+ *   - a live index whose stored vectors cannot be counted is left to the
+ *     build and the swap: it may be a file that fails its check, and the
+ *     swap restores the parked `.old` over such a live index, which frees
+ *     the name this preflight would have refused for;
+ *   - a live index that FAILS its check is left to the build and the swap
+ *     for the same reason: the swap puts the parked `.old` back over it.
+ *     The verdict comes from the same check the swap runs
+ *     ({@link checkIndexFile}), so the two agree on what a live index is;
+ *   - whether a removal the prune attempts actually succeeds stays at the
+ *     swap, where the removal is made.
+ */
+function preflightParkNames(dbPath: string): string | null {
+  const bakPath = dbPath + ".bak";
+  const oldPath = dbPath + ".old";
+  // Nothing to park aside: the swap has no live index to move.
+  if (!existsSync(dbPath)) return null;
+  // A name is free: the swap parks the live index there.
+  if (freeParkPath(bakPath, oldPath) !== null) return null;
+  const liveVectors = countStoredEmbeddings(dbPath);
+  if (liveVectors === null) {
+    // The live index cannot be weighed against the parked ones: the swap
+    // judges it (it restores the parked `.old` over a live index that
+    // fails its check), so the preflight says nothing about it.
+    return null;
   }
+  // The same order the swap's own refusal names them in.
+  const parked = parkedPaths(dbPath).map((path) => ({
+    path,
+    vectors: countStoredEmbeddings(path),
+  }));
+  const keep = parkedIndexesToKeep(parked, liveVectors);
+  // The swap's prune removes every parked index but the kept ones, so a
+  // name frees and the swap can park the live index.
+  if (keep.length < parked.length) return null;
+  // No name can be freed by the prune. The swap refuses only when the live
+  // index is not the failed successor it replaces: one that fails its
+  // check is put back over by the parked `.old`, which frees a name. The
+  // same check the swap runs decides it here, so the preflight refuses
+  // only what the swap would refuse.
+  if (checkIndexFile(dbPath, undefined).kind === "corrupt") return null;
+  const unreadable = parked.filter((p) => p.vectors === null).map((p) => p.path);
+  if (unreadable.length === 0) {
+    // Every parked index is readable and every one of them is kept: the
+    // prune would remove none, and the swap's own attempt decides whether
+    // a removal fails.
+    return null;
+  }
+  return (
+    `${unreadable.join(" and ")} could not be read, and a rebuild never removes a parked ` +
+    `index it cannot read; move ${unreadable.length > 1 ? "either of them" : "it"} out of ` +
+    `${dirname(dbPath)} (or make it readable again) and run the rebuild again`
+  );
 }
 
 /**
@@ -2481,7 +2591,18 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
         warnings: Object.freeze([]),
       });
     }
-    throw e;
+    // An index on an older schema is upgraded in place, exactly as the
+    // query path upgrades it: the same decision (`planIndexRepair`), the
+    // same helper. Reporting a rebuild here would send the user to a
+    // minute of work for an upgrade that takes seconds and keeps every
+    // stored embedding. An index no upgrade can repair keeps the refusal
+    // it always had - the rebuild advice is right for those.
+    if (e instanceof SearchError && e.code === "SCHEMA_MISMATCH") {
+      const heal = await import("./self-heal.ts");
+      store = await heal.openReadWithUpgrade(config);
+    } else {
+      throw e;
+    }
   }
   try {
     const counts = store.counts();

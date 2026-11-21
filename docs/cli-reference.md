@@ -2295,6 +2295,11 @@ o2b search focus status       Show the active focus; --json emits { active, focu
 o2b search focus clear        Clear the persisted focus file next to the search index (--session S clears one session's focus)
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
+                              A rebuild that cannot park the live index because both parked names
+                              (.bak and .old) are held and neither can be released refuses BEFORE it
+                              builds: the answer comes without a full build and no staging index is
+                              written; a live index that fails its integrity check is still replaced
+                              by the parked .old, as before
                               --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
                               --embeddings computes vectors; --concurrency N, --db PATH, --verbose
                               --cron-template prints a periodic-reindex cron recipe on stdout and
@@ -2353,7 +2358,14 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               price_source, forced}, its receipt. Both are absent otherwise
                               Idempotent; an --apply run that wrote vectors appends one
                               vector-backfill Brain log event
-o2b search status             Index status; since v0.36.0 also reports the active embedding
+o2b search status             Index status; an index on an older schema is upgraded in place (the
+                              same upgrade the query path performs, keeping every stored embedding)
+                              and then reported, so this verb never asks for a rebuild an upgrade
+                              replaces; an index no in-place upgrade can repair (a newer schema than
+                              this build, a corrupt file) keeps the rebuild advice, and so does an
+                              in-place upgrade that fails - the failure that stopped it is kept as
+                              the cause, while an index another writer holds stays a lock error
+                              since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
                               Since v1.72.0 the estimate is null and printed as `price unknown` when
                               the model has no known price; --json adds refresh_price_source

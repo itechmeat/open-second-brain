@@ -31,7 +31,7 @@ import { defaultConfigPath } from "../config.ts";
 import { o2bCommand, spawnSelfDetached } from "./o2b-command.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { resolveSearchConfig } from "../search/index.ts";
-import { healIndex, inspectIndex } from "../search/self-heal.ts";
+import { healIndex, owesRepairBeyondUpgrade, planIndexRepair } from "../search/self-heal.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "../search/store/state.ts";
 import { maybeFreshenIndex, type FreshenDecision } from "../search/freshen.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
@@ -839,7 +839,11 @@ async function ensureVaultCurrentJudged(
         ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
       });
     };
-    if (inspectIndex(config) !== "current") {
+    // ONE decision about what a stale index needs (`planIndexRepair`),
+    // the same one the read path takes: an older schema is upgraded in
+    // place, and only an index no upgrade can repair is rebuilt.
+    const plan = planIndexRepair(config);
+    if (plan.kind !== "current") {
       if (
         background &&
         migrationOwnsUpgrade(migrationSpawn) &&
@@ -853,10 +857,23 @@ async function ensureVaultCurrentJudged(
         // vault. The first start after the switch builds the new one.
         reindexSpawn = SELF_HEAL_SPAWN.skippedMigration;
       } else if (background) {
-        reindexSpawn = startSelfHealReindex(vault, configPath, config.dbPath, errors);
-        // A run that declined to spawn started nothing, and saying it did
-        // would report a rebuild that is not this run's.
-        reindexTriggered = reindexSpawn === SELF_HEAL_SPAWN.spawned;
+        // An older schema is left to the read that meets it: the read path
+        // upgrades it in place, and a background job would take the writer
+        // lock that upgrade needs and race it for it. The command line and
+        // the MCP server therefore meet an old index the same way - one
+        // decision, one repair, whichever surface the read came from.
+        //
+        // Unless the index owes a repair BEYOND that upgrade - entity rows
+        // of the older rule, chunks of older rules. The reader that
+        // upgrades the schema answers from the index it upgraded and does
+        // not repair it; the background heal does, and it re-plans after
+        // the upgrade, so it ends current on both counts.
+        if (plan.kind !== "upgrade-in-place" || owesRepairBeyondUpgrade(config)) {
+          reindexSpawn = startSelfHealReindex(vault, configPath, config.dbPath, errors);
+          // A run that declined to spawn started nothing, and saying it did
+          // would report a rebuild that is not this run's.
+          reindexTriggered = reindexSpawn === SELF_HEAL_SPAWN.spawned;
+        }
       } else {
         const healed = await healIndex(config);
         reindexTriggered = healed.kind === "rebuilt";

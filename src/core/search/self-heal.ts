@@ -28,6 +28,7 @@ import { CHUNKER_VERSION, ENTITY_ONLY_CHUNKER_VERSIONS } from "./chunker.ts";
 import { refreshEntitiesInPlace } from "./entity-refresh.ts";
 import { countStoredEmbeddings, reindexVaultUnless, type IndexVaultOptions } from "./indexer.ts";
 import { findSchemaGaps, LATEST_SCHEMA_VERSION, readSchemaVersion } from "./schema.ts";
+import { Store } from "./store.ts";
 import { consolidateWal, openWriteDatabase, restoreFromBakIfMissing } from "./store/lifecycle.ts";
 import { CHUNKER_VERSION_STATE_KEY, INTEGRITY_FAULT_STATE_KEY } from "./store/state.ts";
 import { SearchError, type IndexStats, type ResolvedSearchConfig } from "./types.ts";
@@ -105,6 +106,153 @@ export function inspectIndex(config: ResolvedSearchConfig): IndexCondition {
     return "rebuild"; // corrupt / non-Open Second Brain file
   } finally {
     closeDatabase(db);
+  }
+}
+
+/**
+ * What an index that is not current needs, decided ONCE and read by every
+ * caller that has to act on it: the read path (which upgrades an older
+ * schema in place and answers), the status surface (which must not send
+ * the user to a rebuild an upgrade replaces) and the post-upgrade
+ * maintenance (which must not start a background rebuild for an index a
+ * read repairs in place).
+ *
+ * - `current`: nothing to do.
+ * - `upgrade-in-place`: an older schema; a write open migrates it under
+ *   the writer lock and every stored vector survives. A read repairs
+ *   this index, so nothing else needs to.
+ * - `refresh-in-place`: current chunks whose entity rows were extracted
+ *   by older rules; the entity rows are refreshed in place (which also
+ *   keeps every stored embedding) when the index holds any, and rebuilt
+ *   when it holds none.
+ * - `rebuild`: no in-place repair exists - an absent, unreadable or
+ *   newer-than-this-build index, one cut by older chunking rules, or one
+ *   stamped current with tables missing.
+ */
+export type IndexRepairPlan =
+  | { readonly kind: "current" }
+  | { readonly kind: "upgrade-in-place" }
+  | { readonly kind: "refresh-in-place" }
+  | { readonly kind: "rebuild" };
+
+/**
+ * The repair the index at `config.dbPath` needs, by the rule above. The
+ * one decision the read path, the status surface and the maintenance
+ * share, so they cannot disagree about what a stale index needs: an
+ * in-place upgrade when one exists, a rebuild only when it does not.
+ */
+export function planIndexRepair(config: ResolvedSearchConfig): IndexRepairPlan {
+  const condition = inspectIndex(config);
+  if (condition === "current") return { kind: "current" };
+  if (condition === "older-schema") return { kind: "upgrade-in-place" };
+  if (condition === "entities-stale") {
+    // The same rule {@link healIndex} applies: an index with no stored
+    // vectors cannot be refreshed into the compact layout, so it is
+    // rebuilt; one whose vectors cannot be counted may hide some, and is
+    // refreshed in place so none is lost.
+    const vectors = countStoredEmbeddings(config.dbPath);
+    return vectors === 0 ? { kind: "rebuild" } : { kind: "refresh-in-place" };
+  }
+  return { kind: "rebuild" };
+}
+
+/**
+ * Whether the index at `config.dbPath` owes a repair BEYOND the schema
+ * upgrade: entity rows extracted by older rules (refreshed in place) or
+ * chunks cut by older chunking rules (rebuilt).
+ *
+ * Read past the schema version, because the chunker stamp is independent
+ * of it: an index on an older schema can already owe this repair, and
+ * {@link inspectIndex} reports the schema first, so the plan alone cannot
+ * see it. The background heal owns that repair - it upgrades, re-plans and
+ * repairs - while the reader that upgrades the schema does not: the read
+ * path answers from the index it upgraded.
+ */
+export function owesRepairBeyondUpgrade(config: ResolvedSearchConfig): boolean {
+  if (!existsSync(config.dbPath)) return false;
+  let db: Database;
+  try {
+    db = new Database(config.dbPath, { readonly: true });
+  } catch {
+    return false; // unreadable: the plan says what to do with that file
+  }
+  try {
+    return chunkState(db) !== "current";
+  } catch {
+    return false;
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/**
+ * Whether a REBUILD can repair a failed in-place upgrade - the one
+ * decision the query path and the read-only surfaces share, so neither can
+ * send the user to a rebuild that cannot help.
+ *
+ * A lock failure (`INDEX_LOCKED`) is not one: another writer holds the
+ * index - and may be performing this very upgrade - so a rebuild would only
+ * queue behind it to discard its work. Every other failure (a migration
+ * that rolled back) is one a rebuild replaces: the query path rebuilds, and
+ * a read-only surface names the rebuild as the remedy.
+ */
+export function rebuildRepairsUpgradeFailure(upgradeError: unknown): boolean {
+  return !(upgradeError instanceof SearchError && upgradeError.code === "INDEX_LOCKED");
+}
+
+/**
+ * Open the index for reading, upgrading an older schema in place first -
+ * the SAME in-place upgrade the query path performs, decided by the SAME
+ * plan. A read-only surface that opens the index this way can never tell
+ * the user to rebuild what an upgrade replaces.
+ *
+ * A refusal no upgrade can repair (a newer schema than this build, an
+ * index stamped current with tables missing, a corrupt file) is the
+ * caller's to report, unchanged: the rebuild advice is right for those.
+ *
+ * An index another process made current between the refused open and the
+ * plan is answered, not refused: the read is retried, the way the query
+ * path retries it, and the stale mismatch - which named an old schema
+ * version of an index that now answers - is not reported.
+ *
+ * A failed upgrade is reported the way the query path reports the same
+ * two failures ({@link rebuildRepairsUpgradeFailure} is the decision both
+ * paths read): a lock failure stays a lock error, because a rebuild would
+ * not help; any other failure is the refusal the read started with - the
+ * schema mismatch and the rebuild advice that answers it - with the
+ * failure that stopped the upgrade kept as its cause, so the reason the
+ * upgrade did not work is not lost.
+ */
+export async function openReadWithUpgrade(config: ResolvedSearchConfig): Promise<Store> {
+  try {
+    return await Store.open(config, { mode: "read" });
+  } catch (e) {
+    if (!(e instanceof SearchError) || e.code !== "SCHEMA_MISMATCH") throw e;
+    const plan = planIndexRepair(config);
+    // A plan no in-place repair exists for (`rebuild`): the caller's
+    // refusal is right for it, and the rebuild advice it carries stands.
+    if (plan.kind === "rebuild") throw e;
+    // `upgrade-in-place`: the index is upgraded in place, exactly as the
+    // query path upgrades it.
+    if (plan.kind === "upgrade-in-place") {
+      try {
+        await upgradeIndexInPlace(config);
+      } catch (upgradeError) {
+        // A lock failure stays a lock error: another writer holds the
+        // index, and a rebuild would only queue behind it.
+        if (!rebuildRepairsUpgradeFailure(upgradeError)) throw upgradeError;
+        // The refusal the read started with is what surfaces - a rebuild
+        // is what repairs a failed migration - with the failure that
+        // stopped the upgrade as its cause, so the reason it did not work
+        // is not lost.
+        throw new SearchError(e.code, e.message, { cause: upgradeError });
+      }
+    }
+    // `current`: another process made the index current between the
+    // refused open and this plan. It is readable now, so the read is
+    // retried: the mismatch that named an old schema version is stale
+    // advice about an index that answers.
+    return await Store.open(config, { mode: "read" });
   }
 }
 
@@ -196,9 +344,9 @@ export async function healIndex(
   config: ResolvedSearchConfig,
   opts?: IndexVaultOptions,
 ): Promise<HealOutcome> {
-  let condition = inspectIndex(config);
-  if (condition === "current") return { kind: "current" };
-  if (condition === "older-schema") {
+  let plan = planIndexRepair(config);
+  if (plan.kind === "current") return { kind: "current" };
+  if (plan.kind === "upgrade-in-place") {
     try {
       await upgradeIndexInPlace(config);
     } catch (e) {
@@ -210,15 +358,13 @@ export async function healIndex(
           `${e instanceof Error ? e.message : String(e)}`,
       );
     }
-    condition = inspectIndex(config);
-    if (condition === "current") return { kind: "migrated" };
+    plan = planIndexRepair(config);
+    if (plan.kind === "current") return { kind: "migrated" };
   }
   // Entity rows of older rules over current chunks: a refresh in place keeps
   // every stored embedding, which a keyword-only rebuild would drop; an
   // index with none is rebuilt, which also writes the compact layout.
-  // A count that cannot be read may hide vectors: refreshed in place too.
-  const vectors = condition === "entities-stale" ? countStoredEmbeddings(config.dbPath) : 0;
-  if (condition === "entities-stale" && (vectors === null || vectors > 0)) {
+  if (plan.kind === "refresh-in-place") {
     await refreshEntitiesInPlace(config);
     if (inspectIndex(config) === "current") return { kind: "migrated" };
   }
