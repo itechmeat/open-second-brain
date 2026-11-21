@@ -11,6 +11,7 @@
 
 import type { FrontmatterMap } from "../types.ts";
 import { pageText, PREFERENCE_TEXT_FIELD } from "./preference-store.ts";
+import { fencedLineMask } from "./source-links.ts";
 import type { BrainEvidenceSummary } from "./types.ts";
 
 /** What {@link renderPreferenceBody} renders a body from. */
@@ -131,11 +132,11 @@ export function derivedPreferenceBody(meta: FrontmatterMap, retired: boolean): s
   const field = (name: string): unknown => meta[name] ?? meta[`_${name}`];
   const evidence = field("evidenced_by");
   const evidenced_by = Array.isArray(evidence) ? evidence.map(String) : [];
-  if (!retired) return renderPreferenceBody({ evidenced_by });
-  // A retire re-renders the body from the page's un-prefixed fields, and a
-  // page carries `evidenced_by` under its derived `_` name, so a retired
-  // page has no `## Origin` list: only the `## Retired` section.
-  const body = "";
+  // The `## Origin` list renders `evidenced_by` on a retired page too, so
+  // the list a page shows always equals the field (FORMAT.md
+  // "Preferences"), whatever wrote the page: then the `## Retired` section.
+  const body = renderPreferenceBody({ evidenced_by });
+  if (!retired) return body;
   const text = (name: string): string | undefined => {
     const value = field(name);
     return typeof value === "string" && value !== "" ? value : undefined;
@@ -166,10 +167,19 @@ export function preferencePageBody(
   retired: boolean,
 ): string {
   if (text === null) return derivedPreferenceBody(meta, retired);
-  if (!retired || /^## Retired$/m.test(text)) return text;
+  // The evidence list under `## Origin` is the render of `evidenced_by`,
+  // never prose, live or retired: it is rendered from the field here, so a
+  // write that changes the list (a dream refresh, a merge, a doctor repair)
+  // needs no prose write, and a list prose stored by an earlier release is
+  // replaced, every other line kept.
+  const listed = withOriginList(text, meta);
+  if (!retired) return listed;
+  if (sectionsOf(listed).sections.some((section) => section.key === RETIRED_HEADING)) {
+    return listed;
+  }
   const derived = derivedPreferenceBody(meta, true);
-  const at = derived.indexOf("## Retired");
-  return at === -1 ? text : `${text.trimEnd()}\n\n${derived.slice(at)}`;
+  const at = derived.indexOf(RETIRED_HEADING);
+  return at === -1 ? listed : `${listed.trimEnd()}\n\n${derived.slice(at)}`;
 }
 
 /**
@@ -184,13 +194,23 @@ export function preferencePageProse(
   body: string,
   retired: boolean,
 ): string | null {
-  // The evidence sections are the writer's render of the log, refreshed
-  // on every write: they are no prose, so they never become `text` (a
-  // frozen copy would then hide every later render).
-  const text = pageText(withoutEvidenceSections(body));
+  // The derived parts are the writer's render of fields and of the log
+  // (the evidence list under `## Origin`, the recent evidence sections),
+  // refreshed on every write: they are no prose, so they never become
+  // `text` (a frozen copy would then hide every later render). Prose
+  // under `## Origin` (an imported page's own words) stays.
+  const text = proseOf(body);
   if (text === "") return null;
-  return text === pageText(derivedPreferenceBody(meta, retired)) ? null : text;
+  return text === proseOf(derivedPreferenceBody(meta, retired)) ? null : text;
 }
+
+/** `body` without its derived parts, as `text` stores it. */
+function proseOf(body: string): string {
+  return pageText(withoutSections(withoutOriginList(body), EVIDENCE_HEADINGS));
+}
+
+const ORIGIN_HEADING = "## Origin";
+const RETIRED_HEADING = "## Retired";
 
 /** Headings of the sections the writer renders from the log. */
 const EVIDENCE_HEADINGS: ReadonlySet<string> = new Set([
@@ -198,15 +218,143 @@ const EVIDENCE_HEADINGS: ReadonlySet<string> = new Set([
   "## Recent violations",
 ]);
 
-/** `body` without its `## Recent applications` / `## Recent violations` sections. */
-function withoutEvidenceSections(body: string): string {
-  const kept: string[] = [];
-  let skipping = false;
-  for (const line of body.replace(/\r\n?/g, "\n").split("\n")) {
-    if (line.startsWith("## ")) skipping = EVIDENCE_HEADINGS.has(line.trimEnd());
-    if (!skipping) kept.push(line);
+/** One bullet of the writer's evidence list: a bare wikilink, nothing else on the line. */
+const EVIDENCE_BULLET_RE = /^ {0,3}[-*+][ \t]+\[\[[^\]\n]+\]\][ \t]*$/;
+
+/** An ATX heading of level 1 or 2 (up to three spaces of indent): a section boundary. */
+const SECTION_HEADING_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
+
+interface Section {
+  /** The heading as one normalised line (`## Origin`); `null` for the lead before the first heading. */
+  readonly key: string | null;
+  /** Index of the section's first line (its heading) and one past its last. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * `body` cut at its level 1 and 2 headings. A line inside a fenced code
+ * block (backtick or tilde, up to three spaces of indent; the rule every
+ * section reader shares, `fencedLineMask`) is content, never a heading:
+ * an example page in a rule's guidance neither opens nor ends a section.
+ */
+function sectionsOf(body: string): {
+  readonly lines: string[];
+  readonly fenced: boolean[];
+  readonly sections: Section[];
+} {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const fenced = fencedLineMask(lines);
+  const starts: Array<{ key: string | null; start: number }> = [];
+  for (const [i, line] of lines.entries()) {
+    const heading = !fenced[i] && SECTION_HEADING_RE.test(line);
+    if (heading || i === 0) starts.push({ key: heading ? headingKey(line) : null, start: i });
   }
-  return kept.join("\n").replace(/\n{3,}/g, "\n\n");
+  const sections = starts.map((s, n) => ({ ...s, end: starts[n + 1]?.start ?? lines.length }));
+  return { lines, fenced, sections };
+}
+
+/** A heading line as one normalised line: no indent, no closing `#`s, single spaces. */
+function headingKey(line: string): string {
+  return line
+    .trim()
+    .replace(/[ \t]+#+[ \t]*$/, "")
+    .replace(/[ \t]+/g, " ");
+}
+
+function joined(lines: ReadonlyArray<string>): string {
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+/** `body` without the sections whose heading is in `headings`; every other line kept as it is. */
+function withoutSections(body: string, headings: ReadonlySet<string>): string {
+  const { lines, sections } = sectionsOf(body);
+  return joined(
+    sections
+      .filter((section) => section.key === null || !headings.has(section.key))
+      .flatMap((section) => lines.slice(section.start, section.end)),
+  );
+}
+
+/**
+ * The lines of a `## Origin` section without its evidence bullets (the
+ * writer's list); every other line (prose, an annotated bullet, a fenced
+ * example) kept. `null` when nothing but blank lines would remain under
+ * the heading: the section was only the list.
+ */
+function originRest(
+  lines: ReadonlyArray<string>,
+  fenced: ReadonlyArray<boolean>,
+  section: Section,
+) {
+  const rest: string[] = [];
+  for (let i = section.start + 1; i < section.end; i++) {
+    if (!fenced[i] && EVIDENCE_BULLET_RE.test(lines[i]!)) continue;
+    rest.push(lines[i]!);
+  }
+  return rest.some((line) => line.trim() !== "") ? rest : null;
+}
+
+/** `body` without the evidence list of its `## Origin` sections (a section that was only the list goes). */
+function withoutOriginList(body: string): string {
+  const { lines, fenced, sections } = sectionsOf(body);
+  const out: string[] = [];
+  for (const section of sections) {
+    if (section.key !== ORIGIN_HEADING) {
+      out.push(...lines.slice(section.start, section.end));
+      continue;
+    }
+    const rest = originRest(lines, fenced, section);
+    if (rest !== null) out.push(lines[section.start]!, ...rest);
+  }
+  return joined(out);
+}
+
+/**
+ * Prose `text` with the evidence list of `meta` under its `## Origin`
+ * heading: the list goes right below the first such heading, ahead of
+ * the section's own prose, and a list in the prose is replaced. Prose with
+ * no such heading gets the section first, where the writer renders it;
+ * an empty list leaves no bullet (and no section that held only bullets).
+ */
+function withOriginList(text: string, meta: FrontmatterMap): string {
+  const evidence = meta["evidenced_by"] ?? meta["_evidenced_by"];
+  const bullets = (Array.isArray(evidence) ? evidence.map(String) : []).map((ev) => `- ${ev}`);
+  const { lines, fenced, sections } = sectionsOf(text);
+  const first = sections.findIndex((section) => section.key === ORIGIN_HEADING);
+  if (first === -1) {
+    if (bullets.length === 0) return text;
+    return `${[ORIGIN_HEADING, "", ...bullets].join("\n")}\n\n${text.replace(/^\n+/, "")}`;
+  }
+  const out: string[] = [];
+  for (const [n, section] of sections.entries()) {
+    if (section.key !== ORIGIN_HEADING) {
+      out.push(...lines.slice(section.start, section.end));
+      continue;
+    }
+    const rest = originRest(lines, fenced, section);
+    const list = n === first ? bullets : [];
+    if (list.length === 0 && rest === null) continue;
+    const body = rest === null ? [] : trimBlankEdges(rest);
+    out.push(
+      lines[section.start]!,
+      "",
+      ...list,
+      ...(list.length > 0 && body.length > 0 ? [""] : []),
+      ...body,
+      "",
+    );
+  }
+  return joined(out).replace(/\n+$/, text.endsWith("\n") ? "\n" : "");
+}
+
+/** `lines` without the blank lines at either end. */
+function trimBlankEdges(lines: ReadonlyArray<string>): string[] {
+  let from = 0;
+  let to = lines.length;
+  while (from < to && lines[from]!.trim() === "") from++;
+  while (to > from && lines[to - 1]!.trim() === "") to--;
+  return lines.slice(from, to);
 }
 
 /**

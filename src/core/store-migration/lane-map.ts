@@ -18,6 +18,7 @@ import { IDEMPOTENCY_GRAMMAR } from "../brain/idempotency-ledger.ts";
 import { COMMITS_GRAMMAR, gitStoreRootDir } from "../brain/git/store.ts";
 import { jsonlLedgerGrammar } from "../brain/ledger-shards.ts";
 import { LOG_GRAMMAR } from "../brain/log-jsonl.ts";
+import { VAULT_MAP_REL } from "../brain/portability/vault-map-document.ts";
 import {
   BRAIN_ACTIVE_FILE,
   BRAIN_ARCHIVED_SIGNALS_REL,
@@ -135,6 +136,9 @@ function ledgerStream(
     record,
   };
 }
+
+/** Base name of the vault map file under `Brain/`. */
+const VAULT_MAP_FILE = VAULT_MAP_REL.slice(VAULT_MAP_REL.lastIndexOf("/") + 1);
 
 const PAGE_RULE = "private when the page is private, or its fields name a private page";
 
@@ -295,6 +299,16 @@ export const LEGACY_LANES: ReadonlyArray<LegacyLane> = Object.freeze([
     mapping: plain(
       DESTINATION_KIND.backup,
       "vault-level settings; keys every machine must agree on become shared settings records",
+    ),
+  },
+  {
+    id: "vault_map",
+    label: "vault map (role tokens)",
+    root: at(BRAIN_ROOT_REL, VAULT_MAP_FILE),
+    mapping: plain(
+      DESTINATION_KIND.backup,
+      "the folder names of the role tokens; its text becomes the operator's " +
+        "vault_map.document shared setting",
     ),
   },
   {

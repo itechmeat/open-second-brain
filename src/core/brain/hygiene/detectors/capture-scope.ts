@@ -53,9 +53,10 @@
  */
 
 import { existsSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join, posix, relative, sep } from "node:path";
 
-import { listVaultNotePaths, parseFrontmatter } from "../../../vault.ts";
+import { listVaultNotePaths } from "../../../vault.ts";
+import { lanePagesInStore, listLaneTree, parseLanePage } from "../../../store/lane-pages.ts";
 import type { FrontmatterMap } from "../../../types.ts";
 import {
   BRAIN_DISTILLATIONS_REL,
@@ -182,7 +183,7 @@ function isUrlOnly(vault: string, source: string, readable: Readable): boolean {
 }
 
 function inspectPage(vault: string, page: string, readable: Readable): HygieneFinding | null {
-  const [meta, body] = parseFrontmatter(join(vault, page));
+  const [meta, body] = parseLanePage(vault, join(vault, page));
   if (!isRetrievableKnowledge(meta)) return null;
 
   const sources = citedSources(meta, body);
@@ -246,6 +247,21 @@ function inspectArchiveStamp(
 }
 
 /**
+ * The pages below the lane folder `dir` (vault-relative), relative to it
+ * and `/`-separated: the lane entries of the store on a store-only machine
+ * (design D14 item 1), where the folder is absent or stale, the tree on an
+ * unswitched one.
+ */
+function lanePageRels(vault: string, dir: string): string[] {
+  const abs = join(vault, dir);
+  if (lanePagesInStore(vault)) {
+    return listLaneTree(vault, abs).map((path) => relative(abs, path).split(sep).join("/"));
+  }
+  if (!existsSync(abs)) return [];
+  return listVaultNotePaths(abs).map((rel) => rel.split("\\").join("/"));
+}
+
+/**
  * Every finding in the vault. `readable` is the caller's reach (see
  * `HygieneDetectorContext.readable`); a local caller passes nothing.
  */
@@ -255,9 +271,7 @@ export function detectCaptureScope(
 ): ReadonlyArray<HygieneFinding> {
   const pages: string[] = [];
   for (const dir of INSPECTED_DIRS) {
-    const abs = join(vault, dir);
-    if (!existsSync(abs)) continue;
-    for (const rel of listVaultNotePaths(abs)) pages.push(posix.join(dir, rel));
+    for (const rel of lanePageRels(vault, dir)) pages.push(posix.join(dir, rel));
   }
   const findings: HygieneFinding[] = [];
   for (const page of pages.toSorted()) {
@@ -300,11 +314,9 @@ export function auditArchiveStamps(vault: string): ArchiveStampAudit {
     mismatched: 0,
     uncited: sourceArchiveUncitedHashes(vault).length,
   };
-  const abs = join(vault, BRAIN_SOURCES_REL);
-  if (!existsSync(abs)) return counts;
-  for (const rel of listVaultNotePaths(abs)) {
-    const page = posix.join(BRAIN_SOURCES_REL, rel.split("\\").join("/"));
-    const [meta] = parseFrontmatter(join(vault, page));
+  for (const rel of lanePageRels(vault, BRAIN_SOURCES_REL)) {
+    const page = posix.join(BRAIN_SOURCES_REL, rel);
+    const [meta] = parseLanePage(vault, join(vault, page));
     const hash = stringValue(meta, SOURCE_ARCHIVE_HASH_KEY);
     if (hash === null) continue;
     const state = verifySourceArchive(vault, hash).state;

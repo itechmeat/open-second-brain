@@ -43,6 +43,60 @@ const state = (
     body: authored(authority, { signal: id, ...body }),
   });
 
+/** A capture the migration imported from where the legacy page sat. */
+const imported = (id: string, physical: number, folder: string) =>
+  rec({
+    physical,
+    kind: "signal",
+    body: {
+      id,
+      path: `Brain/inbox/${folder}/${id}.md`,
+      staged: false,
+      frontmatter: { id, topic: "t", principle: "p", created_at: "2026-11-06T12:00:00Z" },
+      raw: null,
+    },
+  });
+
+describe("an explicit state record and a later folder move", () => {
+  // On a legacy machine the folder is the signal's state: the legacy
+  // reader never reads a state record. A page approved there and then
+  // moved by hand into `processed/` read as consumed until the switch, so
+  // the capture the migration imports from that folder is the newer word
+  // and wins over the earlier record. A state record after the import (a
+  // decision on the switched machine) wins in turn.
+  test("a capture imported from processed/ or archived/ outranks an earlier state", () => {
+    const fold = foldSignals([
+      capture("sig-a", T),
+      state("sig-a", T + 1, { state: "approved" }),
+      imported("sig-a", T + 2, "processed"),
+      capture("sig-b", T),
+      state("sig-b", T + 1, { state: "approved" }),
+      imported("sig-b", T + 2, "archived"),
+    ]);
+    expect(fold.signals.get("sig-a")?.state).toBe("consumed");
+    expect(fold.signals.get("sig-a")?.stateRecord).toBeNull();
+    expect(fold.signals.get("sig-b")?.state).toBe("archived");
+  });
+
+  test("a state record after the imported capture wins", () => {
+    const fold = foldSignals([
+      state("sig-a", T + 1, { state: "approved" }),
+      imported("sig-a", T + 2, "processed"),
+      state("sig-a", T + 3, { state: "approved" }),
+    ]);
+    expect(fold.signals.get("sig-a")?.state).toBe("active");
+  });
+
+  test("an inbox capture after a state record leaves the state alone", () => {
+    const fold = foldSignals([
+      capture("sig-a", T),
+      state("sig-a", T + 1, { state: "consumed" }),
+      capture("sig-a", T + 2),
+    ]);
+    expect(fold.signals.get("sig-a")?.state).toBe("consumed");
+  });
+});
+
 describe("foldSignals", () => {
   test("a captured signal is active, a staged capture is staged", () => {
     const fold = foldSignals([capture("sig-a", T), capture("sig-b", T, true)]);

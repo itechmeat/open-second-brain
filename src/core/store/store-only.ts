@@ -17,6 +17,13 @@
  * Every other machine is unswitched: the legacy writers keep the legacy
  * tree and dual-write behind the flag exactly as in phase 1.
  *
+ * A machine that is not switched and cannot examine `<vault>/Brain` (the
+ * vault cannot be traversed, an I/O error) cannot tell which it is: a
+ * failed look is not an absent folder. {@link storeOnlyAnswer} says so
+ * (`undetermined`), and {@link storeOnlyMode} and {@link isStoreOnly}
+ * throw {@link StoreOnlyUndeterminedError}, so no writer lands in the store
+ * on a guess and no reader answers "nothing here" from an empty store.
+ *
  * The switch is sticky per machine. The migration records it in a
  * device-local marker beside the stores' state as it switches the device
  * ({@link recordSwitchMarker}), and the first answer that sees a switch
@@ -29,7 +36,7 @@
  * switched use {@link deviceSwitchedHere}, which reads the same marker.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
@@ -94,15 +101,75 @@ export interface StoreOnlyMode {
 export const readSwitchRecords: DeviceSwitchedReader = (store, deviceId) =>
   isDeviceSwitched(store, deviceId);
 
+/** The answer when this machine cannot tell whether it is store-only. */
+export interface StoreOnlyUndetermined {
+  readonly reason: "undetermined";
+  readonly vault: string;
+  /** The error the look at `<vault>/Brain` failed with. */
+  readonly cause: Error;
+}
+
+/**
+ * This machine is not switched and cannot tell whether `vault` holds a
+ * legacy tree: `<vault>/Brain` could not be examined. Thrown by
+ * {@link storeOnlyMode} and {@link isStoreOnly}; a caller that branches on
+ * the mode fails with it instead of reading or writing either layout.
+ */
+export class StoreOnlyUndeterminedError extends Error {
+  readonly vault: string;
+  readonly code: string | undefined;
+  constructor(vault: string, cause: Error) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    super(
+      `cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join(vault, BRAIN_ROOT_REL)} ` +
+        `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` +
+        "the store or the vault until the vault can be read (check its permissions)",
+      { cause },
+    );
+    this.name = "StoreOnlyUndeterminedError";
+    this.vault = vault;
+    this.code = code;
+  }
+}
+
+/** Errors of a look at `<vault>/Brain` that prove no tree is there. */
+const ABSENT_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "ENAMETOOLONG",
+  "ERR_INVALID_ARG_VALUE",
+  "ERR_INVALID_ARG_TYPE",
+]);
+
+/** Whether `<vault>/Brain` exists, is absent, or cannot be examined. */
+type LegacyTreeLook = "present" | "absent" | { readonly failed: Error };
+
+function lookAtLegacyTree(vault: string | null): LegacyTreeLook {
+  if (vault === null || vault.trim() === "") return "absent";
+  try {
+    statSync(join(vault, BRAIN_ROOT_REL));
+    return "present";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // A missing vault, a missing folder, a path through a file, or a path
+    // no file can have (a NUL byte, a name too long): there is no tree.
+    // Any other failure (EACCES, EPERM, ELOOP, EIO) says nothing.
+    if (ABSENT_CODES.has(code ?? "")) return "absent";
+    return { failed: err instanceof Error ? err : new Error(String(err)) };
+  }
+}
+
 /**
  * Whether `vault` holds a `Brain/` folder: an unswitched machine with one
  * writes the legacy tree. Whether that folder holds anything to migrate is
  * `legacy-tree.ts`; a bootstrap-only folder becomes store-only through the
- * fresh-install switch (`fresh-switch.ts`).
+ * fresh-install switch (`fresh-switch.ts`). Throws
+ * {@link StoreOnlyUndeterminedError} when the folder cannot be examined.
  */
 export function hasLegacyTree(vault: string | null): boolean {
-  if (vault === null || vault.trim() === "") return false;
-  return existsSync(join(vault, BRAIN_ROOT_REL));
+  const look = lookAtLegacyTree(vault);
+  if (typeof look === "object") throw new StoreOnlyUndeterminedError(vault ?? "", look.failed);
+  return look === "present";
 }
 
 function markerPath(): string {
@@ -264,18 +331,40 @@ function isSwitched(context: StoreOnlyContext, options: StoreOnlyOptions): boole
   return switched;
 }
 
-/** Whether, and why, this machine writes to the store only. */
+/**
+ * Whether, and why, this machine writes to the store only, or that it
+ * cannot tell (`undetermined`): for a caller that reports the answer (a
+ * status or doctor line) rather than branching on it.
+ */
+export function storeOnlyAnswer(
+  context: StoreOnlyContext = {},
+  options: StoreOnlyOptions = {},
+): StoreOnlyMode | StoreOnlyUndetermined {
+  const vault = vaultOf(context);
+  if (isSwitched(context, options)) return { storeOnly: true, reason: "device-switched", vault };
+  const look = lookAtLegacyTree(vault);
+  if (typeof look === "object")
+    return { reason: "undetermined", vault: vault!, cause: look.failed };
+  if (look === "absent") return { storeOnly: true, reason: "no-legacy-tree", vault };
+  return { storeOnly: false, reason: "legacy", vault };
+}
+
+/**
+ * Whether, and why, this machine writes to the store only. Throws
+ * {@link StoreOnlyUndeterminedError} when it cannot tell.
+ */
 export function storeOnlyMode(
   context: StoreOnlyContext = {},
   options: StoreOnlyOptions = {},
 ): StoreOnlyMode {
-  const vault = vaultOf(context);
-  if (isSwitched(context, options)) return { storeOnly: true, reason: "device-switched", vault };
-  if (!hasLegacyTree(vault)) return { storeOnly: true, reason: "no-legacy-tree", vault };
-  return { storeOnly: false, reason: "legacy", vault };
+  const answer = storeOnlyAnswer(context, options);
+  if (answer.reason === "undetermined") {
+    throw new StoreOnlyUndeterminedError(answer.vault, answer.cause);
+  }
+  return answer;
 }
 
-/** Whether this machine writes to the store only; see the module docblock. */
+/** Whether this machine writes to the store only; see the module docblock. Throws when it cannot tell. */
 export function isStoreOnly(
   context: StoreOnlyContext = {},
   options: StoreOnlyOptions = {},

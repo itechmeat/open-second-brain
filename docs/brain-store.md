@@ -1357,6 +1357,30 @@ still on disk (the store is the truth there):
   reads its candidates and judges its approvals against the store's
   preferences, and the doctor's `active-budget-pressure` check reads the
   active digest the session start reads.
+- **Maintenance and hygiene readers.** Page dedup candidates, the
+  semantics backfill plan, `o2b brain sources`, knowledge packs (list,
+  conflicts, uninstall, the owner block of an export), the schema report's
+  log event kinds, the capture-scope and document-dedup detectors, the
+  orphan-session check and `o2b brain orphan-repair`, the skill rewrite
+  verbs, the supersession chain lookup, source freshness and the recompile
+  plan, and `privacy-marker-restamp` read the store's records and lane
+  pages, and write through the store where they write.
+  `doctor --repair` prunes a dead `evidenced_by` of a stored preference
+  with a store record, in the private partition when the store holds the
+  preference as private. `privacy-marker-restamp` skips by name a lane page
+  whose stored text holds a line its fields omit, as it skips such a file,
+  and one edited while it reads it: the page is read once under its lane
+  lock and written only while the store still holds that read. The
+  orphan-session check reports an uncertainty, and `o2b brain orphan-repair`
+  refuses, while an events shard cannot be read or a signal lifecycle
+  record waits for its blob. Every repair that writes from the store's
+  fold judges that fold whole on the read its write decision rests on:
+  while it may miss a record, `privacy-marker-restamp` stamps no lane page,
+  `orphan-repair` skips the signal (`skip-incomplete`), `doctor --repair`
+  leaves an evidence prune for a later run, and a knowledge-pack uninstall
+  removes no rule (each is reported in `refused`). `o2b brain attest sign` refuses once the legacy log
+  is gone: an attestation measures the legacy log and ledgers, which a
+  switched vault no longer holds.
 - **Quote check.** A quote of a `Brain/` page other than the two digests
   (the standing rules, say) reads `note-unavailable` on a switched
   machine, also while a legacy copy of the page is still on disk: that
@@ -1367,10 +1391,49 @@ still on disk (the store is the truth there):
   name `o2b brain migrate-store --rollback` (back to the legacy tree) and
   `o2b view recover <page>` (an older version of a view page);
   `o2b brain snapshot log` and `rollback --list` still list the snapshots.
-- **Not carried over.** `Brain/_vault-map.yaml` (the role tokens of
-  `o2b vault map`) has no destination in the migration: the dry run names
-  it, it stays in the legacy tree and its archive, and once the tree is
-  removed the built-in folder names apply.
+  The recovery point a destructive operation takes there (`forget-source`,
+  a note delete, a dream pass) says so: its recoverability is not
+  `covered`, and it names `brain_records_in_store` as not covered, because
+  the records the operation removes are store records no archive holds.
+- **Vault map.** The migration imports `Brain/_vault-map.yaml` (the role
+  tokens of `o2b vault map`, the note walk and graph import) into the
+  operator-only shared setting `vault_map.document`, as it imports
+  `_permissions.yaml` into `permissions.document`. A machine that switched
+  before this import existed reads the copy its legacy-tree removal kept in
+  the device-local archive the first time the map is needed, and stores it
+  in the setting at your authority, unless the setting was ever recorded:
+  after `o2b brain settings unset vault_map.document` the built-in folder
+  names apply and the archive is not read again. While a settings shard
+  cannot be read, or a settings record waits for its blob, the archive is
+  not read either (your unset may be in it): the built-in folder names
+  apply and nothing is written until every shard reads again. Where that archive is gone (or the
+  tree was removed on another machine), the built-in folder names apply
+  until you set the map yourself:
+  `o2b brain settings set vault_map.document "$(cat _vault-map.yaml)"`.
+- **Consumed and archived signals.** A signal page's state on a legacy
+  machine is its folder. A page that sits in `Brain/inbox/processed/` or
+  `Brain/inbox/archived/` with no state of its own (moved there by hand)
+  reads as consumed or archived after the switch too, also on a store
+  migrated before this release, because the store reads the state from
+  the folder the migration recorded. That folder also wins over a state
+  recorded before the switch (a signal approved and then moved into
+  `processed/` by hand stays consumed, as the legacy reader showed it); a
+  state set after the switch wins over the folder.
+- **Rules migrated before the raw text was kept.** A rule file with
+  frontmatter that an earlier release migrated is stored as fields and
+  text only, and would read back with its YAML written anew (`'7'` as
+  `7`, an empty value as `""`). While this machine keeps the original file
+  (the legacy tree, or the archive of its removal) and that file still
+  says exactly what the entry says, the rules read back byte for byte from
+  it. Without it the entry's rendering applies; the values are the same.
+  `o2b brain standing-rules set` stores the text whole.
+- **A vault the process cannot examine.** A vault whose `Brain/` cannot
+  be looked at (its permissions, an I/O error) on a machine that has not
+  switched is neither store-only nor legacy: nothing is read from or
+  written to either layout. Commands fail with one line naming the vault
+  and the error, MCP tools with `vault_unreadable`, the session start
+  shows the rules as unavailable, and a lineage observation is dropped
+  with a named notice.
 
 ## What the partitions protect, and what they do not
 

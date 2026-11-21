@@ -361,6 +361,30 @@ describe("applyRepair - dry-run diff preview (t_b6bcd984)", () => {
     expect(readFileSync(wrPath, "utf8")).toBe(before);
   });
 
+  test("the prune leaves a fenced example of the dead link in place", () => {
+    writePreference(tmp, {
+      slug: "fenced",
+      topic: "fenced",
+      principle: "rule",
+      created_at: "2026-05-14T10:00:00Z",
+      unconfirmed_until: "2026-05-28T10:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: ["[[sig-never-existed]]"],
+      howToApply: [
+        "Cite like this:",
+        "",
+        "```md",
+        "## Origin",
+        "- [[sig-never-existed]]",
+        "```",
+      ].join("\n"),
+    });
+    applyRepair(tmp, { dryRun: false, now: new Date("2026-07-18T12:00:00Z") });
+    const text = readFileSync(join(brainDirs(tmp).preferences, "pref-fenced.md"), "utf8");
+    expect(text).not.toMatch(/^## Origin\n\n- \[\[sig-never-existed\]\]/m);
+    expect(text).toContain("```md\n## Origin\n- [[sig-never-existed]]\n```");
+  });
+
   test("the evidence-prune preview diffs the pruned frontmatter", () => {
     writePreference(tmp, {
       slug: "delta",

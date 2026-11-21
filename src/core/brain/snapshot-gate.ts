@@ -33,7 +33,10 @@
  * and reported as if it were protected for all of it. Every result here
  * therefore carries a {@link RecoverabilityVerdict} beside the archive:
  * the archive says what was taken, the verdict says what it is worth.
- * See `gates/recoverability.ts`.
+ * See `gates/recoverability.ts`. On a switched (store-only) machine the
+ * archive holds the device-local state root and the brain records the
+ * operation removes are store records, so the verdict names them as not
+ * covered (`brain_records_in_store`) rather than reading `covered`.
  *
  * The engine module stays untouched; this sibling only composes its
  * public functions.
@@ -64,6 +67,7 @@ import {
 } from "./snapshot.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 import { compactRunStamp } from "./time.ts";
+import { isStoreOnly } from "../store/store-only.ts";
 import { BRAIN_SNAPSHOT_REASON, type BrainSnapshotReason } from "./types.ts";
 
 /** The recovery point minted for a destructive operation. */
@@ -407,7 +411,7 @@ export function withDestructiveSnapshot<T>(
   // the caller now needs.
   const result = op(snapshot);
 
-  return { snapshot, result, recoverability: recoverabilityOf(opts) };
+  return { snapshot, result, recoverability: recoverabilityOf(vault, opts) };
 }
 
 /**
@@ -417,11 +421,17 @@ export function withDestructiveSnapshot<T>(
  * destroys recovery points - has to be able to build the same verdict
  * with `recoveryPoint: false` from the same vocabulary.
  */
-function recoverabilityOf(opts: WithDestructiveSnapshotOptions): RecoverabilityVerdict {
+function recoverabilityOf(
+  vault: string,
+  opts: WithDestructiveSnapshotOptions,
+): RecoverabilityVerdict {
   return classifyRecoverability({
     recoveryPoint: true,
     blastRadius: opts.blastRadius ?? DEFAULT_DESTRUCTIVE_BLAST_RADIUS,
     derivedStoreArchived: opts.derivedStoreArchived === true,
+    // A switched machine's snapshot archives its device-local state; the
+    // brain records the operation removes are store records, in no archive.
+    brainInStore: isStoreOnly({ vault }),
   });
 }
 

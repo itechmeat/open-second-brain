@@ -25,7 +25,8 @@
  * `_permissions.yaml` rides along (review finding F461): its text becomes
  * the operator-only `permissions.document` setting at `human` authority,
  * never over a value the store already holds, so the deny rules stay in
- * force once the legacy tree leaves the vault.
+ * force once the legacy tree leaves the vault. `_vault-map.yaml` (the role
+ * tokens) does the same into `vault_map.document`.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -37,6 +38,7 @@ import {
 } from "../brain/permissions/document.ts";
 
 import { brainConfigPath } from "../brain/paths.ts";
+import { VAULT_MAP_REL, VAULT_MAP_SETTING } from "../brain/portability/vault-map-document.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../brain/policy/defaults.ts";
 import { brainConfigKey, brainKeyHome, brainSettingKey } from "../brain/policy/settings-keys.ts";
 import {
@@ -198,6 +200,27 @@ export function importBrainSettings(
         },
       });
       result.written.push(PERMISSIONS_DOCUMENT_SETTING);
+    }
+  }
+  // `_vault-map.yaml` becomes the operator-only `vault_map.document`
+  // setting the same way: the role tokens apply once the tree is gone.
+  const vaultMap = join(vault, VAULT_MAP_REL);
+  if (existsSync(vaultMap)) {
+    if (fold.settings.has(VAULT_MAP_SETTING)) {
+      result.unchanged.push(VAULT_MAP_SETTING);
+    } else {
+      appendRecord(store, {
+        partition: "shared",
+        stream: "settings",
+        kind: SETTING_SET_KIND,
+        agent,
+        body: {
+          [AUTHORITY_FIELD]: "human",
+          key: VAULT_MAP_SETTING,
+          value: readFileSync(vaultMap, "utf8"),
+        },
+      });
+      result.written.push(VAULT_MAP_SETTING);
     }
   }
   if (!existsSync(path)) return result;

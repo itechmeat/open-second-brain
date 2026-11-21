@@ -130,6 +130,11 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
       "`logEntryAtReach` with the caller's view; the digest's log window moved out of `digest.ts` in the 700-line split (task 3.19)",
     ),
     ...rows(
+      ["core/brain/schema-report.ts"],
+      "at-reach",
+      "the store log's event kinds for the schema report; a caller below local reach (`privateWithheld`) is not counted the private partition's events",
+    ),
+    ...rows(
       ["core/brain/doctor/orphan-session-check.ts", "core/brain/doctor/records.ts"],
       "computation",
       "D2, settled rows",

@@ -104,6 +104,7 @@ const NEW_TOKENS = [
   "argument_forbidden",
   "quote_unverified",
   "store_write_failed",
+  "vault_unreadable",
 ] as const;
 
 /**

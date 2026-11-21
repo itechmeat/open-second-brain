@@ -31,6 +31,7 @@ import {
   type AttestationRecord,
 } from "../../../core/brain/attestation/record.ts";
 import {
+  assertAttestationMeasurable,
   attestationStoreDigest,
   collectAttestationManifest,
 } from "../../../core/brain/attestation/digest.ts";
@@ -71,7 +72,9 @@ const ATTEST_USAGE =
   "  sign [--passphrase-from-env NAME] [--json]\n" +
   "                  Measure the store (log heads, ledger inventories, index\n" +
   "                  stamp), seal and sign one attestation record, and write it as\n" +
-  "                  one JSON file. Signing never creates a key.\n" +
+  "                  one JSON file. Signing never creates a key. Refused on a\n" +
+  "                  machine that reads the brain from the store and no longer\n" +
+  "                  holds the legacy log tree: nothing of the brain is measured.\n" +
   "  list [--json]   Every attestation, newest first: id, created-at, device.\n" +
   "                  A record that cannot be read is named on its own row.\n" +
   "  verify [--json] [--public-key PATH]\n" +
@@ -225,6 +228,7 @@ async function cmdBrainAttestSign(argv: string[]): Promise<number> {
   return await withPassphraseBridge(ingested, async () => {
     let record: AttestationRecord;
     try {
+      assertAttestationMeasurable(vault);
       const manifest = collectAttestationManifest(vault);
       const sealed = buildAttestationRecord(vault, manifest);
       record = signAttestationRecord(

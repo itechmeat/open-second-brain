@@ -7,6 +7,7 @@ import { hostPathFreeReason } from "./host-path-free.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import {
   memoryFromStore,
+  memorySource,
   signalPageRaw,
   type StoreMemoryPage,
   storePagesIn,
@@ -26,6 +27,9 @@ import {
   type SchemaVocabularyCategory,
 } from "./schema-vocab.ts";
 import { parseSignal, parseStoreSignal } from "./signal.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
+import { readStoreLogEventsReport } from "../store/read/log-events.ts";
+import { fencedLineMask } from "./source-links.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 export interface SchemaTokenUsage {
@@ -273,7 +277,11 @@ function scanPageTypes(
   }
 }
 
-const LOG_EVENT_HEADER_RE = /^##\s+\d{2}:\d{2}:\d{2}\s+([\p{L}][\p{L}\p{N}_-]*)\s*$/u;
+// A day file's event header: the writer's `## HH:MM:SSZ — <kind>` (the
+// log parser's form, hyphen accepted for hand edits) and the older bare
+// `## HH:MM:SS <kind>`. The writer's form went uncounted for as long as
+// only the bare one matched, so every kind read as unused.
+const LOG_EVENT_HEADER_RE = /^##\s+\d{2}:\d{2}:\d{2}Z?\s+(?:[—-]\s+)?([\p{L}][\p{L}\p{N}_-]*)\s*$/u;
 
 function scanLogEventKinds(
   vault: string,
@@ -281,16 +289,85 @@ function scanLogEventKinds(
   counts: Map<string, number>,
   findings: SchemaReportFinding[],
 ): void {
+  const source = memorySource(vault);
+  if (source !== "legacy") {
+    scanStoreLogEventKinds(vault, source, vocabulary, counts, findings);
+    return;
+  }
   for (const path of listMarkdown(brainDirs(vault).log, "")) {
     const text = readArtifact(vault, path, "log_event_kinds", findings, () =>
       readFileSync(path, "utf8"),
     );
     if (text === undefined) continue;
-    for (const line of text.split(/\r?\n/)) {
+    // An event body can quote a header in a fenced code block: content,
+    // never an event (the fence rule the section readers share).
+    const lines = text.split(/\r?\n/);
+    const fenced = fencedLineMask(lines);
+    for (const [i, line] of lines.entries()) {
+      if (fenced[i]) continue;
       const match = LOG_EVENT_HEADER_RE.exec(line.trim());
       if (!match) continue;
       recordSchemaType(vault, path, "log_event_kinds", match[1]!, vocabulary, counts, findings);
     }
+  }
+}
+
+/** The whole stream: a store log read from its first day. */
+const STORE_LOG_RANGE = { from: "1970-01-01", to: "9999-12-31" } as const;
+
+/**
+ * A store-only machine (design D14 item 1): the log is the store's
+ * `log-event` records, read once, streamed by the log reader. Each event
+ * is counted under the day page it would have had, so a finding names
+ * the same `Brain/log/<date>.md` it names on an unswitched machine. A
+ * store shard that could not be read, or a store that could not be
+ * opened, is an `unreadable-artifact` finding: the usage it would have
+ * added is missing, so an `unused-declaration` beside it is not final.
+ */
+function scanStoreLogEventKinds(
+  vault: string,
+  source: "store" | "none",
+  vocabulary: BrainSchemaVocabulary,
+  counts: Map<string, number>,
+  findings: SchemaReportFinding[],
+): void {
+  if (source === "none") {
+    findings.push({
+      kind: "unreadable-artifact",
+      category: "log_event_kinds",
+      path: "store:log",
+      detail: "this machine reads the brain store, and no store could be opened",
+    });
+    return;
+  }
+  const read = readArtifact(vault, brainDirs(vault).log, "log_event_kinds", findings, () =>
+    readStoreLogEventsReport(STORE_LOG_RANGE, { vault }),
+  );
+  if (read === undefined || read === null) return;
+  for (const shard of read.unreadable) {
+    findings.push({
+      kind: "unreadable-artifact",
+      category: "log_event_kinds",
+      path: `store:${shard}`,
+      detail: "a store log shard could not be read",
+    });
+  }
+  const logDir = brainDirs(vault).log;
+  // A caller below local reach (a remote MCP transport) is not told the
+  // kinds or days of the `private` partition's events (caller-reach.ts).
+  const withheld = privateWithheld();
+  for (const { entry, partition } of read.events) {
+    if (withheld && partition === "private") continue;
+    const day = entry.timestamp.slice(0, 10);
+    recordSchemaType(
+      vault,
+      join(logDir, `${day}.md`),
+      "log_event_kinds",
+      entry.eventType,
+      vocabulary,
+      counts,
+      findings,
+    );
   }
 }
 

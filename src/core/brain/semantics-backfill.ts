@@ -1,8 +1,6 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
-import { brainDirs } from "./paths.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
+import type { FrontmatterMap } from "../types.ts";
+import { memoryFolderPages } from "./memory-pages.ts";
+import { parsePreferenceMeta, parseRetiredMeta } from "./preference.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import type { BrainPreference, BrainRetired } from "./types.ts";
 
@@ -63,15 +61,22 @@ export function planSemanticsBackfill(vault: string): SemanticsBackfillPlan {
   return Object.freeze({ proposals: Object.freeze(proposals) });
 }
 
-function readPreferences(vault: string): ReadonlyArray<ParsedPreferenceEntry> {
-  const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
-  const out: ParsedPreferenceEntry[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
-    const path = join(dir, name);
+/**
+ * The pages of one rule folder, parsed: the folder's files on an
+ * unswitched machine, the pages the store's fold rebuilds on a switched
+ * one ({@link memoryFolderPages}). A page that does not parse is skipped.
+ */
+function readFolder<T>(
+  vault: string,
+  folder: "preferences" | "retired",
+  prefix: string,
+  parse: (meta: FrontmatterMap, path: string) => T,
+): ReadonlyArray<{ readonly path: string; readonly value: T }> {
+  const out: Array<{ path: string; value: T }> = [];
+  for (const page of memoryFolderPages(vault, folder)) {
+    if (!page.name.startsWith(prefix) || !page.name.endsWith(".md")) continue;
     try {
-      out.push({ path, pref: parsePreference(path) });
+      out.push({ path: page.path, value: parse(page.read()[0], page.path) });
     } catch {
       continue;
     }
@@ -79,18 +84,16 @@ function readPreferences(vault: string): ReadonlyArray<ParsedPreferenceEntry> {
   return out;
 }
 
+function readPreferences(vault: string): ReadonlyArray<ParsedPreferenceEntry> {
+  return readFolder(vault, "preferences", "pref-", parsePreferenceMeta).map(({ path, value }) => ({
+    path,
+    pref: value,
+  }));
+}
+
 function readRetired(vault: string): ReadonlyArray<ParsedRetiredEntry> {
-  const dir = brainDirs(vault).retired;
-  if (!existsSync(dir)) return [];
-  const out: ParsedRetiredEntry[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith("ret-") || !name.endsWith(".md")) continue;
-    const path = join(dir, name);
-    try {
-      out.push({ path, retired: parseRetired(path) });
-    } catch {
-      continue;
-    }
-  }
-  return out;
+  return readFolder(vault, "retired", "ret-", parseRetiredMeta).map(({ path, value }) => ({
+    path,
+    retired: value,
+  }));
 }

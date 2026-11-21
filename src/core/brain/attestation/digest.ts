@@ -50,6 +50,7 @@ import type { Safeguard } from "../safeguard.ts";
 import type { ProgressSink } from "../progress.ts";
 import { readVaultIdentity } from "../vault-identity.ts";
 import { collectLogShardHeads } from "../log.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
 
 /** The manifest schema version, sealed into every manifest and record. */
 export const ATTESTATION_MANIFEST_SCHEMA_VERSION = "o2b.attestation.manifest.v1";
@@ -278,6 +279,24 @@ function indexStampToken(vault: string): string | null {
     throw new Error(`attestation: the search index exists but could not be read: ${peek.detail}`);
   }
   return sha256Hex(canonicalJson(peek.value));
+}
+
+/**
+ * Refuse a new attestation where its manifest would measure nothing of the
+ * brain: a store-only machine whose legacy `Brain/log` is gone. The
+ * manifest binds the legacy log's chain heads and the ledger folders under
+ * `Brain/`; once the brain lives in the store none of them is there, so a
+ * signature would vouch for an empty measurement. The doctor reads an
+ * older attestation on such a machine as unmeasured for the same reason
+ * (`doctor/attestation-check.ts`).
+ */
+export function assertAttestationMeasurable(vault: string): void {
+  if (!isStoreOnly({ vault }) || existsSync(brainDirs(vault).log)) return;
+  throw new Error(
+    "this machine reads the brain from the store and its legacy log tree is gone, so an " +
+      "attestation would measure nothing of the brain (no log heads, no ledger folders); " +
+      "signing is refused",
+  );
 }
 
 /**

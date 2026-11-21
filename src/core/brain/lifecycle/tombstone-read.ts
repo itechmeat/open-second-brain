@@ -1,10 +1,11 @@
 /** Read-only lifecycle state and supersession traversal. */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { parseFrontmatter } from "../../vault.ts";
+import { lanePagesInStore, listLaneTree, parseLanePage } from "../../store/lane-pages.ts";
 import { BRAIN_ROOT_REL, vaultRelative } from "../paths.ts";
 import {
   MEMORY_FOLDERS,
@@ -182,7 +183,10 @@ export function buildChainLookup(
     const skip = memoryFromStore(vault)
       ? new Set(MEMORY_FOLDERS.map((f) => join(vault, ...memoryFolderRel(f).split("/"))))
       : new Set<string>();
-    if (existsSync(root)) walk(vault, root, index, readable, skip);
+    // Once switched every other page under `Brain/` is a lane entry: the
+    // lane store answers for it, never a frozen legacy file.
+    if (lanePagesInStore(vault)) addStoredLanePages(vault, root, index, readable, skip);
+    else if (existsSync(root)) walk(vault, root, index, readable, skip);
   }
   addStoredMemoryPages(vault, index, readable);
   return (link: string): ChainLookupEntry | null => index.get(normalizeChainLink(link)) ?? null;
@@ -204,6 +208,29 @@ function addStoredMemoryPages(
       const supersededBy = readScalar(page.read()[0], SUPERSEDED_BY_KEY);
       index.set(normalizeChainLink(page.name), { supersededBy });
     }
+  }
+}
+
+/**
+ * On a store-only machine the non-memory pages under `Brain/` are entries
+ * of their lanes: index them under the walk's rules (no dot folder, `.md`
+ * only, the `readable` filter before the page is read).
+ */
+function addStoredLanePages(
+  vault: string,
+  root: string,
+  index: Map<string, ChainLookupEntry>,
+  readable: ((rel: string) => boolean) | undefined,
+  skip: ReadonlySet<string>,
+): void {
+  for (const path of listLaneTree(vault, root, ".md")) {
+    const below = relative(root, path).split(sep);
+    if (below.slice(0, -1).some((segment) => segment.startsWith("."))) continue;
+    if ([...skip].some((dir) => path.startsWith(dir + sep))) continue;
+    if (readable !== undefined && !readable(vaultRelative(path, vault))) continue;
+    const [meta] = parseLanePage(vault, path);
+    const id = normalizeChainLink(basename(path));
+    index.set(id, { supersededBy: readScalar(meta, SUPERSEDED_BY_KEY) });
   }
 }
 

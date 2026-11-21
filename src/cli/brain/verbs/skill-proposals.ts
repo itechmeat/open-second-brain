@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import {
@@ -6,6 +6,7 @@ import {
   resolveSkillRewriteJudgeCmd,
   resolveSkillRewriteModeConfig,
 } from "../../../core/config.ts";
+import { lanePageExists, listLaneFiles, readLaneFile } from "../../../core/store/lane-pages.ts";
 import {
   SkillPageDraftError,
   commitSkillPageDraft,
@@ -465,14 +466,14 @@ interface VerifiedBenchmark {
  */
 function loadVerifiedBenchmark(vault: string, skill: string): VerifiedBenchmark {
   const tasksPath = skillBenchmarkTasksPath(vault, skill);
-  if (!existsSync(tasksPath)) {
+  if (!lanePageExists(vault, tasksPath)) {
     throw new CliError(
       `brain skill-proposals rewrite: no benchmark task set for '${skill}' at ${tasksPath} ` +
         `(${SKILL_BENCHMARK_TASKS_FILE} must exist before a rewrite round can be planned)`,
     );
   }
   const specPath = skillBenchmarkSpecPath(vault, skill);
-  if (!existsSync(specPath)) {
+  if (!lanePageExists(vault, specPath)) {
     throw new CliError(
       `brain skill-proposals rewrite: no frozen spec for '${skill}' at ${specPath} ` +
         "(run the receipt step before planning a rewrite round)",
@@ -481,8 +482,8 @@ function loadVerifiedBenchmark(vault: string, skill: string): VerifiedBenchmark 
   let rawTasks: unknown;
   let rawSpec: unknown;
   try {
-    rawTasks = JSON.parse(readFileSync(tasksPath, "utf8"));
-    rawSpec = JSON.parse(readFileSync(specPath, "utf8"));
+    rawTasks = JSON.parse(readLaneFile(vault, tasksPath));
+    rawSpec = JSON.parse(readLaneFile(vault, specPath));
   } catch (error) {
     throw new CliError(
       `brain skill-proposals rewrite: the benchmark files for '${skill}' are not valid JSON: ` +
@@ -609,7 +610,7 @@ function rewritePlan(argv: string[]): number {
 
 function loadTasks(vault: string, skill: string): ReturnType<typeof parseSkillBenchmarkTasks> {
   return parseSkillBenchmarkTasks(
-    JSON.parse(readFileSync(skillBenchmarkTasksPath(vault, skill), "utf8")),
+    JSON.parse(readLaneFile(vault, skillBenchmarkTasksPath(vault, skill))),
     skillBenchmarkTasksPath(vault, skill),
   );
 }
@@ -679,7 +680,7 @@ function rewriteScore(argv: string[]): number {
 
   if (selection.verdict === SKILL_REWRITE_VERDICT.promote) {
     const heldoutDir = join(roundsDir, "heldout");
-    if (existsSync(heldoutDir) && readDirNames(heldoutDir).length > 0) {
+    if (readDirNames(vault, heldoutDir).length > 0) {
       heldoutScores = scoreArm(vault, roundsDir, "heldout", tasks, spec, candidateHash);
       heldoutVerdict = checkRewriteHeldout(heldoutScores, spec);
       const finalVerdict = heldoutVerdict;
@@ -842,31 +843,41 @@ function scoreArm(
   if (arm === "heldout") {
     // The caller decides when the held-out arm is allowed to exist.
     const dir = join(roundsDir, arm);
-    if (!existsSync(dir)) return [];
-    return scoreRewriteTranscripts(readSubmissions(dir), tasks, {
+    const submissions = readSubmissions(vault, dir);
+    if (submissions.length === 0) return [];
+    return scoreRewriteTranscripts(submissions, tasks, {
       arm: "heldout",
       spec,
       ...binding,
     });
   }
   const dir = join(roundsDir, arm);
-  if (!existsSync(dir)) {
+  if (!lanePageExists(vault, dir)) {
     throw new CliError(
       `brain skill-proposals rewrite-score: no ${arm} round transcripts under ${dir}; ` +
         "run rewrite-plan and execute the envelopes first - an absent arm is not a passing arm",
     );
   }
-  return scoreRewriteTranscripts(readSubmissions(dir), tasks, { arm: "dev", spec, ...binding });
+  return scoreRewriteTranscripts(readSubmissions(vault, dir), tasks, {
+    arm: "dev",
+    spec,
+    ...binding,
+  });
 }
 
-function readSubmissions(dir: string): ReadonlyArray<unknown> {
-  return readDirNames(dir)
-    .toSorted()
-    .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")));
+/**
+ * The submitted transcripts of one round folder. The default rounds folder
+ * lies under `Brain/skill-benchmarks/`, so on a switched machine its
+ * transcripts are entries of the `skill-benchmark` lane and are read
+ * through the lane page store; a `--rounds-dir` outside `Brain/` stays a
+ * folder of files in both modes.
+ */
+function readSubmissions(vault: string, dir: string): ReadonlyArray<unknown> {
+  return readDirNames(vault, dir).map((name) => JSON.parse(readLaneFile(vault, join(dir, name))));
 }
 
-function readDirNames(dir: string): ReadonlyArray<string> {
-  return readdirSync(dir).filter((name) => name.endsWith(".json"));
+function readDirNames(vault: string, dir: string): ReadonlyArray<string> {
+  return listLaneFiles(vault, dir, ".json");
 }
 
 function passedRateOf(scores: ReadonlyArray<RewriteTaskScore>): number {

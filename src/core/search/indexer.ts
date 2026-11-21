@@ -454,8 +454,18 @@ function assertVaultDirectory(vault: string | null): void {
   let isDir = false;
   try {
     isDir = statSync(vault).isDirectory();
-  } catch {
-    throw new SearchError("INVALID_INPUT", `vault not found: ${vault}`);
+  } catch (err) {
+    // Only a failed look that proves the path absent is "not found"; a
+    // permission or I/O fault is named, so the operator fixes the fault
+    // instead of looking for a moved vault.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new SearchError("INVALID_INPUT", `vault not found: ${vault}`);
+    }
+    throw new SearchError(
+      "INVALID_INPUT",
+      `vault cannot be examined (${code ?? (err as Error).message}): ${vault}`,
+    );
   }
   if (!isDir) {
     throw new SearchError("INVALID_INPUT", `vault path is not a directory: ${vault}`);

@@ -25,9 +25,13 @@ import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { isoDate } from "./time.ts";
-import { parseFrontmatter } from "../vault.ts";
 import { renameWithRetry } from "../fs-atomic.ts";
-import { lanePagesInStore, readLaneText, removeLanePage } from "../store/lane-pages.ts";
+import {
+  lanePagesInStore,
+  parseLanePage,
+  readLaneText,
+  removeLanePage,
+} from "../store/lane-pages.ts";
 import { lanePlaceOf } from "../store/lane-paths.ts";
 import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
@@ -90,7 +94,7 @@ export function planRecompile(
 
   for (const stale of freshness.stale) {
     if (stale.page === activePath) continue;
-    const [meta] = parseFrontmatter(stale.page);
+    const [meta] = parseLanePage(vault, stale.page);
     const sessionId = typeof meta["session_id"] === "string" ? meta["session_id"] : null;
     const sources = Array.isArray(meta["source_paths"]) ? (meta["source_paths"] as string[]) : [];
     const transcript = sources.length === 1 ? resolveSource(vault, sources[0]!) : null;

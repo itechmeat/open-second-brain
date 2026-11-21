@@ -44,8 +44,7 @@ test("the claim graph reads the store once the legacy tree is gone", () => {
   expect(existsSync(join(vault, "Brain"))).toBe(false);
 
   const after = buildClaimGraph(vault, { now });
-  // Keyed by id: the fixture's processed signal carries no `_status`, so the
-  // migration files it as active (the folder is not a state of record).
+  // Keyed by id, so the order of the two walks does not matter.
   const shape = (g: typeof before) =>
     g.nodes
       .map((n) => [n.id, n.topic, n.principle, n.superseded_by, n.contradicts, n.tombstoned])

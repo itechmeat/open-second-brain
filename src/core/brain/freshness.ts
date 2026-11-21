@@ -21,10 +21,13 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
-import { listVaultPages, parseFrontmatter } from "../vault.ts";
+import { EXCLUDED_FILES, listVaultPages } from "../vault.ts";
+import { insideBrain } from "../store/lane-entry-store.ts";
+import { lanePagesInStore, listLaneTree, parseLanePage } from "../store/lane-pages.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 /** Hash value recorded for a source that did not exist at derivation. */
@@ -121,7 +124,7 @@ function readContract(meta: Record<string, unknown>): SourceStamp | "absent" | "
  * callers that need the distinction use {@link scanFreshness}.
  */
 export function checkPageFreshness(vault: string, pagePath: string): PageFreshness | null {
-  const [meta] = parseFrontmatter(pagePath);
+  const [meta] = parseLanePage(vault, pagePath);
   const contract = readContract(meta);
   if (contract === "absent" || contract === "invalid") return null;
   return freshnessOf(vault, pagePath, contract);
@@ -165,28 +168,47 @@ function freshnessOf(vault: string, pagePath: string, contract: SourceStamp): Pa
 }
 
 /**
+ * The pages a freshness scan reads. The pages that carry the contract are
+ * mostly ones the brain derives itself (a session handoff note under
+ * `Brain/handoffs/`), so on a store-only machine the lane pages count:
+ * the vault walk without its `Brain/` folder (a frozen legacy copy the
+ * store no longer reads), plus every lane page the store holds, under
+ * the walk's own skip-file rule. An unswitched machine walks the vault.
+ */
+function freshnessPagePaths(vault: string): string[] {
+  const walked = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH }).map((p) => p.path);
+  if (!lanePagesInStore(vault)) return walked;
+  const brainRoot = join(vault, BRAIN_ROOT_REL);
+  const skip = new Set(EXCLUDED_FILES.map((name) => name.toLowerCase()));
+  const lanes = listLaneTree(vault, brainRoot, ".md").filter(
+    (path) => !skip.has(basename(path).toLowerCase()),
+  );
+  return [...walked.filter((path) => !insideBrain(vault, path)), ...lanes];
+}
+
+/**
  * Walk every markdown page in the vault and classify the ones carrying
  * the contract. On-demand and read-only.
  */
 export function scanFreshness(vault: string): FreshnessReport {
-  const pages = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH });
+  const pages = freshnessPagePaths(vault);
   let withContract = 0;
   let fresh = 0;
   const stale: PageFreshness[] = [];
   const orphaned: string[] = [];
   const invalid: string[] = [];
-  for (const page of pages) {
-    const [meta] = parseFrontmatter(page.path);
+  for (const path of pages) {
+    const [meta] = parseLanePage(vault, path);
     const contract = readContract(meta);
     if (contract === "absent") continue;
     if (contract === "invalid") {
-      invalid.push(page.path);
+      invalid.push(path);
       continue;
     }
     withContract++;
-    const freshness = freshnessOf(vault, page.path, contract);
+    const freshness = freshnessOf(vault, path, contract);
     if (freshness.status === "fresh") fresh++;
-    else if (freshness.status === "orphaned") orphaned.push(page.path);
+    else if (freshness.status === "orphaned") orphaned.push(path);
     else stale.push(freshness);
   }
   return Object.freeze({

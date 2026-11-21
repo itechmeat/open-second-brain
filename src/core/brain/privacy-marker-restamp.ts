@@ -47,11 +47,13 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
+  EXCLUDED_FILES,
   FRONTMATTER_RE,
   listVaultPages,
+  parseFrontmatterTextWithNotices,
   parseFrontmatterWithNotices,
   writeFrontmatterAtomic,
 } from "../vault.ts";
@@ -62,6 +64,16 @@ import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../graph/visibility.ts"
 import { hasPrivacyDenyMarker } from "../graph/privacy-markers.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { heldInStore, insideBrain } from "../store/lane-entry-store.ts";
+import {
+  lanePagesInStore,
+  listLaneTree,
+  parseLanePage,
+  readLaneEntrySnapshot,
+  withLaneLock,
+  writeLanePage,
+} from "../store/lane-pages.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 /** U+FEFF, which may precede a page's opening fence (see vault.ts). */
 const BYTE_ORDER_MARK = 0xfeff;
@@ -170,6 +182,28 @@ function absolutePath(vault: string, relPath: string): string {
  * text, not from the parsed map, because the loss is in the bytes the
  * parse throws away.
  */
+/** The skip reason for frontmatter lines the parse reported dropping. */
+function droppedLinesReason(notices: ReadonlyArray<{ readonly code: string }>): string {
+  const code = notices[0]!.code;
+  return notices.length === 1
+    ? `frontmatter parse dropped 1 line; rewriting would lose it (${code})`
+    : `frontmatter parse dropped ${notices.length} lines; rewriting would lose them (${code})`;
+}
+
+/**
+ * Why rewriting a page whose text is `text` from its parsed fields would
+ * lose a line (a line the parse reports dropping, or one it skips without
+ * a notice), or `null` when nothing would be lost.
+ */
+function frontmatterLoss(text: string): string | null {
+  const notices = parseFrontmatterTextWithNotices(text)[2];
+  if (notices.length > 0) return droppedLinesReason(notices);
+  const loss = unroundtrippableFrontmatterLine(text);
+  return loss === null
+    ? null
+    : `${loss}; the writer cannot round-trip it, so rewriting would lose it`;
+}
+
 function unroundtrippableFrontmatterLine(raw: string): string | null {
   const text = raw.charCodeAt(0) === BYTE_ORDER_MARK ? raw.slice(1) : raw;
   const match = FRONTMATTER_RE.exec(text);
@@ -191,6 +225,79 @@ function unroundtrippableFrontmatterLine(raw: string): string | null {
  * candidate's `visibility:` through {@link writeFrontmatterAtomic};
  * otherwise report the candidates and write nothing.
  */
+/**
+ * The frontmatter with the reserved token unioned into `visibility:`, or
+ * `null` when the page no longer carries a marker or is already formal
+ * (an edit since the scan): a reservation this run no longer owes.
+ */
+function stampedFields(meta: FrontmatterMap): FrontmatterMap | null {
+  if (!hasPrivacyDenyMarker(meta)) return null;
+  const declared = declaredTokens(meta);
+  if (declaresReserved(declared)) return null;
+  return {
+    ...meta,
+    visibility: Object.freeze([...declared, REMOTE_DENY_VISIBILITY_TOKEN]),
+  };
+}
+
+/**
+ * The pages the restamp scans, with their frontmatter. An unswitched
+ * machine walks the whole vault, `Brain/` included. On a store-only
+ * machine the `Brain/` pages are lane entries: the walk leaves out the
+ * folder (a frozen legacy copy the store no longer reads, which an apply
+ * must never rewrite) and the lane store's pages are read instead.
+ */
+function restampPages(
+  vault: string,
+): ReadonlyArray<{ readonly path: string; readonly metadata: FrontmatterMap }> {
+  const walked = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH });
+  if (!lanePagesInStore(vault)) return walked;
+  const skip = new Set(EXCLUDED_FILES.map((name) => name.toLowerCase()));
+  const lanes = listLaneTree(vault, join(vault, BRAIN_ROOT_REL), ".md")
+    .filter((path) => !skip.has(basename(path).toLowerCase()))
+    .map((path) => ({ path, metadata: parseLanePage(vault, path)[0] }));
+  return [...walked.filter((page) => !insideBrain(vault, page.path)), ...lanes];
+}
+
+/**
+ * Stamp one store-held lane entry, under its lane lock: `"updated"` when
+ * written, `null` when it owes no stamp any more, or the reason it was
+ * skipped. The entry is read once; the write lands only while the store
+ * still holds that read, so an edit that landed since (another process, a
+ * sync) is never replaced by fields computed from the older entry.
+ */
+function restampLaneEntry(vault: string, absolute: string): string | null {
+  const snapshot = readLaneEntrySnapshot(vault, absolute);
+  if (snapshot === null) {
+    return "page could not be re-read before the write (the store no longer holds it)";
+  }
+  // A record the fold could not read may be a newer version of the entry:
+  // a write from this read would replace it. Judged on the same read.
+  if (!snapshot.whole) {
+    return "the lane store could not be read in full; run the restamp again once it reads";
+  }
+  // The entry's stored text can hold lines its parsed fields omit (a
+  // folded block scalar, a comment): a write from the fields would drop
+  // them from the store. Refused by name, as a file is.
+  const loss = frontmatterLoss(snapshot.text);
+  if (loss !== null) return loss;
+  const stamped = stampedFields(snapshot.page.frontmatter);
+  if (stamped === null) return null;
+  if (!snapshot.unchanged()) {
+    return "page changed while it was read for the write; run the restamp again";
+  }
+  // The stamp only adds the reserved token to an entry another writer
+  // made: it keeps that writer's authority, so a later writer of the same
+  // standing (an agent refreshing a source summary, a person) can still
+  // replace the entry. Written at the operator's authority it would
+  // outrank every later agent write of the whole entry.
+  writeLanePage(vault, absolute, stamped, snapshot.page.body, {
+    overwrite: true,
+    ...(snapshot.authority !== null ? { authority: snapshot.authority } : {}),
+  });
+  return "updated";
+}
+
 export function planPrivacyMarkerRestamp(
   vault: string,
   opts: PrivacyMarkerRestampOptions = {},
@@ -204,7 +311,7 @@ export function planPrivacyMarkerRestamp(
   const candidates: PrivacyMarkerRestampCandidate[] = [];
   let scanned = 0;
 
-  for (const page of listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH })) {
+  for (const page of restampPages(vault)) {
     if (!hasPrivacyDenyMarker(page.metadata)) continue;
     scanned++;
     const declared = declaredTokens(page.metadata);
@@ -227,6 +334,15 @@ export function planPrivacyMarkerRestamp(
   if (apply) {
     for (const candidate of candidates) {
       const absolute = absolutePath(vault, candidate.path);
+      if (heldInStore(vault, absolute)) {
+        // A lane entry: its fields are structured, so the stamp is a
+        // lane write of the re-read entry with the token unioned in, and
+        // no frontmatter line can be lost on the way.
+        const reason = withLaneLock(vault, absolute, () => restampLaneEntry(vault, absolute));
+        if (reason === "updated") updated++;
+        else if (reason !== null) skipped.push(Object.freeze({ path: candidate.path, reason }));
+        continue;
+      }
       // Write-time recompute: the candidate list describes the vault as
       // the scan saw it, but the page is re-parsed here, immediately
       // before its write, and an edit that landed in between (operator,
@@ -261,9 +377,7 @@ export function planPrivacyMarkerRestamp(
             reason:
               first.code === DEGRADATION_CODE.frontmatterUnreadable
                 ? `page could not be re-read before the write (${first.detail})`
-                : parseNotices.length === 1
-                  ? `frontmatter parse dropped 1 line; rewriting would lose it (${first.code})`
-                  : `frontmatter parse dropped ${parseNotices.length} lines; rewriting would lose them (${first.code})`,
+                : droppedLinesReason(parseNotices),
           }),
         );
         continue;
@@ -298,13 +412,8 @@ export function planPrivacyMarkerRestamp(
         );
         continue;
       }
-      if (!hasPrivacyDenyMarker(meta)) continue;
-      const declared = declaredTokens(meta);
-      if (declaresReserved(declared)) continue;
-      const next: FrontmatterMap = {
-        ...meta,
-        visibility: Object.freeze([...declared, REMOTE_DENY_VISIBILITY_TOKEN]),
-      };
+      const next = stampedFields(meta);
+      if (next === null) continue;
       writeFrontmatterAtomic(absolute, next, body, { overwrite: true });
       updated++;
     }

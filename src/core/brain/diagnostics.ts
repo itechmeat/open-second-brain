@@ -44,7 +44,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName } from "../config.ts";
@@ -73,9 +73,17 @@ import { everyArtifactRefView, type ArtifactRef } from "./artifact-ref-view.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import { reachView } from "./reach-view.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
+import { memoryFromStore, storeMemoryPageAt } from "./memory-pages.ts";
+import { memoryEntities, memoryFoldGap } from "../store/read/memory-ids.ts";
+import { preferencePrivacy, preferenceStoreRecords, storeFieldsOf } from "./preference.ts";
+import { preferenceLockTarget } from "./preference-store.ts";
+import { authorityFromOrigin } from "../store/dual-write.ts";
+import { withOperationPrivacy } from "../store/operation-scope.ts";
+import { routeWrite } from "../store/store-write.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
 import { isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
+import { fencedLineMask } from "./source-links.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { recordRefs } from "./log-events-at-reach.ts";
 import { WRITE_REFUSAL_NEXT_COMMAND } from "./write-refusal-exit.ts";
@@ -1409,6 +1417,16 @@ function evidencePruneDerived(
   dead: string,
 ): { meta: FrontmatterMap; body: string; next: FrontmatterMap; nextBody: string } | null {
   const [meta, body] = parseFrontmatter(path);
+  return evidencePruneOf(vault, meta, body, dead);
+}
+
+/** {@link evidencePruneDerived} over a page already read (a store page). */
+function evidencePruneOf(
+  vault: string,
+  meta: FrontmatterMap,
+  body: string,
+  dead: string,
+): { meta: FrontmatterMap; body: string; next: FrontmatterMap; nextBody: string } | null {
   const arr = meta[EVIDENCED_BY_KEY];
   if (!Array.isArray(arr)) return null;
   const known = collectAllBasenames(vault);
@@ -1451,6 +1469,17 @@ const orphanedReferenceFixer: Fixer = {
   preview(vault: string, item: RepairItem): { before: string; after: string } | null {
     const [rel, field, dead] = item.target.split(TARGET_SEP);
     if (rel === undefined || field !== EVIDENCED_BY_KEY || dead === undefined) return null;
+    if (memoryFromStore(vault)) {
+      const page = storeMemoryPageAt(vault, rel);
+      if (page === null) return null;
+      const [meta, body] = page.read();
+      const pruned = evidencePruneOf(vault, meta, body, dead);
+      if (pruned === null) return null;
+      return {
+        before: formatFrontmatter(meta, body),
+        after: formatFrontmatter(pruned.next, pruned.nextBody),
+      };
+    }
     const path = join(vault, rel);
     if (!existsSync(path)) return null;
     const derived = evidencePruneDerived(vault, path, dead);
@@ -1470,6 +1499,9 @@ const orphanedReferenceFixer: Fixer = {
   apply(vault: string, item: RepairItem): AppliedFix | null {
     const [rel, field, dead] = item.target.split(TARGET_SEP);
     if (rel === undefined || field !== EVIDENCED_BY_KEY || dead === undefined) return null;
+    // Once switched the page is a store record: its file under `Brain/`
+    // is absent (or a frozen legacy copy), so the prune is a store write.
+    if (memoryFromStore(vault)) return applyStoreEvidencePrune(vault, item, rel, dead);
     const path = join(vault, rel);
     if (!existsSync(path)) return null;
 
@@ -1492,6 +1524,81 @@ const orphanedReferenceFixer: Fixer = {
     }
   },
 };
+
+/**
+ * The evidence prune on a store-only machine: the preference (or retired
+ * rule) the doctor read from the store's fold gets one record setting its
+ * `evidenced_by` list without the dead target, under the preference's own
+ * device-local lock, in the partition the store holds it in (or the
+ * pruned fields' own privacy verdict). The `## Origin` bullets are
+ * rendered from that list, so they follow it. `null` when the store holds
+ * no such page or nothing would change (idempotent no-op).
+ */
+function applyStoreEvidencePrune(
+  vault: string,
+  item: RepairItem,
+  rel: string,
+  dead: string,
+): AppliedFix | null {
+  const name = basename(rel, ".md");
+  const slug = name.replace(/^(?:pref|ret)-/, "");
+  if (slug === name) return null;
+  const path = join(vault, rel);
+  let handle: ReturnType<typeof acquireLockSync>;
+  try {
+    handle = acquireLockSync(preferenceLockTarget(path, slug, true));
+  } catch {
+    return null; // contended: leave for a later run
+  }
+  try {
+    // The page, the dead-target judgement and the write decision rest on
+    // ONE whole read of the fold: a record it could not read may be the
+    // evidence the prune would drop, or the target it calls dead. A fold
+    // that is incomplete, or that changed while the prune was derived, is
+    // left for a later run, as a contended lock is.
+    const fold = memoryEntities({ vault });
+    if (fold === null || memoryFoldGap(fold) !== null) return null;
+    const page = storeMemoryPageAt(vault, rel);
+    if (page === null) return null;
+    const [meta, body] = page.read();
+    const derived = evidencePruneOf(vault, meta, body, dead);
+    if (derived === null) return null;
+    const fields = storeFieldsOf(derived.next);
+    if (memoryEntities({ vault }) !== fold) return null;
+    // A preference the store holds as private (any of its records sits in
+    // `private/`) keeps its repair there too, even when the pruned fields
+    // name nothing private: one entity, one partition, as `writePreference`.
+    const judged = preferencePrivacy(vault, fields);
+    const privacy = (): boolean => page.private || judged();
+    withOperationPrivacy(privacy, () =>
+      routeWrite({
+        legacy: () =>
+          writeFrontmatterAtomic(path, derived.next, derived.nextBody, { overwrite: true }),
+        store: () => {
+          // `evidenced_by` is a derived field: it goes in its own record at
+          // agent authority (`preferenceStoreRecords` splits a human write
+          // that way), so a later evidence update by a dream pass still
+          // supersedes the pruned list. The prose needs no write: the
+          // `## Origin` list is rendered from the field, never from `text`.
+          const records = preferenceStoreRecords(
+            `pref-${slug}`,
+            { evidenced_by: derived.next[EVIDENCED_BY_KEY] },
+            authorityFromOrigin(),
+            privacy(),
+          );
+          const scope = typeof fields["scope"] === "string" ? fields["scope"].trim() : "";
+          return records === null
+            ? null
+            : records.map((record) => ({ ...record, scope: scope === "" ? null : scope }));
+        },
+        context: { vault },
+      }),
+    );
+    return { code: item.code, target: item.target, detail: item.detail };
+  } finally {
+    handle.release();
+  }
+}
 
 function evidencePrune(rel: string, dead: string): RepairItem {
   return {
@@ -1522,12 +1629,17 @@ function structuralReview(rel: string, field: string, dead: string): RepairItem 
  */
 function removeOriginBullet(body: string, dead: string): string {
   const lines = body.split("\n");
+  // A line inside a fenced code block is content: a heading there neither
+  // opens nor ends a section, and a bullet there is an example, never one
+  // of the Origin's links (the rule the section readers share).
+  const fenced = fencedLineMask(lines.map((line) => line.replace(/\r$/, "")));
   let inOrigin = false;
-  const kept = lines.filter((line) => {
+  const kept = lines.filter((line, i) => {
+    if (fenced[i]) return true;
     // Track section boundaries so a matching bullet outside `## Origin` (in
     // Notes, How-to-apply, or any other section) is never dropped.
-    if (/^#{1,6}\s+/.test(line)) {
-      inOrigin = /^##\s+Origin\s*$/.test(line);
+    if (/^ {0,3}#{1,6}(?:\s|$)/.test(line)) {
+      inOrigin = /^ {0,3}##\s+Origin\s*$/.test(line);
       return true;
     }
     if (!inOrigin) return true;

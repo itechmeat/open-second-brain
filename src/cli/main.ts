@@ -72,6 +72,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
+import { StoreOnlyUndeterminedError } from "../core/store/store-only.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { renderHelp, renderUsage } from "./help-render.ts";
@@ -1602,6 +1603,14 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
     }
     if (exc instanceof ConfigReadError) {
       return reportConfigReadError(exc, command, rest);
+    }
+    if (exc instanceof StoreOnlyUndeterminedError) {
+      // The machine cannot tell whether the vault holds a legacy tree (the
+      // vault cannot be examined), so the verb neither read nor wrote: one
+      // line naming the vault and the error, exit 1, as for a config the
+      // machine cannot read.
+      process.stderr.write(`error: ${exc.message}\n`);
+      return 1;
     }
     if (exc instanceof BrainConfigError) {
       // Joins `NoVaultConfiguredError` on exit 1 for the reason stated at

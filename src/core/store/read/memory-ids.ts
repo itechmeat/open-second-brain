@@ -47,6 +47,22 @@ function contextOf(vault: string | null, configPath: string | undefined): ReadCo
  * store-only machine (switched, or with no legacy tree), false on an
  * unswitched one, where the reader keeps walking the legacy folders.
  */
+/**
+ * Why the memory fold `entities` may miss a record (an events shard
+ * unreadable or gone, a record whose body is a pending blob), or `null`
+ * when that read is whole. A repair that writes from what the fold shows
+ * judges this on the very read its write decision rests on: a missing
+ * record may be the one that changed the page.
+ */
+export function memoryFoldGap(entities: StoreEntities): string | null {
+  const shards = entities.unreadable.length;
+  if (shards > 0) return `${shards} events shard${shards === 1 ? "" : "s"} could not be read`;
+  if (entities.skippedPending || entities.pendingSignalLifecycle > 0) {
+    return "a record waits for its body blob";
+  }
+  return null;
+}
+
 export function memoryFromStore(vault: string | null, configPath?: string): boolean {
   return readSource(contextOf(vault, configPath)).kind === "store";
 }

@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   brainDirsOf,
   brainStandingRulesPath,
@@ -46,6 +47,7 @@ import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
 import { readPinnedContext } from "../../core/brain/pinned.ts";
+import { StoreOnlyUndeterminedError } from "../../core/store/store-only.ts";
 import { contextReach, contextVault, type ServerContext } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { deliveryView } from "./reach-events.ts";
@@ -96,10 +98,42 @@ export async function toolBrainContext(ctx: ServerContext): Promise<Record<strin
   // file to read (standing rules, scoped rules, the instruction file).
   const vault = contextVault(ctx);
   const dirs = brainDirsOf(vault);
-  // `Brain/active.md` on an unswitched machine; on a store-only one the
-  // device-local cache the digest is rendered into on demand (D14 item 7).
-  const activePath = compiledDigestPath(vault, "active");
-  const onDemand = digestsRenderedOnDemand(vault);
+  // The operator's rules first: whatever the memory layer below does,
+  // including a vault this process cannot tell is switched or not, the
+  // rules lead the answer or it says why they could not be read.
+  const standing = vault === null ? NO_STANDING_BLOCK : readStandingBlock(vault);
+  const scoped = readScopedBlock(ctx);
+  let activePath: string;
+  let onDemand: boolean;
+  try {
+    // `Brain/active.md` on an unswitched machine; on a store-only one the
+    // device-local cache the digest is rendered into on demand (D14 item 7).
+    activePath = compiledDigestPath(vault, "active");
+    onDemand = digestsRenderedOnDemand(vault);
+  } catch (err) {
+    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    // Neither the legacy tree nor the store can be read as this vault's
+    // memory: say so in `error`, beside the rules, never "no memory". The
+    // paths are where the legacy layout keeps the files; the pinned
+    // context is not read, and `maintenance_overdue` is null (not read).
+    return {
+      vault_path: vaultPathField(ctx),
+      present: false,
+      active_path: join(dirs.brain, "active.md"),
+      content: prependBlock(standing.text, prependBlock(scoped?.text ?? "", "")),
+      counts: EMPTY_CONTEXT_COUNTS,
+      generated_at: null,
+      pinned: serializePinnedContext(ctx, {
+        path: join(dirs.brain, "pinned.md"),
+        present: false,
+        content: "",
+      }),
+      maintenance_overdue: null,
+      error: err.message,
+      ...standingRulesField(ctx, standing),
+      ...scopedRulesField(scoped),
+    };
+  }
   const pinned = readPinnedContext(vault);
   // The request's delivery binding, resolved ONCE and used for the active
   // body AND the pinned scratchpad beside it (delivery-trust, lane A): one
@@ -126,12 +160,11 @@ export async function toolBrainContext(ctx: ServerContext): Promise<Record<strin
   // path that said nothing at all about the rules - the last silent answer
   // on a surface where every other path either carries the block or states
   // why it could not be read.
-  const standing = vault === null ? NO_STANDING_BLOCK : readStandingBlock(vault);
-  // The scoped operator rules for the project, harness and host this
-  // server was launched for - local reach only, see `readScopedBlock`.
-  // Read beside the constitution, before the no-Brain return, for the
-  // same reason: the rules govern a session whatever the memory layer did.
-  const scoped = readScopedBlock(ctx);
+  // (`standing` above.) The scoped operator rules for the project,
+  // harness and host this server was launched for - local reach only, see
+  // `readScopedBlock` - are read beside the constitution, before the
+  // no-Brain return, for the same reason: the rules govern a session
+  // whatever the memory layer did.
 
   // A store-only machine keeps its memory in the store, `Brain/` or not.
   if (!onDemand && !existsSync(dirs.brain)) {
