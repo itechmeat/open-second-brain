@@ -39,7 +39,7 @@ import { readHookStamp, writeHookStamp } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import { resolveHookVault } from "./lib/hook-vault.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /** Namespaced cadence stamp key (binding D1 convention). */
 const NAV_TIER_STAMP_KEY = "osb.nav_tier.last_injected";
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
     const out = {
       hookSpecificOutput: {
         hookEventName,
-        additionalContext: fitHostContext(decision.block),
+        additionalContext: fitHostContextFor(payload, decision.block),
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");

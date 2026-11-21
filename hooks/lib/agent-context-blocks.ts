@@ -38,6 +38,8 @@ export interface AgentContextBlocksOptions {
   readonly provider?: DecisionProvider;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly configPath?: string;
+  /** The host's measure the caps are applied in (UTF-16 by default, UTF-8 bytes for Codex). */
+  readonly measure?: (text: string) => number;
 }
 
 /** The branch the workspace's `.git/HEAD` names, or null. */
@@ -75,7 +77,21 @@ function buildPinned(options: AgentContextBlocksOptions): { block: string } {
     const pinned = buildPinnedBlock({
       vault: options.vault,
       maxChars: options.limits.pinnedMaxChars,
+      ...(options.measure !== undefined ? { measure: options.measure } : {}),
     });
+    // A cut is recorded for the digest's one note, even when nothing of
+    // the pinned context fit at all.
+    if (pinned.cut) {
+      options.meter.cuts.push({
+        source: "pinned-context",
+        keptChars: pinned.keptChars,
+        totalChars: pinned.totalChars,
+        itemsKept: 0,
+        itemsTotal: 0,
+        sectionsDropped: 0,
+        sectionsTotal: 0,
+      });
+    }
     if (pinned.text === "") return { block: "" };
     options.meter.sources.push({
       name: "pinned-context",
@@ -146,6 +162,7 @@ async function buildHeads(
       heads: ordered,
       max: options.limits.topicHeadsMax,
       maxChars: options.limits.topicHeadsMaxChars,
+      ...(options.measure !== undefined ? { measure: options.measure } : {}),
       cutLine: (dropped) =>
         budgetCutLine({
           dropped: dropped + droppedBelow,

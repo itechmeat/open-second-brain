@@ -14,6 +14,11 @@
 
 import type { ToolCall } from "./transcript.ts";
 
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
+import { resolveSessionRootsFor, SESSION_RUNTIME_ID } from "../../src/core/runtime/host-facts.ts";
+
 // Canonical tool names that mutate files across runtimes.
 //   Claude Code: `Write`, `Edit`, `MultiEdit` (native tools — no
 //   `mcp__…__` prefix in transcripts).
@@ -174,7 +179,6 @@ export function summarizeTurn(
 export type HookRuntime = "claudecode" | "codex" | "grok" | "opencode" | "unknown";
 
 const CLAUDE_TRANSCRIPT_NEEDLES = ["/.claude/projects/", "/.claude/sessions/"] as const;
-const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
 
 /**
  * Infer the runtime from a hook payload by shape. First-hit wins,
@@ -191,7 +195,7 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  *      every audit row the lane writes - and it outranks the
  *      apply_patch shape, which an opencode patch payload shares.
  *   3. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
- *   4. `transcript_path` substring (`/.codex/sessions/`).
+ *   4. `transcript_path` under a Codex session root from host-facts.
  *   5. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
  *   6. Claude Code Stop shape: `hook_event_name === "Stop"` with
  *      `stop_hook_active` and `last_assistant_message` but no `turn_id`
@@ -234,7 +238,13 @@ export function detectHookRuntime(
     if (CLAUDE_TRANSCRIPT_NEEDLES.some((n) => tp.includes(n))) {
       return "claudecode";
     }
-    if (tp.includes(CODEX_TRANSCRIPT_NEEDLE)) return "codex";
+    const roots = resolveSessionRootsFor(SESSION_RUNTIME_ID.codex, {
+      home: env["HOME"] ?? env["USERPROFILE"] ?? homedir(),
+      env,
+    });
+    if (roots.some((root) => isTranscriptUnderSessionRoot(tp, root.path))) {
+      return "codex";
+    }
   }
 
   if (
@@ -265,4 +275,21 @@ export function detectHookRuntime(
   }
 
   return "unknown";
+}
+
+function resolveTranscriptPath(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  return /^[A-Za-z]:\//.test(normalized) ? normalized : resolve(normalized).replaceAll("\\", "/");
+}
+
+function isTranscriptUnderSessionRoot(transcriptPath: string, rootPath: string): boolean {
+  const path = resolveTranscriptPath(transcriptPath);
+  const resolvedRoot = resolveTranscriptPath(rootPath);
+  const windowsPath = /^[A-Za-z]:\//.test(path) && /^[A-Za-z]:\//.test(resolvedRoot);
+  if (windowsPath) {
+    return path.toLowerCase().startsWith(`${resolvedRoot.replace(/\/+$/, "").toLowerCase()}/`);
+  }
+
+  const root = resolvedRoot === "/" ? "/" : resolvedRoot.replace(/\/+$/, "");
+  return path.startsWith(root === "/" ? root : `${root}/`);
 }

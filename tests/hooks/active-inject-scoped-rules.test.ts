@@ -29,7 +29,7 @@ import {
   SCOPED_RULES_NOTICE_RESERVE,
   readScopedRules,
 } from "../../src/core/brain/scoped-rules.ts";
-import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import { budgetActiveBodyContent } from "../../src/core/brain/active-budget.ts";
 import {
   neutralizeUntrustedText,
   untrustedBindingFramingHeader,
@@ -235,11 +235,17 @@ describe("active-inject scoped rules - budget", () => {
     // into the rest, exactly as the assembly composes it.
     const framedHeader = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY);
     const activeBudget = Math.max(0, 1000 - expected.text.length - (framedHeader.length + 1));
-    expect(
-      context.endsWith(
-        `${framedHeader}\n${budgetActiveBody(neutralizeUntrustedText(trimmedActive), activeBudget)}`,
-      ),
-    ).toBe(true);
+    // The body carries no note of its own; the payload ends in the one
+    // note, after the budgeted content.
+    const activeContent = budgetActiveBodyContent(
+      neutralizeUntrustedText(trimmedActive),
+      activeBudget,
+    ).content;
+    const note = context.slice(context.lastIndexOf("\n\n") + 2);
+    expect(note.startsWith("_Injection truncated to budget:")).toBe(true);
+    expect(context.slice(0, -(note.length + 2)).endsWith(`${framedHeader}\n${activeContent}`)).toBe(
+      true,
+    );
 
     const receipts = injectionReceipts();
     expect(receipts.length).toBe(1);
@@ -356,10 +362,12 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
     const framedHeader = untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY);
     const activeBudget = 800 - scopedBlock.length - (framedHeader.length + 1);
-    const activeOut = `${framedHeader}\n${budgetActiveBody(neutralizeUntrustedText(trimmedActive), activeBudget)}`;
-    expect(budgeted.endsWith(activeOut)).toBe(true);
-    const activeNotice = activeOut.slice(activeOut.lastIndexOf("\n\n") + 2);
-    expect(budgeted.length).toBeLessThanOrEqual(800 + "\n\n".length + activeNotice.length);
+    const activeOut = `${framedHeader}\n${budgetActiveBodyContent(neutralizeUntrustedText(trimmedActive), activeBudget).content}`;
+    // The content fills the budget; the one note rides after it.
+    const note = budgeted.slice(budgeted.lastIndexOf("\n\n") + 2);
+    expect(note.startsWith("_Injection truncated to budget:")).toBe(true);
+    expect(budgeted.slice(0, -(note.length + 2)).endsWith(activeOut)).toBe(true);
+    expect(budgeted.length).toBeLessThanOrEqual(800 + "\n\n".length + note.length);
   });
 
   test("a scoped charge that leaves less room than the memory framing skips the memory source whole", async () => {
@@ -384,23 +392,31 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
     const scopedStart = context.indexOf(SCOPED_RULES_HEADER);
     expect(scopedStart).toBeGreaterThan(-1);
     // The scoped block still renders, dropped file named, inside budget.
-    const budgeted = context.slice(scopedStart);
+    const note = context.slice(context.lastIndexOf("\n\n") + 2);
+    const budgeted = context.slice(scopedStart, -(note.length + 2));
     expect(budgeted).toContain("1 file(s) dropped");
     expect(budgeted.length).toBeLessThanOrEqual(500);
-    // The memory framing does not fit what is left: no header, no body,
-    // nothing after the scoped block at all.
+    // The memory framing does not fit what is left: no header, no body;
+    // only the one note follows the scoped block, and it says that every
+    // rule line is missing, so the skip is not silent.
     expect(context.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY))).toBe(-1);
     expect(context).not.toContain(ACTIVE_HEAD);
+    expect(note).toContain("Not shown: 60 of 60 rule lines");
+    expect(note).toContain("`brain_context`");
     expect(context.trimEnd()).toBe(
-      context.slice(0, scopedStart).trimEnd() + "\n\n" + budgeted.trimEnd(),
+      context.slice(0, scopedStart).trimEnd() + "\n\n" + budgeted.trimEnd() + "\n\n" + note,
     );
-    // The receipt carries the scoped measurement but no memory body: the
-    // floor returns before the memory source is metered.
+    // The receipt carries the scoped measurement and the note but no
+    // memory body: the floor returns before the memory source is metered.
     const receipts = injectionReceipts();
     const items = receipts[receipts.length - 1]!.payload["items"] as ReadonlyArray<
       Record<string, unknown>
     >;
-    expect(items.map((item) => item["id"])).toEqual(["standing-rules", "scoped-rules"]);
+    expect(items.map((item) => item["id"])).toEqual([
+      "standing-rules",
+      "scoped-rules",
+      "digest-cut-note",
+    ]);
   });
 
   test("a degraded run keeps the scoped-rules item in the receipt", async () => {

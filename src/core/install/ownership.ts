@@ -635,6 +635,13 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "runtimes wrote those logs and own them; this module opens nothing and writes nothing",
   ],
   [
+    "hooks/lib/detect.ts",
+    "it resolves the Codex session roots `host-facts.ts` declares against HOME, USERPROFILE or " +
+      "the home directory only to compare a hook payload's `transcript_path` against them as " +
+      "strings when it infers the runtime. It opens, creates and deletes nothing at those roots, " +
+      "which belong to the agent runtime that wrote them",
+  ],
+  [
     "src/core/brain/sessions/discover.ts",
     "it READS the declared session roots of every agent runtime on this machine to hash what it " +
       "finds. The only thing it writes is the import ledger, which lives inside the vault under " +

@@ -90,9 +90,10 @@ export function splitRegroundParts(
   ceilingChars: number,
   join: (blocks: ReadonlyArray<string>) => string,
   separator: string = BLANK_LINE,
+  measure: (text: string) => number = (text) => text.length,
 ): RegroundSplit {
   const joined = join(blocks);
-  if (joined.length <= ceilingChars) {
+  if (measure(joined) <= ceilingChars) {
     return {
       parts: [joined],
       utf16Chars: joined.length,
@@ -106,9 +107,9 @@ export function splitRegroundParts(
   const units: Unit[] = [];
   for (const block of blocks) {
     if (block.length === 0) continue;
-    pushUnits(units, block, units.length === 0 ? "" : separator, capacity);
+    pushUnits(units, block, units.length === 0 ? "" : separator, capacity, measure);
   }
-  const { bodies, ends } = pack(units, capacity);
+  const { bodies, ends } = pack(units, capacity, measure);
 
   const kept = bodies.slice(0, REGROUND_MAX_PARTS);
   const partsDropped = bodies.length - kept.length;
@@ -127,7 +128,7 @@ export function splitRegroundParts(
     utf16Chars: joined.length,
     partsDropped,
     droppedChars,
-    overBudget: partsDropped > 0 || parts.some((part) => part.length > ceilingChars),
+    overBudget: partsDropped > 0 || parts.some((part) => measure(part) > ceilingChars),
   };
 }
 
@@ -136,41 +137,57 @@ export function splitRegroundParts(
  * coarsest boundary that fits: the whole block, then blank-line
  * paragraphs, then lines, and only then a hard cut.
  */
-function pushUnits(units: Unit[], text: string, separator: string, capacity: number): void {
-  if (text.length <= capacity) {
+function pushUnits(
+  units: Unit[],
+  text: string,
+  separator: string,
+  capacity: number,
+  measure: (text: string) => number,
+): void {
+  if (measure(text) <= capacity) {
     units.push({ text, separator });
     return;
   }
   const paragraphs = text.split(BLANK_LINE);
   if (paragraphs.length > 1) {
     paragraphs.forEach((paragraph, i) =>
-      pushUnits(units, paragraph, i === 0 ? separator : BLANK_LINE, capacity),
+      pushUnits(units, paragraph, i === 0 ? separator : BLANK_LINE, capacity, measure),
     );
     return;
   }
   const lines = text.split(LINE_SEPARATOR);
   if (lines.length > 1) {
     lines.forEach((line, i) =>
-      pushUnits(units, line, i === 0 ? separator : LINE_SEPARATOR, capacity),
+      pushUnits(units, line, i === 0 ? separator : LINE_SEPARATOR, capacity, measure),
     );
     return;
   }
   let rest = text;
   let first = true;
   while (rest.length > 0) {
-    const cut = safeCut(rest, capacity);
+    const cut = safeCut(rest, capacity, measure);
     units.push({ text: rest.slice(0, cut), separator: first ? separator : "" });
     rest = rest.slice(cut);
     first = false;
   }
 }
 
-/** A cut position at most `limit` that never splits a surrogate pair. */
-function safeCut(text: string, limit: number): number {
-  if (text.length <= limit) return text.length;
-  const before = text.charCodeAt(limit - 1);
+/**
+ * A cut position whose head measures at most `limit` (and at least one
+ * unit, so the loop always advances) that never splits a surrogate pair.
+ */
+function safeCut(text: string, limit: number, measure: (text: string) => number): number {
+  if (measure(text) <= limit) return text.length;
+  let at = Math.min(limit, text.length);
+  // Every unit costs at least one of either measure: step down by the overshoot.
+  for (;;) {
+    const over = measure(text.slice(0, at)) - limit;
+    if (over <= 0 || at <= 1) break;
+    at = Math.max(1, at - Math.max(1, Math.ceil(over / 3)));
+  }
+  const before = text.charCodeAt(at - 1);
   const isHighSurrogate = before >= 0xd800 && before <= 0xdbff;
-  return isHighSurrogate && limit > 1 ? limit - 1 : limit;
+  return isHighSurrogate && at > 1 ? at - 1 : at;
 }
 
 /** Packed bodies, and where each one ends in the joined context. */
@@ -180,22 +197,33 @@ interface Packed {
 }
 
 /** Greedily fill bodies with whole units; a separator at a part boundary is dropped. */
-function pack(units: ReadonlyArray<Unit>, capacity: number): Packed {
+function pack(
+  units: ReadonlyArray<Unit>,
+  capacity: number,
+  measure: (text: string) => number,
+): Packed {
   const bodies: string[] = [];
   const ends: number[] = [];
   let current = "";
+  // The running measure of `current`: separators are ASCII, so their
+  // length is their measure.
+  let currentSize = 0;
   // The units joined by their separators are the joined context, so this
   // running offset is a position in it.
   let offset = 0;
   for (const unit of units) {
+    const size = measure(unit.text);
     if (current.length === 0) {
       current = unit.text;
-    } else if (current.length + unit.separator.length + unit.text.length <= capacity) {
+      currentSize = size;
+    } else if (currentSize + unit.separator.length + size <= capacity) {
       current += unit.separator + unit.text;
+      currentSize += unit.separator.length + size;
     } else {
       bodies.push(current);
       ends.push(offset);
       current = unit.text;
+      currentSize = size;
     }
     offset += unit.separator.length + unit.text.length;
   }

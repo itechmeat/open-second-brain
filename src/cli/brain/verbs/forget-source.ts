@@ -94,7 +94,10 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         failed: plan.failed.map((f) => ({ path: f.path, message: f.message })),
         // What of the brain store the trace could not read: a run that
         // carries it is not a complete forget, and exits non-zero.
-        ...(plan.unreachable !== undefined ? { unreachable: [...plan.unreachable] } : {}),
+        // `complete: false` rides beside it, as on `brain_delete_by_source`.
+        ...(plan.unreachable !== undefined
+          ? { unreachable: [...plan.unreachable], complete: false }
+          : {}),
         manifest_entry_removed: plan.manifestEntryRemoved,
         audit_record_id: plan.auditRecordId,
         snapshot_run_id: plan.snapshotRunId,
@@ -120,6 +123,7 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
       ok(`forget-source: ${plan.source}`);
       ok(`  deleted ${plan.deleted.length} file(s)`);
       for (const p of plan.deleted) ok(`    - ${p}`);
+      if (plan.unreachable !== undefined) ok(incompleteLine(plan.unreachable));
       // The failed list reaches the text report too (review M8), with the
       // same exit rule the JSON path answers: failures are a non-zero exit.
       for (const f of plan.failed) {
@@ -158,6 +162,7 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
     for (const e of plan.derived) {
       ok(`    - ${e.path} (${e.kind}${e.isIndexArtifact ? ", index artifact" : ""})`);
     }
+    if (plan.unreachable !== undefined) ok(incompleteLine(plan.unreachable));
     if (plan.mentions.length > 0) {
       info(`  ${plan.mentions.length} protected mention(s) reported, NOT deleted:`);
       for (const e of plan.mentions) info(`    - ${e.path} (${e.kind})`);
@@ -178,4 +183,16 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
     }
     return fail(message);
   }
+}
+
+/**
+ * The report's own line for a trace that could not read part of the
+ * brain store, so the counts above it never read as the final answer
+ * (the per-part lines go to stderr).
+ */
+function incompleteLine(unreachable: ReadonlyArray<string>): string {
+  return (
+    `  incomplete: ${unreachable.length} part(s) of the brain store could not be read ` +
+    `(${unreachable.join(", ")}); more may derive from this source`
+  );
 }

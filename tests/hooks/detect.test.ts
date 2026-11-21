@@ -269,9 +269,12 @@ describe("detectHookRuntime", () => {
 
   test("Codex transcript path → codex", () => {
     expect(
-      detectHookRuntime({
-        transcript_path: "/root/.codex/sessions/2026-05-18.json",
-      }),
+      detectHookRuntime(
+        {
+          transcript_path: "/root/.codex/sessions/2026-05-18.json",
+        },
+        { HOME: "/root" },
+      ),
     ).toBe("codex");
   });
 
@@ -282,10 +285,32 @@ describe("detectHookRuntime", () => {
       }),
     ).toBe("claudecode");
     expect(
-      detectHookRuntime({
-        transcript_path: "C:\\Users\\x\\.codex\\sessions\\2026-05-18.json",
-      }),
+      detectHookRuntime(
+        {
+          transcript_path: "C:\\Users\\x\\.codex\\sessions\\2026-05-18.json",
+        },
+        { HOME: "C:\\Users\\x" },
+      ),
     ).toBe("codex");
+  });
+
+  test("Windows Codex roots match case-insensitively across slash styles", () => {
+    expect(
+      detectHookRuntime(
+        {
+          transcript_path: "c:/users/X/.CODEX/sessions/rollout.jsonl",
+        },
+        { HOME: "C:\\Users\\x" },
+      ),
+    ).toBe("codex");
+    expect(
+      detectHookRuntime(
+        {
+          transcript_path: "C:\\Users\\x\\.codex\\sessions-old\\rollout.jsonl",
+        },
+        { HOME: "c:/Users/x" },
+      ),
+    ).toBe("unknown");
   });
 
   test("Claude Code triple without transcript_path → claudecode", () => {

@@ -21,7 +21,11 @@ import {
   fitHostContextCut,
   HOST_CONTEXT_CAP_CHARS,
   HOST_CONTEXT_CEILING_CHARS,
+  hostMeasureFor,
+  utf16Length,
+  utf8Bytes,
 } from "../../hooks/lib/host-context-ceiling.ts";
+import { splitRegroundParts } from "../../src/core/brain/reground-parts.ts";
 import { takeRegroundPart } from "../../hooks/lib/injection-ledger.ts";
 import { initStore } from "../../src/core/store/store-init.ts";
 import { openStore } from "../../src/core/store/store-open.ts";
@@ -306,7 +310,8 @@ describe("active-inject under the host's context cap", () => {
     const all = parts.join("\n");
     for (let i = 0; i < 80; i++) expect(all).toContain(`- Standing rule ${i}: `);
     expect(all).toContain("- Lesson 0: ");
-    expect(parts.at(-1)!.endsWith("for the full preference set._")).toBe(true);
+    const lastLine = parts.at(-1)!.split("\n").at(-1)!;
+    expect(lastLine).toMatch(/^_Injection truncated to budget: .*Call `brain_context`.*\._$/);
   });
 });
 
@@ -356,5 +361,43 @@ describe("fitHostContext and untrusted-source fences", () => {
     const close = fitted.lastIndexOf("</untrusted_source>");
     expect(close).toBeGreaterThan(fitted.lastIndexOf('<untrusted_source origin="x">'));
     expect(close).toBeLessThan(fitted.indexOf("_Injection truncated to budget"));
+  });
+});
+
+describe("the ceiling in each host's measure", () => {
+  // Codex spills a hook's context once ceil(UTF-8 bytes / 4) passes 2,500
+  // tokens, so its ceiling counts bytes; every other host counts UTF-16
+  // code units.
+  const russian = Array.from({ length: 600 }, (_, i) => `- правило ${i}: пиши просто`).join("\n");
+
+  test("Codex is measured in UTF-8 bytes, every other host in UTF-16 code units", () => {
+    expect(hostMeasureFor("codex")).toBe(utf8Bytes);
+    expect(hostMeasureFor("claudecode")).toBe(utf16Length);
+    expect(hostMeasureFor("unknown")).toBe(utf16Length);
+    expect(utf8Bytes("правило")).toBe(14);
+  });
+
+  test("the guard cuts a non-ASCII payload to the byte ceiling at a line, with the notice", () => {
+    expect(russian.length).toBeLessThan(HOST_CONTEXT_CEILING_CHARS * 2);
+    expect(utf8Bytes(russian)).toBeGreaterThan(HOST_CONTEXT_CEILING_CHARS);
+    const cut = fitHostContextCut(russian, "", HOST_CONTEXT_CEILING_CHARS, utf8Bytes);
+    expect(utf8Bytes(cut.text)).toBeLessThanOrEqual(HOST_CONTEXT_CEILING_CHARS);
+    expect(utf8Bytes(cut.text)).toBeGreaterThan(HOST_CONTEXT_CEILING_CHARS - 400);
+    expect(cut.text.startsWith(russian.slice(0, cut.kept))).toBe(true);
+    expect(russian[cut.kept]).toBe("\n");
+    expect(cut.text).toContain("to fit the host's context limit");
+  });
+
+  test("the re-delivery splitter sizes every part in the host's measure", () => {
+    const split = splitRegroundParts(
+      [russian, russian],
+      4000,
+      (b) => b.join("\n\n"),
+      "\n\n",
+      utf8Bytes,
+    );
+    expect(split.parts.length).toBeGreaterThan(1);
+    for (const part of split.parts) expect(utf8Bytes(part)).toBeLessThanOrEqual(4000);
+    expect(split.overBudget).toBe(split.partsDropped > 0);
   });
 });

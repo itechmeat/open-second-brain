@@ -131,7 +131,7 @@ import {
 } from "./lib/injection-ledger.ts";
 import { readHookStamp } from "./lib/session-state.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /**
  * The last assistant messages of the turn the check reads. Everything
@@ -1079,7 +1079,10 @@ async function main(): Promise<void> {
   if (handsOver || text === null) return;
   process.stdout.write(
     `${JSON.stringify({
-      hookSpecificOutput: { hookEventName: "Stop", additionalContext: fitHostContext(text) },
+      hookSpecificOutput: {
+        hookEventName: "Stop",
+        additionalContext: fitHostContextFor(payload, text),
+      },
     })}\n`,
   );
 }

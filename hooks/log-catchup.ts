@@ -77,7 +77,7 @@ import {
 import { resolveHookTarget } from "./lib/hook-vault.ts";
 import { logDaysWithDevices } from "../src/core/brain/log-days.ts";
 import { isStoreOnly } from "../src/core/store/store-only.ts";
-import { fitHostContext } from "./lib/host-context-ceiling.ts";
+import { fitHostContextFor } from "./lib/host-context-ceiling.ts";
 
 /** `origin` label stamped on the catch-up block's untrusted-content fence. */
 const CATCHUP_FENCE_ORIGIN = "cross-agent-catch-up";
@@ -439,7 +439,7 @@ async function main(): Promise<void> {
       const out = {
         hookSpecificOutput: {
           hookEventName,
-          additionalContext: fitHostContext(block),
+          additionalContext: fitHostContextFor(payload, block),
         },
       };
       process.stdout.write(JSON.stringify(out) + "\n");
@@ -447,7 +447,7 @@ async function main(): Promise<void> {
       const out = {
         hookSpecificOutput: {
           hookEventName,
-          additionalContext: fitHostContext(render([])),
+          additionalContext: fitHostContextFor(payload, render([])),
         },
       };
       process.stdout.write(JSON.stringify(out) + "\n");
