@@ -39,6 +39,7 @@
  * into the store a second time), and when there is no store at all.
  */
 
+import { VaultUnexaminableError } from "../vault-unexaminable.ts";
 import { realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
@@ -152,7 +153,16 @@ function mirrorRefusal(
 ): MirrorReport | null {
   if (isSelfMirror(sharedVault, originVault)) return SELF_MIRROR;
   const withConfig = configPath !== undefined ? { configPath } : {};
-  const mode = storeOnlyMode({ vault: sharedVault, ...withConfig });
+  let mode: ReturnType<typeof storeOnlyMode>;
+  try {
+    mode = storeOnlyMode({ vault: sharedVault, ...withConfig });
+  } catch (err) {
+    // A shared path that cannot be examined (a file where the vault should
+    // be, a permission) is a broken namespace: reported `failed` before any
+    // write, never mirrored on a guessed layout.
+    if (err instanceof VaultUnexaminableError) return NOT_A_DIRECTORY;
+    throw err;
+  }
   if (mode.reason === "device-switched") return STORE_ONLY_MIRROR;
   if (mode.reason !== "no-legacy-tree") return null;
   // A shared path that is no directory at all (an unmounted share, a

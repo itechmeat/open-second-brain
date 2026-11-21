@@ -9,7 +9,9 @@
  * Before the fix the setting was refused ("not a brain setting"), the
  * phases were read only from `Brain/_brain.yaml`, and the emitted ledger
  * was written only with recall-inject or re-delivery on, so the check had
- * no candidates and wrote nothing.
+ * no candidates and wrote nothing. The preference pages the ledger names
+ * then all read `note-unavailable`; each is now judged against the bullet
+ * text the session start delivered for it, which the ledger keeps.
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -19,7 +21,7 @@ import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts"
 import { readAllLogEntries } from "../../src/core/brain/query.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { STORE_DUAL_WRITE_ENV, STORE_ROOT_ENV } from "../../src/core/store/constants.ts";
-import { readActiveEmittedPaths } from "../../hooks/lib/injection-ledger.ts";
+import { readActiveDelivered, readActiveEmittedPaths } from "../../hooks/lib/injection-ledger.ts";
 import { switchDevice } from "../core/brain/store-only/fixtures.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -137,6 +139,10 @@ test("set on a switched vault, the quote check finds the session start's notes a
   expect({ exit: start.exit, stderr: start.stderr }).toEqual({ exit: 0, stderr: "" });
   expect(start.stdout).toContain(RULE);
   expect(readActiveEmittedPaths(env.vault, SESSION).has("Brain/active.md")).toBe(true);
+  // The ledger keeps what the bullet delivered, the evidence for its page.
+  expect(
+    readActiveDelivered(env.vault, SESSION).get("Brain/preferences/pref-otters-first.md")?.text,
+  ).toContain(RULE);
 
   const transcript = join(env.parent, "transcript.jsonl");
   mkdirSync(env.parent, { recursive: true });
@@ -176,6 +182,12 @@ test("set on a switched vault, the quote check finds the session start's notes a
   // The digest the session start emitted is read from the device-local
   // cache, not reported unavailable for lack of a `Brain/active.md` file.
   expect(payload.per_note.find((n) => n.path === "Brain/active.md")?.verdict).toBe("verified");
+  // The preference page the digest's bullet came from is judged against the
+  // text that bullet delivered: the span the digest left unverified was
+  // measured against it (it used to read `note-unavailable`).
+  expect(
+    payload.per_note.find((n) => n.path === "Brain/preferences/pref-otters-first.md")?.verdict,
+  ).toBe("not-in-note");
 
   const enforced = readAllLogEntries(env.vault).filter((event) =>
     JSON.stringify(event).includes("answer-quote-check"),

@@ -92,7 +92,8 @@ import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vaul
 import type { SessionLineage } from "./types.ts";
 import { dualWrite } from "../../store/dual-write.ts";
 import { readLedgerRows } from "../../store/read/ledger-rows.ts";
-import { isStoreOnly, StoreOnlyUndeterminedError } from "../../store/store-only.ts";
+import { isStoreOnly } from "../../store/store-only.ts";
+import { VaultUnexaminableError } from "../../vault-unexaminable.ts";
 import { storeWrite } from "../../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../../store/dual-write-records.ts";
 
@@ -894,7 +895,7 @@ export function readLineageLedger(vault: string): LineageLedgerState {
   try {
     storeOnly = isStoreOnly({ vault });
   } catch (err) {
-    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    if (!(err instanceof VaultUnexaminableError)) throw err;
     return buildState([]);
   }
   if (storeOnly) {
@@ -954,7 +955,7 @@ export function recordLineageObservation(
   try {
     storeOnly = isStoreOnly({ vault });
   } catch (err) {
-    if (!(err instanceof StoreOnlyUndeterminedError)) throw err;
+    if (!(err instanceof VaultUnexaminableError)) throw err;
     return {
       status: LINEAGE_RECORD_STATUS.dropped,
       notice: degradationNotice({

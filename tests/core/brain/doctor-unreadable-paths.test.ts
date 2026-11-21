@@ -340,7 +340,10 @@ describe("a failure on a parent path component", () => {
       expect((result.uncertain ?? []).map((u) => u.code)).not.toContain("brain-root-absent");
       const entry = (result.uncertain ?? []).find((u) => u.code === SKIPPED);
       expect(entry).toBeDefined();
-      expect(entry!.path).toBe(brainDirs(vault).brain);
+      // Not `brainDirs(vault)`: its path check refuses an unexaminable vault.
+      expect(entry!.path).toBe(join(vault, "Brain"));
+      // A failing check: nothing about the root was verified.
+      expect(result.errors.map((e) => e.code)).toContain(SKIPPED);
     },
   );
 

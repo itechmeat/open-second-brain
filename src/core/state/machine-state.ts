@@ -49,6 +49,7 @@
  * not brought back.
  */
 
+import { pathPresent } from "../vault-unexaminable.ts";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -279,7 +280,7 @@ function locate(
     adoptOnce(join(deviceStateDir(null), freshVaultRel(vault)), root);
     if (storeId !== null) adoptOnce(join(deviceStateDir(storeId), freshVaultRel(vault)), root);
     // A switched vault with no legacy tree: the migration copied nothing.
-    if (!existsSync(join(vault, BRAIN_ROOT_REL))) seedFromVaultOnce(vault, root);
+    if (!pathPresent(vault, join(vault, BRAIN_ROOT_REL))) seedFromVaultOnce(vault, root);
   }
   restoreBackupOnce(root);
   return { relocated: true, root };

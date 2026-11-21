@@ -49,6 +49,7 @@
  * the records the replay uses, before the restore.
  */
 
+import { pathPresent } from "../vault-unexaminable.ts";
 import {
   appendFileSync,
   cpSync,
@@ -574,7 +575,7 @@ function rollbackChecks(vault: string, store: StoreHandle, dir: string): Rollbac
     readRemovalMarker(store, vault) !== null ||
     removedElsewhere ||
     (removing !== null && sameVaultPath(removing.vault, vault)) ||
-    !existsSync(join(vault, BRAIN_ROOT_REL))
+    !pathPresent(vault, join(vault, BRAIN_ROOT_REL))
   ) {
     throw new RollbackRefusedError(
       "the legacy tree has left the vault; a rollback is only possible until then",

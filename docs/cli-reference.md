@@ -75,7 +75,7 @@ table:
 | `3`  | `--check` found drift in at least one target                                                                                                        |
 | `4`  | `--apply` hit a user-modified managed block; re-run with `--force` to overwrite it                                                                  |
 | `5`  | `--check` found a runtime it proved unreachable (since v1.46.0)                                                                                     |
-| `6`  | `--apply` refused for want of consent in a non-interactive run (`--json`, CI, no TTY); nothing was written, and the refusal names `--yes` on stderr |
+| `6`  | `--apply` refused for want of consent in a non-interactive run (`--json`, CI, no TTY), or the prompt of an interactive run was answered no; nothing was written, and the headless refusal names `--yes` on stderr |
 
 Code `5` is a behaviour change, and a breaking one for any script that
 treated a zero exit as "everything is fine". Before v1.46.0 a
@@ -88,6 +88,20 @@ Code `6` is a behaviour change too, and breaking for headless scripts:
 `--apply` writes nothing until something consents - a `--yes` flag, or a
 human answering the one prompt on an interactive terminal. `--check`,
 `--plan` and dry runs never prompt and never gate.
+
+A refusal never exits 0, across the command line: a guarded write that
+needs its consent flag in a non-interactive run (`--yes`; `--force` for
+`o2b brain merge` and `o2b brain entity merge`), and the same write whose
+`[y/N]` prompt is answered no, both exit with that verb's refusal code and
+write nothing. That code is `6` for `o2b install`, `o2b brain lessons approve`,
+`deny` and `refresh-blocks`; `1` for `o2b state migrate`, `o2b state
+rollback`, `o2b brain upgrade`, `o2b brain rollback`, `o2b brain merge`,
+`o2b brain entity merge`, `o2b brain doctor --repair --apply`, `o2b brain
+protect` and `o2b brain unprotect` (the headless form of `o2b state` exits
+`2`). A prompt answered no used to exit `0`. `o2b brain upgrade --dry-run`
+exits `1` when a managed file could not be read or planned (its `ERROR`
+line names it; an unreadable `_brain.yaml` used to print `EACCES` and exit
+`0`).
 
 Drift outranks unreachable when both are present, and the order is the
 operator's repair order rather than a severity ranking: a runtime can be

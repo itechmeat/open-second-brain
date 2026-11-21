@@ -43,8 +43,7 @@ import { removeLegacyTree, type RemovalResult } from "./removal.ts";
 export { MigrationSwitchedError } from "./migrate.ts";
 import { rollbackMigration, type RollbackHooks, type RollbackResult } from "./rollback.ts";
 import { importLateLegacyWrites, type TransitionResult } from "./transition.ts";
-import { cohortStatus, type DeviceEvidenceDate } from "./cohort-status.ts";
-import { legacyDeviceEvidence } from "./device-evidence.ts";
+import { cohortStatus, legacyEvidenceInput, type DeviceEvidenceDate } from "./cohort-status.ts";
 
 /**
  * What the transition did with a vault configured after this machine
@@ -177,7 +176,7 @@ export function migrateStore(vault: string, options: MigrationOptions = {}): Mig
     // judges them: a device retired by silence is not pending.
     const cohort = cohortStatus(store, {
       legacy: result.legacy_devices,
-      legacyEvidence: legacyDeviceEvidence(vault),
+      ...legacyEvidenceInput(vault),
       now: new Date(),
     });
     return {

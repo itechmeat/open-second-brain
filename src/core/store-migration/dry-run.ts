@@ -45,7 +45,13 @@ import {
 import { endPrivacyBatchChunk, withPrivacyBatch } from "../store/reference-privacy.ts";
 import { IMPORT_BATCH_ITEMS } from "./import-batch.ts";
 import { unclaimedEntries, type UnmappedEntry } from "./legacy-claims.ts";
-import { emptyTally, scanCopyLines, scanLocator, type ScanTally } from "./legacy-scan.ts";
+import {
+  CANNOT_LIST_PREFIX,
+  emptyTally,
+  scanCopyLines,
+  scanLocator,
+  type ScanTally,
+} from "./legacy-scan.ts";
 import { fileCopyVerdicts, judgeCopyFile, recordsSignature } from "./convert.ts";
 import {
   findSyncLeftovers,
@@ -110,8 +116,17 @@ export interface UnparseableReport {
 
 export interface MigrationDryRun {
   readonly dry_run: true;
-  /** True when every legacy entry has a mapping. */
+  /**
+   * True when every legacy entry has a mapping and every folder of the
+   * tree could be listed: a folder the dry run could not read may hold
+   * entries no mapping covers, so the plan cannot say it covers them.
+   */
   readonly ok: boolean;
+  /**
+   * Folders of the legacy tree that could not be listed (a permission, an
+   * I/O error), vault-relative; each also counts as an unparseable item.
+   */
+  readonly unreadable_folders: ReadonlyArray<string>;
   readonly vault: string;
   readonly devices: {
     readonly roster_window_days: number;
@@ -258,6 +273,7 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
   const allLocators: Locator[] = [];
   let unshardedFiles = 0;
   let problems = 0;
+  const unreadableFolders = new Set<string>();
   let items = 0;
 
   const catalogue = migrationCatalogue(vault);
@@ -286,6 +302,11 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
     unshardedFiles += tally.unshardedFiles;
     problems += tally.problems.length;
     items += tally.items;
+    for (const problem of tally.problems) {
+      if (problem.line === null && problem.reason.startsWith(CANNOT_LIST_PREFIX)) {
+        unreadableFolders.add(vaultRel(vault, problem.path));
+      }
+    }
     for (const problem of tally.problems) {
       if (unparseable.length >= DRY_RUN_PROBLEM_LIST_CAP) break;
       unparseable.push({ surface: entry.id, ...problem, path: vaultRel(vault, problem.path) });
@@ -334,7 +355,8 @@ function planDryRun(vault: string, options: MigrationDryRunOptions): MigrationDr
 
   return {
     dry_run: true,
-    ok: unmapped.length === 0,
+    ok: unmapped.length === 0 && unreadableFolders.size === 0,
+    unreadable_folders: [...unreadableFolders].toSorted(),
     vault,
     devices: {
       roster_window_days: DIGEST_ROSTER_WINDOW_DAYS,

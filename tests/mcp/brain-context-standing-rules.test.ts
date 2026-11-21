@@ -147,23 +147,26 @@ describe("brain_context standing_rules field", () => {
 
   // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
   test.skipIf(CHMOD_CANNOT_DENY)(
-    "the branch that reports Brain/ as absent still says why the rules are unavailable",
+    "a vault the process cannot traverse answers vault_unreadable, never an empty context",
     async () => {
-      // A vault directory the process cannot traverse makes `existsSync`
-      // answer false for `Brain/`, which is the one return path that used
-      // to fire before the standing-rules read: it handed back
-      // `present: false` and an empty body with nothing saying that the
-      // constitution had not been consulted.
+      // A vault directory the process cannot traverse used to read as one
+      // with no `Brain/`: `present: false` and an empty body. It is the
+      // unexaminable vault now (one class wherever it surfaces), so the
+      // tool fails with `vault_unreadable` and hands back no body that
+      // could pass for a vault with no rules.
       writeRules(RULES);
       chmodSync(vault, 0o000);
       try {
-        const out = await callContext();
-        expect(out["present"]).toBe(false);
-        const content = out["content"] as string;
-        expect(content).toContain(STANDING_RULES_HEADER);
-        expect(content).toContain("UNAVAILABLE");
-        // No record to report for bytes nobody could read.
-        expect("standing_rules" in out).toBe(false);
+        const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+        await initialize(server);
+        const r = (await server.handleRequest({
+          jsonrpc: JSONRPC_VERSION,
+          id: 9,
+          method: "tools/call",
+          params: { name: "brain_context", arguments: {} },
+        })) as { result: Record<string, any> };
+        expect(r.result["isError"]).toBe(true);
+        expect(r.result["_meta"]?.["open-second-brain/error"]?.["code"]).toBe("vault_unreadable");
       } finally {
         chmodSync(vault, 0o755);
       }

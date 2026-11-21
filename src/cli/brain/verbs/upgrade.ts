@@ -61,6 +61,9 @@ function printPlan(
       ...renderUpgradePlanJson(plan),
       self_heal_failure: failure === null ? null : failureJson(failure),
       store_migration: autoMigrationReportJson(migration),
+      // A file the plan could not read or plan makes the preview
+      // incomplete: `ok` says so, as the dry run's exit code 1 does.
+      ok: plan.errors === 0,
     });
     return;
   }
@@ -166,7 +169,10 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
 
   if (!flags["apply"]) {
     printPlan(plan, failure, migration, Boolean(flags["json"]));
-    return 0;
+    // A file the plan could not read (a permission, an I/O error) is
+    // printed as an ERROR line: the preview is incomplete, so it does not
+    // exit as a clean one.
+    return plan.errors > 0 ? 1 : 0;
   }
 
   if (plan.errors > 0)
@@ -199,7 +205,7 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
     const ans = await readSingleLine();
     if (ans.toLowerCase() !== "y" && ans.toLowerCase() !== "yes") {
       ok("upgrade cancelled");
-      return 0;
+      return 1;
     }
   }
 

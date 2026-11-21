@@ -63,7 +63,7 @@ import {
 } from "../memory-pages.ts";
 import { removeFile } from "../source-cleanup.ts";
 import { memoryEntities, memoryFoldGap } from "../../store/read/memory-ids.ts";
-import { StoreOnlyUndeterminedError } from "../../store/store-only.ts";
+import { VaultUnexaminableError } from "../../vault-unexaminable.ts";
 import { topicKey } from "../dream-plan.ts";
 import {
   collectExportRowsWithDenials,
@@ -1207,7 +1207,7 @@ function scanInstalled(vault: string): KnowledgePackInstalledEntry[] {
   try {
     pages = memoryFolderPages(vault, "preferences", { sorted: true });
   } catch (err) {
-    if (err instanceof StoreOnlyUndeterminedError) throw err;
+    if (err instanceof VaultUnexaminableError) throw err;
     pages = [];
   }
   for (const prefPage of pages) {

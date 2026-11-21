@@ -36,7 +36,7 @@
  * switched use {@link deviceSwitchedHere}, which reads the same marker.
  */
 
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
@@ -47,6 +47,7 @@ import {
   isDeviceSwitched,
 } from "../store-migration/migration-records.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
+import { lookAtDirectory, VaultUnexaminableError } from "../vault-unexaminable.ts";
 import { withLocalLock } from "./local-lock.ts";
 import { inspectStore, type StoreHandle, type StoreInspection } from "./store-open.ts";
 import { resolveConfiguredStoreRoot, storesStateDir } from "./store-paths.ts";
@@ -115,48 +116,30 @@ export interface StoreOnlyUndetermined {
  * {@link storeOnlyMode} and {@link isStoreOnly}; a caller that branches on
  * the mode fails with it instead of reading or writing either layout.
  */
-export class StoreOnlyUndeterminedError extends Error {
-  readonly vault: string;
-  readonly code: string | undefined;
+export class StoreOnlyUndeterminedError extends VaultUnexaminableError {
   constructor(vault: string, cause: Error) {
     const code = (cause as NodeJS.ErrnoException).code;
     super(
+      vault,
+      cause,
       `cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join(vault, BRAIN_ROOT_REL)} ` +
         `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` +
         "the store or the vault until the vault can be read (check its permissions)",
-      { cause },
     );
     this.name = "StoreOnlyUndeterminedError";
-    this.vault = vault;
-    this.code = code;
   }
 }
-
-/** Errors of a look at `<vault>/Brain` that prove no tree is there. */
-const ABSENT_CODES: ReadonlySet<string> = new Set([
-  "ENOENT",
-  "ENOTDIR",
-  "ENAMETOOLONG",
-  "ERR_INVALID_ARG_VALUE",
-  "ERR_INVALID_ARG_TYPE",
-]);
 
 /** Whether `<vault>/Brain` exists, is absent, or cannot be examined. */
 type LegacyTreeLook = "present" | "absent" | { readonly failed: Error };
 
 function lookAtLegacyTree(vault: string | null): LegacyTreeLook {
   if (vault === null || vault.trim() === "") return "absent";
-  try {
-    statSync(join(vault, BRAIN_ROOT_REL));
-    return "present";
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    // A missing vault, a missing folder, a path through a file, or a path
-    // no file can have (a NUL byte, a name too long): there is no tree.
-    // Any other failure (EACCES, EPERM, ELOOP, EIO) says nothing.
-    if (ABSENT_CODES.has(code ?? "")) return "absent";
-    return { failed: err instanceof Error ? err : new Error(String(err)) };
-  }
+  // A missing vault or folder, or a name no file can have: no tree. A look
+  // that fails otherwise (EACCES, EPERM, ELOOP, EIO, ENOTDIR through a
+  // file), a Brain/ that is no directory, or one this process cannot list
+  // and traverse (mode 000) says nothing (`lookAtDirectory`).
+  return lookAtDirectory(join(vault, BRAIN_ROOT_REL));
 }
 
 /**

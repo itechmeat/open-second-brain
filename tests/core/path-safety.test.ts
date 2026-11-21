@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 
 import { ensureInsideVault, pathIsInsideOn, vaultRelative } from "../../src/core/path-safety.ts";
+import { VaultUnexaminableError } from "../../src/core/vault-unexaminable.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../helpers/platform.ts";
 
 // Resolving `/v` produces a platform-appropriate absolute path:
 // `/v` on POSIX, `C:\v` (or the current drive) on Windows. Building all
@@ -168,5 +171,80 @@ describe("pathIsInsideOn — the posix rules stay case-sensitive and slash-separ
 
   test("a descendant accepts", () => {
     expect(pathIsInsideOn("posix", "/v/notes/page.md", "/v")).toBe(true);
+  });
+});
+
+describe("ensureInsideVault — a folder that cannot be examined", () => {
+  // Only the folders that decide the layout (the vault root and Brain/)
+  // make the vault unexaminable. A folder deeper inside that refuses a look
+  // is its readers' concern: the doctor reports it as uncertainty, and the
+  // rest of the vault stays usable.
+  let tmp: string;
+  let vault: string;
+  const undo: Array<() => void> = [];
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-path-safety-denied-"));
+    vault = join(tmp, "vault");
+    mkdirSync(join(vault, "Brain", "inbox", "processed"), { recursive: true });
+    mkdirSync(join(tmp, "elsewhere"), { recursive: true });
+  });
+  afterEach(() => {
+    for (const step of undo.splice(0).toReversed()) step();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** realpath of `dir` fails as macOS fails it for a mode-000 directory. */
+  function denyRealpathOf(dir: string): void {
+    const real = fs.realpathSync;
+    const spy = spyOn(fs, "realpathSync").mockImplementation(((
+      p: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (resolve(String(p)) === resolve(dir)) {
+        throw Object.assign(new Error(`EACCES: permission denied, lstat '${dir}'`), {
+          code: "EACCES",
+        });
+      }
+      return (real as (...a: unknown[]) => string)(p, ...rest);
+    }) as typeof fs.realpathSync);
+    undo.push(() => spy.mockRestore());
+  }
+
+  test("a refused realpath of Brain/ leaves the vault unexaminable", () => {
+    denyRealpathOf(join(vault, "Brain"));
+    expect(() => ensureInsideVault(join(vault, "Brain", "x.md"), vault)).toThrow(
+      VaultUnexaminableError,
+    );
+  });
+
+  test("a refused realpath of a folder below Brain/ is resolved through its parent", () => {
+    const inbox = join(vault, "Brain", "inbox");
+    denyRealpathOf(inbox);
+    const target = join(inbox, "x.md");
+    expect(ensureInsideVault(target, vault)).toBe(target);
+  });
+
+  test.skipIf(IS_WINDOWS)("a refused realpath of a link below Brain/ is not guessed", () => {
+    const link = join(vault, "Brain", "linked");
+    symlinkSync(join(tmp, "elsewhere"), link);
+    denyRealpathOf(link);
+    expect(() => ensureInsideVault(join(link, "x.md"), vault)).toThrow(VaultUnexaminableError);
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)("a mode-000 folder below Brain/ is walked past", () => {
+    const inbox = join(vault, "Brain", "inbox");
+    chmodSync(inbox, 0o000);
+    undo.push(() => chmodSync(inbox, 0o700));
+    const target = join(inbox, "processed", "x.md");
+    expect(ensureInsideVault(target, vault)).toBe(target);
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)("a mode-000 Brain/ leaves the vault unexaminable", () => {
+    const brain = join(vault, "Brain");
+    chmodSync(brain, 0o000);
+    undo.push(() => chmodSync(brain, 0o700));
+    expect(() => ensureInsideVault(join(brain, "inbox", "x.md"), vault)).toThrow(
+      VaultUnexaminableError,
+    );
   });
 });

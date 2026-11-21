@@ -573,7 +573,7 @@ async function lessonsApprove(argv: string[]): Promise<number> {
     const ans = await readSingleLine();
     if (ans.trim().toLowerCase() !== "y" && ans.trim().toLowerCase() !== "yes") {
       ok("approval cancelled; nothing was written");
-      return LESSONS_EXIT.ok;
+      return LESSONS_EXIT.consentRefused;
     }
   }
 
@@ -758,7 +758,7 @@ async function lessonsDeny(argv: string[]): Promise<number> {
     const ans = await readSingleLine();
     if (ans.trim().toLowerCase() !== "y" && ans.trim().toLowerCase() !== "yes") {
       ok("denial cancelled; nothing was recorded");
-      return LESSONS_EXIT.ok;
+      return LESSONS_EXIT.consentRefused;
     }
   }
 
@@ -968,7 +968,7 @@ async function lessonsRefreshBlocks(argv: string[]): Promise<number> {
     const ans = await readSingleLine();
     if (ans.trim().toLowerCase() !== "y" && ans.trim().toLowerCase() !== "yes") {
       ok("refresh cancelled; nothing was written");
-      return LESSONS_EXIT.ok;
+      return LESSONS_EXIT.consentRefused;
     }
   }
 

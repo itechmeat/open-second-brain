@@ -34,6 +34,12 @@ export interface DeviceEvidenceInput {
   readonly evidenceMs: number | null;
   /** Clock of the earliest cohort record naming the device, in ms, or null. */
   readonly cohortMs: number | null;
+  /**
+   * The device's evidence was read with a gap (a shard that could not be
+   * read whole): its newest trace may be later than {@link evidenceMs}, so
+   * it is never silent on this read.
+   */
+  readonly uncertain?: boolean;
 }
 
 export interface SilenceInput {
@@ -73,6 +79,7 @@ export function judgeSilence(input: SilenceInput): SilenceJudgement {
     .map((d): SilenceVerdict => {
       const last = d.evidenceMs ?? d.cohortMs;
       const silent =
+        d.uncertain !== true &&
         input.thresholdDays > 0 &&
         referenceMs !== null &&
         last !== null &&

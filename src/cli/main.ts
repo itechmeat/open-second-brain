@@ -72,7 +72,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
-import { StoreOnlyUndeterminedError } from "../core/store/store-only.ts";
+import { VaultUnexaminableError } from "../core/vault-unexaminable.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { renderHelp, renderUsage } from "./help-render.ts";
@@ -1096,12 +1096,11 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // must not resolve the token file against the working directory.
   const mapVault =
     normalizeFlagString(flags["vault"] as string | undefined) ?? resolveVault(config) ?? null;
-  const mintedTokens = hasAnyMcpToken({ vault: mapVault, configPath: config });
   if (
     transport === "http" &&
     !isLoopbackHost(host) &&
     (apiKey === undefined || apiKey === "") &&
-    !mintedTokens
+    !mintedTokenKnown({ vault: mapVault, configPath: config })
   ) {
     process.stderr.write(
       "o2b mcp: --api-key (or OPEN_SECOND_BRAIN_MCP_API_KEY) or at least one minted agent token " +
@@ -1180,7 +1179,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
       // enforce against. With the key on but nothing minted yet the server
       // starts and only says so - an outage would be the wrong answer for
       // an operator one mint away from the posture they asked for.
-      if (resolveMcpTokensRequired(config) && !hasAnyMcpToken({ vault, configPath: config })) {
+      if (resolveMcpTokensRequired(config) && !mintedTokenKnown({ vault, configPath: config })) {
         process.stderr.write(
           "o2b mcp: mcp_tokens_required is on, but no agent token is minted for this server yet; " +
             "credential-less requests are not refused until one exists " +
@@ -1237,6 +1236,26 @@ async function cmdMcp(argv: string[]): Promise<number> {
     }
   } finally {
     faults.release();
+  }
+}
+
+/**
+ * Whether the token map the transport reads holds a minted agent token, as
+ * far as this machine can tell at start.
+ *
+ * On a vault that cannot be examined (`VaultUnexaminableError`) the
+ * machine cannot tell which token map is the one in force, and that must
+ * not keep the server from starting: a host would see a dead server
+ * instead of a `vault_unreadable` answer per tool. It counts as no token
+ * here, so a non-loopback bind still needs the shared key, and every HTTP
+ * request reads the map again and is refused while it cannot be read.
+ */
+function mintedTokenKnown(context: { vault: string | null; configPath: string }): boolean {
+  try {
+    return hasAnyMcpToken(context);
+  } catch (err) {
+    if (err instanceof VaultUnexaminableError) return false;
+    throw err;
   }
 }
 
@@ -1604,7 +1623,7 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
     if (exc instanceof ConfigReadError) {
       return reportConfigReadError(exc, command, rest);
     }
-    if (exc instanceof StoreOnlyUndeterminedError) {
+    if (exc instanceof VaultUnexaminableError) {
       // The machine cannot tell whether the vault holds a legacy tree (the
       // vault cannot be examined), so the verb neither read nor wrote: one
       // line naming the vault and the error, exit 1, as for a config the

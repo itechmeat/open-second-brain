@@ -43,10 +43,11 @@
  * the existing `doctor` legacy command on an empty vault.
  */
 
-import { statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { toPosix } from "../path-safety.ts";
+import { lookAtDirectory } from "../vault-unexaminable.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 import { activeBudgetPressureCheck } from "./doctor/active-budget-check.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./doctor/check.ts";
@@ -103,7 +104,7 @@ import { adoptConflictsCheck } from "./doctor/adopt-conflicts-check.ts";
 import { laneFolderCollisionCheck, laneIdMisfiledCheck } from "./doctor/lane-id-check.ts";
 import { migrationCheck } from "./doctor/migration-check.ts";
 import { storeCheck } from "./doctor/store-check.ts";
-import { runStoreSideDoctor } from "./doctor/store-side-pass.ts";
+import { runStoreSideDoctor, STORE_SIDE_CHECKS } from "./doctor/store-side-pass.ts";
 import { configuredStore } from "../store/read/store-entities.ts";
 import { storeOnlyMode } from "../store/store-only.ts";
 import { vaultBindingStatus } from "../vault-adapter/vault-binding.ts";
@@ -317,13 +318,13 @@ const BRAIN_ROOT_SITE = "brain.doctor.root";
  * never managed to look at.
  */
 function brainRootProbe(brain: string): BrainRootProbe {
-  try {
-    statSync(brain);
-    return { kind: "present" };
-  } catch (err) {
-    const reason = sweptFailureReason(err);
-    return reason === null ? { kind: "absent" } : { kind: "unreadable", reason };
-  }
+  // The one look every layout decision makes (`lookAtDirectory`): a
+  // Brain/ this process cannot list and traverse (mode 000 stats fine) is
+  // unreadable, never present-and-empty.
+  const look = lookAtDirectory(brain);
+  if (look === "present") return { kind: "present" };
+  if (look === "absent") return { kind: "absent" };
+  return { kind: "unreadable", reason: sweptFailureReason(look.failed) ?? look.failed.message };
 }
 
 /** The three answers, kept apart because two of them used to be one. */
@@ -402,26 +403,39 @@ export function runDoctor(vault: string | null, opts: RunDoctorOptions = {}): Ru
 
 function runDoctorPass(vault: string | null, opts: RunDoctorOptions): RunDoctorResult {
   if (vault === null) return runDoctorWithoutVault(opts);
-  const dirs = brainDirs(vault);
-  const root = brainRootProbe(dirs.brain);
+  // Probed before `brainDirs`, whose path check would throw on a Brain/
+  // it cannot look into: the doctor reports that as its finding.
+  const brainRoot = join(vault, BRAIN_ROOT_REL);
+  const root = brainRootProbe(brainRoot);
   if (root.kind === "unreadable") {
     // The layer is there and was not read. Every check below would have
     // reported the same denial for its own subtree, so the pass stops
     // here and says so once - under the code the sweeps already use for
     // a subtree they could not enter.
     const uncertain: DoctorUncertainEntry[] = [];
-    const message = reportSweptSkip(dirs.brain, `Brain layer could not be read: ${root.reason}`, {
+    const message = reportSweptSkip(brainRoot, `Brain layer could not be read: ${root.reason}`, {
       site: BRAIN_ROOT_SITE,
       consequence: "every Brain check was skipped, so nothing about this root has been verified",
       uncertain,
     });
+    // A failing check, not a warning: nothing about this root was verified,
+    // and every reader of it fails the same way (`vault_unreadable`).
     return Object.freeze({
-      warnings: Object.freeze([sweptPathWarning(dirs.brain, message)]),
-      errors: Object.freeze([]),
-      trust_verdict: "watch" as TrustVerdict,
+      warnings: Object.freeze([]),
+      errors: Object.freeze([
+        { ...sweptPathWarning(brainRoot, message), severity: "error" as const },
+      ]),
+      trust_verdict: "investigate" as TrustVerdict,
       instruction_file_warnings: Object.freeze([]),
       uncertain: Object.freeze(uncertain),
     });
+  }
+  const dirs = brainDirs(vault);
+  // A switched machine whose vault still holds the legacy tree it imported:
+  // the tree is an archive until `--remove-legacy` takes it out, so the
+  // pass reads the store, not the tree.
+  if (root.kind === "present" && legacyTreeIsArchive(vault, opts.configPath)) {
+    return runArchivedTreePass(vault, opts);
   }
   // A vault with no `Brain/` on a machine whose brain is the store is the
   // normal store-only shape, not a mis-resolved root: the brain is in the
@@ -520,37 +534,15 @@ function runDoctorPass(vault: string | null, opts: RunDoctorOptions): RunDoctorR
 
   // v0.10.16 trust layer. Each computation is best-effort: a failure
   // in a helper must not poison the legacy warning / error stream.
-  const guardrails = opts.guardrails ?? BRAIN_GUARDRAIL_DEFAULTS;
-  let instructionWarnings: ReadonlyArray<InstructionFileCeilingWarning> = [];
-  try {
-    instructionWarnings = checkInstructionFileCeiling(vault, {
-      maxLines: guardrails.instruction_file_max_lines,
-      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
-    });
-  } catch {
-    /* doctor never throws */
-  }
+  const instructionWarnings = instructionWarningsOf(vault, opts);
 
-  let verificationCounts: VerificationDeltaSummaryCounts | undefined;
-  if (opts.dreamSummary !== undefined) {
-    try {
-      const delta = computeVerificationDelta(vault, opts.dreamSummary);
-      verificationCounts = delta.summary;
-    } catch {
-      /* doctor never throws */
-    }
-  }
+  const verificationCounts = verificationCountsOf(vault, opts);
 
   const trustVerdict: TrustVerdict = computeTrustVerdict({
     doctorWarnings: warnings,
     doctorErrors: errors,
     dreamWarnings: opts.dreamSummary?.warnings ?? [],
-    verification: verificationCounts ?? {
-      confirmed: 0,
-      drift: 0,
-      regression: 0,
-      missing_evidence: 0,
-    },
+    verification: verificationCounts ?? NO_VERIFICATION,
   });
 
   return Object.freeze({
@@ -565,6 +557,200 @@ function runDoctorPass(vault: string | null, opts: RunDoctorOptions): RunDoctorR
     ...(findings.uncertain.length > 0 ? { uncertain: Object.freeze(findings.uncertain) } : {}),
     ...(semanticReport !== undefined ? { semantic_health: semanticReport } : {}),
   });
+}
+
+/**
+ * Whether `vault`'s legacy `Brain/` tree is an archive on this machine:
+ * the machine switched to the brain store (its own switch record, or the
+ * sticky marker) and the vault is the one bound to the store, so the tree
+ * was imported and nothing writes it here any more. A vault configured
+ * after the switch with a tree of its own is not bound: its tree has not
+ * been imported yet, and the full pass still judges it. Any failure to
+ * tell answers no, and the full pass runs as before.
+ */
+function legacyTreeIsArchive(vault: string, configPath: string | undefined): boolean {
+  try {
+    if (configuredStore(configPath) === null) return false;
+    const context = { vault, ...(configPath !== undefined ? { configPath } : {}) };
+    if (storeOnlyMode(context).reason !== "device-switched") return false;
+    return (
+      vaultBindingStatus(vault, configPath !== undefined ? { configPath } : {}).state === "match"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The checks over the store's records that also run on a switched machine
+ * whose vault still holds the archived tree: each reads the store's folds
+ * (`memoryFromStore`), never the tree, and their findings are the ones
+ * `doctor --repair` derives the store-side evidence prune from. The id
+ * index they fill is what {@link duplicateIdCheck} reads, so it follows them.
+ */
+const STORE_RECORD_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
+  signalCheck,
+  preferenceCheck,
+  retiredCheck,
+  duplicateIdCheck,
+]);
+
+/**
+ * The vault-side checks the archived-tree pass keeps: each names a
+ * condition of the vault or this machine that still matters while the tree
+ * waits for `--remove-legacy` (and none of them is about the tree as an
+ * archive), and each costs a few milliseconds on a real-size vault
+ * (measured: at most 8 ms and 4 MB, the symlink sweep). The checks of the
+ * full pass left out are about the tree itself (its config, its log, its
+ * locks, its ledgers, its snapshots, its sync conflict copies, which the
+ * migration already kept aside) or cost hundreds of milliseconds and are
+ * not run after the removal either.
+ */
+const ARCHIVE_VAULT_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
+  // The settings in force (the store's on a switched machine, with the
+  // machine config): an invalid value is active configuration, not the tree.
+  configCheck,
+  frozenVaultCheck,
+  secretsSyncExposureCheck,
+  gitTrackedStateCheck,
+  symlinkEscapeCheck,
+  permissionsDocumentCheck,
+  permissionsLegacyOnlyCheck,
+  storageCapacityCheck,
+  lessonsBlockCheck,
+  embeddingSunsetCheck,
+  embeddingsHealthCheck,
+  chunkHoldsCheck,
+  rerankHealthCheck,
+  denyConsultedLanesCheck,
+]);
+
+/**
+ * The pass of a switched machine whose vault still holds the legacy tree
+ * it imported (between the switch and `--remove-legacy`): the store record
+ * checks above, the vault-side checks that still matter, the store-side
+ * checks the pass runs once the tree has left (`doctor/store-side-pass.ts`),
+ * and the migration check, which says what `--remove-legacy` needs said
+ * about the tree (the cohort, a tree that came back, a failed or available
+ * migration). Nothing else walks or judges the tree: its log, its pages
+ * and its lanes are an archive the store already holds, and reading them
+ * made this pass several times slower and larger than the same pass after
+ * the removal.
+ */
+function runArchivedTreePass(vault: string, opts: RunDoctorOptions): RunDoctorResult {
+  const findings: DoctorFindings = {
+    issues: [],
+    uncertain: uncertainStream(uncertainAdmission(vault, opts.readable)),
+  };
+  let config;
+  try {
+    config = loadBrainConfigDetailed(vault).config;
+  } catch {
+    config = undefined;
+  }
+  const ctx: DoctorCheckContext = {
+    vault,
+    now: opts.now ?? new Date(),
+    config,
+    dbPath: opts.dbPath,
+    configPath: opts.configPath,
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    ...(opts.reach !== undefined ? { reach: opts.reach } : {}),
+    ...(opts.withholdsPrivate === true ? { withholdsPrivate: true } : {}),
+    // On a switched vault the link targets are the store's record pages
+    // plus two directory listings (the Brain/ root and its log folder, the
+    // log days a retirement's `retired_by` names); no walk of the tree.
+    knownBasenames: collectAllBasenames(vault, {
+      site: CONTEXT_SITE,
+      consequence:
+        "its files are absent from the basename universe every link check resolves against, so " +
+        "a wikilink that resolves under it reads as broken here",
+      uncertain: findings.uncertain,
+    }),
+    idIndex: new Map<string, string[]>(),
+    preferences: [],
+    // No check of this pass reads the log.
+    logs: [],
+  };
+  const checks = [
+    ...STORE_RECORD_CHECKS,
+    ...ARCHIVE_VAULT_CHECKS,
+    ...STORE_SIDE_CHECKS,
+    migrationCheck,
+  ];
+  for (const check of checks) {
+    if (!check.failSoft) {
+      check.run(ctx, findings);
+      continue;
+    }
+    try {
+      check.run(ctx, findings);
+    } catch {
+      /* doctor never throws */
+    }
+  }
+  const warnings = findings.issues.filter((i) => i.severity === "warning");
+  const errors = findings.issues.filter((i) => i.severity === "error");
+  const verificationCounts = verificationCountsOf(vault, opts);
+  return Object.freeze({
+    warnings: Object.freeze(warnings),
+    errors: Object.freeze(errors),
+    trust_verdict: computeTrustVerdict({
+      doctorWarnings: warnings,
+      doctorErrors: errors,
+      dreamWarnings: opts.dreamSummary?.warnings ?? [],
+      verification: verificationCounts ?? NO_VERIFICATION,
+    }),
+    ...(verificationCounts !== undefined ? { verification_delta_summary: verificationCounts } : {}),
+    instruction_file_warnings: instructionWarningsOf(vault, opts),
+    ...(findings.uncertain.length > 0 ? { uncertain: Object.freeze(findings.uncertain) } : {}),
+  });
+}
+
+/**
+ * The agent instruction files of the vault (`CLAUDE.md`, `AGENTS.md`, ...)
+ * past their line ceiling, as every vault pass reports them; none when the
+ * check fails.
+ */
+function instructionWarningsOf(
+  vault: string,
+  opts: RunDoctorOptions,
+): ReadonlyArray<InstructionFileCeilingWarning> {
+  const guardrails = opts.guardrails ?? BRAIN_GUARDRAIL_DEFAULTS;
+  try {
+    return checkInstructionFileCeiling(vault, {
+      maxLines: guardrails.instruction_file_max_lines,
+      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    });
+  } catch {
+    /* doctor never throws */
+    return [];
+  }
+}
+
+/** The verification counts of a pass with no dream summary to compare. */
+const NO_VERIFICATION: VerificationDeltaSummaryCounts = Object.freeze({
+  confirmed: 0,
+  drift: 0,
+  regression: 0,
+  missing_evidence: 0,
+});
+
+/**
+ * The verification delta of the caller's dream summary, as every pass
+ * computes it; absent with no summary or when the computation fails.
+ */
+function verificationCountsOf(
+  vault: string,
+  opts: RunDoctorOptions,
+): VerificationDeltaSummaryCounts | undefined {
+  if (opts.dreamSummary === undefined) return undefined;
+  try {
+    return computeVerificationDelta(vault, opts.dreamSummary).summary;
+  } catch {
+    /* doctor never throws */
+    return undefined;
+  }
 }
 
 /** The extension of the pages the reference grammar judges by path. */

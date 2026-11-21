@@ -337,7 +337,7 @@ generic tokens:
 | `argument_forbidden` | `brain_scaffold_stub` was given an argument that belongs to its other action |
 | `quote_unverified` | `brain_distill_source` with `strict_quotes: true` refused the write because a quoted span in a claim did not verify against its source (see "Source distillation" below) |
 | `store_write_failed` | a write on a machine that writes the brain store only did not land; the payload (`_meta` on a tool result, `error.data` on a JSON-RPC error) also carries `reason` (`no-store`, `no-device`, `root-inside-vault`, `partition-unavailable`, `store-identity` or `store-error`) and `remedy`, one sentence naming the fix |
-| `vault_unreadable` | the machine cannot tell whether the vault holds a legacy `Brain/` tree, because the vault cannot be examined (its permissions, an I/O error), so the tool neither read nor wrote anything rather than answer from a guessed layout |
+| `vault_unreadable` | the machine cannot tell whether the vault holds a legacy `Brain/` tree, because the vault cannot be examined (its permissions, an I/O error), so the tool neither read nor wrote anything rather than answer from a guessed layout. The server starts on such a vault, answers `initialize` and `tools/list`, and each call reads the vault again, so it answers normally once the vault can be read |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:

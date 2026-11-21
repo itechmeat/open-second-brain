@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { LEGACY_LOCAL_FILES_LEFT_CODE } from "../../../src/core/brain/doctor/migration-check.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
+import { openStore } from "../../../src/core/store/store-open.ts";
 import { readMigrationBackup } from "../../../src/core/store-migration/backup.ts";
 import { migrationDir } from "../../../src/core/store-migration/journal.ts";
 import { MIGRATION_STREAM } from "../../../src/core/store-migration/migration-records.ts";
@@ -28,7 +29,11 @@ import {
   readRemovalInProgress,
   removeLegacyTree,
 } from "../../../src/core/store-migration/removal.ts";
-import { removedLines, summariseList } from "../../../src/cli/brain/verbs/migrate-store-forms.ts";
+import {
+  removedLines,
+  runRemoveLegacy,
+  summariseList,
+} from "../../../src/cli/brain/verbs/migrate-store-forms.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
 import { setSilenceDays } from "./fixtures/silence.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
@@ -200,6 +205,59 @@ describe("a machine whose tree left by sync", () => {
     expect(text).toContain("dev-c (last evidence 2026-09-01)");
     expect(text).not.toContain("retired by hand");
   });
+  test("with nothing of the tree left, the removal succeeds and names the cohort as a removal does", () => {
+    const { b } = treeLeftOnBoth("silence");
+    // The deletion took this machine's leftover folder too (rsync --delete).
+    rmSync(join(b.vault, ".open-second-brain"), { recursive: true, force: true });
+
+    const result = removeLegacy(b.vault);
+    if (result.removed || result.reason !== "no-legacy-tree") {
+      throw new Error(`expected no legacy tree on dev-b, got ${JSON.stringify(result)}`);
+    }
+    expect(result.switched).toEqual(["dev-a", "dev-b"]);
+    expect(result.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
+    expect(result.silence_threshold_days).toBe(10);
+
+    const chunks: string[] = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    (process.stdout as unknown as { write: (c: string) => boolean }).write = (c: string) => {
+      chunks.push(c);
+      return true;
+    };
+    let code: number;
+    try {
+      code = runRemoveLegacy(b.vault, process.env["OPEN_SECOND_BRAIN_CONFIG"]!, false, false);
+    } finally {
+      (process.stdout as unknown as { write: typeof realWrite }).write = realWrite;
+    }
+    const text = chunks.join("");
+    expect(code).toBe(0);
+    expect(text).not.toContain("stays in the vault");
+    expect(text).toContain("The legacy tree is not in this vault");
+    expect(text).toContain("switched: dev-a, dev-b");
+    expect(text).toContain("retired by silence (no evidence of life for more than 10 days");
+    expect(text).toContain("dev-c (last evidence 2026-09-01)");
+  });
+
+  test("a device a forced removal left behind is never named retired by hand afterwards", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    // dev-c, the fixture's legacy writer, is pending: the rule is off.
+    setSilenceDays(a, 0);
+    const forced = removeLegacy(a.vault, { force: true });
+    if (!forced.removed) throw new Error(`not removed: ${forced.reason}`);
+    expect(forced.stopped).toContain("dev-c");
+
+    const again = removeLegacy(a.vault);
+    if (again.removed || again.reason !== "no-legacy-tree") {
+      throw new Error(`expected no legacy tree, got ${JSON.stringify(again)}`);
+    }
+    expect(again.retired).not.toContain("dev-c");
+    expect(again.switched).toEqual(["dev-a"]);
+  });
+
   test("a cleanup never takes another vault's identity or its silence verdict", () => {
     const { a, b } = treeLeftOnBoth("silence");
     const vaultId = a.records().find((r) => r.kind === "legacy-tree-removed")?.body["vault_id"];
@@ -296,6 +354,39 @@ describe("a machine whose tree left by sync", () => {
     if (!removed.removed) throw new Error(`not removed on dev-e: ${removed.reason}`);
     expect(removed.retired_by_silence.map((d) => d.device)).toEqual(["dev-c"]);
     expect(removed.silence_threshold_days).toBe(10);
+  });
+  test("an empty silence verdict of the removal that moved the tree stays its verdict", () => {
+    // dev-a retires dev-c by hand and removes the tree: nobody was retired
+    // by silence, and its record says so with an empty list.
+    const { a, b } = treeLeftOnBoth("hand");
+    const first = ownRemovalRecord(a);
+    expect(first?.body["retired_by_silence"]).toEqual([]);
+    const threshold = first?.body["silence_threshold_days"];
+    const asOf = first?.body["as_of"];
+    // dev-c writes again after its retirement, then falls silent: today's
+    // read calls it silent, but that is not why the tree left.
+    const later = Date.now() + 86_400_000;
+    appendRecord(
+      openStore({ root: b.storeRoot, device: "dev-c" }),
+      { partition: "shared", stream: "events", kind: "note", agent: "t", body: { text: "back" } },
+      { now: () => later },
+    );
+    // The store moves on: dev-b writes two months later, so the silence
+    // rule's reference date is past dev-c's last record.
+    const today = later + 60 * 86_400_000;
+    appendRecord(
+      b.store(),
+      { partition: "shared", stream: "events", kind: "note", agent: "t", body: { text: "on" } },
+      { now: () => today },
+    );
+    setSilenceDays(b, 10);
+
+    const removed = removeLegacy(b.vault, { now: new Date(today) });
+    if (!removed.removed) throw new Error(`not removed on dev-b: ${removed.reason}`);
+    expect(removed.tree_already_left).toBe(true);
+    expect(removed.retired_by_silence).toEqual([]);
+    expect(removed.silence_threshold_days).toBe(threshold as number);
+    expect(removed.as_of).toBe(asOf as string);
   });
   test("a cleanup interrupted after its journal is still a cleanup when it is retried", () => {
     const { b } = treeLeftOnBoth("silence");

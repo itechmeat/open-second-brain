@@ -965,8 +965,9 @@ export const VERB_HELP: Record<string, string> = {
     "vault once every device of the store has migrated or been retired; --force removes\n" +
     "it anyway. --force-release-gate releases the migration gate a run that is gone left\n" +
     "on this machine, unless its holder is still running. The forms exclude each other.\n" +
-    "Exit codes: 0 done (or a plan that maps every entry), 1 refused, failed, a plan with\n" +
-    "unmapped entries or a legacy tree kept in place, 2 usage error.\n",
+    "Exit codes: 0 done (or a plan that maps every entry, or nothing of the legacy tree\n" +
+    "left to remove), 1 refused, failed, a plan with unmapped entries or a legacy tree\n" +
+    "kept in place, 2 usage error.\n",
   "set-primary":
     "usage: o2b brain set-primary <name> [--vault <path>] [--agent <name>] [--json]\n" +
     "       o2b brain set-primary --clear [--vault <path>] [--agent <name>] [--json]\n" +
@@ -1144,7 +1145,8 @@ export const VERB_HELP: Record<string, string> = {
     "User-owned content (preferences/, retired/, inbox/, log/) is\n" +
     "never touched.\n" +
     "--dry-run (default) prints a per-file plan with a unified diff\n" +
-    "for every pending update. Exit 0 regardless of pending count.\n" +
+    "for every pending update. Exit 0 regardless of pending count, 1 when a\n" +
+    "file could not be read or planned (its ERROR line names it).\n" +
     "--check is dry-run + exit 2 when anything is pending or in error\n" +
     "(CI-friendly).\n" +
     "--apply takes a pre-apply snapshot named upgrade-<ts> (rollback\n" +

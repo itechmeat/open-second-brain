@@ -256,6 +256,31 @@ export function recordSubagentDeliveredId(
   return outcome.status === "ok";
 }
 
+/**
+ * The text each emitted preference page delivered in the current epoch, by
+ * page path; empty for an epoch recorded before the field existed.
+ */
+export function readActiveDelivered(
+  vault: string,
+  sessionId: string,
+  nowMs: number = Date.now(),
+): ReadonlyMap<string, { readonly text: string; readonly truncated: boolean }> {
+  const raw = readHookStamp(vault, sessionId, LEDGER_KEY_ACTIVE, nowMs)?.data?.["delivered"];
+  const out = new Map<string, { readonly text: string; readonly truncated: boolean }>();
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string") out.set(path, { text: value, truncated: false });
+    else if (
+      value !== null &&
+      typeof value === "object" &&
+      typeof (value as { text?: unknown }).text === "string"
+    ) {
+      out.set(path, { text: (value as { text: string }).text, truncated: true });
+    }
+  }
+  return out;
+}
+
 /** Vault paths the active digest emitted in the current epoch. */
 export function readActiveEmittedPaths(
   vault: string,
@@ -343,6 +368,57 @@ export function digestNotePaths(input: {
 }
 
 /**
+ * The text each preference bullet of a digest emission delivered, keyed by
+ * the page path {@link digestNotePaths} names for it: the bullet's whole
+ * line, as the session received it. The quote check verifies a span cited
+ * against that page against this text, never against the page as it reads
+ * later (another sync may have rewritten it) or against a fold of the
+ * store. The first rendering of a bullet wins, as the first path does.
+ */
+export function digestDeliveredText(input: {
+  readonly emittedText: string;
+  /**
+   * The context before the host ceiling cut it, when it was cut: a bullet
+   * whose line the cut ended mid-way is recorded truncated (the line
+   * ending the cut wrote is no end of the bullet).
+   */
+  readonly sourceText?: string;
+}): Readonly<Record<string, DeliveredText>> {
+  const delivered: Record<string, DeliveredText> = {};
+  for (const match of input.emittedText.matchAll(PREF_BULLET_RE)) {
+    const path = `Brain/preferences/pref-${match[1]}.md`;
+    if (path in delivered) continue;
+    const start = match.index!;
+    const end = input.emittedText.indexOf("\n", start);
+    const text = input.emittedText.slice(start, end === -1 ? undefined : end);
+    delivered[path] = deliveredWhole(input.sourceText, match[1]!, text)
+      ? text
+      : { text, truncated: true };
+  }
+  return delivered;
+}
+
+/** What a bullet delivered: its whole line, or the part of it a cut kept. */
+export type DeliveredText = string | { readonly text: string; readonly truncated: true };
+
+/**
+ * Whether `text`, the delivered line of the bullet for `slug`, is the whole
+ * line the source (the context before any cut) held for it. Without a
+ * source the emission is the context itself: whole.
+ */
+function deliveredWhole(source: string | undefined, slug: string, text: string): boolean {
+  if (source === undefined) return true;
+  for (const match of source.matchAll(PREF_BULLET_RE)) {
+    if (match[1] !== slug) continue;
+    const end = source.indexOf("\n", match.index!);
+    return source.slice(match.index!, end === -1 ? undefined : end) === text;
+  }
+  // The bullet is not in the source the caller named: nothing proves the
+  // delivered line was cut.
+  return true;
+}
+
+/**
  * Start a new injection epoch in one locked write: record the digest's
  * emitted paths, clear the recall set (the new digest supersedes what recall
  * already showed), and replace the re-delivery queue with `regroundParts`
@@ -355,6 +431,8 @@ export function beginInjectionEpoch(
   input: {
     readonly epoch: string;
     readonly emittedPaths: ReadonlyArray<string>;
+    /** What each preference bullet delivered ({@link digestDeliveredText}). */
+    readonly delivered?: Readonly<Record<string, DeliveredText>>;
     readonly regroundParts: ReadonlyArray<string>;
     readonly partCeilingChars: number;
   },
@@ -367,7 +445,13 @@ export function beginInjectionEpoch(
       const expiresAt = now + LEDGER_TTL_MS;
       state[LEDGER_KEY_ACTIVE] = {
         expiresAt,
-        data: { epoch: input.epoch, paths: [...new Set(input.emittedPaths)] },
+        data: {
+          epoch: input.epoch,
+          paths: [...new Set(input.emittedPaths)],
+          ...(input.delivered !== undefined && Object.keys(input.delivered).length > 0
+            ? { delivered: { ...input.delivered } }
+            : {}),
+        },
       };
       delete state[LEDGER_KEY_RECALL];
       if (input.regroundParts.length === 0) {

@@ -8,7 +8,7 @@
  * file outside the vault root.
  */
 
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import {
   basename,
   dirname,
@@ -19,6 +19,9 @@ import {
   sep,
   win32 as pathWin32,
 } from "node:path";
+
+import { BRAIN_ROOT_REL } from "./brain/path-constants.ts";
+import { isUnexaminableLook, lookAtDirectory, unexaminablePath } from "./vault-unexaminable.ts";
 
 /** The `code` a {@link VaultEscapeError} carries, beside the errno codes of fs errors. */
 export const VAULT_ESCAPE_CODE = "ESCAPE";
@@ -67,8 +70,10 @@ export function ensureInsideVault(target: string, vault: string): string {
 
   // Realpath protection only matters when the vault actually exists on
   // disk — otherwise there is no symlink to follow. Pure-lexical inputs
-  // (used by unit tests) skip this branch and rely on step 1 above.
-  if (existsSync(resolvedVault) && !realpathInsideVault(resolvedTarget, resolvedVault)) {
+  // (used by unit tests) skip this branch and rely on step 1 above. A vault
+  // that cannot be examined is not one that is absent: the probe keeps the
+  // errno and throws the unexaminable class (`realpathInsideVault`).
+  if (!realpathInsideVault(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault via symlink: ${target}`);
   }
 
@@ -84,10 +89,48 @@ export function ensureInsideVault(target: string, vault: string): string {
  */
 export function realpathInsideVault(target: string, vault: string): boolean {
   const resolvedVault = resolve(vault);
-  if (!existsSync(resolvedVault)) return true;
-  const realVault = safeRealpath(resolvedVault);
-  const realAncestor = safeRealpath(deepestExistingAncestor(resolve(target)));
+  // Not `existsSync`: it answers false for a vault below a parent this
+  // process cannot traverse, exactly as for a vault nobody created. Only a
+  // look that proves the vault absent skips the check; every other failure
+  // (and a vault this process cannot list and traverse) is the
+  // unexaminable vault, one class wherever it surfaces.
+  const look = lookAtDirectory(resolvedVault);
+  if (look === "absent") return true;
+  if (look !== "present") throw unexaminablePath(resolvedVault, resolvedVault, look.failed);
+  const realVault = realpathOrUnexaminable(resolvedVault, resolvedVault);
+  const ancestor = deepestExistingAncestor(resolve(target), resolvedVault);
+  const realAncestor = realpathOrUnexaminable(ancestor, resolvedVault);
   return isLexicallyInsideHost(realAncestor, realVault);
+}
+
+/**
+ * Whether `dir` decides the vault's layout: the vault root, `Brain/`, or a
+ * folder above them. A look refused there leaves the vault unexaminable; a
+ * folder deeper inside that cannot be traversed is its readers' concern
+ * (the doctor reports it as uncertainty), not the whole vault's.
+ */
+function decidesLayout(dir: string, vault: string): boolean {
+  const brain = join(vault, BRAIN_ROOT_REL);
+  return dir === brain || !isLexicallyInsideHost(dir, vault) || dir === vault;
+}
+
+/**
+ * The realpath of `path` inside the vault, or the unexaminable class when
+ * a look along it fails for a reason other than absence (macOS answers the
+ * realpath of a mode-000 folder with EACCES where Linux resolves it). A
+ * folder below `Brain/` refused that way is resolved through its parent
+ * when it is no link: its real path is the parent's real path and its name.
+ */
+function realpathOrUnexaminable(path: string, vault: string): string {
+  try {
+    return safeRealpath(path);
+  } catch (err) {
+    if (!isUnexaminableLook(err)) throw err;
+    if (!decidesLayout(path, vault) && !lstatSync(path).isSymbolicLink()) {
+      return join(realpathOrUnexaminable(dirname(path), vault), basename(path));
+    }
+    throw unexaminablePath(vault, path, err);
+  }
 }
 
 /**
@@ -148,17 +191,31 @@ function isLexicallyInsideHost(target: string, root: string): boolean {
   return isLexicallyInside(hostPlatform(), target, root);
 }
 
-function deepestExistingAncestor(target: string): string {
+function deepestExistingAncestor(target: string, vault: string): string {
   let cur = target;
   // Walk up until we hit a path that exists. `dirname` of a top-level
   // path returns itself; the loop terminates either at the first existing
-  // ancestor (the common case — vault root exists) or at the root.
-  while (!existsSync(cur)) {
+  // ancestor (the common case — vault root exists) or at the root. Not
+  // `existsSync`: a look refused because the vault root or `Brain/` cannot
+  // be traversed (a mode-000 Brain/) is no absence, and the vault is
+  // unexaminable. A folder deeper inside that refuses the look is walked
+  // past, as an absent one: the path is judged from that folder, which
+  // exists, and its readers report what they could not read.
+  for (;;) {
+    try {
+      lstatSync(cur);
+      return cur;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        if (!isUnexaminableLook(err)) throw err;
+        if (decidesLayout(dirname(cur), vault)) throw unexaminablePath(vault, cur, err);
+      }
+    }
     const parent = dirname(cur);
     if (parent === cur) return cur;
     cur = parent;
   }
-  return cur;
 }
 
 function safeRealpath(p: string): string {
