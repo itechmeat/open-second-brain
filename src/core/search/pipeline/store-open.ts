@@ -233,6 +233,44 @@ async function awaitSwap(dbPath: string, budgetMs: number = FINISHING_WAIT_MS): 
 }
 
 /**
+ * Longest a read waits for the staging file of a build that announced it
+ * to become openable. The build publishes the readiness of its staging
+ * file before the file carries its schema (`IndexBuildRecorder.ready`),
+ * so a read that lands in that window finds a file it cannot read yet;
+ * the build makes it readable within a moment, and the read waits for
+ * that instead of refusing the query.
+ */
+const STAGING_READY_WAIT_MS = 5_000;
+
+/**
+ * The staging file of the build at `build`, opened for reading once it
+ * can be opened. The wait ends when the file opens, when the live index
+ * appears (the build swapped it in), when the build stops announcing a
+ * staging file (it is swapping its index in, and no new reader may open
+ * the staging file), or after {@link STAGING_READY_WAIT_MS}. Null when
+ * the staging file could not be read.
+ */
+async function awaitStagingIndex(
+  config: ResolvedSearchConfig,
+  build: IndexBuildProgress,
+): Promise<Store | null> {
+  const deadline = Date.now() + STAGING_READY_WAIT_MS;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const staging = await openStagingIndex(config, build);
+    if (staging !== null) return staging;
+    if (Date.now() >= deadline) return null;
+    // The build swapped its index in while this read waited: the live
+    // index answers now, not the staging file.
+    if (existsSync(config.dbPath)) return null;
+    const current = readIndexBuild(config.dbPath);
+    if (current === null || !stagingReadable(current.phase)) return null;
+    // eslint-disable-next-line no-await-in-loop
+    await Bun.sleep(FINISHING_POLL_MS);
+  }
+}
+
+/**
  * The staging file of a running rebuild, opened for reading and refusing
  * every write (`query_only`): the query cache and the other best-effort
  * writes a search makes must not land in a file the rebuild is writing and
@@ -344,8 +382,17 @@ export async function openReadOrSelfHeal(
     }
     if (build !== null) {
       if (opts.serveBuilding === true && stagingReadable(build.phase)) {
-        const staging = await openStagingIndex(config, build);
+        const staging = await awaitStagingIndex(config, build);
         if (staging !== null) return staging;
+      }
+      // The build swapped its index in while this read waited for the
+      // staging file: the live index answers now.
+      if (existsSync(config.dbPath)) {
+        try {
+          return await Store.open(config, { mode: "read" });
+        } catch (e) {
+          if (!(e instanceof SearchError) || e.code !== "INDEX_MISSING") throw e;
+        }
       }
       // The build is swapping its index in (or began to while this read
       // looked): that takes seconds, so wait for it rather than refuse.

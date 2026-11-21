@@ -8,7 +8,7 @@
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import {
@@ -16,9 +16,16 @@ import {
   SELF_HEAL_REINDEX_OUTCOME,
   SELF_HEAL_SPAWN,
 } from "../../../src/core/maintenance/self-heal-reindex.ts";
-import { IndexBuildStartingError } from "../../../src/core/search/build-progress.ts";
+import {
+  IndexBuildRecorder,
+  IndexBuildStartingError,
+  readIndexBuild,
+  stagingIndexPath,
+} from "../../../src/core/search/build-progress.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { acquireWriterLease } from "../../../src/core/search/store/writer-lock.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 import { switchDevice } from "../brain/fixtures/memory-twins.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
@@ -96,4 +103,47 @@ test("a search whose own settings differ from the config file builds the index i
   expect(
     readSelfHealReindexRows(env.vault).some((r) => r.decision === SELF_HEAL_SPAWN.spawned),
   ).toBe(false);
+});
+
+test("a search waits for the staging file a running build announced instead of refusing it", async () => {
+  env = makeStoreEnv("osb-first-search-staging-", { dualWrite: false });
+  switchDevice(env);
+  mkdirSync(join(env.vault, "Notes"), { recursive: true });
+  writeFileSync(join(env.vault, "Notes", "godwit.md"), "# Godwit\n\nBar-tailed godwit notes.\n");
+  const config = resolveSearchConfig({ vault: env.vault, configPath: env.configPath });
+  expect(existsSync(config.dbPath)).toBe(false);
+
+  // A build that has announced its staging file, whose file cannot be
+  // read yet: the build publishes the readiness of its staging file
+  // before the file carries its schema, so a read that lands in that
+  // window finds a file it cannot open.
+  mkdirSync(dirname(config.dbPath), { recursive: true });
+  const staging = stagingIndexPath(config.dbPath);
+  writeFileSync(staging, "");
+  const lease = await acquireWriterLease(config.dbPath);
+  const recorder = new IndexBuildRecorder(config.dbPath);
+  recorder.ready();
+  recorder.storeBegins();
+  expect(readIndexBuild(config.dbPath)?.phase).toBe("store");
+
+  // The build makes its staging file readable a moment later.
+  const readable = Bun.sleep(200).then(async () => {
+    const store = await Store.open({ ...config, dbPath: staging }, { mode: "write" });
+    await store.close();
+  });
+  try {
+    const outcome = await search(config, {
+      query: "godwit",
+      limit: 5,
+      transportReach: TRANSPORT_REACH.local,
+    });
+    await readable;
+    // The answer comes from the staging file the build is still filling,
+    // and says so: the query is answered, not refused.
+    expect(outcome.warnings.some((w) => w.startsWith("the search index is being built"))).toBe(
+      true,
+    );
+  } finally {
+    lease.release();
+  }
 });
