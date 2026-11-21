@@ -256,7 +256,7 @@ describe("self-heal reindex: the child's terminal outcome", () => {
 
         expect(code).toBe(0);
         // A migration is reported as one, not as an index that was current.
-        expect(stderr.join("")).toContain("was migrated in place");
+        expect(stderr.join("")).toContain("was brought current in place");
         expect(stderr.join("")).not.toContain("is current; no rebuild was needed");
         expect(readSelfHealReindexRows(vault).find((row) => row.runId === runId)?.outcome).toBe(
           SELF_HEAL_REINDEX_OUTCOME.completed,

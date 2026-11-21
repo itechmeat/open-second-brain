@@ -211,5 +211,7 @@ test("an index stamped current but missing a table is still rebuilt", async () =
   const outcome = await search(keywordOnly, { query: "fox", recordAccess: false });
 
   expect(outcome.results.length).toBeGreaterThan(0);
-  expect(existsSync(`${v.dbPath}.bak`)).toBe(true);
+  // The condemned index held no vectors the rebuild lacks, so a verified
+  // rebuild leaves no copy of it behind.
+  expect(existsSync(`${v.dbPath}.bak`)).toBe(false);
 });

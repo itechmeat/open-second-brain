@@ -1418,9 +1418,72 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   cached; a cut one is cached under a key that carries the effective
   window and the query prefix, so a changed window re-keys it.
 - **Atomic reindex.** `o2b search reindex` writes to
-  `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
-  previous file as `brain.sqlite.bak`. If the main file is missing on
+  `brain.sqlite.new`, parks the previous file at `brain.sqlite.bak` and
+  renames the new one to `brain.sqlite`. If the main file is missing on
   open and a `.bak` exists, it is auto-restored with a stderr notice.
+  Each database moves as a set with its `-wal`, `-shm` and `-journal`
+  (`src/core/sqlite-file-set.ts`, shared with the snapshot restore), so a
+  killed writer's log is never replayed into the new index. A move that
+  fails part way is undone siblings first, and the main file comes back
+  only with all of its journals; what could not be moved back is named
+  in the error. The new index is renamed in only while the rebuild still
+  holds the writer lock, which is kept fresh for every retry the swap or
+  corrupt-index rollback can spend. A lone `-shm` left after SQLite has
+  switched out of WAL mode is not a data-bearing journal, so it does not
+  make an otherwise sound index unverified; `-wal` and `-journal` still
+  block verification and publication. Once the new file is live, opened
+  for writing, passes an integrity check and carries the generation the
+  rebuild built, the
+  `.bak` is removed, unless it holds stored embeddings the new index
+  lacks (a keyword-only rebuild cannot recompute them) or its count
+  cannot be read; a new index that fails the check is swapped back out
+  and the previous one put back, and a check that could not run (an I/O
+  error, a busy file) counts as neither pass nor failure, so nothing is
+  removed or undone. Nothing parked is removed before that point: a
+  rebuild killed between the renames of its swap leaves the previous
+  index at `.bak` or `.old`, possibly split from its journals, and the
+  next open, self-heal, rebuild or snapshot restore puts it back
+  together first. Before a swap moves the live main file it records the
+  parked name it uses in `brain.sqlite.parking`, so a set split by a stop
+  between the renames is reunited under that name, not by guessing from
+  `.old` and `.bak`; the record is removed once a live index is back in
+  place. The crash restore on open keeps the writer lock fresh through
+  its renames, which retry for seconds on Windows, and checks before each
+  rename and before removing the record that the lock is still its own;
+  once another writer has taken the lock over, it moves nothing more and
+  leaves the record for that writer. A lease loss during a file-set move
+  stops the next rename and names any stranded paths; a parked set is not
+  restored over an occupied live path. When both `.bak` and `.old` are
+  taken by indexes no verified rebuild may remove (one whose stored
+  embeddings cannot be counted, one richer in them than the live index),
+  the rebuild refuses with `INDEX_LOCKED` and removes neither; the
+  message names the unreadable parked file and says to move it out of
+  the index folder (or make it readable again), after which the next
+  rebuild parks the live index at the freed name. When the check after the swap cannot complete (on
+  POSIX a search still holding the renamed file keeps its log beside
+  it), the rebuild still succeeds: it says so on stderr and in
+  `swap_unverified` of `o2b search reindex --json`, names where the
+  previous index is kept, and removes and undoes nothing; the next
+  rebuild whose check completes removes what it kept. The end line and
+  `duration_ms` give the whole rebuild's wall time.
+- **What the index stores (schema v18).** One row per chunk with its
+  text once: the full-text form is a generated column over the content,
+  with a stored override only where CJK expansion changes the text. The
+  `chunk_trigram` substring index exists only on an index opened for
+  writing with `search_trigram_prefilter_enabled` on, the one setting
+  that reads it; turning the setting on builds it at the next index run,
+  and until then the lane answers nothing with a
+  `trigram_degraded [not_built]` warning. Entities are extracted from
+  whole tokens only, and the entity table stores each row once. An index
+  whose entities were extracted by the older rules (chunker version 3)
+  is served as it is and brought current by the background heal: rebuilt
+  when it holds no stored embeddings, its entities re-extracted in place
+  when it does. On a brain store of 400,000 records the index takes
+  517 MB; `o2b search status` and the migration's dry run estimate the
+  size and build time from 401 bytes per store record, 1,777 bytes per
+  indexed document, 0.15 ms per record and 20 ms per note file. The
+  migration's dry run counts no note files, so its estimate leaves out
+  their build time: add 20 ms per note file to it.
 - **Embedding model fingerprint.** Model + dimension are recorded in
   the index. Changing either drops the `embeddings` and `chunk_vec`
   tables on next open, logs one line, and preserves `chunks` and

@@ -58,7 +58,7 @@ export interface AtomicWriteOptions {
 const WINDOWS_TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
 
 /** Total time {@link renameWithRetry} keeps retrying on Windows. */
-const WINDOWS_RENAME_RETRY_BUDGET_MS = 2_000;
+export const WINDOWS_RENAME_RETRY_BUDGET_MS = 2_000;
 
 /**
  * Block the calling thread for `ms` milliseconds.

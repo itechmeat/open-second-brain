@@ -39,10 +39,13 @@ function hasTable(db: Database, name: string): boolean {
 }
 
 function hasColumn(db: Database, table: string, name: string): boolean {
-  return db
-    .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
-    .all()
-    .some((c) => c.name === name);
+  return (
+    db
+      // `table_xinfo`: `chunks.fts_content` is a generated column since v18.
+      .query<{ name: string }, []>(`PRAGMA table_xinfo(${table})`)
+      .all()
+      .some((c) => c.name === name)
+  );
 }
 
 test("fresh migration reaches latest and creates query_cache", () => {

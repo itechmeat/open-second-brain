@@ -2,10 +2,10 @@
  * The trigram candidate lane is a BROADENER: it only ever adds to a pool
  * the keyword lane already filled. So a fault in it degrades the lane and
  * never the query - but visibly, with a `trigram_degraded` warning on the
- * outcome, next to `hybrid_degraded` for the semantic lane. The one
- * exception is a `chunk_trigram` shadow that is simply absent (a store
- * migrated to v9 but never rebuilt): the table is optional, and that case
- * stays silent.
+ * outcome, next to `hybrid_degraded` for the semantic lane. A
+ * `chunk_trigram` shadow that is simply absent (an index built while
+ * nothing read the lane, schema v18) is optional, not damage: it is named
+ * `not_built`, with the index run that builds it.
  */
 
 import { test, expect, afterEach } from "bun:test";
@@ -38,7 +38,9 @@ async function indexedVault(): Promise<{ vault: string; dbPath: string }> {
   // and is itself a whole word the keyword lane DOES match.
   writeMd(v.vault, "a.md", "# Ops\n\nReindexing the vault can be slow on large corpora.");
   writeMd(v.vault, "b.md", "# Turtles\n\nGreen turtles migrate across oceans.");
-  await indexVault(makeConfig({ vault: v.vault, dbPath: v.dbPath }), {});
+  // Built by an opener that reads the trigram lane, so the shadow exists
+  // (schema v18 builds it only for one).
+  await indexVault(trigramConfig(v.vault, v.dbPath), {});
   return { vault: v.vault, dbPath: v.dbPath };
 }
 
@@ -61,7 +63,9 @@ function trigramConfig(vault: string, dbPath: string) {
 /** Leaves `chunk_trigram` absent - the documented optional-table case. */
 function dropTrigramShadow(dbPath: string): void {
   const db = openRaw(dbPath);
-  db.exec("DROP TABLE chunk_trigram");
+  db.exec(
+    "DROP TRIGGER chunks_tri_ai; DROP TRIGGER chunks_tri_ad; DROP TRIGGER chunks_tri_au; DROP TABLE chunk_trigram",
+  );
 }
 
 /**
@@ -93,7 +97,7 @@ test("a lost FTS5 shadow table does not read as an absent shadow", () => {
 
 // ─── the lane, against induced faults ────────────────────────────────────────
 
-test("an absent chunk_trigram shadow stays silent", async () => {
+test("an absent chunk_trigram shadow is named not_built, with the run that builds it", async () => {
   const { dbPath } = await indexedVault();
   dropTrigramShadow(dbPath);
   const db = openRaw(dbPath);
@@ -101,7 +105,11 @@ test("an absent chunk_trigram shadow stays silent", async () => {
   const outcome = trigramCandidates(db, '"index"', { limit: 10 });
 
   expect(outcome.hits).toEqual([]);
-  expect(outcome.warnings).toEqual([]);
+  expect(outcome.warnings).toEqual([
+    "trigram_degraded [not_built]: trigram candidate lane skipped until the next index run " +
+      "builds its table (o2b search index); keyword candidates unaffected",
+  ]);
+  expect(outcome.degraded.map((d) => d.detail)).toEqual([{ fault: "not_built" }]);
 });
 
 test("a chunk_trigram that is not an FTS5 shadow degrades with a warning", async () => {
@@ -168,7 +176,7 @@ test("a search whose trigram lane fails still returns the keyword-lane results",
   expect(degraded.warnings.some((w) => w.startsWith("trigram_degraded ["))).toBe(true);
 });
 
-test("a search over an absent trigram shadow is byte-identical to a healthy one", async () => {
+test("a search over an absent trigram shadow keeps the keyword results and says why", async () => {
   const { vault, dbPath } = await indexedVault();
   const cfg = trigramConfig(vault, dbPath);
   const healthy = await search(cfg, { query: "reindexing", limit: 10 });
@@ -177,8 +185,10 @@ test("a search over an absent trigram shadow is byte-identical to a healthy one"
   const absent = await search(cfg, { query: "reindexing", limit: 10 });
 
   expect(absent.results.map((r) => r.path)).toEqual(healthy.results.map((r) => r.path));
-  expect(absent.warnings).toEqual(healthy.warnings);
-  expect(absent.warnings.some((w) => w.startsWith("trigram_degraded"))).toBe(false);
+  expect(absent.warnings.filter((w) => w.startsWith("trigram_degraded"))).toEqual([
+    "trigram_degraded [not_built]: trigram candidate lane skipped until the next index run " +
+      "builds its table (o2b search index); keyword candidates unaffected",
+  ]);
 });
 
 // ─── the writer-lock guard travels with its function ─────────────────────────

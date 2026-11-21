@@ -463,8 +463,8 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   if (stats === null) {
     process.stderr.write(
       migrated
-        ? `search index ${cfg.dbPath} was migrated in place to the current schema; ` +
-            `its stored embeddings were kept and no rebuild was needed\n`
+        ? `search index ${cfg.dbPath} was brought current in place (a schema upgrade or an ` +
+            `entity refresh); its stored embeddings were kept and no rebuild was needed\n`
         : `search index ${cfg.dbPath} is current; no rebuild was needed\n`,
     );
     return 0;
@@ -601,6 +601,8 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
           })),
         }
       : {}),
+    // Conditional: a verified swap emits the payload it emitted before.
+    ...(stats.swapUnverified === undefined ? {} : { swap_unverified: stats.swapUnverified }),
     duration_ms: stats.durationMs,
     vault: cfg.vault,
     db_path: cfg.dbPath,

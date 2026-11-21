@@ -660,15 +660,6 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "the signal twin of the preference retire: shared-writer write first, existence " +
       "re-confirmed, then the source unlinked.",
   },
-  "src/core/search/store/lifecycle.ts": {
-    categories: [C.lifecycleMove, C.retentionDelete],
-    calls: ["renameSync", "unlinkSync"],
-    reason:
-      "restores the parked `.old` (else the `.bak`) sqlite index over a missing database " +
-      "after a crashed reindex, re-checked under the lock, and deletes a `.old` a completed " +
-      "swap left beside the live index. A database file has no text-writer form.",
-  },
-
   // --- Retention, reset and cleanup deletes ------------------------------
   "src/core/brain/exact-state.ts": {
     categories: [C.retentionDelete],
@@ -894,6 +885,14 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "swaps a freshly built sqlite index into place under the index lock, keeping the " +
       "previous file as `.bak`. A database is not text and has no shared-writer form.",
+  },
+  "src/core/search/store/lifecycle.ts": {
+    categories: [C.machineArtifact, C.retentionDelete],
+    calls: ["unlinkSync"],
+    reason:
+      "the park record a swap writes beside the search index before it moves the live " +
+      "database aside (`.parking`, through `atomicWriteFileSync`), and its removal once a " +
+      "live index is back in place. Machine state beside the index, never a note.",
   },
   "src/core/search/build-progress.ts": {
     categories: [C.machineArtifact, C.lockPrimitive, C.retentionDelete],
@@ -1434,6 +1433,8 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 82 -> 83: `src/core/search/build-progress.ts` removes a running rebuild's progress file beside the search index when the rebuild ends.
  * 83 -> 84: `src/core/brain/tar-writer.ts` writes a Windows snapshot's tar stream into a temp file outside the vault.
  * 84 -> 85: `src/core/brain/tar-extract.ts` extracts a snapshot's tar stream into a temp directory outside the vault.
+ * 85 -> 84: `src/core/search/store/lifecycle.ts` moves the index's database set through `src/core/sqlite-file-set.ts` (fs-atomic retries) instead of calling `fs` itself.
+ * 84 -> 85: `src/core/search/store/lifecycle.ts` removes the park record a swap writes beside the search index once a live index is back in place.
  */
 const DIRECT_WRITE_ROWS = 85;
 
@@ -1698,8 +1699,10 @@ const DIRECT_WRITE_ROWS = 85;
  * the shared atomic writer (change migration-sync-conflict-copies).
  * 116 -> 117: `src/core/search/build-progress.ts` writes a running rebuild's
  * progress file beside the search index with the shared atomic writer.
+ * 117 -> 118: `src/core/search/store/lifecycle.ts` writes the park record a
+ * swap leaves beside the search index with the shared atomic writer.
  */
-const SHARED_HELPER_ROWS = 117;
+const SHARED_HELPER_ROWS = 118;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1828,6 +1831,8 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 81 -> 82: a running rebuild's progress file beside the search index (machine state, no note).
  * 82 -> 83: the in-process tar writer of a Windows snapshot (a temp tar stream, no note).
  * 83 -> 84: the in-process tar reader of every restore (a temp extraction folder, no note).
+ * 84 -> 83: the search index's crash restore moves its database set through `sqlite-file-set.ts` (fs-atomic retries, no direct `fs` call).
+ * 83 -> 84: the removal of the park record a swap writes beside the search index (machine state, no note).
  */
 const UNSTAMPED_DIRECT_ROWS = 84;
 
@@ -1977,8 +1982,10 @@ const UNSTAMPED_DIRECT_ROWS = 84;
  * keeps, machine state in the device-local migration folder and no note.
  * 112 -> 113: a running rebuild's progress file beside the search index,
  * written through the shared atomic writer, machine state and no note.
+ * 113 -> 114: the park record a swap writes beside the search index,
+ * through the shared atomic writer, machine state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 113;
+const UNSTAMPED_SHARED_ROWS = 114;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

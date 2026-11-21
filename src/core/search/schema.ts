@@ -27,7 +27,7 @@ import {
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 17;
+export const LATEST_SCHEMA_VERSION = 18;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -107,6 +107,12 @@ export function buildFtsTokenize(opts: FtsTokenizerOptions): string {
 export interface MigrationContext {
   /** FTS5 tokenizer clause for the searchable `chunk_fts` table. */
   readonly ftsTokenize: string;
+  /**
+   * Whether the opener reads the `chunk_trigram` shadow
+   * (`search_trigram_prefilter_enabled`). A fresh index is built without
+   * it when this is false (v18); see {@link ensureTrigramShadow}.
+   */
+  readonly trigram: boolean;
 }
 
 function ddlV1(ftsTokenize: string): string {
@@ -322,7 +328,10 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // current content until a reindex computes CJK token expansions.
     version: 5,
     up(db, ctx) {
-      const cols = db.query<{ name: string }, []>("PRAGMA table_info(chunks)").all();
+      // `table_xinfo`, not `table_info`: since v18 `fts_content` is a
+      // generated column, which `table_info` does not list, and a re-run of
+      // this migration over a later index must not add it a second time.
+      const cols = db.query<{ name: string }, []>("PRAGMA table_xinfo(chunks)").all();
       if (!cols.some((c) => c.name === "fts_content")) {
         db.exec("ALTER TABLE chunks ADD COLUMN fts_content TEXT NOT NULL DEFAULT ''");
         db.exec("UPDATE chunks SET fts_content = content WHERE fts_content = ''");
@@ -834,7 +843,172 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       );
     },
   },
+  {
+    // v18 (index size) - a real-size brain store made the index about
+    // 1 GB for 200,000 documents, and almost half of it was data no
+    // answer reads. Measured per object with `dbstat` on that index:
+    //
+    //   - the `chunk_trigram` shadow (295 MB, the largest object) is read
+    //     only when `search_trigram_prefilter_enabled` is on, which is off
+    //     by default. A fresh index is now built without it unless the
+    //     opener reads it, and an index opened for writing with the
+    //     prefilter on gets it built in place ({@link ensureTrigramShadow});
+    //   - `chunks.fts_content` (104 MB) repeated `content` byte for byte
+    //     in every chunk whose text needs no CJK expansion, which is all
+    //     but a handful. The stored column becomes `fts_override`, empty
+    //     when the full-text form IS the content, and `fts_content` turns
+    //     into a VIRTUAL generated column over the two, so `chunk_fts`,
+    //     `chunk_trigram` and every reader keep the name they read;
+    //   - `idx_documents_path`, `idx_chunks_document` and
+    //     `idx_tier_drift_document` repeat the leading columns of the
+    //     UNIQUE constraints beside them (`documents.path`,
+    //     `chunks(document_id, chunk_index)`, `tier_drift(document_id,
+    //     field)`), which answer the same lookups;
+    //   - `chunk_entities` (184 MB) was a rowid table beside its own
+    //     primary-key index, so every row was stored twice. A fresh table
+    //     is WITHOUT ROWID, keyed by the same primary key.
+    //
+    // In place and cheap on an existing index: only DDL runs, no row is
+    // rewritten, so the upgrade forces no rebuild and takes no longer on a
+    // large index than on a small one. A populated `chunk_entities` and
+    // `chunk_trigram` keep their shape and the stored `fts_override`
+    // keeps its full copies (the generated column reads them correctly);
+    // the space they hold is given back by the next rebuild, which writes
+    // the compact layout. Entity rows of the old extraction rules are the
+    // background heal's (chunker version 4, `self-heal.ts`).
+    version: 18,
+    up(db, ctx) {
+      const chunksEmpty = db.query("SELECT 1 FROM chunks LIMIT 1").get() === null;
+      // The triggers name `fts_content`; they are recreated over the
+      // generated column once it exists.
+      db.exec(`
+        DROP TRIGGER IF EXISTS chunks_ai;
+        DROP TRIGGER IF EXISTS chunks_ad;
+        DROP TRIGGER IF EXISTS chunks_au;
+        DROP TRIGGER IF EXISTS chunks_tri_ai;
+        DROP TRIGGER IF EXISTS chunks_tri_ad;
+        DROP TRIGGER IF EXISTS chunks_tri_au;
+      `);
+      const chunkCols = db.query<{ name: string }, []>("PRAGMA table_xinfo(chunks)").all();
+      if (!chunkCols.some((c) => c.name === CHUNK_FTS_OVERRIDE_COLUMN)) {
+        db.exec(`ALTER TABLE chunks RENAME COLUMN fts_content TO ${CHUNK_FTS_OVERRIDE_COLUMN}`);
+        db.exec(
+          `ALTER TABLE chunks ADD COLUMN fts_content TEXT GENERATED ALWAYS AS (${chunkFtsExpression()}) VIRTUAL`,
+        );
+      }
+      db.exec(CHUNK_FTS_TRIGGERS);
+      if (tableExists(db, TRIGRAM_TABLE)) {
+        if (chunksEmpty && !ctx.trigram) db.exec(`DROP TABLE ${TRIGRAM_TABLE}`);
+        else db.exec(TRIGRAM_TRIGGERS);
+      }
+      db.exec("DROP INDEX IF EXISTS idx_documents_path");
+      db.exec("DROP INDEX IF EXISTS idx_chunks_document");
+      db.exec("DROP INDEX IF EXISTS idx_tier_drift_document");
+      if (db.query("SELECT 1 FROM chunk_entities LIMIT 1").get() === null) {
+        db.exec(`
+          DROP TABLE chunk_entities;
+          CREATE TABLE chunk_entities (
+            chunk_id   INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+            entity     TEXT NOT NULL,
+            PRIMARY KEY (chunk_id, entity)
+          ) WITHOUT ROWID;
+          CREATE INDEX idx_chunk_entities_entity ON chunk_entities(entity);
+        `);
+      }
+    },
+  },
 ]);
+
+/**
+ * The stored half of a chunk's full-text form (v18): empty when the form
+ * is the chunk's content itself, the CJK-expanded text otherwise.
+ */
+export const CHUNK_FTS_OVERRIDE_COLUMN = "fts_override";
+
+/** The generated `chunks.fts_content` (v18): the override, or the content when it is empty. */
+function chunkFtsExpression(): string {
+  return `CASE WHEN ${CHUNK_FTS_OVERRIDE_COLUMN} = '' THEN content ELSE ${CHUNK_FTS_OVERRIDE_COLUMN} END`;
+}
+
+/**
+ * What {@link CHUNK_FTS_OVERRIDE_COLUMN} stores for a chunk whose
+ * full-text form is `ftsText`: nothing when it repeats the content.
+ */
+export function chunkFtsOverride(content: string, ftsText: string): string {
+  return ftsText === content ? "" : ftsText;
+}
+
+/** The substring shadow (v9), built only for an opener that reads it (v18). */
+const TRIGRAM_TABLE = "chunk_trigram";
+
+/** The `chunk_fts` sync triggers, over the generated `fts_content` (v18). */
+const CHUNK_FTS_TRIGGERS = `
+CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunk_fts(rowid, fts_content, heading_path)
+    VALUES (new.id, new.fts_content, new.heading_path);
+END;
+CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunk_fts(chunk_fts, rowid, fts_content, heading_path)
+    VALUES('delete', old.id, old.fts_content, old.heading_path);
+END;
+CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+  INSERT INTO chunk_fts(chunk_fts, rowid, fts_content, heading_path)
+    VALUES('delete', old.id, old.fts_content, old.heading_path);
+  INSERT INTO chunk_fts(rowid, fts_content, heading_path)
+    VALUES (new.id, new.fts_content, new.heading_path);
+END;
+`;
+
+/** The `chunk_trigram` sync triggers (v9's, recreated by v18). */
+const TRIGRAM_TRIGGERS = `
+CREATE TRIGGER chunks_tri_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunk_trigram(rowid, fts_content) VALUES (new.id, new.fts_content);
+END;
+CREATE TRIGGER chunks_tri_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunk_trigram(chunk_trigram, rowid, fts_content)
+    VALUES('delete', old.id, old.fts_content);
+END;
+CREATE TRIGGER chunks_tri_au AFTER UPDATE ON chunks BEGIN
+  INSERT INTO chunk_trigram(chunk_trigram, rowid, fts_content)
+    VALUES('delete', old.id, old.fts_content);
+  INSERT INTO chunk_trigram(rowid, fts_content) VALUES (new.id, new.fts_content);
+END;
+`;
+
+function tableExists(db: Database, name: string): boolean {
+  return (
+    db
+      .query<{ name: string }, [string]>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get(name) !== null
+  );
+}
+
+/**
+ * Build the `chunk_trigram` shadow in place when the opener reads it and
+ * the index has none (v18 builds a fresh index without it unless asked):
+ * the table, its triggers and one `rebuild` over the chunks already
+ * indexed. Turning `search_trigram_prefilter_enabled` on therefore takes
+ * effect at the next write open of the index (any index run, a session
+ * start's catch-up), not at the next full rebuild. An existing shadow is
+ * never dropped here: a process that does not read it keeps it current
+ * through the triggers, so openers that disagree about the setting do not
+ * build and drop it in turn.
+ */
+function ensureTrigramShadow(db: Database): void {
+  if (tableExists(db, TRIGRAM_TABLE)) return;
+  db.exec(`
+    CREATE VIRTUAL TABLE ${TRIGRAM_TABLE} USING fts5(
+      fts_content,
+      content='chunks',
+      content_rowid='id',
+      tokenize='trigram'
+    );
+    ${TRIGRAM_TRIGGERS}
+    INSERT INTO ${TRIGRAM_TABLE}(${TRIGRAM_TABLE}) VALUES('rebuild');
+  `);
+}
 
 /** The `documents` column naming where a document came from (v17). */
 export const DOCUMENT_SOURCE_COLUMN = "source";
@@ -1239,7 +1413,7 @@ const TABLE_NAMES_SQL =
   "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
 
 /** Column names of one table. */
-const TABLE_COLUMNS_SQL = "SELECT name FROM pragma_table_info(?)";
+const TABLE_COLUMNS_SQL = "SELECT name FROM pragma_table_xinfo(?)";
 
 function tableNames(db: Database): Set<string> {
   return new Set(
@@ -1265,9 +1439,10 @@ function columnNames(db: Database, table: string): Set<string> {
  * absence of; a lane that already classifies its own table as missing and
  * degrades is not that.
  *
- * `chunk_trigram` is the opt-in substring broadener from v9. `trigram.ts`
- * detects its absence (`isMissingTrigramTable`) and returns no candidates
- * silently, which is a documented, tested behaviour. Demanding it here
+ * `chunk_trigram` is the opt-in substring broadener from v9, built since
+ * v18 only for an opener that reads it. `trigram.ts` detects its absence
+ * (`isMissingTrigramTable`) and returns no candidates with a `not_built`
+ * warning, which is a documented, tested behaviour. Demanding it here
  * would push a legitimately readable index into a reindex that drops every
  * embedding, to restore a table the query path never needed.
  *
@@ -1428,6 +1603,13 @@ export interface ApplyMigrationsOptions {
    * (reindex); an already-migrated index is not rewritten.
    */
   readonly ftsTokenize?: string;
+  /**
+   * Whether the opener reads the `chunk_trigram` shadow
+   * (`search_trigram_prefilter_enabled`). True builds it when the index
+   * has none; false leaves it out of a fresh index and keeps an existing
+   * one. Absent = false.
+   */
+  readonly trigram?: boolean;
 }
 
 /**
@@ -1438,7 +1620,10 @@ export interface ApplyMigrationsOptions {
  * Returns the version after migration.
  */
 export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {}): number {
-  const ctx: MigrationContext = { ftsTokenize: opts.ftsTokenize ?? DEFAULT_FTS_TOKENIZE };
+  const ctx: MigrationContext = {
+    ftsTokenize: opts.ftsTokenize ?? DEFAULT_FTS_TOKENIZE,
+    trigram: opts.trigram === true,
+  };
   const hasIndexState = db
     .query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='index_state'",
@@ -1455,11 +1640,13 @@ export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {})
     );
   }
 
-  if (current === LATEST_SCHEMA_VERSION) return current;
+  const trigramOwed = ctx.trigram && !tableExists(db, TRIGRAM_TABLE);
+  if (current === LATEST_SCHEMA_VERSION && !trigramOwed) return current;
 
-  // A migration can rewrite a large table in one synchronous run; the
-  // write open that calls this holds the writer lock, kept fresh off the
-  // blocked thread meanwhile.
+  // A migration can rewrite a large table in one synchronous run, and the
+  // trigram shadow's build reads every chunk; the write open that calls
+  // this holds the writer lock, kept fresh off the blocked thread
+  // meanwhile.
   keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () => {
     db.exec("BEGIN");
     try {
@@ -1468,6 +1655,7 @@ export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {})
         migration.up(db, ctx);
         setSchemaVersion(db, migration.version);
       }
+      if (ctx.trigram) ensureTrigramShadow(db);
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");

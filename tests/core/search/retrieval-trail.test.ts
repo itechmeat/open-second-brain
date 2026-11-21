@@ -59,7 +59,8 @@ async function indexedVault(prefix: string): Promise<{ vault: string; dbPath: st
 function breakTrigramShadow(dbPath: string): void {
   const db = new Database(dbPath);
   cleanups.push(() => db.close(true));
-  db.exec("DROP TABLE chunk_trigram");
+  // An index built while nothing read the lane has no shadow (schema v18).
+  db.exec("DROP TABLE IF EXISTS chunk_trigram");
   db.exec("CREATE TABLE chunk_trigram (id INTEGER PRIMARY KEY, fts_content TEXT)");
 }
 

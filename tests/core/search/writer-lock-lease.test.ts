@@ -37,6 +37,7 @@ import lockfile from "proper-lockfile";
 
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
+import { parkMarkerPath, writeParkMarker } from "../../../src/core/search/store/lifecycle.ts";
 import {
   acquireWriterLease,
   acquireWriterLeaseSync,
@@ -590,4 +591,93 @@ test("a Windows refusal while the previous writer releases the lock is waited ou
     spy.mockRestore();
   }
   expect(refusals).toBe(2);
+});
+
+test("a lock taken over while an open restores the parked index leaves the set and its record to the new holder", async () => {
+  const v = createTempVault("lease-restore-parked");
+  let successor: WriterLease | null = null;
+  try {
+    writeMd(v.vault, "note.md", "# Note\n\nbody text\n");
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    await indexVault(config);
+    // A rebuild stopped after parking: the index at `.bak` with a sibling,
+    // no live file, and the park record naming `.bak`.
+    fs.renameSync(v.dbPath, `${v.dbPath}.bak`);
+    writeFileSync(`${v.dbPath}.bak-journal`, "");
+    writeParkMarker(v.dbPath, `${v.dbPath}.bak`);
+    const realRename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      realRename(from, to);
+      // The sibling has just come back: another writer takes the lock
+      // before the main file follows it.
+      if (String(from) === `${v.dbPath}.bak-journal` && successor === null) {
+        rmSync(`${v.dbPath}.lock`, { recursive: true });
+        successor = acquireWriterLeaseSync(v.dbPath);
+      }
+    });
+    try {
+      const store = await Store.open(config, { mode: "read" });
+      await store.close();
+    } catch {
+      // No live index is the expected outcome once the lock was lost.
+    } finally {
+      spy.mockRestore();
+    }
+    expect(successor).not.toBeNull();
+    // The stale recovery renames nothing more and keeps the record.
+    expect(existsSync(v.dbPath)).toBe(false);
+    expect(existsSync(`${v.dbPath}.bak`)).toBe(true);
+    expect(existsSync(parkMarkerPath(v.dbPath))).toBe(true);
+    (successor as WriterLease | null)?.release();
+    // The next holder finishes the restore by the record.
+    const restored = await Store.open(config, { mode: "read" });
+    await restored.close();
+    expect(existsSync(v.dbPath)).toBe(true);
+    expect(existsSync(parkMarkerPath(v.dbPath))).toBe(false);
+  } finally {
+    (successor as WriterLease | null)?.release();
+    v.cleanup();
+  }
+});
+
+test("a lock taken over while the swap parks the live index never publishes the new one", async () => {
+  const v = createTempVault("lease-swap-publish");
+  let successor: WriterLease | null = null;
+  try {
+    writeMd(v.vault, "note.md", "# Note\n\nbody text\n");
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    await indexVault(config);
+    const liveIno = statSync(v.dbPath).ino;
+    let refused: unknown = null;
+    const realRename = fs.renameSync;
+    const spy = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      realRename(from, to);
+      // The previous index has just been parked: another writer takes the
+      // lock before the new index is renamed in.
+      if (String(from) === v.dbPath && successor === null) {
+        rmSync(`${v.dbPath}.lock`, { recursive: true });
+        successor = acquireWriterLeaseSync(v.dbPath);
+      }
+    });
+    try {
+      await reindexVault(config);
+    } catch (err) {
+      refused = err;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(successor).not.toBeNull();
+    expect((refused as SearchError | null)?.code).toBe("INDEX_LOCKED");
+    // The stale writer cannot overwrite its successor. The previous index
+    // remains parked until the next owner restores it.
+    expect(existsSync(v.dbPath)).toBe(false);
+    expect(statSync(`${v.dbPath}.bak`).ino).toBe(liveIno);
+    (successor as WriterLease | null)?.release();
+    const restored = await Store.open(config, { mode: "read" });
+    await restored.close();
+    expect(statSync(v.dbPath).ino).toBe(liveIno);
+  } finally {
+    (successor as WriterLease | null)?.release();
+    v.cleanup();
+  }
 });

@@ -382,6 +382,35 @@ test("a passing scan clears a stale fault the operator has already repaired", as
   expect(readState(dbPath, INTEGRITY_FAULT_STATE_KEY)).toBeNull();
 });
 
+test("a scan that cannot complete is no verdict: it points at the scan again, not at a rebuild", async () => {
+  await writeConfig();
+  writeMd(vault, "Notes/foo.md", "# Foo\n\nfox");
+  await indexVault(makeConfig({ vault, dbPath }));
+  // A connection that keeps the file locked: the scan's reads get
+  // SQLITE_BUSY, an operational failure that says nothing about the pages.
+  const holder = new Database(dbPath);
+  try {
+    holder.exec("PRAGMA locking_mode = EXCLUSIVE");
+    holder.run("UPDATE index_state SET updated_at = updated_at WHERE key = 'schema_version'");
+    holder.exec("BEGIN EXCLUSIVE");
+
+    const integrity = integrityOf(await checkJson("--integrity"));
+
+    expect(integrity["scanned"]).toBe(false);
+    expect(integrity["verdict"]).toBe("not-run");
+    expect(String(integrity["reason"])).toContain("could not complete");
+    expect(integrity["next_command"]).toBe(
+      DIAGNOSTIC_SIGNALS.get("search-index-scan-incomplete")!.nextCommand,
+    );
+    expect(integrity["next_command"]).not.toBe(
+      DIAGNOSTIC_SIGNALS.get(INDEX_CORRUPT_CODE)!.nextCommand,
+    );
+  } finally {
+    holder.exec("ROLLBACK");
+    holder.close();
+  }
+});
+
 test("a store with no index file reports that the scan could not run", async () => {
   await writeConfig();
   writeMd(vault, "Notes/foo.md", "# Foo\n\nfox");

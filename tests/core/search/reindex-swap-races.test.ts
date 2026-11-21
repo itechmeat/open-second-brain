@@ -21,7 +21,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 
+import { Database } from "bun:sqlite";
+
+import { stagingIndexPath } from "../../../src/core/search/build-progress.ts";
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
+import { closeDatabase } from "../../../src/core/sqlite-close.ts";
 import { acquireWriterLock, Store } from "../../../src/core/search/store.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { IndexStats } from "../../../src/core/search/types.ts";
@@ -199,7 +203,10 @@ test("a crash mid-swap with the live index parked at .old restores .old, not the
   expect(existsSync(`${dbPath}.bak`)).toBe(true);
 });
 
-test("a .old left beside a present live index by a crash after the swap is removed", async () => {
+test("a .old beside a present live index is kept by an open and removed by the next verified rebuild", async () => {
+  // A crash after the swap and before its verification leaves the new
+  // index live and the previous one at `.old`: until a rebuild verifies a
+  // successor, the parked one is the last index known to be good.
   writeMd(vault, "a.md", "# A\n\nalpha content");
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);
@@ -208,5 +215,51 @@ test("a .old left beside a present live index by a crash after the swap is remov
   const store = await Store.open(cfg, { mode: "read" });
   await store.close();
   expect(existsSync(dbPath)).toBe(true);
+  expect(existsSync(`${dbPath}.old`)).toBe(true);
+
+  await reindexVault(cfg);
   expect(existsSync(`${dbPath}.old`)).toBe(false);
+  expect(existsSync(`${dbPath}.bak`)).toBe(false);
 });
+
+// POSIX only: the handle is this process's own, and a Windows rename waits
+// for it to close (staging-swap-readers.test.ts covers that platform).
+test.skipIf(process.platform === "win32")(
+  "a rebuild whose check after the swap cannot complete stands, keeps the previous index and says so",
+  async () => {
+    writeMd(vault, "a.md", "# A\n\nalpha content");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+    // A reader on the staging file follows it through the rename: it still
+    // holds the published inode, so the check cannot fold its WAL away and
+    // stays inconclusive. That is no verdict on the index.
+    let held: Database | null = null;
+    let stats: IndexStats;
+    try {
+      stats = await reindexVault(cfg, {
+        onFile: () => {
+          if (held !== null) return;
+          held = new Database(stagingIndexPath(dbPath), { readonly: true });
+          held.query("SELECT count(*) FROM index_state").get();
+        },
+      });
+    } finally {
+      if (held !== null) closeDatabase(held);
+    }
+    expect(stats.swapUnverified).toContain("its check after the swap could not complete");
+    expect(stats.swapUnverified).toContain(`the previous index is kept at ${dbPath}.bak`);
+    expect(existsSync(dbPath)).toBe(true);
+    expect(existsSync(`${dbPath}.bak`)).toBe(true);
+    const store = await Store.open(cfg, { mode: "read" });
+    try {
+      expect([...store.listDocuments().keys()]).toEqual(["a.md"]);
+    } finally {
+      await store.close();
+    }
+
+    // The next rebuild whose check completes prunes what this one kept.
+    const next = await reindexVault(cfg);
+    expect(next.swapUnverified).toBeUndefined();
+    expect(existsSync(`${dbPath}.bak`)).toBe(false);
+  },
+);

@@ -71,7 +71,9 @@ interface Fixture {
 /** A store holding one document per apostrophe form, under `ftsTokenize`. */
 async function fixture(ftsTokenize: string): Promise<Fixture> {
   const store = await Store.open(
-    { ...makeConfig({ vault, dbPath }), ftsTokenize },
+    // The trigram lane is probed below, and its shadow is built only for
+    // an opener that reads it (schema v18).
+    { ...makeConfig({ vault, dbPath, trigramPrefilterEnabled: true }), ftsTokenize },
     { mode: "write", loadVec: false },
   );
   const paths = new Map<number, string>();

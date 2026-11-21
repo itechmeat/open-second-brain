@@ -441,6 +441,14 @@ export interface IndexStats {
    * spend emits the shape it always emitted.
    */
   readonly spend?: MaintenanceSpendReceipt;
+  /**
+   * Set when a rebuild published its index but the check after the swap
+   * could not complete (another handle on the file, a busy scan): the
+   * index is in place and nothing was rolled back or pruned. Names why,
+   * and where the previous index is kept, if there was one. Absent on
+   * every run whose swap was verified or that swapped nothing.
+   */
+  readonly swapUnverified?: string;
   readonly durationMs: number;
 }
 

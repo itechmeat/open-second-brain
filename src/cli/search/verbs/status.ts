@@ -20,6 +20,13 @@ import {
 } from "../../../core/search/index.ts";
 import type { EventTimeStatus, IndexStatusSnapshot } from "../../../core/search/index.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
+import {
+  describeIndexEstimate,
+  estimateIndexBuild,
+  formatEstimateBytes,
+  readIndexCensus,
+  type IndexCensus,
+} from "../../../core/search/index-estimate.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import {
   flagBoolean,
@@ -45,12 +52,15 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   const freshen = status.exists
     ? freshenStatus(cfg, status.lastIndexedAt, undefined, behind?.behind ?? null)
     : null;
+  // The size on disk and what a rebuild of it is expected to take.
+  const census = status.exists ? readIndexCensus(cfg.dbPath) : null;
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({
         ...(serializeIndexStatus(status) as Record<string, unknown>),
         ...(eventTime !== null ? { event_time: serializeEventTimeStatus(eventTime) } : {}),
         ...(freshen !== null ? { freshen: serializeFreshenStatus(freshen) } : {}),
+        ...(census !== null ? censusJson(census) : {}),
         // Same polarity as the human twin below, so the two conditions
         // read as one rule rather than as each other's negation.
         ...(!status.exists ? nextCommandField("search-index-missing") : {}),
@@ -58,7 +68,7 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
     );
     return 0;
   }
-  process.stdout.write(renderStatusHuman(status, eventTime, freshen));
+  process.stdout.write(renderStatusHuman(status, eventTime, freshen, census));
   // no-dead-ends, phase 3: the pointer used to be spliced into the
   // renderer's first line, which is a second emission mechanism AND
   // beyond the reach of a scan over writer call sites. The rail decides
@@ -71,10 +81,26 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   return 0;
 }
 
+/** The JSON twin of the size and rebuild lines. */
+function censusJson(census: IndexCensus): Record<string, unknown> {
+  const estimate = estimateIndexBuild(census);
+  return {
+    size_on_disk_bytes: census.sizeOnDiskBytes,
+    rebuild_estimate: {
+      bytes: estimate.bytes,
+      seconds: estimate.seconds,
+      store_records: census.storeRecords,
+      documents: census.documents,
+      note_files: census.noteFiles,
+    },
+  };
+}
+
 function renderStatusHuman(
   s: IndexStatusSnapshot,
   eventTime: EventTimeStatus | null,
   freshen: FreshenStatus | null,
+  census: IndexCensus | null,
 ): string {
   if (!s.exists) {
     return `index: not initialised\n  path: ${s.indexPath}\n`;
@@ -84,6 +110,10 @@ function renderStatusHuman(
   lines.push(`schema_version: ${s.schemaVersion}`);
   lines.push(`documents:  ${s.documents}`);
   lines.push(`chunks:     ${s.chunks}`);
+  if (census !== null) {
+    lines.push(`size_on_disk:        ${formatEstimateBytes(census.sizeOnDiskBytes)}`);
+    lines.push(`rebuild_estimate:    ${describeIndexEstimate(census)}`);
+  }
   lines.push(`embeddings: ${s.embeddings} (stale: ${s.staleEmbeddings})`);
   lines.push(`embedding_model:     ${s.embeddingModel ?? "(none)"}`);
   lines.push(`embedding_dimension: ${s.embeddingDimension ?? "(none)"}`);

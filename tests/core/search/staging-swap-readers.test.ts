@@ -106,7 +106,7 @@ async function until(cond: () => boolean, ms: number): Promise<boolean> {
   return cond();
 }
 
-async function finished(build: PausedBuild): Promise<void> {
+async function finished(build: PausedBuild): Promise<string> {
   const code = await build.child.exited;
   const stderr = await new Response(build.child.stderr as ReadableStream).text();
   expect({ code, stderr }).toEqual({ code: 0, stderr: expect.any(String) });
@@ -123,6 +123,7 @@ async function finished(build: PausedBuild): Promise<void> {
     transportReach: TRANSPORT_REACH.local,
   });
   expect(after.results.length).toBe(NOTES);
+  return stderr;
 }
 
 test("the swap waits for a search that holds the staging file, then renames it", async () => {
@@ -182,12 +183,31 @@ test("a handle still open on the staging file during the rename does not fail th
         60_000,
       ),
     ).toBe(true);
-    // Hold the handle well into the swap's retry window, then let go.
-    await Bun.sleep(1000);
+    if (process.platform === "win32") {
+      // Hold the handle well into the swap's retry window, then let go:
+      // the rename waits for it to close.
+      await Bun.sleep(1000);
+    } else {
+      // The rename does not wait for the handle, so it stays open until
+      // the worker has exited, its check after the swap included: the
+      // notice asserted below then does not depend on timing.
+      await build.child.exited;
+    }
   } finally {
     closeDatabase(raw);
     build.go();
     await build.child.exited;
   }
-  await finished(build);
+  const stderr = await finished(build);
+  // On POSIX the renamed file is the inode the handle still holds, so the
+  // check after the swap cannot fold its WAL away and stays inconclusive:
+  // the build stands and says so. On Windows the rename waited for the
+  // handle to close, and the check completes.
+  const notice = "its check after the swap could not complete";
+  if (process.platform === "win32") {
+    expect(stderr).not.toContain(notice);
+  } else {
+    expect(stderr).toContain(notice);
+    expect(stderr).toContain("there was no previous index to keep");
+  }
 });

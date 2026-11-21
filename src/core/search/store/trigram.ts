@@ -43,9 +43,11 @@ const NO_DEGRADATIONS: ReadonlyArray<RetrievalDegradation> = Object.freeze([]);
 const CHUNK_ORDER = "ORDER BY bm25 ASC, chunk_id ASC";
 
 /**
- * The one condition this lane stays SILENT for: `chunk_trigram` itself is
- * absent, which is a store migrated to v9 but never rebuilt - the table
- * is documented as optional. Anchored on the right, because a message
+ * Whether `chunk_trigram` itself is absent: an index built while nothing
+ * read the prefilter (schema v18 builds the shadow only for an opener that
+ * reads it), not yet opened for writing since the prefilter was turned on.
+ * The table is optional, so this is reported as `not_built`, which the
+ * next index run settles, never as damage. Anchored on the right, because a message
  * naming `chunk_trigram_data` / `_idx` / `_content` / `_docsize` names an
  * FTS5 shadow the index has LOST: the index HAS the trigram table and
  * cannot read it, which is corruption and must be reported, not silently
@@ -64,6 +66,7 @@ export function isMissingTrigramTable(message: string): boolean {
  * never content.
  */
 type TrigramFault =
+  | "not_built"
   | "locked"
   | "tokenizer_unavailable"
   | "corrupt"
@@ -86,6 +89,12 @@ function classifyTrigramFault(message: string): TrigramFault {
  * while reading as a vault with nothing to match.
  */
 function degradeWarning(fault: TrigramFault): string {
+  if (fault === "not_built") {
+    return (
+      "trigram_degraded [not_built]: trigram candidate lane skipped until the next index run " +
+      "builds its table (o2b search index); keyword candidates unaffected"
+    );
+  }
   return `trigram_degraded [${fault}]: trigram candidate lane skipped; keyword candidates unaffected`;
 }
 
@@ -108,9 +117,8 @@ function degradation(fault: TrigramFault): RetrievalDegradation {
  * query - a strict superset of exact substring matches for the query's
  * terms, used as an opt-in candidate source that broadens large-vault
  * keyword recall (substring / partial-token matches the word tokenizer
- * misses). Yields no candidates and no warning when the trigram table is
- * absent; any other fault yields no candidates and one warning naming
- * the cause.
+ * misses). Yields no candidates when the trigram table is absent
+ * (`not_built`) or unreadable, each with one warning naming the cause.
  */
 export function trigramCandidates(
   db: Database,
@@ -189,10 +197,7 @@ export function trigramCandidates(
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (isMissingTrigramTable(msg)) {
-      return { hits: [], warnings: NO_WARNINGS, degraded: NO_DEGRADATIONS };
-    }
-    const fault = classifyTrigramFault(msg);
+    const fault = isMissingTrigramTable(msg) ? "not_built" : classifyTrigramFault(msg);
     return {
       hits: [],
       warnings: Object.freeze([degradeWarning(fault)]),

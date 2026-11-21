@@ -4,7 +4,7 @@
  * `indexVault` is the incremental path: walk → diff against stored
  * documents → upsert/replace/delete. `reindexVault` is the atomic
  * rebuild: write to `brain.sqlite.new`, then a same-file rename swap
- * with `.bak` retention.
+ * that parks the previous index at `.bak` until the new one is verified.
  *
  * `indexStatus`, `indexCheck`, `indexRootCoverage` and
  * `indexBehindCount` are the read-side diagnostics that power
@@ -119,7 +119,12 @@ import {
   LAST_INDEXED_AT_STATE_KEY,
   LINK_RESOLUTION_PENDING_STATE_KEY,
 } from "./store.ts";
-import { LATEST_SCHEMA_VERSION, documentAttributesFromFrontmatter } from "./schema.ts";
+import {
+  LATEST_SCHEMA_VERSION,
+  REINDEX_COMMAND,
+  documentAttributesFromFrontmatter,
+  readSchemaVersion,
+} from "./schema.ts";
 import { chunkWindowDiagnosticCode, CHUNK_HOLD_REASON, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import {
@@ -134,7 +139,7 @@ import {
   waitForStagingReaders,
 } from "./build-progress.ts";
 import { purgeStoreRecords } from "./brain-store/ingest.ts";
-import { STORE_RECORD_PATH_PREFIX } from "./brain-store/constants.ts";
+import { STORE_INDEX_GENERATION_KEY, STORE_RECORD_PATH_PREFIX } from "./brain-store/constants.ts";
 import {
   callableVisibilitySurfaces,
   excludedCallableVisibilitySurfaces,
@@ -159,7 +164,21 @@ import type { ValidityWindow } from "./validity.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
 import { remoteDenyVisibilityTokens } from "../graph/privacy-markers.ts";
 import { closeDatabase } from "../sqlite-close.ts";
-import { renameWithRetry, unlinkWithRetry, type RenameRetrySeams } from "../fs-atomic.ts";
+import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
+import {
+  discardSqliteFileSet,
+  parkSqliteFileSet,
+  sqliteJournalsPresent,
+  sqliteSiblingsPresent,
+  unparkSqliteFileSet,
+} from "../sqlite-file-set.ts";
+import {
+  clearParkMarker,
+  restoreParkedIndexUnderLock,
+  runIntegrityCheck,
+  writeParkMarker,
+} from "./store/lifecycle.ts";
+import { INTEGRITY_CHECKED_AT_STATE_KEY } from "./store/state.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1539,6 +1558,10 @@ async function reindexInto(
   stillCurrent: (() => boolean) | null,
   opts?: IndexVaultOptions,
 ): Promise<IndexStats | null> {
+  // The run's own clock: the build below times only its note walk, and a
+  // rebuild is also the lock wait, the brain store's ingest and the swap
+  // (a real-size store: "done in 8.3s" after 1 min 51 s of wall time).
+  const startedAt = Date.now();
   const newPath = stagingIndexPath(config.dbPath);
   const bakPath = config.dbPath + ".bak";
 
@@ -1704,41 +1727,164 @@ async function reindexInto(
     if (typeof Bun !== "undefined") Bun.gc(true);
     else (globalThis as { gc?: () => void }).gc?.();
     progress.start(INDEX_STAGE.swap, 1);
-    // Counting the stored embeddings reads both indexes in full, which on
-    // a large one blocks for a while; the lock is kept fresh meanwhile.
-    const keepBak = keepWriterLeasesFresh(
-      WRITER_LEASE_BLOCKING_BUDGET_MS,
-      () => countStoredEmbeddings(bakPath) > countStoredEmbeddings(config.dbPath),
+    const oldPath = config.dbPath + ".old";
+    // A rebuild killed between the renames of an earlier swap left the
+    // previous index parked with no live index beside it, its main file and
+    // journals possibly split between the two names. It is put back first,
+    // so it is parked again below like any live index instead of being
+    // read as leftovers: nothing parked is discarded before this rebuild
+    // has verified the index that supersedes it.
+    lease.assertHeld();
+    restoreParkedIndexUnderLock(config.dbPath, lease);
+    if (!existsSync(config.dbPath) && (existsSync(bakPath) || existsSync(oldPath))) {
+      throw new SearchError(
+        "INDEX_LOCKED",
+        `the rebuild of ${config.dbPath} found a parked previous index it could not put back, ` +
+          "so it swapped nothing in; the parked index is untouched",
+      );
+    }
+    // Counting the stored embeddings reads the index in full, which on a
+    // large one blocks for a while; the lock is kept fresh meanwhile.
+    const builtVectors = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+      countStoredEmbeddings(newPath),
     );
+    const builtGeneration = readIndexGeneration(newPath);
+    // The live index is parked at a free parked name: `.bak`, or `.old`
+    // beside an earlier `.bak` (one that still holds stored embeddings a
+    // keyword-only rebuild cannot recompute). When both hold an earlier
+    // index - a rebuild that died before verifying its successor - the live
+    // index decides between them, if it passes the same check.
+    let parkPath = freeParkPath(bakPath, oldPath);
+    if (parkPath === null) {
+      lease.assertHeld();
+      const blocked = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+        settleParkedBesideLive(config.dbPath, lease),
+      );
+      parkPath = freeParkPath(bakPath, oldPath);
+      if (parkPath === null) {
+        throw new SearchError(
+          "INDEX_LOCKED",
+          `the rebuild of ${config.dbPath} found earlier indexes parked at both ${bakPath} and ` +
+            `${oldPath}, so it swapped nothing in and removed neither: ${blocked}`,
+        );
+      }
+    }
     // The last moment the rebuild can still be thrown away harmlessly,
     // right before the first destructive step. A lease another writer took
     // over (this run stalled past the stale window) no longer excludes that
     // writer, and swapping now would replace whatever it committed with
     // this run's staging build.
     lease.assertHeld();
-    const parkPath = keepBak ? config.dbPath + ".old" : bakPath;
+    const park = parkPath;
     // On Windows each rename may retry for STAGING_SWAP_BUDGET_MS, blocking
     // this thread: the lease is kept fresh off it for both, and ownership
     // is checked again once they are done.
     keepWriterLeasesFresh(SWAP_LEASE_BUDGET_MS, () => {
-      tryUnlink(parkPath);
-      tryRename(config.dbPath, parkPath, SWAP_RENAME_SEAMS); // no-op (ENOENT) on fresh reindex
+      // Each database moves as a set with its `-wal`, `-shm` and
+      // `-journal` (`sqlite-file-set.ts`): a writer killed after a
+      // commit leaves a non-empty `-wal` at the live path, and SQLite
+      // would replay it into whatever database is renamed there next. The
+      // previous index takes its siblings with it to the parked path, and
+      // the new one is renamed in only over a live path with none left.
+      // A free parked name holds no main file; journals of nothing found
+      // there would be adopted by the set parked now, so they go first.
+      discardSiblings(park, lease);
+      discardSiblings(newPath, lease);
+      // Durable before the main file moves: a stop between the renames
+      // below leaves the main at `park` and its journals at the live path,
+      // and the crash restore reunites them by this record, not by name.
+      lease.assertHeld();
+      writeParkMarker(config.dbPath, park);
       try {
+        parkSqliteFileSet(config.dbPath, park, SWAP_RENAME_SEAMS, () => lease.assertHeld());
+      } catch (err) {
+        clearMarkerIfLiveWhole(config.dbPath, lease);
+        throw new SearchError(
+          "INDEX_LOCKED",
+          `the rebuild of ${config.dbPath} could not park the live index at ${park}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      try {
+        const stray = sqliteJournalsPresent(config.dbPath);
+        if (stray.length > 0) {
+          throw new SearchError(
+            "INDEX_LOCKED",
+            `the rebuild of ${config.dbPath} could not swap its index in: ${stray.join(", ")} ` +
+              "appeared at the live path after the previous index was moved aside",
+          );
+        }
+        // The publish itself: only while the lease is still this run's. A
+        // writer that took the lock over while the renames above retried
+        // owns the live path now, and the previous index is put back.
+        lease.assertHeld();
         // must succeed — `newPath` was just built
         renameWithRetry(newPath, config.dbPath, SWAP_RENAME_SEAMS);
       } catch (swapError) {
-        restoreLiveFromBak(parkPath, config.dbPath);
-        throw swapError;
+        let rollback: string | null;
+        try {
+          lease.assertHeld();
+          rollback = restoreLiveFromBak(park, config.dbPath, lease);
+        } catch (e) {
+          rollback = `writer lease could not be confirmed: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        if (rollback === null) {
+          clearMarkerIfLiveWhole(config.dbPath, lease);
+          throw swapError;
+        }
+        // The swap's own failure stays first; the refusal never reads as
+        // "previous index intact" when it is not.
+        const what = swapError instanceof Error ? swapError.message : String(swapError);
+        throw new SearchError(
+          swapError instanceof SearchError ? swapError.code : "INDEX_LOCKED",
+          `${what}; the previous index could not be put back (${rollback}) and stays at ` +
+            `${park}, where the next open of the index restores it`,
+        );
       }
     });
     lease.assertHeld();
-    // The staging file's journal siblings stay behind when a reader kept
-    // the journal mode from switching back; they belong to no file now.
-    discardQuietly(newPath + "-wal");
-    discardQuietly(newPath + "-shm");
-    if (keepBak) tryUnlink(parkPath);
+    // The previous index stays parked through the swap, so a crash between
+    // the renames restores it. Parked indexes are removed only here, once
+    // the new live index has been opened for writing, passed an integrity
+    // check, is the file this rebuild built and has no sibling left beside
+    // it; one that holds more stored embeddings than the new index is kept
+    // (a keyword-only rebuild cannot recompute them, and the rebuild notice
+    // points at it). A new index that fails the check is swapped back out
+    // and the previous one restored.
+    const verdict = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
+      checkIndexFile(config.dbPath, builtGeneration),
+    );
+    if (verdict.kind === "corrupt") {
+      lease.assertHeld();
+      keepWriterLeasesFresh(SWAP_LEASE_BUDGET_MS, () =>
+        rollBackCorruptSwap(config.dbPath, park, verdict.fault, lease),
+      );
+    }
+    if (verdict.kind === "verified") {
+      lease.assertHeld();
+      keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () => {
+        lease.assertHeld();
+        pruneParkedIndexes(config.dbPath, builtVectors, lease);
+      });
+    }
+    // The swap is over and the live index is in place: the marker names
+    // nothing any more.
+    clearMarkerIfLiveWhole(config.dbPath, lease);
     progress.advance(INDEX_STAGE.swap);
-    return stats;
+    if (verdict.kind === "unverified") {
+      // An inconclusive check is no verdict on the index: the build stands,
+      // nothing is rolled back and nothing parked is removed. The next
+      // rebuild whose check completes prunes what this one kept.
+      const swapUnverified =
+        `the rebuilt index was published at ${config.dbPath}, but its check after the swap ` +
+        "could not complete (another handle on the file, or a busy scan); " +
+        (existsSync(park)
+          ? `the previous index is kept at ${park}`
+          : "there was no previous index to keep");
+      // eslint-disable-next-line no-console
+      console.error(`search index rebuilt: ${swapUnverified}`);
+      return Object.freeze({ ...stats, swapUnverified, durationMs: Date.now() - startedAt });
+    }
+    return Object.freeze({ ...stats, durationMs: Date.now() - startedAt });
   } finally {
     recorder?.end();
     lease.release();
@@ -1880,36 +2026,300 @@ async function withStagingStore(
 }
 
 /**
- * Stored vectors in the index at `dbPath`; 0 when it is absent or cannot
- * be read. A plain read-only open with no extension loaded: the count
- * reads the embeddings table's rows, not the vectors.
+ * Stored vectors in the index at `dbPath`: 0 when there is no file, null
+ * when the file is there and the count cannot be read (it does not open,
+ * or has no readable `embeddings` table). Unknown is never zero: every
+ * caller treats null as "may hold vectors", so an index whose count cannot
+ * be read is neither deleted as empty nor rebuilt over as if it held none.
+ * A plain read-only open with no extension loaded: the count reads the
+ * embeddings table's rows, not the vectors.
  */
-export function countStoredEmbeddings(dbPath: string): number {
+export function countStoredEmbeddings(dbPath: string): number | null {
   if (!existsSync(dbPath)) return 0;
   let db: Database;
   try {
     db = new Database(dbPath, { readonly: true });
   } catch {
-    return 0;
+    return null;
   }
   try {
-    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
+    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? null;
   } catch {
-    return 0;
+    return null;
   } finally {
     closeDatabase(db);
   }
 }
 
-/** `unlinkWithRetry` that tolerates ENOENT (file already absent). */
-function tryUnlink(p: string): void {
+/**
+ * The index generation (a fresh ULID per index file, schema v17) of the
+ * index at `dbPath` when it opens read-only at the current schema; null
+ * when it is absent, unreadable or at another schema. A rebuild compares
+ * the live file's against its staging build's to know that the file now
+ * live is the one it built before it removes the previous one.
+ */
+function readIndexGeneration(dbPath: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  let db: Database;
   try {
-    // A stale `.bak` or `.new` held by an antivirus scan or a sync client
-    // is a Windows sharing violation that clears; ride it out like the
-    // renames beside it instead of failing the whole reindex.
-    unlinkWithRetry(p);
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    if (readSchemaVersion(db) !== LATEST_SCHEMA_VERSION) return null;
+    return (
+      db
+        .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
+        .get(STORE_INDEX_GENERATION_KEY)?.value ?? null
+    );
+  } catch {
+    return null;
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** What {@link checkIndexFile} found. */
+type IndexFileVerdict =
+  | { readonly kind: "verified" }
+  | { readonly kind: "unverified" }
+  | { readonly kind: "corrupt"; readonly fault: string };
+
+/**
+ * Open the index at `dbPath` for writing and check it: no sibling beside
+ * it before or after, the current schema, the generation `generation`
+ * names (`undefined`: any), and a passing `PRAGMA quick_check`, whose
+ * completion is recorded so the next write open does not repeat it.
+ * `corrupt` is a failed check; `unverified` is anything else that falls
+ * short (an unreadable file, another generation, a data-bearing journal), which
+ * deletes nothing and undoes nothing.
+ */
+function checkIndexFile(dbPath: string, generation: string | null | undefined): IndexFileVerdict {
+  const unverified: IndexFileVerdict = { kind: "unverified" };
+  if (generation === null || sqliteJournalsPresent(dbPath).length > 0) return unverified;
+  let db: Database;
+  try {
+    db = new Database(dbPath);
+  } catch {
+    return unverified;
+  }
+  let verdict: IndexFileVerdict = unverified;
+  try {
+    const stored = db
+      .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
+      .get(STORE_INDEX_GENERATION_KEY)?.value;
+    const ours = generation === undefined || stored === generation;
+    if (ours && readSchemaVersion(db) === LATEST_SCHEMA_VERSION) {
+      const check = runIntegrityCheck(db);
+      if (!check.ok) {
+        // A scan that could not complete is no verdict: nothing is undone.
+        verdict =
+          check.inconclusive === true ? unverified : { kind: "corrupt", fault: check.fault };
+      } else {
+        const now = new Date().toISOString();
+        db.run(
+          "INSERT INTO index_state(key, value, updated_at) VALUES (?, ?, ?) " +
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+          [INTEGRITY_CHECKED_AT_STATE_KEY, now, now],
+        );
+        verdict = { kind: "verified" };
+      }
+    }
+  } catch {
+    verdict = unverified;
+  } finally {
+    closeDatabase(db);
+  }
+  if (verdict.kind === "verified" && sqliteJournalsPresent(dbPath).length > 0) return unverified;
+  return verdict;
+}
+
+/** The parked names of the index at `dbPath`, newest first. */
+function parkedPaths(dbPath: string): [string, string] {
+  return [dbPath + ".old", dbPath + ".bak"];
+}
+
+/** The first of `candidates` that holds no parked main file, or null. */
+function freeParkPath(...candidates: string[]): string | null {
+  return candidates.find((p) => !existsSync(p)) ?? null;
+}
+
+/**
+ * The step that has just verified the live index at `dbPath` (holding
+ * `liveVectors` stored embeddings, null when that count cannot be read)
+ * removes the parked indexes it supersedes: every one but the single
+ * parked index holding the most stored embeddings, and that one too unless
+ * it holds more than the live index. A parked index whose count cannot be
+ * read is kept, and so is every parked index while the live count cannot
+ * be read. What is kept stays under the parked name it has (moving a set
+ * between parked names is itself a split a stop could leave), so the
+ * rebuild notice names the parked paths that exist. A removal that fails
+ * is left for the next verified rebuild.
+ */
+function pruneParkedIndexes(dbPath: string, liveVectors: number | null, lease: WriterLease): void {
+  const parked = parkedPaths(dbPath)
+    .filter((p) => existsSync(p))
+    .map((path) => ({ path, vectors: countStoredEmbeddings(path) }));
+  const keep = new Set<string>(
+    parked.filter((p) => p.vectors === null || liveVectors === null).map((p) => p.path),
+  );
+  let richest: { path: string; vectors: number } | null = null;
+  for (const p of parked) {
+    if (p.vectors !== null && (richest === null || p.vectors > richest.vectors)) {
+      richest = { path: p.path, vectors: p.vectors };
+    }
+  }
+  if (richest !== null && liveVectors !== null && richest.vectors > liveVectors) {
+    keep.add(richest.path);
+  }
+  for (const p of parked) {
+    if (keep.has(p.path)) continue;
+    lease.assertHeld();
+    discardQuietlySet(p.path, lease);
+  }
+}
+
+/**
+ * Both parked names are taken and a live index is present: a rebuild
+ * died after swapping its index in and before verifying it, or the parked
+ * indexes are ones no verified rebuild may remove (an unreadable one, one
+ * richer in stored vectors than the live index). The live index is checked
+ * now; verified, it supersedes the parked indexes {@link
+ * pruneParkedIndexes} says it does, which may free a name. Found corrupt,
+ * it is the failed successor: the newest parked index is put back over it.
+ * Which parked set was the failed successor's predecessor is not recorded
+ * once it was published; restoring `.old` keeps `.bak` where it is, the
+ * restored index is parked again by the rebuild that called this, and the
+ * parked sets are then pruned by the same verified rule as after any
+ * rebuild.
+ *
+ * Returns why no name is free, worded as the step that frees one, for the
+ * caller's refusal when both names are still taken. Nothing parked is
+ * removed here unless the verified rule says so, so a parked index whose
+ * stored vectors cannot be counted stays until the operator moves it out
+ * of the way: the refusal names it.
+ */
+function settleParkedBesideLive(dbPath: string, lease: WriterLease): string {
+  const verdict = checkIndexFile(dbPath, undefined);
+  if (verdict.kind === "verified") {
+    const liveVectors = countStoredEmbeddings(dbPath);
+    lease.assertHeld();
+    pruneParkedIndexes(dbPath, liveVectors, lease);
+    if (liveVectors === null) {
+      return "the live index passes its check but its stored vectors could not be counted, so neither parked index can be weighed against it; run the rebuild again";
+    }
+    const unreadable = parkedPaths(dbPath).filter(
+      (p) => existsSync(p) && countStoredEmbeddings(p) === null,
+    );
+    if (unreadable.length > 0) {
+      return (
+        `${unreadable.join(" and ")} could not be read, and a rebuild never removes a parked ` +
+        `index it cannot read; move ${unreadable.length > 1 ? "either of them" : "it"} out of ` +
+        `${dirname(dbPath)} (or make it readable again) and run the rebuild again`
+      );
+    }
+    return "a parked index the live index supersedes could not be removed (another process may have it open); run the rebuild again once nothing else has it open";
+  }
+  if (verdict.kind === "corrupt") {
+    try {
+      lease.assertHeld();
+      unparkSqliteFileSet(dbPath + ".old", dbPath, undefined, () => lease.assertHeld());
+      return "the live index failed its check and the parked one was put back";
+    } catch (e) {
+      return (
+        `the live index fails its check (${verdict.fault}) and ${dbPath}.old could not be put ` +
+        `back over it (${e instanceof Error ? e.message : String(e)}); move ${dbPath} and its ` +
+        "-wal, -shm and -journal files out of the folder, and the next open of the index restores the parked one"
+      );
+    }
+  }
+  return "the live index could not be checked (another handle on it, or a busy scan), so it cannot decide between them; run the rebuild again once nothing else has the index open";
+}
+
+/**
+ * The new live index failed its integrity check: put the parked previous
+ * index back over it (its rename replaces the corrupt file), or remove the
+ * corrupt file when there was no previous index, and refuse with the
+ * integrity fault. A step that fails is added to the refusal; it never
+ * replaces the fault or skips the restore.
+ */
+function rollBackCorruptSwap(
+  dbPath: string,
+  parkPath: string,
+  fault: string,
+  lease: WriterLease,
+): never {
+  const problems: string[] = [];
+  try {
+    discardSqliteFileSet(dbPath, SWAP_RENAME_SEAMS, () => lease.assertHeld());
   } catch (e) {
-    if (!isEnoent(e)) throw e;
+    problems.push(e instanceof Error ? e.message : String(e));
+  }
+  if (problems.length > 0 && existsSync(parkPath)) {
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      `the rebuilt index failed its integrity check after the swap (${fault}); the previous index stays parked at ${parkPath} because rejected live files could not all be removed (${problems.join("; ")}); run ${REINDEX_COMMAND} again`,
+    );
+  }
+  let outcome: string;
+  if (existsSync(parkPath)) {
+    lease.assertHeld();
+    try {
+      unparkSqliteFileSet(parkPath, dbPath, SWAP_RENAME_SEAMS, () => lease.assertHeld());
+      clearMarkerIfLiveWhole(dbPath, lease);
+      outcome = `the previous index is back at ${dbPath}`;
+    } catch (e) {
+      outcome = `the previous index could not be put back and is at ${parkPath}`;
+      problems.push(e instanceof Error ? e.message : String(e));
+    }
+  } else {
+    try {
+      lease.assertHeld();
+      discardSqliteFileSet(dbPath, SWAP_RENAME_SEAMS, () => lease.assertHeld());
+      outcome = "there was no previous index, and the rebuilt one was removed";
+    } catch (e) {
+      outcome = "there was no previous index, and the rebuilt one could not be removed";
+      problems.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+  throw new SearchError(
+    "INDEX_UNREADABLE",
+    `the rebuilt index failed its integrity check after the swap (${fault}); ${outcome}; ` +
+      `run ${REINDEX_COMMAND} again` +
+      (problems.length > 0 ? ` (also: ${problems.join("; ")})` : ""),
+  );
+}
+
+/**
+ * Clear the park marker once the live main file is back in place, while
+ * the lease is still this run's. A lease lost, or a live path still empty,
+ * leaves the marker for the crash restore of whoever holds the lock next.
+ */
+function clearMarkerIfLiveWhole(dbPath: string, lease: WriterLease): void {
+  if (!existsSync(dbPath)) return;
+  try {
+    lease.assertHeld();
+    clearParkMarker(dbPath);
+  } catch {
+    // not this run's to clear
+  }
+}
+
+/** Remove the journal siblings of `path`, leaving the main file. */
+function discardSiblings(path: string, lease: WriterLease): void {
+  for (const sibling of sqliteSiblingsPresent(path)) {
+    lease.assertHeld();
+    unlinkWithRetry(sibling);
+  }
+}
+
+/** {@link discardSqliteFileSet} that leaves what it cannot remove for the next rebuild. */
+function discardQuietlySet(path: string, lease: WriterLease): void {
+  try {
+    discardSqliteFileSet(path, undefined, () => lease.assertHeld());
+  } catch {
+    // still held (a reader on Windows): the next rebuild removes it
   }
 }
 
@@ -1920,8 +2330,23 @@ function tryUnlink(p: string): void {
  */
 const STAGING_SWAP_BUDGET_MS = 30_000;
 
-/** How long the lease is kept fresh through the swap's renames: both retry budgets and a margin. */
-const SWAP_LEASE_BUDGET_MS = 2 * STAGING_SWAP_BUDGET_MS + 10_000;
+/**
+ * The most file operations one swap can make, each retried for at most
+ * {@link STAGING_SWAP_BUDGET_MS} on Windows: removing journals of nothing
+ * at the parked name and beside the staging file (3 + 3), parking the live
+ * set (4 renames) and undoing a park that failed part way (4), renaming
+ * the new index in (1), and putting the previous index back after a failed
+ * swap (4) with that move's own undo (4).
+ */
+const SWAP_MAX_FILE_OPERATIONS = 23;
+
+/**
+ * How long the lease is kept fresh through the swap: every retry budget the
+ * swap can spend, and a margin. A shorter budget let the lease go stale
+ * while the renames still retried, so another writer could take the lock
+ * over before the publish.
+ */
+const SWAP_LEASE_BUDGET_MS = SWAP_MAX_FILE_OPERATIONS * STAGING_SWAP_BUDGET_MS + 10_000;
 
 /** The retry seams of the swap's renames: {@link STAGING_SWAP_BUDGET_MS} on Windows. */
 const SWAP_RENAME_SEAMS = Object.freeze({ budgetMs: STAGING_SWAP_BUDGET_MS });
@@ -1942,18 +2367,7 @@ function leaseStillHeld(lease: WriterLease): boolean {
 
 /** A fresh build's staging file and its journal siblings, discarded. */
 function discardStaging(newPath: string): void {
-  tryUnlink(newPath);
-  tryUnlink(newPath + "-wal");
-  tryUnlink(newPath + "-shm");
-}
-
-/** Best-effort unlink of a file nothing reads any more. */
-function discardQuietly(path: string): void {
-  try {
-    unlinkWithRetry(path);
-  } catch {
-    // absent, or still held: the next fresh build discards it
-  }
+  discardSqliteFileSet(newPath);
 }
 
 /**
@@ -1994,41 +2408,37 @@ async function foldStagingWal(newPath: string): Promise<void> {
   }
 }
 
-/** `renameSync` that tolerates ENOENT on the source. */
-function tryRename(from: string, to: string, seams?: RenameRetrySeams): void {
-  try {
-    renameWithRetry(from, to, seams);
-  } catch (e) {
-    if (!isEnoent(e)) throw e;
-  }
-}
-
 /**
  * Undo the first half of a reindex swap whose second rename failed: put the
- * previous index (parked at `.bak`) back at the live path, so the failure
- * reads as "reindex refused, old index intact" rather than "no search
- * index" until the next `Store.open` happens to run its crash-restore
- * (#187). ENOENT on `.bak` is a fresh reindex with nothing to restore.
+ * previous index (parked at `.bak` or `.old`) back at the live path, so the
+ * failure reads as "reindex refused, old index intact" rather than "no
+ * search index" until the next `Store.open` happens to run its
+ * crash-restore (#187). Nothing parked is a fresh reindex with nothing to
+ * restore.
  *
- * Best effort by design: the caller rethrows the swap's own error, and a
- * rollback failure must not replace it. If the rollback fails too, `.bak`
- * stays where it is and the crash-restore in `Store.open` still recovers it.
+ * Returns null when the previous index is back (or there was none), else
+ * why it is not: the caller keeps the swap's own error first and adds
+ * this, so a refusal never claims a restore that failed. The parked set
+ * then stays where it is (`sqlite-file-set.ts` never moves the main file
+ * back without its journals) and the crash-restore in `Store.open`
+ * recovers it.
  *
  * `.new` is left in place. It holds a complete build, and in the Windows
  * case that motivates this path it is the very file a sharing violation
  * refuses to move, so deleting it would only spend a second retry budget;
  * the next reindex discards it (or resumes from it with `resumeReindex`).
  */
-function restoreLiveFromBak(bakPath: string, dbPath: string): void {
-  try {
-    tryRename(bakPath, dbPath);
-  } catch {
-    // Deliberately swallowed: see above.
+function restoreLiveFromBak(bakPath: string, dbPath: string, lease: WriterLease): string | null {
+  const occupied = [dbPath, ...sqliteSiblingsPresent(dbPath)].filter((p) => existsSync(p));
+  if (occupied.length > 0) {
+    return `the live path is occupied (${occupied.join(", ")}); the previous index stays at ${bakPath}`;
   }
-}
-
-function isEnoent(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: string }).code === "ENOENT";
+  try {
+    unparkSqliteFileSet(bakPath, dbPath, undefined, () => lease.assertHeld());
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

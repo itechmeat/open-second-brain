@@ -404,14 +404,20 @@ describe("a stale lock name this process may not remove", () => {
     // the name is delete pending - it refuses any look at it and the
     // removal of it - and both clear when the last handle to it closes. A
     // refusal that says a release is going through is not a removal that
-    // cannot be done: the attempt is made again over the settle window, and
-    // the lock is taken once the release has finished.
+    // cannot be done: while it lasts past the settle window the name reads
+    // as held (a lock changing hands), never as LockRemovalRefusedError,
+    // and the lock is taken once the release has finished.
     const target = join(root, "settings.yaml");
     const lockPath = plantStaleLock(target);
     let releasing = true;
+    let refusedLooks = 0;
     const realLstat = fs.lstatSync;
-    spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
+    const looks = spyOn(fs, "lstatSync").mockImplementation(((
+      path: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
       if (releasing && String(path) === lockPath) {
+        refusedLooks += 1;
         throw Object.assign(new Error(`EPERM: operation not permitted, lstat '${lockPath}'`), {
           code: "EPERM",
           syscall: "lstat",
@@ -420,18 +426,34 @@ describe("a stale lock name this process may not remove", () => {
       }
       return (realLstat as (...args: unknown[]) => unknown)(path, ...rest);
     }) as typeof fs.lstatSync);
-    const removals = refuseLockRmdir(lockPath, Number.MAX_SAFE_INTEGER, (call) => {
-      if (call === 1) return windowsRefusal(lockPath, "EPERM", "rmdir");
-      // The release finished: the name is free again.
+    try {
+      const removals = refuseLockRmdir(lockPath, Number.MAX_SAFE_INTEGER, () => {
+        if (releasing) return windowsRefusal(lockPath, "EPERM", "rmdir");
+        // The release finished: the name is free again.
+        rmSync(lockPath, { recursive: true, force: true });
+        return null;
+      });
+      // The release outlasts the whole settle window: a held lock.
+      let caught: unknown;
+      try {
+        lockDirSync(target, { stale: 2_000 });
+      } catch (err) {
+        caught = err;
+      }
+      // Non-vacuous: every answer came through the refused look.
+      expect(refusedLooks).toBeGreaterThan(1);
+      expect(removals.calls()).toBe(refusedLooks);
+      expect(caught).not.toBeInstanceOf(LockRemovalRefusedError);
+      expect((caught as NodeJS.ErrnoException).code).toBe("ELOCKED");
+      // The release finishes: the next attempt takes the lock.
       releasing = false;
-      rmSync(lockPath, { recursive: true, force: true });
-      return null;
-    });
-    const release = lockDirSync(target, { stale: 2_000 });
-    release();
-    expect(removals.calls()).toBeGreaterThanOrEqual(1);
-    // The lock was taken and given back, so the name is gone.
-    expect(existsSync(lockPath)).toBe(false);
+      const release = lockDirSync(target, { stale: 2_000 });
+      release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      looks.mockRestore();
+      mock.restore();
+    }
   });
 });
 

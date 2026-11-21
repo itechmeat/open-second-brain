@@ -6,6 +6,8 @@
  * the store layer adds is added here once and both follow it.
  */
 
+import { SQLITE_SIBLING_SUFFIXES } from "../sqlite-file-set.ts";
+
 /**
  * True where the filesystem compares names without case by default
  * (APFS, HFS+, NTFS), so `Index.sqlite` and `index.sqlite` are one file.
@@ -20,7 +22,7 @@ export function compareKey(name: string, platform: NodeJS.Platform): string {
 }
 
 /** SQLite's journal siblings of a database file: WAL mode and DELETE mode. */
-const STORE_JOURNAL_SUFFIXES: ReadonlyArray<string> = Object.freeze(["-wal", "-shm", "-journal"]);
+const STORE_JOURNAL_SUFFIXES: ReadonlyArray<string> = SQLITE_SIBLING_SUFFIXES;
 
 /**
  * The database files the store layer keeps beside the store, as suffixes
@@ -46,6 +48,12 @@ export const STORE_BUILD_READER_PREFIX = ".building.reader-";
 /** {@link STORE_BUILD_READER_PREFIX} with its pid and random tail. */
 const STORE_BUILD_READER_PATTERN = /^\.building\.reader-\d+-[0-9a-f]{8}$/u;
 
+/**
+ * The durable record a swap writes before it parks the store
+ * (`store/lifecycle.ts`, `writeParkMarker`): a plain file, never journaled.
+ */
+export const STORE_PARK_MARKER_SUFFIX = ".parking";
+
 /** The writer lock `proper-lockfile` takes on the store: a directory. */
 const STORE_LOCK_SUFFIX = ".lock";
 
@@ -66,6 +74,8 @@ const STAGED_STORE_PATTERN = /^\.restore-\d+-[0-9a-f]{8}$/u;
  *     `-journal`);
  *   - the restore's staged store (`.restore-<pid>-<hex>`) with its
  *     journals;
+ *   - the park record a swap writes before it moves the store aside
+ *     (`.parking`);
  *   - the progress file of a running rebuild (`.building.json`) and the
  *     files of the searches reading its staging file
  *     (`.building.reader-<pid>-<hex>`);
@@ -88,7 +98,11 @@ export function isStoreFamilyEntry(
   if (!key.startsWith(stem)) return false;
   const suffix = key.slice(stem.length);
   if (isDirectory) return suffix === STORE_LOCK_SUFFIX || suffix === STAGING_LOCK_SUFFIX;
-  if (suffix === STORE_BUILD_PROGRESS_SUFFIX || STORE_BUILD_READER_PATTERN.test(suffix))
+  if (
+    suffix === STORE_BUILD_PROGRESS_SUFFIX ||
+    suffix === STORE_PARK_MARKER_SUFFIX ||
+    STORE_BUILD_READER_PATTERN.test(suffix)
+  )
     return true;
   // At most one journal suffix comes off: `-wal-shm` is not a journal.
   const journal = STORE_JOURNAL_SUFFIXES.find((j) => suffix.endsWith(j));
