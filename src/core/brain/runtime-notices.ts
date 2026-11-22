@@ -88,6 +88,12 @@ export interface RuntimeNoticeOptions {
    * which only a session start shows (and then clears, `active-context.ts`).
    */
   readonly oneTime?: boolean;
+  /**
+   * The configured vault's folder is not there, on a machine that has not
+   * switched: the brain is not a fresh installation, and the notice says
+   * so before anything else does.
+   */
+  readonly missing?: { readonly vault: string; readonly notice: string };
 }
 
 /**
@@ -110,6 +116,20 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
   if (optOut === "false" || optOut === "0") return [];
 
   const notices: RuntimeNotice[] = [];
+
+  // The configured vault's folder is not there (an unmounted disk, a
+  // renamed folder), on a machine that has NOT switched. The brain is not
+  // a fresh installation: everything else this channel says about an
+  // empty vault would read as one, and the advice to initialise a new
+  // brain would start a second one beside the real one. So it is named
+  // first.
+  //
+  // The exit is the CONFIG: the operator mounts the disk or points the
+  // machine config at the vault, and `o2b status` is where the configured
+  // path is shown.
+  if (opts.missing !== undefined) {
+    notices.push(notice("vault_folder_missing", "warning", opts.missing.notice));
+  }
 
   // Vault writability: a read-only vault means every memory write will fail.
   //

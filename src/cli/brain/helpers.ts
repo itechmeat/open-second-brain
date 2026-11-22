@@ -33,6 +33,8 @@ import {
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import type { UpgradePlan } from "../../core/brain/upgrade.ts";
+import { noVaultRoot } from "../../core/platform-dirs.ts";
+import { servedVault, configuredVaultMissing } from "../../core/store/store-only.ts";
 
 import { CliError, parseFlags, type FlagsSchema } from "../argparse.ts";
 import {
@@ -80,10 +82,21 @@ export interface OptionalVaultBrainVerbContext {
   readonly vault: string | null;
 }
 
-/** Options of {@link brainVerbContext}. */
+/**
+ * Options of {@link brainVerbContext}: how a verb meets a switched
+ * machine's vault that is gone or cannot be examined (`servedVault`).
+ *
+ * - `optional`: `vault: null` when none is configured, and on such a
+ *   machine: the verb works from the store.
+ * - `store`: a vault must be configured; on such a machine the verb gets
+ *   the no-vault stand-in root and reads the store, as with no vault.
+ * - `files`: a vault must be configured; on such a machine the verb
+ *   needs the vault's files and refuses with the reason.
+ *
+ * A verb that names none keeps the configured vault as it is.
+ */
 export interface BrainVerbContextOptions {
-  /** `optional`: answer `vault: null` instead of refusing when none is configured. */
-  readonly vault: "optional";
+  readonly vault: "optional" | "store" | "files";
 }
 
 /**
@@ -98,6 +111,10 @@ export interface BrainVerbContextOptions {
 export function brainVerbContext(flags: BrainVerbFlags): BrainVerbContext;
 export function brainVerbContext(
   flags: BrainVerbFlags,
+  options: { readonly vault: "store" | "files" },
+): BrainVerbContext;
+export function brainVerbContext(
+  flags: BrainVerbFlags,
   options: BrainVerbContextOptions,
 ): OptionalVaultBrainVerbContext;
 export function brainVerbContext(
@@ -106,15 +123,59 @@ export function brainVerbContext(
 ): BrainVerbContext | OptionalVaultBrainVerbContext {
   const config = defaultConfigPath();
   const flag = flags["vault"] as string | undefined;
-  if (options?.vault !== "optional") return { config, vault: resolveBrainVault(flag, config) };
+  if (options === undefined) return { config, vault: resolveBrainVault(flag, config) };
+  if (options.vault !== "optional") {
+    return { config, vault: brainVaultFor(resolveBrainVault(flag, config), config, options.vault) };
+  }
   // The shared rule (an explicit empty `--vault` is a user error), with
   // the brain dispatcher's error type.
   try {
-    return { config, vault: resolveOptionalVault(flag, config) };
+    return { config, vault: servedOptionalVault(flag, config) };
   } catch (err) {
     if (err instanceof NoVaultConfiguredError) throw new CliError(NO_VAULT_ERROR);
     throw err;
   }
+}
+
+/**
+ * The notice for a configured vault whose folder is not there, on stderr:
+ * the brain is not a fresh installation, and the operator has to read that
+ * before any advice to initialise a new brain.
+ *
+ * Written before the verb's own output, so it leads the advice rather
+ * than following it. Nothing is written when the machine is not in that
+ * state, and a failure to read the config writes nothing either: a notice
+ * must never break the verb it precedes.
+ */
+export function noticeMissingVault(configPath: string = defaultConfigPath()): void {
+  try {
+    const missing = configuredVaultMissing(resolveVault(configPath), { configPath });
+    if (missing === null) return;
+    process.stderr.write(`warning: ${missing.notice}\n`);
+  } catch {
+    // best-effort - see above
+  }
+}
+
+/**
+ * The vault an `optional` verb works on (see {@link BrainVerbContextOptions}):
+ * the configured one, or `null` with none and on a switched machine whose
+ * vault cannot be reached. An explicit empty `--vault` is a user error.
+ */
+export function servedOptionalVault(flag: string | undefined, config: string): string | null {
+  return servedVault(resolveOptionalVault(flag, config), { configPath: config }).vault;
+}
+
+/**
+ * The vault a `store` or `files` verb works on (see
+ * {@link BrainVerbContextOptions}): `vault` itself, unless this machine
+ * switched and the vault cannot be reached.
+ */
+export function brainVaultFor(vault: string, config: string, mode: "store" | "files"): string {
+  const { unreachable } = servedVault(vault, { configPath: config });
+  if (unreachable === null) return vault;
+  if (mode === "files") throw unreachable.error;
+  return noVaultRoot();
 }
 
 /**

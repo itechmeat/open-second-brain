@@ -110,13 +110,19 @@ describe("brain_context tool registration", () => {
 });
 
 describe("brain_context tool — Brain absent", () => {
-  test("returns present:false with empty content and zero counts", async () => {
-    // No bootstrapBrain — Brain/ does not exist.
+  test("returns present:false with the missing-vault notice and zero counts", async () => {
+    // No bootstrapBrain — Brain/ does not exist, and neither does the
+    // vault folder the machine config names: the machine is not a fresh
+    // installation, it points at a vault it cannot reach. The content
+    // therefore leads with the notice for the missing folder instead of
+    // reporting an empty brain; the counts stay zero and nothing is
+    // present.
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
     const out = await callContext(server);
     expect(out["present"]).toBe(false);
-    expect(out["content"]).toBe("");
+    expect(out["content"]).toStartWith("UNAVAILABLE: the configured vault folder ");
+    expect(out["content"]).toContain("is missing");
     expect(out["generated_at"]).toBeNull();
     const counts = out["counts"] as Record<string, number>;
     expect(counts.confirmed).toBe(0);

@@ -27,7 +27,14 @@ import {
   type ClaimGraph,
   type ClaimNode,
 } from "../../../core/brain/claim-graph.ts";
-import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import {
+  brainVaultFor,
+  normalizeFlagString,
+  ok,
+  okJson,
+  parse,
+  resolveBrainVault,
+} from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -70,7 +77,11 @@ export async function cmdBrainClaims(argv: string[]): Promise<number> {
   });
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
-  const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+  const vault = brainVaultFor(
+    resolveBrainVault(flags["vault"] as string | undefined, config),
+    config,
+    "store",
+  );
   const wantsJson = flags["json"] === true;
 
   try {

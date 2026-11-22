@@ -34,6 +34,7 @@ import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibilit
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
 import { withTimeout } from "../core/search/with-timeout.ts";
+import { rethrowVaultUnreadable } from "./vault-unreachable.ts";
 import {
   IndexBuildingError,
   IndexBuildStartFailedError,
@@ -1099,6 +1100,9 @@ async function toolBrainSearch(
     );
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
+    // A vault that cannot be reached keeps its class: the boundary answers
+    // it as the named refusal `vault_unreadable`, not a code-less error.
+    rethrowVaultUnreadable(e);
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 
@@ -1726,6 +1730,9 @@ async function toolBrainEval(
   } catch (e) {
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
+    // A vault that cannot be reached keeps its class: the boundary answers
+    // it as the named refusal `vault_unreadable`, not a code-less error.
+    rethrowVaultUnreadable(e);
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
   return {
@@ -1850,6 +1857,9 @@ async function toolBrainFileContext(
   } catch (e) {
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
+    // A vault that cannot be reached keeps its class: the boundary answers
+    // it as the named refusal `vault_unreadable`, not a code-less error.
+    rethrowVaultUnreadable(e);
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
 }
@@ -2003,6 +2013,9 @@ async function toolBrainSearchExpand(
   } catch (e) {
     if (e instanceof SearchError) throw searchErrorToMcp(e);
     if (e instanceof MCPError) throw e;
+    // A vault that cannot be reached keeps its class: the boundary answers
+    // it as the named refusal `vault_unreadable`, not a code-less error.
+    rethrowVaultUnreadable(e);
     throw new MCPError(INTERNAL_ERROR, e instanceof Error ? e.message : String(e));
   }
   // Delivery shaping (delivery-trust, lane A): the drill-down bodies are

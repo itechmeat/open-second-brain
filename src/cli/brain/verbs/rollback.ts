@@ -52,7 +52,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     "force-rollback": { type: "boolean" },
     json: { type: "boolean" },
   });
-  const { vault } = brainVerbContext(flags);
+  const { vault } = brainVerbContext(flags, { vault: "store" });
   const forceRollback = Boolean(flags["force-rollback"]);
 
   // The usage check precedes the listing so a missing argument is still a

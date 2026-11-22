@@ -225,6 +225,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "tier-drift",
   "topic-key-collision",
   "topics-records-without-project",
+  "vault-folder-missing",
   "vault-frozen",
   "vault-walk-entry-skipped",
   "view-writer-silent",

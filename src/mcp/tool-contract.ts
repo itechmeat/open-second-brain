@@ -155,6 +155,20 @@ export interface VaultUnreachable {
   readonly reason: string;
 }
 
+/**
+ * The vault this context serves is configured, and its folder is not
+ * there: an unmounted disk, a renamed folder. The brain is not a fresh
+ * installation - the machine names a vault it cannot reach - and every
+ * surface that would answer "there is nothing here yet" says so instead,
+ * before any advice to initialise a new brain.
+ */
+export interface VaultMissing {
+  /** The configured vault, whose folder is not there. */
+  readonly vault: string;
+  /** The notice, in words. */
+  readonly notice: string;
+}
+
 export interface ServerContext {
   /**
    * The vault this server serves. On a server with no vault (design D14)
@@ -177,6 +191,13 @@ export interface ServerContext {
    * no rules, which reads as "the operator wrote none".
    */
   readonly vaultUnreachable?: VaultUnreachable;
+  /**
+   * The configured vault's folder is not there, on a machine that has not
+   * switched (see {@link VaultMissing}). The surfaces that report what
+   * they could not read lead with it, and every refusal names the missing
+   * folder before any advice to initialise a new brain.
+   */
+  readonly vaultMissing?: VaultMissing;
   readonly configPath: string | null;
   readonly repoRoot: string | null;
   readonly capabilityReport?: ToolCapabilityReport;

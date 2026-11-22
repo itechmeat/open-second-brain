@@ -7,7 +7,7 @@
  */
 
 import { CliError } from "./argparse.ts";
-import { BRAIN_HELP, VERB_HELP } from "./brain/helpers.ts";
+import { BRAIN_HELP, noticeMissingVault, VERB_HELP } from "./brain/helpers.ts";
 import {
   cmdBrainInit,
   cmdBrainFeedback,
@@ -231,6 +231,16 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
     process.stdout.write(BRAIN_HELP);
     return 2;
   }
+
+  // A machine whose configured vault folder is not there (an unmounted
+  // disk, a renamed folder) is not a fresh installation. The notice goes
+  // out before the verb's own output, so the operator reads "the vault is
+  // missing" before any advice to initialise a new brain - and the advice
+  // that follows it stays.
+  //
+  // `o2b brain init` is the one verb that CREATES that folder, so it is
+  // not warned about a folder it is about to make.
+  if (verb !== "init") noticeMissingVault();
 
   try {
     switch (verb) {

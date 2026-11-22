@@ -55,6 +55,7 @@ import {
   contextReach,
   contextVault,
   type ServerContext,
+  type VaultMissing,
   type VaultUnreachable,
 } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -110,11 +111,13 @@ export async function toolBrainContext(ctx: ServerContext): Promise<Record<strin
   // including a vault this process cannot tell is switched or not, the
   // rules lead the answer or it says why they could not be read.
   const standing =
-    vault === null
-      ? ctx.vaultUnreachable === undefined
-        ? NO_STANDING_BLOCK
-        : unreachableStandingBlock(ctx.vaultUnreachable)
-      : readStandingBlock(vault);
+    ctx.vaultMissing !== undefined
+      ? missingVaultStandingBlock(ctx.vaultMissing)
+      : vault === null
+        ? ctx.vaultUnreachable === undefined
+          ? NO_STANDING_BLOCK
+          : unreachableStandingBlock(ctx.vaultUnreachable)
+        : readStandingBlock(vault);
   const scoped = readScopedBlock(ctx);
   let activePath: string;
   let onDemand: boolean;
@@ -355,6 +358,22 @@ function unreachableStandingBlock(unreachable: VaultUnreachable): StandingBlock 
   const path = `${BRAIN_ROOT_REL}/${BRAIN_STANDING_RULES_FILE}`;
   return Object.freeze({
     text: renderStandingRulesFailure(path, new Error(unreachable.reason)),
+    rules: null,
+  });
+}
+
+/**
+ * The block for a vault whose folder is not there: the notice, in the
+ * `UNAVAILABLE:` shape the other unreadable case uses, so the leading
+ * slot of the content says what is wrong with the machine instead of
+ * reporting an empty brain.
+ *
+ * The operator's rules are in that folder, so they are unknown here -
+ * never "there are none". The notice carries that, and the remedy.
+ */
+function missingVaultStandingBlock(missing: VaultMissing): StandingBlock {
+  return Object.freeze({
+    text: `UNAVAILABLE: ${missing.notice} No standing rules are in force this session.`,
     rules: null,
   });
 }

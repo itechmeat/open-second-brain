@@ -93,7 +93,7 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
   }
   // The gate is this machine's, not a vault's: no vault is needed.
   if (flags["force-release-gate"] === true) return runForceReleaseGate(flags["json"] === true);
-  const { vault, config } = brainVerbContext(flags);
+  const { vault, config } = brainVerbContext(flags, { vault: "files" });
   const json = flags["json"] === true;
   if (flags["rollback"] === true) return runRollback(vault, config, json);
   if (flags["remove-legacy"] === true) {

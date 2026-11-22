@@ -48,6 +48,27 @@ async function call(
 }
 
 describe("memory-contract tools with no vault", () => {
+  test("brain_query looks a preference up in the store", async () => {
+    const server = serverWithoutVault("osb-novault-mcp-query-");
+    const fb = await call(server, "brain_feedback", {
+      topic: "otter-rota",
+      signal: "positive",
+      principle: "Feed the otters before the herons.",
+      force_confirmed: true,
+    });
+    const byId = await call(server, "brain_query", { preference: fb["preference_id"] as string });
+    expect(JSON.stringify(byId)).toContain("Feed the otters before the herons.");
+    const byTopic = await call(server, "brain_query", { topic: "otter-rota" });
+    expect(byTopic["mode"]).toBe("topic");
+    // An explicit owner scope answers too: it is authorized against the
+    // store's stand-in root, not the vault getter that refuses here.
+    const scoped = await call(server, "brain_query", {
+      topic: "otter-rota",
+      agent_scope: "otter-keeper",
+    });
+    expect(scoped["mode"]).toBe("topic");
+  });
+
   test("brain_feedback then brain_search returns the record", async () => {
     const server = serverWithoutVault("osb-novault-mcp-search-");
     const written = await call(server, "brain_feedback", {

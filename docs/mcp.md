@@ -105,8 +105,8 @@ note, is left as written. `expose_host_paths: true` keeps every path raw.
 A server started with no vault configured keeps the memory contract on
 the brain store alone. `brain_feedback`, `brain_apply_evidence`,
 `brain_note`, `brain_pinned_context`, `brain_context`, `brain_search`,
-`brain_changes`, `brain_dream`, `brain_doctor`, `brain_settings` and
-`second_brain_status` answer from store records: a written record is named
+`brain_query`, `brain_changes`, `brain_dream`, `brain_doctor`,
+`brain_settings` and `second_brain_status` answer from store records: a written record is named
 `store:<id>` (a pinned register `store:<partition>/pinned`), the search
 index is keyed by the store id, the dream pass runs over the store's folds
 with no pre-run snapshot, and the doctor runs its store-side checks. A
@@ -130,6 +130,11 @@ unread on such a machine - an `UNAVAILABLE:` notice for the standing and
 the scoped rules, naming the reason - instead of reporting no rules,
 which reads as "the operator wrote none". The rules are not read from
 the store: the store holds the operator's memories, not their rules.
+A result past a tool's preview budget is parked where a server with no
+vault parks it (this machine's device-local state) and fetched back from
+there with `brain_artifact_get`, so a long search answer never reads the
+vault to park itself. The command line and the hooks take the same
+decision (`docs/brain-store.md`, "A vault the process cannot examine").
 
 A machine that has not switched is not served that way in every case, and
 its two cases are not the same answer, because the store-only predicate
@@ -146,6 +151,15 @@ reads the `Brain/` folder, not the vault:
   recreated: a write never materialises a vault, so an unmounted disk
   stays unmounted and visible instead of being replaced by an empty tree
   that hides the real vault.
+  The machine is told what is wrong before it is told what to do. The
+  session context (`brain_context`) leads with an `UNAVAILABLE:` notice
+  naming the missing folder - it may be on a disk that is not mounted -
+  and keeps `present: false`; every refusal names the missing folder
+  before any advice to initialise a new brain, and the advice stays,
+  second; and `brain_doctor` reports the missing folder ahead of the
+  "brain root absent" entry, whose `o2b brain init` advice stays behind
+  the new `o2b status` exit. A machine with no vault configured is not
+  in this case, and keeps today's guidance word for word.
 - **The vault folder cannot be examined.** The machine cannot tell
   whether it holds a legacy tree (`undetermined`), so the tools that ask
   refuse with `vault_unreadable`, and nothing is read from or written to

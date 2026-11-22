@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { noVaultRoot } from "../platform-dirs.ts";
 import { escapeRegex } from "../strings.ts";
 import { BRAIN_MANIFEST_SIDECAR_SINCE_VERSION } from "./manifest.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./policy.ts";
@@ -227,9 +228,10 @@ export function describeManualRevisionAhead(path: string, aheadRevision: number)
 /**
  * Best-effort display name for the vault: the trailing directory name
  * with separators stripped. Falls back to the literal `Second Brain`
- * if the vault path has no usable basename.
+ * if the vault path has no usable basename, or is the no-vault stand-in.
  */
 export function vaultDisplayName(vault: string): string {
+  if (vault === noVaultRoot()) return "Second Brain";
   const parts = vault.split(/[\\/]/).filter((p) => p.length > 0);
   const last = parts.length > 0 ? parts[parts.length - 1]! : "";
   return last !== "" ? last : "Second Brain";

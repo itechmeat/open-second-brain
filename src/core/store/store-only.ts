@@ -356,7 +356,10 @@ export function switchedVaultUnreachable(
 ): VaultUnexaminableError | null {
   const look = lookAtDirectory(vault);
   if (look === "present") return null;
-  if (!isSwitched({ vault, ...context }, {})) return null;
+  // A look, never a write: every surface asks this before it does
+  // anything, a dry run and a hook included, so it never records a newly
+  // observed switch (the writers and readers that follow do).
+  if (!isSwitched({ vault, ...context }, { persistSwitch: false })) return null;
   if (look === "absent") {
     const gone = Object.assign(new Error(`ENOENT: no such directory, '${vault}'`), {
       code: "ENOENT",
@@ -378,6 +381,92 @@ export function switchedVaultUnreachable(
       "that needs the vault answers once it can be read (make it and every parent directory " +
       "traversable, chmod u+rx)",
   );
+}
+
+/** A switched machine's vault that cannot be reached, and why. */
+export interface UnreachableVault {
+  /** The configured vault. */
+  readonly vault: string;
+  /** The refusal a step that needs the vault answers with. */
+  readonly error: VaultUnexaminableError;
+  /** The short reason: the vault and what the look at it failed with. */
+  readonly reason: string;
+}
+
+/** The vault a caller works on, after the reachability decision. */
+export interface ServedVault {
+  /** The vault to work on; `null` serves the brain from the store, as with no vault. */
+  readonly vault: string | null;
+  /** Set when a switched machine's vault cannot be reached. */
+  readonly unreachable: UnreachableVault | null;
+}
+
+/**
+ * The one decision every surface (MCP, the command line, the hooks)
+ * takes about a configured vault: on a switched machine whose vault
+ * folder is gone or cannot be examined the brain is served from the
+ * store, as on a machine with no vault, and a step that needs vault files
+ * refuses with {@link UnreachableVault.error}. Every other vault is served
+ * as it is ({@link switchedVaultUnreachable}).
+ */
+export function servedVault(
+  vault: string | null,
+  context: Pick<StoreOnlyContext, "configPath"> = {},
+): ServedVault {
+  if (vault === null || vault.trim() === "") return { vault, unreachable: null };
+  const error = switchedVaultUnreachable(vault, context);
+  if (error === null) return { vault, unreachable: null };
+  const code = error.code ?? (error.cause as Error | undefined)?.message;
+  const reason =
+    code === "ENOENT"
+      ? `the vault ${vault} is not there (ENOENT)`
+      : `the vault ${vault} cannot be examined (${code})`;
+  return { vault: null, unreachable: { vault, error, reason } };
+}
+
+/**
+ * The notice a machine that has NOT switched gives when the vault its
+ * machine config names is gone: the folder may sit on a disk that is not
+ * mounted, and initialising a new brain beside it hides the real one.
+ */
+export interface ConfiguredVaultMissing {
+  /** The configured vault, whose folder is not there. */
+  readonly vault: string;
+  /** The notice, in words: what is missing and what to do about it. */
+  readonly notice: string;
+}
+
+/**
+ * The notice for a configured vault whose folder is not there, or `null`
+ * when there is nothing to report.
+ *
+ * It answers only on a machine that has NOT switched: a switched machine's
+ * brain is in the store, and its vault is only the human view, so
+ * {@link servedVault} already answers that case (and its folder being gone
+ * is not a fault there). A machine with no vault configured never reaches
+ * it - there is no folder to be missing - and a machine whose vault folder
+ * is there never reaches it either.
+ *
+ * A failed look is not an absence: a vault this process cannot examine
+ * (mode 000, an I/O error) is answered by {@link switchedVaultUnreachable}
+ * on a switched machine and refused by the readers otherwise. Only a
+ * folder that is simply not there is this notice.
+ */
+export function configuredVaultMissing(
+  vault: string | null,
+  context: Pick<StoreOnlyContext, "configPath"> = {},
+): ConfiguredVaultMissing | null {
+  if (vault === null || vault.trim() === "") return null;
+  if (lookAtDirectory(vault) !== "absent") return null;
+  // A look, never a write, as in `switchedVaultUnreachable`.
+  if (isSwitched({ vault, ...context }, { persistSwitch: false })) return null;
+  return {
+    vault,
+    notice:
+      `the configured vault folder ${vault} is missing; it may be on a disk that is not ` +
+      "mounted: mount it, or point the machine config at the vault, before initialising " +
+      "a new brain.",
+  };
 }
 
 /**
