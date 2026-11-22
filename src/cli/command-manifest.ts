@@ -1248,6 +1248,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("apply", "boolean"),
           ],
         ),
+        command(
+          "set-aside",
+          "Move a parked index (bak or old) with its -wal, -shm and -journal files into <index folder>/set-aside/ (dry-run unless --apply; deletes nothing)",
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("db", "string"),
+            flag("apply", "boolean"),
+          ],
+        ),
         // Both `schema` subcommands parse `--json` (export also `--stdout`),
         // so the inherited stand-in covers the one and `stdout` is declared
         // here; `tests/cli/search-query-flag-manifest.test.ts` holds this

@@ -73,6 +73,7 @@ import { join } from "node:path";
 
 import { EGRESS_REDACTION, EGRESS_SITES } from "../../../src/core/egress/registry.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../../helpers/source-scan-timeout.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 
@@ -269,15 +270,9 @@ const PAGE_CARRYING_SITES: ReadonlyArray<string> = Object.freeze([
 
 const ENTRIES = Object.values(EGRESS_SITES);
 
-/**
- * Every test here scans the whole source tree, some of them more than
- * once; that walk grows with the tree and takes several seconds on a
- * loaded runner, past bun's 5 s default. One budget for the file, the
- * one its slowest tests already carried, so no test depends on an idle
- * machine.
- */
-const CENSUS_SCAN_BUDGET_MS = 20_000;
-setDefaultTimeout(CENSUS_SCAN_BUDGET_MS);
+// Every test here scans the whole source tree, some of them more than
+// once; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 describe("content-class egress census", () => {
   test("the derived population is the named page-carrying sites, as an equality", () => {

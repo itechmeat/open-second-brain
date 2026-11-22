@@ -178,7 +178,22 @@ import {
   runIntegrityCheck,
   writeParkMarker,
 } from "./store/lifecycle.ts";
+import {
+  countStoredEmbeddings,
+  keptParkedIndexes,
+  keptParkedReasons,
+  parkedIndexPaths,
+  parkedIndexReleaseStep,
+  parkedIndexStates,
+  plainParkedTarget,
+  unreadableParkedRefusal,
+  type KeptParkedIndex,
+  type ParkedIndexTarget,
+} from "./parked-index.ts";
+import { finishInterruptedSetAsides } from "./parked-set-aside.ts";
 import { INTEGRITY_CHECKED_AT_STATE_KEY } from "./store/state.ts";
+
+export { countStoredEmbeddings } from "./parked-index.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -219,6 +234,13 @@ export interface IndexVaultOptions {
    * embed phase carries one, because its pending list is an array.
    */
   readonly onProgress?: import("../brain/progress.ts").ProgressSink;
+  /**
+   * The index this run acts on, and the target a plain command acts on:
+   * the release step a run prints names the index the run names. Carried
+   * in by the caller (the command line, which knows the flags); a run
+   * without one names the plain command.
+   */
+  readonly target?: ParkedIndexTarget;
 }
 
 /** Site recorded on the frontmatter notices an index run collects. */
@@ -1589,6 +1611,9 @@ async function reindexInto(
   let recorder: IndexBuildRecorder | null = null;
   try {
     if (stillCurrent !== null && stillCurrent()) return null;
+    // A set-aside stopped between two renames is finished first, so the
+    // parked names read below are the real ones (`parked-set-aside.ts`).
+    finishInterruptedSetAsides(config.dbPath, lease);
     // The refusal the swap would end in, decided BEFORE the build: both
     // parked names held and neither of them releasable is knowable now -
     // the parked names and their readability are known up front - and
@@ -1606,7 +1631,7 @@ async function reindexInto(
     // keeps it fresh through, so a writer that took the lock over in the
     // meantime is refused before the build, not at the swap.
     const parkRefusal = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
-      preflightParkNames(config.dbPath),
+      preflightParkNames(config.dbPath, opts?.target ?? plainParkedTarget(config.dbPath)),
     );
     if (parkRefusal !== null) {
       throw new SearchError(
@@ -1763,6 +1788,9 @@ async function reindexInto(
     // has verified the index that supersedes it.
     lease.assertHeld();
     restoreParkedIndexUnderLock(config.dbPath, lease);
+    // Again once a live index is back: a set-aside left part way is
+    // finished before a free parked name has its journals cleared.
+    finishInterruptedSetAsides(config.dbPath, lease);
     if (!existsSync(config.dbPath) && (existsSync(bakPath) || existsSync(oldPath))) {
       throw new SearchError(
         "INDEX_LOCKED",
@@ -1785,7 +1813,11 @@ async function reindexInto(
     if (parkPath === null) {
       lease.assertHeld();
       const blocked = keepWriterLeasesFresh(WRITER_LEASE_BLOCKING_BUDGET_MS, () =>
-        settleParkedBesideLive(config.dbPath, lease),
+        settleParkedBesideLive(
+          config.dbPath,
+          lease,
+          opts?.target ?? plainParkedTarget(config.dbPath),
+        ),
       );
       parkPath = freeParkPath(bakPath, oldPath);
       if (parkPath === null) {
@@ -1893,6 +1925,19 @@ async function reindexInto(
         pruneParkedIndexes(config.dbPath, builtVectors, lease);
       });
     }
+    // What is still parked beside the new live index, and why: the rebuild
+    // names it at its end, so a file that stays beside the index is never a
+    // surprise. Only a verified rebuild prunes, so only it has a set to
+    // report; an unverified swap says which previous index it kept in its
+    // own notice.
+    const keptParked =
+      verdict.kind === "verified"
+        ? parkedIndexesLeftBeside(
+            config.dbPath,
+            builtVectors,
+            opts?.target ?? plainParkedTarget(config.dbPath),
+          )
+        : [];
     // The swap is over and the live index is in place: the marker names
     // nothing any more.
     clearMarkerIfLiveWhole(config.dbPath, lease);
@@ -1911,7 +1956,14 @@ async function reindexInto(
       console.error(`search index rebuilt: ${swapUnverified}`);
       return Object.freeze({ ...stats, swapUnverified, durationMs: Date.now() - startedAt });
     }
-    return Object.freeze({ ...stats, durationMs: Date.now() - startedAt });
+    return Object.freeze({
+      ...stats,
+      // Absent when the rebuild left nothing parked beside the index, so a
+      // rebuild with no parked file emits exactly the shape it emitted
+      // before this field existed.
+      ...(keptParked.length > 0 ? { keptParkedIndexes: keptParked } : {}),
+      durationMs: Date.now() - startedAt,
+    });
   } finally {
     recorder?.end();
     lease.release();
@@ -2053,32 +2105,6 @@ async function withStagingStore(
 }
 
 /**
- * Stored vectors in the index at `dbPath`: 0 when there is no file, null
- * when the file is there and the count cannot be read (it does not open,
- * or has no readable `embeddings` table). Unknown is never zero: every
- * caller treats null as "may hold vectors", so an index whose count cannot
- * be read is neither deleted as empty nor rebuilt over as if it held none.
- * A plain read-only open with no extension loaded: the count reads the
- * embeddings table's rows, not the vectors.
- */
-export function countStoredEmbeddings(dbPath: string): number | null {
-  if (!existsSync(dbPath)) return 0;
-  let db: Database;
-  try {
-    db = new Database(dbPath, { readonly: true });
-  } catch {
-    return null;
-  }
-  try {
-    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? null;
-  } catch {
-    return null;
-  } finally {
-    closeDatabase(db);
-  }
-}
-
-/**
  * The index generation (a fresh ULID per index file, schema v17) of the
  * index at `dbPath` when it opens read-only at the current schema; null
  * when it is absent, unreadable or at another schema. A rebuild compares
@@ -2162,11 +2188,6 @@ function checkIndexFile(dbPath: string, generation: string | null | undefined): 
   return verdict;
 }
 
-/** The parked names of the index at `dbPath`, newest first. */
-function parkedPaths(dbPath: string): [string, string] {
-  return [dbPath + ".old", dbPath + ".bak"];
-}
-
 /** The first of `candidates` that holds no parked main file, or null. */
 function freeParkPath(...candidates: string[]): string | null {
   return candidates.find((p) => !existsSync(p)) ?? null;
@@ -2185,10 +2206,10 @@ function freeParkPath(...candidates: string[]): string | null {
  * is left for the next verified rebuild.
  */
 function pruneParkedIndexes(dbPath: string, liveVectors: number | null, lease: WriterLease): void {
-  const parked = parkedPaths(dbPath)
-    .filter((p) => existsSync(p))
-    .map((path) => ({ path, vectors: countStoredEmbeddings(path) }));
-  const keep = new Set<string>(parkedIndexesToKeep(parked, liveVectors).map((p) => p.path));
+  const parked = parkedIndexStates(dbPath);
+  const keep = new Set<string>(
+    keptParkedReasons(parked, { present: true, vectors: liveVectors }).keys(),
+  );
   for (const p of parked) {
     if (keep.has(p.path)) continue;
     lease.assertHeld();
@@ -2197,29 +2218,40 @@ function pruneParkedIndexes(dbPath: string, liveVectors: number | null, lease: W
 }
 
 /**
- * The parked indexes {@link pruneParkedIndexes} would KEEP, given the
- * parked set and the live index's stored-embedding count: the ones whose
- * count cannot be read, every one of them while the live count cannot be
- * read, and the one holding more stored embeddings than the live index.
- * Every other parked index is removed, which frees its name.
+ * The parked indexes that are still beside the live index after a verified
+ * rebuild: the ones the rule keeps, and the ones whose removal failed (a
+ * reader may hold one open). The rebuild's end line names them, so a file
+ * that stays beside the index is never a surprise.
+ *
+ * `target` is the index the release step must act on: the caller carries
+ * it in, so the step names the index this run names.
  */
-function parkedIndexesToKeep(
-  parked: ReadonlyArray<{ readonly path: string; readonly vectors: number | null }>,
+function parkedIndexesLeftBeside(
+  dbPath: string,
   liveVectors: number | null,
-): ReadonlyArray<{ readonly path: string; readonly vectors: number | null }> {
-  const keep = new Set<string>(
-    parked.filter((p) => p.vectors === null || liveVectors === null).map((p) => p.path),
+  target: ParkedIndexTarget,
+): ReadonlyArray<KeptParkedIndex> {
+  const left = parkedIndexStates(dbPath);
+  const kept = new Map<string, KeptParkedIndex>(
+    keptParkedIndexes(left, { present: true, vectors: liveVectors }, target).map((p) => [
+      p.path,
+      p,
+    ]),
   );
-  let richest: { path: string; vectors: number } | null = null;
-  for (const p of parked) {
-    if (p.vectors !== null && (richest === null || p.vectors > richest.vectors)) {
-      richest = { path: p.path, vectors: p.vectors };
-    }
-  }
-  if (richest !== null && liveVectors !== null && richest.vectors > liveVectors) {
-    keep.add(richest.path);
-  }
-  return parked.filter((p) => keep.has(p.path));
+  return left.map((p) => {
+    const k = kept.get(p.path);
+    if (k !== undefined) return k;
+    // Not kept by the rule, so the rebuild tried to remove it and the
+    // removal did not succeed: the file is still there.
+    return {
+      ...p,
+      reason: "removal-failed" as const,
+      release: parkedIndexReleaseStep(
+        { path: p.path, reason: "removal-failed", vectors: p.vectors },
+        target,
+      ),
+    };
+  });
 }
 
 /**
@@ -2247,7 +2279,7 @@ function parkedIndexesToKeep(
  *   - whether a removal the prune attempts actually succeeds stays at the
  *     swap, where the removal is made.
  */
-function preflightParkNames(dbPath: string): string | null {
+function preflightParkNames(dbPath: string, target: ParkedIndexTarget): string | null {
   const bakPath = dbPath + ".bak";
   const oldPath = dbPath + ".old";
   // Nothing to park aside: the swap has no live index to move.
@@ -2262,14 +2294,11 @@ function preflightParkNames(dbPath: string): string | null {
     return null;
   }
   // The same order the swap's own refusal names them in.
-  const parked = parkedPaths(dbPath).map((path) => ({
-    path,
-    vectors: countStoredEmbeddings(path),
-  }));
-  const keep = parkedIndexesToKeep(parked, liveVectors);
+  const parked = parkedIndexStates(dbPath);
+  const keep = keptParkedReasons(parked, { present: true, vectors: liveVectors });
   // The swap's prune removes every parked index but the kept ones, so a
   // name frees and the swap can park the live index.
-  if (keep.length < parked.length) return null;
+  if (keep.size < parked.length) return null;
   // No name can be freed by the prune. The swap refuses only when the live
   // index is not the failed successor it replaces: one that fails its
   // check is put back over by the parked `.old`, which frees a name. The
@@ -2283,11 +2312,7 @@ function preflightParkNames(dbPath: string): string | null {
     // a removal fails.
     return null;
   }
-  return (
-    `${unreadable.join(" and ")} could not be read, and a rebuild never removes a parked ` +
-    `index it cannot read; move ${unreadable.length > 1 ? "either of them" : "it"} out of ` +
-    `${dirname(dbPath)} (or make it readable again) and run the rebuild again`
-  );
+  return unreadableParkedRefusal(unreadable, target);
 }
 
 /**
@@ -2310,7 +2335,11 @@ function preflightParkNames(dbPath: string): string | null {
  * stored vectors cannot be counted stays until the operator moves it out
  * of the way: the refusal names it.
  */
-function settleParkedBesideLive(dbPath: string, lease: WriterLease): string {
+function settleParkedBesideLive(
+  dbPath: string,
+  lease: WriterLease,
+  target: ParkedIndexTarget,
+): string {
   const verdict = checkIndexFile(dbPath, undefined);
   if (verdict.kind === "verified") {
     const liveVectors = countStoredEmbeddings(dbPath);
@@ -2319,16 +2348,10 @@ function settleParkedBesideLive(dbPath: string, lease: WriterLease): string {
     if (liveVectors === null) {
       return "the live index passes its check but its stored vectors could not be counted, so neither parked index can be weighed against it; run the rebuild again";
     }
-    const unreadable = parkedPaths(dbPath).filter(
+    const unreadable = parkedIndexPaths(dbPath).filter(
       (p) => existsSync(p) && countStoredEmbeddings(p) === null,
     );
-    if (unreadable.length > 0) {
-      return (
-        `${unreadable.join(" and ")} could not be read, and a rebuild never removes a parked ` +
-        `index it cannot read; move ${unreadable.length > 1 ? "either of them" : "it"} out of ` +
-        `${dirname(dbPath)} (or make it readable again) and run the rebuild again`
-      );
-    }
+    if (unreadable.length > 0) return unreadableParkedRefusal(unreadable, target);
     return "a parked index the live index supersedes could not be removed (another process may have it open); run the rebuild again once nothing else has it open";
   }
   if (verdict.kind === "corrupt") {
@@ -2339,8 +2362,9 @@ function settleParkedBesideLive(dbPath: string, lease: WriterLease): string {
     } catch (e) {
       return (
         `the live index fails its check (${verdict.fault}) and ${dbPath}.old could not be put ` +
-        `back over it (${e instanceof Error ? e.message : String(e)}); move ${dbPath} and its ` +
-        "-wal, -shm and -journal files out of the folder, and the next open of the index restores the parked one"
+        `back over it (${e instanceof Error ? e.message : String(e)}); stop everything that uses ` +
+        `the index, move ${dbPath} together with its -wal, -shm and -journal files out of the ` +
+        "folder, and the next open of the index restores the parked one"
       );
     }
   }

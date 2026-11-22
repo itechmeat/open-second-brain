@@ -27,11 +27,16 @@ import {
   readIndexCensus,
   type IndexCensus,
 } from "../../../core/search/index-estimate.ts";
+import {
+  parkedIndexStatus,
+  type ParkedIndexStatus as ParkedIndexReport,
+} from "../../../core/search/parked-index.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import {
   flagBoolean,
   parseFlags,
   resolveConfig,
+  resolveParkedTarget,
   searchAdvisoryStream,
   VAULT_FLAGS,
 } from "../helpers.ts";
@@ -54,6 +59,16 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
     : null;
   // The size on disk and what a rebuild of it is expected to take.
   const census = status.exists ? readIndexCensus(cfg.dbPath) : null;
+  // The parked indexes beside the live one: a rebuild keeps some of them
+  // (an index it cannot read, one that holds stored embeddings the live
+  // index lacks), and a file that stays beside the index has to be named
+  // with the step that releases it. The step names the index this report
+  // is about, so it carries the target the caller resolved.
+  const parked = parkedIndexStatus(
+    cfg.dbPath,
+    status.exists ? { present: true, vectors: status.embeddings } : { present: false },
+    resolveParkedTarget(cfg),
+  );
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({
@@ -61,6 +76,9 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
         ...(eventTime !== null ? { event_time: serializeEventTimeStatus(eventTime) } : {}),
         ...(freshen !== null ? { freshen: serializeFreshenStatus(freshen) } : {}),
         ...(census !== null ? censusJson(census) : {}),
+        // Conditional: an index with nothing parked beside it emits
+        // exactly the payload it emitted before this field existed.
+        ...(parked.length > 0 ? { parked_indexes: parkedJson(parked) } : {}),
         // Same polarity as the human twin below, so the two conditions
         // read as one rule rather than as each other's negation.
         ...(!status.exists ? nextCommandField("search-index-missing") : {}),
@@ -68,7 +86,7 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
     );
     return 0;
   }
-  process.stdout.write(renderStatusHuman(status, eventTime, freshen, census));
+  process.stdout.write(renderStatusHuman(status, eventTime, freshen, census, parked));
   // no-dead-ends, phase 3: the pointer used to be spliced into the
   // renderer's first line, which is a second emission mechanism AND
   // beyond the reach of a scan over writer call sites. The rail decides
@@ -96,14 +114,53 @@ function censusJson(census: IndexCensus): Record<string, unknown> {
   };
 }
 
+/** The JSON twin of the parked-index lines. */
+function parkedJson(parked: ReadonlyArray<ParkedIndexReport>): Record<string, unknown>[] {
+  return parked.map((p) => ({
+    path: p.path,
+    size_on_disk_bytes: p.bytes,
+    stored_embeddings: p.vectors,
+    kept: p.kept,
+    reason: p.reason,
+    ...(p.release === null ? {} : { release: p.release }),
+  }));
+}
+
+/**
+ * The parked indexes beside the live one, one block each: where the file
+ * is, what it occupies, whether a rebuild keeps it, why, and the one step
+ * that releases it.
+ */
+function renderParkedIndexes(parked: ReadonlyArray<ParkedIndexReport>): string[] {
+  if (parked.length === 0) return [];
+  const lines = [`parked_indexes:     ${parked.length}`];
+  for (const p of parked) {
+    lines.push(
+      `parked_index:      ${p.path} (${formatEstimateBytes(p.bytes)}) - ` +
+        (p.kept ? "kept: " : "") +
+        p.reason,
+    );
+    if (p.release !== null) lines.push(`  release:         ${p.release}`);
+  }
+  return lines;
+}
+
 function renderStatusHuman(
   s: IndexStatusSnapshot,
   eventTime: EventTimeStatus | null,
   freshen: FreshenStatus | null,
   census: IndexCensus | null,
+  parked: ReadonlyArray<ParkedIndexReport> = [],
 ): string {
   if (!s.exists) {
-    return `index: not initialised\n  path: ${s.indexPath}\n`;
+    // A parked index beside no live index is the index: the next open of
+    // it puts the parked one back. It is still reported, with the same
+    // block a live index reports.
+    const parkedLines = renderParkedIndexes(parked);
+    return (
+      `index: not initialised\n  path: ${s.indexPath}\n` +
+      (parkedLines.length > 0 ? parkedLines.join("\n") + "\n" : "")
+    );
   }
   const lines: string[] = [];
   lines.push(`index: ${s.indexPath}`);
@@ -141,5 +198,6 @@ function renderStatusHuman(
     );
   }
   for (const w of s.warnings) lines.push(`warning: ${w}`);
+  lines.push(...renderParkedIndexes(parked));
   return lines.join("\n") + "\n";
 }

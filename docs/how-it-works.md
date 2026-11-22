@@ -1460,7 +1460,65 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   rebuild built, the
   `.bak` is removed, unless it holds stored embeddings the new index
   lacks (a keyword-only rebuild cannot recompute them) or its count
-  cannot be read; a new index that fails the check is swapped back out
+  cannot be read; a parked index that is kept is named: the rebuild's
+  end line says where it is, what it occupies on disk, why it is kept
+  and the one step that releases it, and `o2b search status` reports the
+  same block under `parked_indexes` (`parked_indexes` in `--json`). The
+  step names the index the report names: a report made for another index
+  (`--db`, `--vault`, a config that names another one) prints a command
+  that acts on that index, carrying only the flags that differ from the
+  default (`--config`, `--db`, `--vault`), and a command with no flags
+  names the default index. When an
+  unreadable parked index holds the other parked name, the step frees
+  that name first, because the rebuild it names cannot start while both
+  names are held. A kept parked index is never a surprise, and how long
+  it stays depends on what it is: a parked index whose stored embeddings
+  cannot be counted is kept while that count cannot be read, because it
+  may be the only copy of stored embeddings a keyword-only rebuild
+  cannot compute again - no later rebuild removes it either; a parked
+  index that can be read is kept only while it holds more stored
+  embeddings than the live index, and a verified rebuild removes it once
+  the index that rebuild builds holds as many as it does. `o2b search
+  status` reports a parked index the live index outweighs as one the
+  rule does not keep, without promising the next rebuild removes it: a
+  keyword-only rebuild builds none, and may keep it again. The step that
+  releases it is chosen from the parked index itself: one that holds
+  stored embeddings is released by the rebuild that computes them again
+  (`o2b search reindex --embeddings`), one that holds none by an
+  ordinary rebuild, and one that cannot be read by setting it aside,
+  because no rebuild removes a parked index it cannot read. Setting
+  aside is the product's own move: `o2b search set-aside bak|old
+  --apply` takes the writer lock and moves the parked main file with its
+  `-wal`, `-shm` and `-journal` files into a new folder under
+  `set-aside/` in the index folder, and deletes nothing. A move by hand
+  that took only the main file would lose the commits only its `-wal`
+  held, since the next rebuild clears journals it finds at a free parked
+  name. A set-aside writes the swap's own park record (the parked suffix,
+  in one atomically written line) inside its new folder before its first
+  rename, and removes it once the whole set is there; a set-aside stopped
+  between two renames is finished from that record by the next set-aside,
+  and by the next rebuild before it reuses a parked name, so the journals
+  left at the parked name follow the main file instead of being cleared.
+  A failed move that was undone removes the record, and a folder that
+  already exists is refused before anything moves. The set-aside decides
+  under the writer lock whether the parked index is still there. It
+  refuses while a rebuild that stopped part way through its swap may
+  still need the parked set to put back, and names the rebuild of the
+  same index, with the flags that select it, that restores it; the step
+  printed for an unreadable parked index in that state names that
+  rebuild first. The embeddings step
+  also names the set-aside for the case no rebuild can reach: when the
+  notes that produced the parked embeddings are gone. A printed
+  `--config` always carries `--db` and `--vault`, since another config
+  may name another index and another vault. A path in the printed command is quoted for the shell
+  that reads it: a single quote on a POSIX shell; on Windows one
+  double-quoted line when cmd.exe and PowerShell read it alike, and
+  otherwise a line for each shell, each named (PowerShell expands `$`
+  inside double quotes and ends a string at a typographic quote, cmd.exe
+  passes single quotes through); a path with `%`, which cmd.exe expands
+  even inside double quotes, or `!`, which it expands when delayed expansion
+  is enabled, gets only the PowerShell line, named. A new index
+  that fails the check is swapped back out
   and the previous one put back, and a check that could not run (an I/O
   error, a busy file) counts as neither pass nor failure, so nothing is
   removed or undone. Nothing parked is removed before that point: a
@@ -1481,8 +1539,8 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   taken by indexes no verified rebuild may remove (one whose stored
   embeddings cannot be counted, one richer in them than the live index),
   the rebuild refuses with `INDEX_LOCKED` and removes neither; the
-  message names the unreadable parked file and says to move it out of
-  the index folder (or make it readable again), after which the next
+  message names the unreadable parked file and the `o2b search
+  set-aside` command that moves it aside, after which the next
   rebuild parks the live index at the freed name. That refusal is
   decided before the build whenever it can be: the parked names and
   their readability are known up front, so the operator gets the answer

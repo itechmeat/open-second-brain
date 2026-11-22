@@ -28,6 +28,7 @@
 import { join } from "node:path";
 
 import { readDeviceId, resolveAgentName } from "../config.ts";
+import { shellWord } from "../shell-quote.ts";
 import { appendRecord, appendRecords, type AppendInput } from "../store/appender.ts";
 import {
   SETTING_TOPIC_MIN_RECORDS,
@@ -203,11 +204,6 @@ export interface TopicPlanningOptions {
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-
-/** A word for a POSIX shell, single-quoted unless it needs no quoting. */
-function shellWord(value: string): string {
-  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 function undoOf(record: string, configPath: string | undefined): string {
   const config = configPath === undefined ? "" : ` --config ${shellWord(configPath)}`;

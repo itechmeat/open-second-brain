@@ -37,6 +37,7 @@ import type {
 import type { SearchTrustGateMode } from "../brain/trust/retrieval-gate.ts";
 import type { RetrievalTrail } from "./retrieval-trail.ts";
 import type { ProviderProbeState } from "./provider-probe.ts";
+import type { KeptParkedIndex } from "./parked-index.ts";
 
 export type { VaultPathRule, VaultScopeRules };
 export type { BrainSearchResult, ScoreBreakdown, TrustMetadata };
@@ -449,6 +450,14 @@ export interface IndexStats {
    * every run whose swap was verified or that swapped nothing.
    */
   readonly swapUnverified?: string;
+  /**
+   * The parked indexes a verified rebuild kept beside the live index, each
+   * with the reason it is there and the one step that releases it. A
+   * rebuild that keeps one says so at its end: a file that stays beside
+   * the index is named, sized and explained rather than left to be found.
+   * Absent when the rebuild left nothing parked beside the index.
+   */
+  readonly keptParkedIndexes?: ReadonlyArray<KeptParkedIndex>;
   readonly durationMs: number;
 }
 

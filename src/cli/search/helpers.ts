@@ -11,8 +11,9 @@
  * `src/cli/brain/helpers.ts` already establishes for the Brain verbs.
  */
 
-import { defaultConfigPath } from "../../core/config.ts";
+import { defaultConfigPath, resolveVault } from "../../core/config.ts";
 import { resolveSearchConfig, type ResolvedSearchConfig } from "../../core/search/index.ts";
+import type { ParkedIndexTarget } from "../../core/search/parked-index.ts";
 import { CliError, type FlagsSchema } from "../argparse.ts";
 import { NoVaultConfiguredError, requireVaultFor, resolveOptionalVault } from "../helpers.ts";
 import type { AdvisoryStream } from "../advisory-rail.ts";
@@ -110,6 +111,46 @@ export function resolveConfig(flags: SearchVerbFlags): ResolvedSearchConfig {
 /** The vault of `config`, or the refusal naming `command` when there is none. */
 export function requireSearchVault(config: ResolvedSearchConfig, command: string): string {
   return requireVaultFor(config.vault, `o2b ${command}`);
+}
+
+/**
+ * The index a release step must act on, and the target a plain command
+ * acts on: the flags a copied command needs, and only those.
+ *
+ * The report names the index this invocation acts on - the one `--db`,
+ * `--vault` or a config override selected. A command printed without
+ * that context would act on the default index instead, and release
+ * nothing. So the effective index is carried here, and compared with the
+ * index a command without target flags acts on: the two halves that
+ * differ are the flags the printed command carries.
+ *
+ * A plain command that cannot be resolved (no vault configured and no
+ * store to index) leaves the defaults unknown, and every flag is spelled
+ * out: a command that names the index is right, a command that names
+ * nothing is not.
+ */
+export function resolveParkedTarget(cfg: ResolvedSearchConfig): ParkedIndexTarget {
+  const configPath = defaultConfigPath();
+  let defaultDbPath = "";
+  let defaultVaultPath: string | null = null;
+  try {
+    const plain = resolveSearchConfig({
+      vault: resolveVault(configPath),
+      configPath,
+    });
+    defaultDbPath = plain.dbPath;
+    defaultVaultPath = plain.vault;
+  } catch {
+    // Unresolvable plain target: keep the defaults unknown.
+  }
+  return Object.freeze({
+    dbPath: cfg.dbPath,
+    vaultPath: cfg.vault,
+    configPath: cfg.configPath ?? null,
+    defaultDbPath,
+    defaultVaultPath,
+    defaultConfigPath: configPath,
+  });
 }
 
 /**

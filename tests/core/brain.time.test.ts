@@ -2,12 +2,16 @@
  * Brain time helpers.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 import { isoSecond, relativeAge } from "../../src/core/brain/time.ts";
 import { lexCode } from "../helpers/source-lexer.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../helpers/source-scan-timeout.ts";
+
+// A test here reads the whole source tree; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 const now = new Date("2026-05-29T12:00:00Z");
 
