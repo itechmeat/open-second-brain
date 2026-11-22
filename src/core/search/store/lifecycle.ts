@@ -275,7 +275,7 @@ export function clearParkMarker(dbPath: string): void {
  * record atomically and never leaves a torn one, and the fallback deletes
  * nothing parked.
  */
-function readParkMarker(dbPath: string): string | null {
+export function readParkMarker(dbPath: string): string | null {
   let text: string;
   try {
     text = readFileSync(parkMarkerPath(dbPath), "utf8").trim();

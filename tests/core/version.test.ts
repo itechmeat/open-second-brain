@@ -39,7 +39,7 @@
  *     answer a different question than the one it is named for.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
@@ -47,6 +47,10 @@ import { lexCode } from "../helpers/source-lexer.ts";
 import { OPEN_SECOND_BRAIN_VERSION } from "../../src/core/version.ts";
 import packageJson from "../../package.json" with { type: "json" };
 import { toPosix } from "../../src/core/path-safety.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../helpers/source-scan-timeout.ts";
+
+// The census reads every module under src/; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 /** The shipped source tree this census scans. */
 const SRC_ROOT = resolve(import.meta.dir, "..", "..", "src");

@@ -18,11 +18,15 @@
  * site.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, posix, relative, sep, win32 } from "node:path";
 
 import { lexSource } from "../../helpers/source-lexer.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../../helpers/source-scan-timeout.ts";
+
+// A test here reads the whole source tree; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 const SRC_ROOT = join(import.meta.dir, "..", "..", "..", "src");
 

@@ -613,6 +613,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   ]),
   "search restamp": u("index"),
   "search schema": r,
+  "search set-aside": u("index"),
   "search status": r,
   "search vector-backfill": u("index"),
   "search watch": o("server"),

@@ -53,7 +53,7 @@
  * name the store directory. Every file it finds must be in the population.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -64,6 +64,10 @@ import {
   STATE_SURFACE_ID,
 } from "../../../src/core/state/surfaces.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../../helpers/source-scan-timeout.ts";
+
+// A test here reads the whole source tree; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 

@@ -2299,7 +2299,10 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (.bak and .old) are held and neither can be released refuses BEFORE it
                               builds: the answer comes without a full build and no staging index is
                               written; a live index that fails its integrity check is still replaced
-                              by the parked .old, as before
+                              by the parked .old, as before; the refusal names the
+                              o2b search set-aside command that frees a name
+                              A parked index the rebuild keeps is named at the end (path, size,
+                              why, and the step that releases it; --json kept_parked_indexes)
                               --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
                               --embeddings computes vectors; --concurrency N, --db PATH, --verbose
                               --cron-template prints a periodic-reindex cron recipe on stdout and
@@ -2364,7 +2367,9 @@ o2b search status             Index status; an index on an older schema is upgra
                               replaces; an index no in-place upgrade can repair (a newer schema than
                               this build, a corrupt file) keeps the rebuild advice, and so does an
                               in-place upgrade that fails - the failure that stopped it is kept as
-                              the cause, while an index another writer holds stays a lock error
+                              the cause, while an index another writer holds stays a lock error;
+                              parked_indexes lists each parked .bak/.old beside the index with its
+                              size, whether a rebuild keeps it, why, and the step that releases it
                               since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
                               Since v1.72.0 the estimate is null and printed as `price unknown` when
@@ -2466,6 +2471,21 @@ o2b search restamp            Record this build's sqlite-vec version as the one 
                               identity, which is deferred by design; the refusal names
                               `o2b search reindex --embeddings` instead. No path contacts a provider.
                               --json emits dry_run, field, recorded, runtime, changed, applied
+o2b search set-aside bak|old  Move a parked previous index (brain.sqlite.bak or .old) out of its parked
+                              name, together with its -wal, -shm and -journal files, into a new folder
+                              under set-aside/ in the index folder, under the writer lock. Deletes
+                              nothing. Dry-run by DEFAULT: it prints what it would move and where;
+                              --apply moves. It is the step `o2b search reindex` and
+                              `o2b search status` print for a parked index no rebuild can release
+                              (one that cannot be read, or one richer in stored embeddings than the
+                              notes left in the vault can produce). It records the move inside the
+                              new folder before the first rename, so a set-aside stopped part way is
+                              finished by the next set-aside or the next rebuild. It refuses a name
+                              that holds no parked index (decided again under the writer lock), a
+                              folder that already exists, and a rebuild that stopped part way through
+                              its swap may still need the parked set to put back (it names the
+                              o2b search reindex of that index to run first). Takes --vault, --config, --db;
+                              --json emits dry_run, from, folder, files
 o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
                               --base-url U --model M --env-key K (K is the env var NAME holding the key);
                               persisted to Brain/search/embedding-providers.json, resolved after built-ins

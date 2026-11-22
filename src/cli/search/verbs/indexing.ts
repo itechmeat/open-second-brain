@@ -32,6 +32,7 @@ import type {
   IndexStats,
   IndexVaultOptions,
 } from "../../../core/search/index.ts";
+import { describeKeptParkedIndex } from "../../../core/search/parked-index.ts";
 import { healIndex } from "../../../core/search/self-heal.ts";
 import {
   recordSelfHealOutcome,
@@ -53,6 +54,7 @@ import {
   flagString,
   parseFlags,
   resolveConfig,
+  resolveParkedTarget,
   searchAdvisoryStream,
   VAULT_FLAGS,
   type ResolvedSearchConfig,
@@ -177,6 +179,20 @@ function reportIndexRun(
   if (stats.chunkWindow !== undefined) codes.push(chunkWindowDiagnosticCode(stats.chunkWindow));
   if (complete) codes.push(exitCode);
   emitNextSteps(codes, searchAdvisoryStream(argv, jsonRequested));
+  reportKeptParkedIndexes(stats);
+}
+
+/**
+ * The parked indexes the run kept beside the live index, one line each:
+ * where the file is, what it occupies, why a rebuild keeps it and the one
+ * step that releases it. Printed after the report, so it is the last thing
+ * the run says - a file that stays beside the index is named, sized and
+ * explained rather than left to be found by the next person who looks.
+ */
+function reportKeptParkedIndexes(stats: IndexStats): void {
+  for (const parked of stats.keptParkedIndexes ?? []) {
+    process.stderr.write(`search index rebuilt: ${describeKeptParkedIndex(parked)}\n`);
+  }
 }
 
 export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
@@ -411,6 +427,9 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
       embeddings: flagBoolean(flags, "embeddings"),
       forceCost: flagBoolean(flags, "force-cost"),
       signal: interrupt.signal,
+      // The release step the rebuild prints names the index this rebuild
+      // acts on: the target the caller resolved, carried in.
+      target: resolveParkedTarget(cfg),
       onFile: flagBoolean(flags, "verbose")
         ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
         : undefined,
@@ -603,6 +622,20 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
       : {}),
     // Conditional: a verified swap emits the payload it emitted before.
     ...(stats.swapUnverified === undefined ? {} : { swap_unverified: stats.swapUnverified }),
+    // Conditional: a rebuild that kept a parked index beside the live one
+    // names it, its size and the step that releases it. A rebuild that
+    // left none emits exactly the payload it emitted before.
+    ...(stats.keptParkedIndexes === undefined
+      ? {}
+      : {
+          kept_parked_indexes: stats.keptParkedIndexes.map((p) => ({
+            path: p.path,
+            size_on_disk_bytes: p.bytes,
+            stored_embeddings: p.vectors,
+            reason: p.reason,
+            release: p.release,
+          })),
+        }),
     duration_ms: stats.durationMs,
     vault: cfg.vault,
     db_path: cfg.dbPath,

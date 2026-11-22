@@ -58,41 +58,13 @@ export class CronTemplateError extends Error {
 }
 
 /**
- * Single-quote a value for bash, the way `discipline-install.ts` quotes
- * the vault it bakes into its job: a quote inside the value closes the
- * string, emits an escaped quote and reopens it. Inside single quotes a
- * backslash, a `$` and a backtick are literal, so nothing else needs
- * escaping. Every operator path a recipe bakes into its script goes
- * through here.
+ * The quoting every operator path a recipe bakes into its script goes
+ * through. It lives in the core layer now, because the commands other
+ * surfaces print - the release step a parked index is named with - are
+ * quoted by the same rule, and a second copy of it would be a second
+ * answer to "how is a path spelled in a command".
  */
-export function shellQuote(value: string): string {
-  return "'" + value.replace(/'/gu, "'\\''") + "'";
-}
-
-/**
- * A word a POSIX shell needs no quoting for: ids like `ent-people-ada`,
- * bare dates and vault-relative paths echo as themselves, everything
- * else gets {@link shellQuote}'d.
- *
- * The plain set is deliberately narrower than bash's own safe-word list
- * (`[A-Za-z0-9_@%+=:,./-]`): the extra characters are safe in a shell
- * but quoting them costs one spelling and saves one audit, and one
- * shared set means every echoed command line - the entity merge preview,
- * the revert plan - quotes by the same rule. Single quotes rather than
- * double because an interactive bash history-expands `!` inside double
- * quotes even when the escaper never mentions it; inside single quotes
- * nothing expands, so the quote itself is the only character needing a
- * spell. The verbs echo these lines for an operator (or an agent) to
- * paste back, so every argument a shell would split, glob or expand is
- * quoted - an unquoted empty value would even render its flag as
- * dropped, which a paste-back then folds to no flag at all.
- */
-const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
-
-/** One shell-safe argv word: bare when plain, single-quoted otherwise. */
-export function shellWord(value: string): string {
-  return PLAIN_SHELL_WORD.test(value) ? value : shellQuote(value);
-}
+export { shellQuote, shellWord } from "../core/shell-quote.ts";
 
 /** A line feed or a carriage return anywhere in a value. */
 const LINE_BREAK_PATTERN = /[\n\r]/u;

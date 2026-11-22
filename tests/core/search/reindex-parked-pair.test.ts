@@ -19,9 +19,11 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
+import { setAsideParkedIndex } from "../../../src/core/search/parked-set-aside.ts";
 import { refreshEntitiesInPlace } from "../../../src/core/search/entity-refresh.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { parkMarkerPath, writeParkMarker } from "../../../src/core/search/store/lifecycle.ts";
@@ -314,12 +316,13 @@ test("both parked names held by an unreadable index and a richer one: the refusa
   expect(readFileSync(dbPath + ".bak").equals(unreadable)).toBe(true);
   expect(vectorsIn(dbPath + ".old")).toBe(3);
 
-  // The step the refusal names: move the unreadable file out of the folder.
-  const movedAside = `${vault}/unreadable-index-copy`;
-  renameSync(dbPath + ".bak", movedAside);
+  // The step the refusal names, run as named: the set-aside of the
+  // unreadable file, which moves it whole and deletes nothing.
+  expect(message).toContain("set it aside with: o2b search set-aside bak --apply");
+  const setAside = await setAsideParkedIndex(dbPath, "bak", true);
   await reindexVault(cfg);
   expect(quickCheck(dbPath)).toBe("ok");
-  expect(readFileSync(movedAside).equals(unreadable)).toBe(true);
+  expect(readFileSync(join(setAside.folder, "brain.sqlite.bak")).equals(unreadable)).toBe(true);
   // The richer `.old` outranks the new keyword-only index and is kept.
   expect(vectorsIn(dbPath + ".old")).toBe(3);
 });

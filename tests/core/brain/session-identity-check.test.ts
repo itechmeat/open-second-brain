@@ -29,7 +29,7 @@
  * shape its classification claims.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -61,6 +61,10 @@ import {
 import type { DoctorUncertainEntry } from "../../../src/core/brain/doctor/report.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import type { DoctorIssue } from "../../../src/core/brain/types.ts";
+import { SOURCE_SCAN_BUDGET_MS } from "../../helpers/source-scan-timeout.ts";
+
+// A test here reads the whole source tree; see tests/helpers/source-scan-timeout.ts.
+setDefaultTimeout(SOURCE_SCAN_BUDGET_MS);
 
 let tmp: string;
 let vault: string;
