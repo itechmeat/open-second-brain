@@ -50,6 +50,22 @@ hooks into that pipeline instead of `o2b install --target`:
 | Codex                | `install/codex.md`        |
 | Claude Code          | `install/claudecode.md`   |
 
+## After installing from a registry
+
+Connect and verify one host with `o2b setup`:
+
+```bash
+o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes
+```
+
+Use `--no-vault` when the machine uses the brain store without a vault.
+Exit `0` means setup and verification passed; `1` means a runtime or
+self-test failure; `2` means invalid usage or a missing choice; `3` means
+verification found drift; `4` means a user-edited block needs attention;
+`5` means the host could not be reached; `6` means consent was refused;
+`7` means a host step remains for you, such as installing a host plugin or
+merging the generic configuration.
+
 ## Interactive setup
 
 For a guided first-time setup that composes `o2b init`, optional

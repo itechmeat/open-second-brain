@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import {
   cleanupPacked,
   installPacked,
@@ -23,6 +24,9 @@ function expectPackedCommandSuccess(
   const stderr = new TextDecoder().decode(result.stderr).trim();
   expect(result.exitCode, `Started ${install.commands[command]}\nstderr:\n${stderr}`).toBe(0);
 }
+
+const SELFTEST_AVAILABLE = sqliteVecLoadable();
+const testWithSelftest = test.skipIf(!SELFTEST_AVAILABLE);
 
 const roots: string[] = [];
 const tarball: PackedTarball | null = (() => {
@@ -117,6 +121,91 @@ if (registryFailure) {
       expectPackedCommandSuccess(result, npmInstall!, "o2b");
       expect(new TextDecoder().decode(result.stdout)).toContain(version);
     });
+
+    test("bootstrap from a registry package writes its absolute Bun launcher", () => {
+      const install = bunInstall!;
+      const vault = join(install.root, "bootstrap-vault");
+      const init = runPackedCommand(install, "o2b", [
+        "init",
+        "--vault",
+        vault,
+        "--agent-name",
+        "Registry Bootstrap",
+        "--timezone",
+        "UTC",
+      ]);
+      expect(init.exitCode).toBe(0);
+      const bootstrap = runPackedCommand(install, "o2b", [
+        "bootstrap",
+        "--vault",
+        vault,
+        "--target",
+        "codex",
+        "--agent",
+        "registry-bootstrap",
+        "--token",
+      ]);
+      expect(bootstrap.exitCode).toBe(0);
+      const codexConfig = readFileSync(join(install.env.CODEX_HOME!, "config.toml"), "utf8");
+      const codex = Bun.TOML.parse(codexConfig) as {
+        mcp_servers: Record<string, { command: string; args: string[] }>;
+      };
+      const registered = codex.mcp_servers["open-second-brain"]!;
+      expect(registered.command).toBe(process.execPath);
+      expect(registered.args.slice(0, 2)).toEqual([
+        "run",
+        join(install.installDir, "bin", "o2b.js"),
+      ]);
+    });
+
+    testWithSelftest(
+      SELFTEST_AVAILABLE
+        ? "setup from a registry package registers its launcher in the scratch host home"
+        : "NOT RUN: registry setup acceptance requires sqlite-vec self-test",
+      () => {
+        const install = bunInstall!;
+        const vault = join(install.root, "bootstrap-vault");
+        const setup = runPackedCommand(install, "o2b", [
+          "setup",
+          "--target",
+          "cursor",
+          "--vault",
+          vault,
+          "--agent-name",
+          "Registry Bootstrap",
+          "--timezone",
+          "UTC",
+          "--apply",
+          "--yes",
+        ]);
+        if (setup.exitCode !== 0) {
+          throw new Error(
+            `setup exited ${setup.exitCode}: ${new TextDecoder().decode(setup.stderr).trim()}\n${new TextDecoder().decode(setup.stdout).trim()}`,
+          );
+        }
+        const cursorConfig = readFileSync(join(install.home, ".cursor/mcp.json"), "utf8");
+        const parsed = JSON.parse(cursorConfig) as {
+          mcpServers: Record<string, { command: string; args: string[] }>;
+        };
+        const registered = parsed.mcpServers["open-second-brain"]!;
+        expect(registered.command).toBe(process.execPath);
+        expect(registered.args.slice(0, 2)).toEqual([
+          "run",
+          join(install.installDir, "bin/o2b.js"),
+        ]);
+        const check = runPackedCommand(install, "o2b", [
+          "install",
+          "--target",
+          "cursor",
+          "--check",
+        ]);
+        if (check.exitCode !== 0) {
+          throw new Error(
+            `install --check exited ${check.exitCode}: ${new TextDecoder().decode(check.stderr).trim()}\n${new TextDecoder().decode(check.stdout).trim()}\n${cursorConfig}`,
+          );
+        }
+      },
+    );
 
     test("commands run from an install and home path with spaces and non-ASCII characters", () => {
       expect(spacedInstall!.root).toMatch(/space café/);

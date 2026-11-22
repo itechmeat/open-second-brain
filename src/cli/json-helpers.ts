@@ -47,6 +47,7 @@ export function wantsJsonFlag(argv: ReadonlyArray<string>): boolean {
 export const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "status",
   "install",
+  "setup",
   "update",
   "tool-call",
   "secrets",

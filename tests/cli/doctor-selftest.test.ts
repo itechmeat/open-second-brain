@@ -206,3 +206,32 @@ test("the concurrent-write stage exercises the writer lock with two writers", as
   expect(stage?.ok).toBe(true);
   expect(stage?.metrics?.["writers"]).toBe(2);
 });
+
+test("every stage passes on a machine configured without a vault", async () => {
+  // `o2b init` without a vault switches this device to the brain store. The
+  // harness must not see that store: its seeded notes live under the temp
+  // vault's `Brain/`, which a switched machine's walk would skip as an
+  // archived legacy tree. One child per call, so the switch the first one
+  // records is read back by the second from the sandboxed state root.
+  const home = join(sandbox, "home");
+  mkdirSync(home, { recursive: true });
+  const env = {
+    HOME: home,
+    XDG_CONFIG_HOME: join(sandbox, "xdg-config"),
+    XDG_DATA_HOME: join(sandbox, "xdg-data"),
+    XDG_STATE_HOME: join(sandbox, "xdg-state"),
+    XDG_CACHE_HOME: join(sandbox, "xdg-cache"),
+    OPEN_SECOND_BRAIN_CONFIG: join(sandbox, "store-only-config.yaml"),
+    OPEN_SECOND_BRAIN_STORE_ROOT: join(sandbox, "store"),
+  };
+  const init = await runCli(["init", "--agent-name", "Selftest", "--timezone", "UTC"], {
+    env,
+    subprocess: true,
+  });
+  expect(init.returncode).toBe(0);
+  const res = await runCli(["doctor", "selftest", "--json"], { env, subprocess: true });
+  const report = parseSelftestJson(res);
+  expect(report.stages.filter((s) => !s.ok)).toEqual([]);
+  expect(report.ok).toBe(true);
+  expect(res.returncode).toBe(0);
+});

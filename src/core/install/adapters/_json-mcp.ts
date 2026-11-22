@@ -422,6 +422,9 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       // current wall clock.
       const existing = readManifest(env.vault).installs[spec.target];
       const appliedAt = !contentChanged && existing ? existing.applied_at : env.now.toISOString();
+      const origin = env.origin;
+      const originChanged =
+        origin !== undefined && JSON.stringify(existing?.origin) !== JSON.stringify(origin);
       const manifest: ManifestEntry = {
         target: spec.target,
         applied_at: appliedAt,
@@ -429,8 +432,8 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
         config_path: path,
         owned_keys: [`${topKey}.${OSB_KEY_FULL}`, `${topKey}.${OSB_KEY_WRITER}`],
       };
-      if (!opts.dryRun && (contentChanged || !existing)) {
-        recordEntry(env.vault, manifest);
+      if (!opts.dryRun && (contentChanged || !existing || originChanged)) {
+        recordEntry(env, manifest);
       }
 
       return {

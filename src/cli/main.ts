@@ -265,11 +265,15 @@ function initBrainStoreForVault(vault: string, configPath: string): boolean {
 }
 
 /** `o2b init` with no `--vault` and none configured: machine values, then the store (see `cmdInit`). */
-function initWithoutVault(agentName: string | null, timezone: string | null): number {
-  let configPath = defaultConfigPath();
+function initWithoutVault(
+  agentName: string | null,
+  timezone: string | null,
+  requestedConfigPath = defaultConfigPath(),
+): number {
+  let configPath = requestedConfigPath;
   try {
-    if (agentName) configPath = setConfigValue("agent_name", agentName);
-    if (timezone) configPath = setConfigValue("timezone", timezone);
+    if (agentName) configPath = setConfigValue("agent_name", agentName, configPath);
+    if (timezone) configPath = setConfigValue("timezone", timezone, configPath);
   } catch (exc) {
     process.stderr.write(
       `error: failed to persist plugin config: ${(exc as Error).message ?? exc}\n`,
@@ -305,7 +309,7 @@ function recordFreshSwitchQuietly(vault: string | null, configPath: string): voi
   }
 }
 
-async function cmdInit(argv: string[]): Promise<number> {
+export async function cmdInit(argv: string[]): Promise<number> {
   // `--interactive` is its own mode — composed of `init` + `brain init` +
   // per-target `install`. The non-interactive path below requires --vault.
   if (argv.includes("--interactive")) {
@@ -316,8 +320,10 @@ async function cmdInit(argv: string[]): Promise<number> {
     name: { type: "string", default: "Second Brain" },
     "agent-name": { type: "string" },
     timezone: { type: "string" },
+    config: { type: "string" },
     force: { type: "boolean" },
   });
+  const requestedConfigPath = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const agentName = (flags["agent-name"] as string | undefined) ?? null;
   const timezone = (flags["timezone"] as string | undefined) ?? null;
 
@@ -350,7 +356,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   // must never be written back as the machine's vault.
   let configured: string | null;
   try {
-    configured = flagVault === undefined ? configuredVaultKey(defaultConfigPath()) : null;
+    configured = flagVault === undefined ? configuredVaultKey(requestedConfigPath) : null;
   } catch (exc) {
     process.stderr.write(
       `error: cannot read the machine config: ${(exc as Error).message ?? exc}\n`,
@@ -358,7 +364,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 1;
   }
   const vault = flagVault ?? configured;
-  if (vault === null) return initWithoutVault(agentName, timezone);
+  if (vault === null) return initWithoutVault(agentName, timezone, requestedConfigPath);
 
   // v0.11.0: `o2b init` no longer writes content into the vault.
   // Content scaffolding belongs to `o2b brain init` (the Brain layer).
@@ -370,9 +376,9 @@ async function cmdInit(argv: string[]): Promise<number> {
   const resolvedVault = resolve(vault).replace(/\\/g, "/");
   let configPath: string;
   try {
-    configPath = setConfigValue("vault", resolvedVault);
-    if (agentName) setConfigValue("agent_name", agentName);
-    if (timezone) setConfigValue("timezone", timezone);
+    configPath = setConfigValue("vault", resolvedVault, requestedConfigPath);
+    if (agentName) setConfigValue("agent_name", agentName, configPath);
+    if (timezone) setConfigValue("timezone", timezone, configPath);
   } catch (exc) {
     process.stderr.write(
       `error: failed to persist plugin config: ${(exc as Error).message ?? exc}\n`,
@@ -1288,7 +1294,7 @@ function parseCapabilityWindow(
   };
 }
 
-async function runMcpProbe(args: {
+export async function runMcpProbe(args: {
   vault: string | undefined;
   config: string;
   scope: ToolScope;
@@ -1554,6 +1560,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await cmdStatus(rest);
       case "init":
         return await cmdInit(rest);
+      case "setup":
+        return await (await import("./setup.ts")).cmdSetup(rest);
       case "doctor":
         return await cmdDoctor(rest);
       case "onboarding":

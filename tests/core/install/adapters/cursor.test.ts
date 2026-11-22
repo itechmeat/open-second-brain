@@ -121,6 +121,30 @@ describe("cursor adapter", () => {
     expect(after2).toBe(after1);
   });
 
+  test("refreshes origin version without rewriting unchanged host config", () => {
+    const origin = {
+      kind: "registry" as const,
+      root: join(home, "node_modules", "open-second-brain"),
+      version: "2.0.0",
+    };
+    const v1 = { ...makeEnv(), origin };
+    const p = payload();
+    cursorAdapter.apply(cursorAdapter.plan(p, v1), p, v1, applyOpts());
+    const hostBefore = readFileSync(cursorConfigPath(), "utf8");
+    const appliedAt = readManifest(vault).installs.cursor!.applied_at;
+    const v2 = {
+      ...v1,
+      now: new Date("2026-05-21T12:00:00.000Z"),
+      origin: { ...origin, version: "2.0.1" },
+    };
+
+    cursorAdapter.apply(cursorAdapter.plan(p, v2), p, v2, applyOpts());
+
+    expect(readFileSync(cursorConfigPath(), "utf8")).toBe(hostBefore);
+    expect(readManifest(vault).installs.cursor?.origin).toEqual(v2.origin);
+    expect(readManifest(vault).installs.cursor?.applied_at).toBe(appliedAt);
+  });
+
   test("apply preserves unrelated mcpServers keys", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
     writeFileSync(

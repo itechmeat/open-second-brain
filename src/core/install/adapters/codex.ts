@@ -424,7 +424,7 @@ export const codexAdapter: InstallAdapter = {
       owned_keys: [...SERVER_NAMES],
       ...(viaCli ? {} : { fallback_file: configPath(env) }),
     };
-    if (!opts.dryRun) recordEntry(env.vault, manifest);
+    if (!opts.dryRun) recordEntry(env, manifest);
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 1 };
   },
 

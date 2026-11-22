@@ -148,7 +148,7 @@ export const piAdapter: InstallAdapter = {
         const canonicalSource = resolve(source);
         if (current === canonicalSource) {
           const manifest = buildManifest(env, target);
-          if (!opts.dryRun) recordEntry(env.vault, manifest);
+          if (!opts.dryRun) recordEntry(env, manifest);
           return { target: TARGET, manifest, steps_executed: 0 };
         }
         if (!opts.dryRun) rmSync(target, { force: true });
@@ -171,7 +171,7 @@ export const piAdapter: InstallAdapter = {
     }
 
     const manifest = buildManifest(env, target);
-    if (!opts.dryRun) recordEntry(env.vault, manifest);
+    if (!opts.dryRun) recordEntry(env, manifest);
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 1 };
   },
 

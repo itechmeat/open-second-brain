@@ -1,6 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   readManifest,
@@ -9,10 +8,13 @@ import {
   manifestPath,
 } from "../../../src/core/install/manifest.ts";
 import type { ManifestEntry } from "../../../src/core/install/types.ts";
+import type { InstallOrigin } from "../../../src/core/install/origin.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
 
 let vault: string;
+const mkTemp = tempDirs();
 beforeEach(() => {
-  vault = mkdtempSync(join(tmpdir(), "osb-manifest-"));
+  vault = mkTemp("osb-manifest-");
   // A legacy vault: it keeps its machine state. A vault with no `Brain/`
   // is store-only and keeps that state device-local instead.
   mkdirSync(join(vault, "Brain"), { recursive: true });
@@ -22,6 +24,12 @@ afterEach(() => {
     rmSync(vault, { recursive: true, force: true });
   } catch {}
 });
+
+function installEnv(
+  origin: InstallOrigin = { kind: "checkout", root: "unknown", version: "unknown" },
+) {
+  return { vault, home: vault, cwd: vault, env: {}, now: new Date(), origin };
+}
 
 describe("install manifest sidecar", () => {
   test("manifestPath lives under <vault>/.open-second-brain/install.lock.json", () => {
@@ -42,22 +50,60 @@ describe("install manifest sidecar", () => {
       config_path: "/home/u/.cursor/mcp.json",
       owned_keys: ["mcpServers.open-second-brain"],
     };
-    recordEntry(vault, entry);
+    recordEntry(installEnv(), entry);
     const m = readManifest(vault);
-    expect(m.installs.cursor).toEqual(entry);
+    expect(m.installs.cursor).toEqual({ ...entry, origin: installEnv().origin });
     const raw = readFileSync(manifestPath(vault), "utf8");
     expect(raw.endsWith("\n")).toBe(true);
   });
 
+  test("recordEntry stamps the origin supplied by the install environment", () => {
+    const origin = {
+      kind: "registry" as const,
+      root: join(vault, "prefix/node_modules/open-second-brain"),
+      version: "2.0.0",
+    };
+    recordEntry(installEnv(origin), {
+      target: "cursor",
+      applied_at: "2026-05-20T12:00:00.000Z",
+      operation: "json-merge",
+      config_path: "/home/u/.cursor/mcp.json",
+    });
+    expect(readManifest(vault).installs.cursor?.origin).toEqual(origin);
+  });
+
+  test("a manifest entry without origin reads as a legacy checkout", () => {
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    writeFileSync(
+      manifestPath(vault),
+      JSON.stringify({
+        schema_version: 1,
+        installs: {
+          cursor: {
+            target: "cursor",
+            applied_at: "2026-05-20T12:00:00.000Z",
+            operation: "json-merge",
+            config_path: "/home/u/.cursor/mcp.json",
+          },
+        },
+      }),
+    );
+    expect(readManifest(vault).installs.cursor?.origin).toEqual({
+      kind: "checkout",
+      root: "unknown",
+      version: "unknown",
+    });
+  });
+
   test("recordEntry overwrites existing entry for the same target", () => {
-    recordEntry(vault, {
+    recordEntry(installEnv(), {
       target: "cursor",
       applied_at: "2026-05-20T12:00:00.000Z",
       operation: "json-merge",
       config_path: "/a",
       owned_keys: ["mcpServers.open-second-brain"],
     });
-    recordEntry(vault, {
+    recordEntry(installEnv(), {
       target: "cursor",
       applied_at: "2026-05-20T12:05:00.000Z",
       operation: "json-merge",
@@ -70,14 +116,14 @@ describe("install manifest sidecar", () => {
   });
 
   test("removeEntry deletes the named target only", () => {
-    recordEntry(vault, {
+    recordEntry(installEnv(), {
       target: "cursor",
       applied_at: "2026-05-20T12:00:00.000Z",
       operation: "json-merge",
       config_path: "/a",
       owned_keys: ["mcpServers.open-second-brain"],
     });
-    recordEntry(vault, {
+    recordEntry(installEnv(), {
       target: "pi",
       applied_at: "2026-05-20T12:00:00.000Z",
       operation: "symlink",

@@ -15,6 +15,7 @@ import type {
   ResolvedSessionRoot,
   SessionRuntimeId,
 } from "../runtime/host-facts.ts";
+import type { InstallOrigin } from "./origin.ts";
 
 // ---------- Constant sets (runtime checkable) ----------
 
@@ -65,6 +66,8 @@ export interface InstallEnv {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly now: Date;
+  /** Production environments come from buildInstallEnv; legacy hand-built callers omit it. */
+  readonly origin?: InstallOrigin;
 }
 
 export interface DetectResult {
@@ -121,6 +124,7 @@ export interface ManifestEntry {
   readonly fallback_file?: string | null;
   /** SHA-256 of the last applied MCP payload (update orchestrator). */
   readonly payload_hash?: string;
+  readonly origin?: InstallOrigin;
 }
 
 export interface ApplyResult {

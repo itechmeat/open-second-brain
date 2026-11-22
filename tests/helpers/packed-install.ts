@@ -82,6 +82,9 @@ function makeEnvironment(
   const bunGlobal = join(root, "bun-global");
   const bunBin = join(root, "bun-bin");
   const bunCache = join(root, "bun-cache");
+  const codexHome = join(root, "codex");
+  const grokHome = join(root, "grok");
+  const piHome = join(root, "pi");
   const npmPrefix = manager === "npm" ? join(root, "npm-prefix") : join(root, "npm-unused-prefix");
   const npmCache = join(root, "npm-cache");
   const configPath = join(root, "app", "config.yaml");
@@ -98,6 +101,9 @@ function makeEnvironment(
     bunCache,
     npmPrefix,
     npmCache,
+    codexHome,
+    grokHome,
+    piHome,
     dirname(configPath),
     storeRoot,
     join(root, "work"),
@@ -128,6 +134,9 @@ function makeEnvironment(
     npm_config_globalconfig: globalConfig,
     OPEN_SECOND_BRAIN_CONFIG: configPath,
     OPEN_SECOND_BRAIN_STORE_ROOT: storeRoot,
+    CODEX_HOME: codexHome,
+    GROK_HOME: grokHome,
+    PI_HOME: piHome,
   };
   mkdirSync(env.TMPDIR!, { recursive: true });
   if (process.platform === "win32") {
@@ -151,6 +160,9 @@ function makeEnvironment(
     bunCache,
     npmPrefix,
     npmCache,
+    codexHome,
+    grokHome,
+    piHome,
     userConfig,
     globalConfig,
     configPath,

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { tempDirs } from "../../helpers/temp-dir.ts";
 
 import {
   COMMAND_PROBE_VERDICT,
@@ -9,11 +10,12 @@ import {
   probeCommandResolvability,
 } from "../../../src/core/install/command-probe.ts";
 
+const mkTemp = tempDirs();
 let tmp: string;
 let binDir: string;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "o2b-command-probe-"));
+  tmp = mkTemp("o2b-command-probe-");
   binDir = join(tmp, "bin");
   mkdirSync(binDir, { recursive: true });
 });
@@ -88,6 +90,15 @@ describe("probeCommandResolvability - bare names", () => {
 });
 
 describe("probeCommandResolvability - runner script arguments", () => {
+  test("a registry Bun run command with a missing launcher is absent", () => {
+    const bun = join(binDir, "bun");
+    writeFileSync(bun, "");
+    const launcher = join(tmp, "global", "node_modules", "open-second-brain", "bin", "o2b.js");
+    const out = probeCommandResolvability(bun, ["run", launcher, "mcp"], ctx());
+    expect(out.verdict).toBe(COMMAND_PROBE_VERDICT.absent);
+    expect(out.detail).toContain(launcher);
+  });
+
   test("a resolved runner with a missing script argument is one absent finding naming the script", () => {
     writeFileSync(join(binDir, "bun"), "");
     const script = join(tmp, "old-repo", "src", "cli", "main.ts");

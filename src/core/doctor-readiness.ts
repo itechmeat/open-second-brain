@@ -83,9 +83,10 @@
  * proved `fail`, because the operative host never sees the gate.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 
-import { discoverConfig } from "./config.ts";
+import { defaultConfigPath, discoverConfig } from "./config.ts";
 import { homedir } from "node:os";
 import { resolveDecisionModelConfig } from "./decision-model/config.ts";
 import {
@@ -116,6 +117,8 @@ import {
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./install/json-merge.ts";
 import { parseJsoncObject } from "./install/jsonc.ts";
 import { readManifest } from "./install/manifest.ts";
+import { buildInstallEnv } from "./install/env.ts";
+import { OPEN_SECOND_BRAIN_VERSION } from "./version.ts";
 import { buildPayload } from "./install/payload.ts";
 import { defaultRegistry } from "./install/registry.ts";
 import { registerAllAdapters } from "./install/adapters/all.ts";
@@ -711,13 +714,13 @@ function installEnvFor(opts: ReadinessOptions): InstallEnv {
   for (const [k, v] of Object.entries(rawEnv)) {
     if (typeof v === "string") cleanEnv[k] = v;
   }
-  return {
+  return buildInstallEnv({
     vault: opts.vault,
+    configPath: opts.config ?? defaultConfigPath(),
     home: opts.home ?? process.env["HOME"] ?? opts.vault,
     cwd: opts.cwd ?? process.cwd(),
     env: cleanEnv,
-    now: new Date(),
-  };
+  });
 }
 
 /**
@@ -743,7 +746,12 @@ export async function probeRuntimeAdapterWiring(opts: ReadinessOptions): Promise
   const env = installEnvFor(opts);
   let payload;
   try {
-    payload = buildPayload({ vault: opts.vault, agent_name: null, timezone: null });
+    payload = buildPayload({
+      vault: opts.vault,
+      agent_name: null,
+      timezone: null,
+      configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"],
+    });
   } catch (err) {
     return {
       status: READINESS_STATUS.fail,
@@ -983,16 +991,20 @@ export async function probeRegisteredCommands(opts: ReadinessOptions): Promise<R
   } catch (err) {
     return {
       status: READINESS_STATUS.unknown,
-      detail:
+      detail: withPathProviderNote(
         "install manifest could not be read, so no registered command could be probed: " +
-        flattenReason((err as Error).message),
+          flattenReason((err as Error).message),
+        { env: opts.env ?? process.env },
+      ),
     };
   }
   const installs = Object.values(manifest.installs);
   if (installs.length === 0) {
     return {
       status: READINESS_STATUS.skipped,
-      detail: "install manifest records no installs; nothing to probe",
+      detail: withPathProviderNote("install manifest records no installs; nothing to probe", {
+        env: opts.env ?? process.env,
+      }),
     };
   }
   const env = installEnvFor(opts);
@@ -1002,7 +1014,10 @@ export async function probeRegisteredCommands(opts: ReadinessOptions): Promise<R
   // Worst rows lead the detail; toSorted is stable, so within one bucket
   // the manifest's own order stands.
   const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
-  const rowText = ordered.map((row) => `${row.target}: ${row.detail}`).join("; ");
+  const rowText = withPathProviderNote(
+    ordered.map((row) => `${row.target}: ${row.detail}`).join("; "),
+    context,
+  );
   const census =
     `(${counts.pass} pass, ${counts.fail} fail, ` +
     `${counts.unknown} unknown, ${counts.skipped} skipped)`;
@@ -1089,7 +1104,7 @@ function registeredCommandRow(
           flattenReason(extraction.reason),
       };
     case "entries":
-      return probeRegisteredEntries(target, configPath, extraction.entries, context);
+      return probeRegisteredEntries(target, configPath, extraction.entries, context, entry.origin);
   }
 }
 
@@ -1098,6 +1113,7 @@ function probeRegisteredEntries(
   configPath: string,
   entries: ReadonlyArray<RegisteredCommandEntry>,
   context: CommandProbeContext,
+  origin: ManifestEntry["origin"],
 ): RegisteredCommandRow {
   const summaries: string[] = [];
   let worst: ReadinessStatus = READINESS_STATUS.pass;
@@ -1119,15 +1135,62 @@ function probeRegisteredEntries(
     }
     const status = statusForProbeOutcome(outcome);
     // The recovery line rides exactly the rows that proved their fault.
+    const setupFix = `o2b setup --target ${target} --apply --yes`;
     const summary =
       `command '${entry.command}': ${outcome.detail}` +
       (outcome.verdict === COMMAND_PROBE_VERDICT.absent
-        ? ` - fix: o2b install ${target} --apply`
+        ? origin?.kind === "registry"
+          ? `; stale_registration: fix: ${setupFix}`
+          : ` - fix: o2b install ${target} --apply`
+        : "") +
+      (isOlderVersion(origin?.version, OPEN_SECOND_BRAIN_VERSION)
+        ? `; registration_version: ${origin!.version} is older than running ${OPEN_SECOND_BRAIN_VERSION}; fix: ${setupFix}`
         : "");
     if (!summaries.includes(summary)) summaries.push(summary);
     if (readinessRank(status) < readinessRank(worst)) worst = status;
   }
   return { target, status: worst, detail: summaries.join("; ") };
+}
+
+function isOlderVersion(recorded: string | undefined, running: string): boolean {
+  if (!recorded || recorded === "unknown") return false;
+  const parse = (version: string) =>
+    /^v?(\d+)\.(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number) ?? null;
+  const oldParts = parse(recorded);
+  const currentParts = parse(running);
+  if (!oldParts || !currentParts) return false;
+  for (let i = 0; i < 3; i++) {
+    if (oldParts[i]! < currentParts[i]!) return true;
+    if (oldParts[i]! > currentParts[i]!) return false;
+  }
+  return false;
+}
+
+function withPathProviderNote(detail: string, context: CommandProbeContext): string {
+  const env = context.env ?? process.env;
+  const paths = typeof env["PATH"] === "string" ? env["PATH"]! : "";
+  const extensions =
+    process.platform === "win32"
+      ? ["", ...(env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")]
+      : [""];
+  const providers: string[] = [];
+  for (const directory of paths.split(delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = join(directory, `o2b${extension.toLowerCase()}`);
+      try {
+        if (!existsSync(candidate)) continue;
+        const stats = statSync(candidate);
+        if (!stats.isFile()) continue;
+        if (process.platform !== "win32" && (stats.mode & 0o111) === 0) continue;
+        const real = realpathSync(candidate);
+        if (!providers.includes(real)) providers.push(real);
+      } catch {
+        // A PATH component that cannot be read is not evidence of a provider.
+      }
+    }
+  }
+  if (providers.length < 2) return detail;
+  return `${detail}; path_providers: multiple o2b files on PATH; first runs ${providers[0]}; also found ${providers.slice(1).join(", ")} (information)`;
 }
 
 // ----- client_versions (t_8e49ec96) -----------------------------------------

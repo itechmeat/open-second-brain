@@ -42,6 +42,8 @@ const SITES: Readonly<Record<string, string>> = Object.freeze({
 const EXEC_PATH_ELSEWHERE: Readonly<Record<string, string>> = Object.freeze({
   "src/core/install/grok-asset.ts":
     "writes the absolute command grok runs into its host config; nothing is spawned",
+  "src/core/install/payload.ts":
+    "writes the absolute command registered in an agent host config; nothing is spawned",
 });
 
 function sourceFiles(dir: string): string[] {

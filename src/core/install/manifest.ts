@@ -24,11 +24,13 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import type { ManifestEntry } from "./types.ts";
+import { installOrigin } from "./origin.ts";
+import type { InstallEnv, ManifestEntry } from "./types.ts";
 import { machineStatePath } from "../state/machine-state.ts";
 import { DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 
 const SUPPORTED_SCHEMA_VERSIONS = new Set<number>([1]);
+const LEGACY_ORIGIN = { kind: "checkout", root: "unknown", version: "unknown" } as const;
 
 export interface Manifest {
   readonly schema_version: 1;
@@ -64,17 +66,24 @@ export function readManifest(vault: string): Manifest {
       `install manifest schema_version ${sv} not supported (expected one of ${Array.from(SUPPORTED_SCHEMA_VERSIONS).join(", ")}): ${path}`,
     );
   }
-  const installs = (obj["installs"] ?? {}) as Record<string, ManifestEntry>;
+  const installs = Object.fromEntries(
+    Object.entries((obj["installs"] ?? {}) as Record<string, ManifestEntry>).map(
+      ([target, entry]) => [target, entry.origin ? entry : { ...entry, origin: LEGACY_ORIGIN }],
+    ),
+  );
   return { schema_version: 1, installs };
 }
 
-export function recordEntry(vault: string, entry: ManifestEntry): void {
-  const current = readManifest(vault);
+export function recordEntry(env: InstallEnv, entry: ManifestEntry): void {
+  const current = readManifest(env.vault);
   const next: Manifest = {
     schema_version: 1,
-    installs: { ...current.installs, [entry.target]: entry },
+    installs: {
+      ...current.installs,
+      [entry.target]: { ...entry, origin: env.origin ?? installOrigin() },
+    },
   };
-  writeManifest(vault, next);
+  writeManifest(env.vault, next);
 }
 
 export function removeEntry(vault: string, target: string): void {

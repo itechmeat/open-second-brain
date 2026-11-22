@@ -475,6 +475,12 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
  */
 export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/core/install/payload.ts",
+    "it computes the default config path only to COMPARE it with the configured one, so a host " +
+      "registration carries an explicit config path exactly when the launched server would not " +
+      "find it by default; it builds no out-of-vault path that it or anything else writes to",
+  ],
+  [
     "src/mcp/brain/device-path.ts",
     "the remote-reach redaction only names this machine's roots (home, temp, vault, store, " +
       "device state, config) to recognise them inside tool results and rewrite them; it builds " +
@@ -563,18 +569,6 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
     "same shape as the install verb: it resolves the home directory only to build the InstallEnv " +
       "the adapters receive, and the files that appear from it are the runtime_config_blocks row " +
       "written by those adapters",
-  ],
-  [
-    "src/cli/install/uninstall-target.ts",
-    "it builds `InstallEnv.home` to REMOVE what an adapter wrote, per that target's install " +
-      "manifest. A verb that only deletes cannot add a location an operator will find, and the " +
-      "locations it deletes are the runtime_config_blocks row",
-  ],
-  [
-    "src/cli/update.ts",
-    "it rebuilds the same `InstallEnv.home` to re-apply existing install targets after a plugin " +
-      "update; the files it can change are the runtime_config_blocks row, and it introduces no " +
-      "path of its own outside the vault",
   ],
   [
     "src/cli/uninstall.ts",

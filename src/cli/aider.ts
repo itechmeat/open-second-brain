@@ -83,6 +83,7 @@ async function cmdAiderWrap(argv: string[]): Promise<number> {
     vault,
     agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
     timezone: env.env["VAULT_TIMEZONE"] ?? null,
+    configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"],
   });
 
   const sidecarPath = resolveAiderSidecarPath(env, {});
