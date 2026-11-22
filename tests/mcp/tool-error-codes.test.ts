@@ -191,6 +191,8 @@ const TYPE_ONLY_MEMBERS = [
   "topic_invalid",
   "topic_unknown-topic",
   "topic_unreadable",
+  // a live dream path on a device that is not the dream owner
+  "dream_not_owner",
 ] as const;
 
 /** A core-style error class that, like several real ones, never sets `this.name`. */

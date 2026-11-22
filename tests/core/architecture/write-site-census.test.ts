@@ -997,6 +997,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "compressor reads that file and `snapshot.ts` publishes the archive. No vault page " +
       "is written and no Markdown parser reads the stream.",
   },
+  "src/core/brain/dream-owner/owner.ts": {
+    categories: [C.machineArtifact],
+    calls: ["writeFileSync"],
+    reason:
+      "notes the dream owner claim this device has already caught up on once, as a small " +
+      "JSON file in the store's device-local state directory (the claim settle rule, mirrored " +
+      "from the view writer's claim-seen file); it is never synced, never in a vault, and no " +
+      "Markdown parser reads it. The role's records go through the store appender.",
+  },
   "src/core/maintenance/self-heal-upgrade-state.ts": {
     categories: [C.lockPrimitive, C.retentionDelete],
     calls: ["unlinkSync", "writeFileSync"],
@@ -1435,8 +1444,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 84 -> 85: `src/core/brain/tar-extract.ts` extracts a snapshot's tar stream into a temp directory outside the vault.
  * 85 -> 84: `src/core/search/store/lifecycle.ts` moves the index's database set through `src/core/sqlite-file-set.ts` (fs-atomic retries) instead of calling `fs` itself.
  * 84 -> 85: `src/core/search/store/lifecycle.ts` removes the park record a swap writes beside the search index once a live index is back in place.
+ * 85 -> 86: `src/core/brain/dream-owner/owner.ts` notes the dream owner claim this device has caught up on, in device-local state.
  */
-const DIRECT_WRITE_ROWS = 85;
+const DIRECT_WRITE_ROWS = 86;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1833,8 +1843,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 83 -> 84: the in-process tar reader of every restore (a temp extraction folder, no note).
  * 84 -> 83: the search index's crash restore moves its database set through `sqlite-file-set.ts` (fs-atomic retries, no direct `fs` call).
  * 83 -> 84: the removal of the park record a swap writes beside the search index (machine state, no note).
+ * 84 -> 85: the dream owner's claim-seen file (device-local machine state, no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 84;
+const UNSTAMPED_DIRECT_ROWS = 85;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

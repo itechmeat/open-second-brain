@@ -126,6 +126,8 @@ export interface MaintenanceJournalEntry {
    * carrying the failure without one.
    */
   readonly receipt?: MaintenanceSpendReceipt;
+  /** Why an `ok` task row did nothing on this device (the dream task off the owner's device). */
+  readonly skipped?: string;
 }
 
 /**

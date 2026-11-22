@@ -1421,6 +1421,26 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       ],
     ),
     command(
+      "dream",
+      "Dream owner verbs: who runs live dream passes on this brain",
+      [],
+      [
+        command(
+          "owner",
+          "Show the dream owner, or take (--here), force (--force) or give up (--release) the role",
+          [
+            flag("here", "boolean"),
+            flag("agent", "string"),
+            flag("force", "boolean"),
+            flag("release", "boolean"),
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
+      ],
+    ),
+    command(
       "topic",
       "Topics: list, show and change them by recording topic events",
       [],

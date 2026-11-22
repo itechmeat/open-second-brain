@@ -8,13 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - Three cross-platform registry launchers provide `o2b`, `o2b-mcp` and `o2b-hook` with Bun on `PATH` as the prerequisite. `vault-log` is excluded because it dispatches to the nonexistent `append-event` command.
 - The package has an explicit runtime file allowlist and a checked manifest of packed paths and size ceilings.
-
 ### Changed
-
 - Removed the `prepare` lifecycle script so package installation runs no lifecycle scripts. Git hooks remain available through `bun run hooks:install`.
+### Changed (breaking)
+- **A live dream pass runs only on the dream owner's device, on a brain that has an owner.** Every brain in the brain store now has at most one dream owner: one agent installation on one device. On any other device a live `o2b brain dream`, its staged `stage`, `apply`, `discard` and `retriage`, the writing step `--step heal-enrich` and `brain_dream` are refused with the error code `dream_not_owner` (the CLI exits 1 with one `error:` line naming the owner's device and agent and `o2b dream owner --here`) before a model is asked or anything is written, where a non-primary run used to complete with a warning. The maintenance lane records its dream task as skipped with the reason there and runs its other tasks, exit code unchanged. Dry runs and previews answer on every device. A brain with no owner record, which is every brain from before this change until it is adopted, and a brain whose records still live in the legacy `Brain/` tree keep running live passes from any device as before, with the existing `non-primary-dream-run` warning.
+### Added
+- **The dream owner, its status and its transfer.** `o2b dream owner` shows the owner's device and agent, whether this device is the owner, the revision and a pending transfer; `--here` takes the role (it adopts a brain with no owner, changes the agent at once on the owner's device, and from another device records a request the owner's device releases the next time it looks: a live pass, its status, or the maintenance a session start or an MCP server start runs); `--here --force` takes the role without a release, for an owner device that is lost, and warns that the old owner may keep running until the forced claim reaches it; `--release` gives the role up. The MCP tool `brain_dream_owner` offers `status` at every reach (device and agent names, no host path) and `take` and `release` at local reach, with agent authority and no forced transfer. The role lives in three `shared` settings record kinds (`dream-owner-claim`, `dream-owner-request`, `dream-owner-released`) folded the same way on every device; a device that took the role by its own claim runs its first live pass from the look after the one that first saw it, and a live pass holds a device-local pass lock under which every release is written, so a pass in progress finishes before the role moves.
+- **The installation that creates a brain becomes its dream owner.** `o2b init`, `o2b brain init` with no vault and `o2b store init` claim the role for this device and the configured agent when they create the store of a new brain; with no agent name they claim nothing and print how to choose one. Attaching another device, initialising again and the store migration never change the owner.
+- **Doctor reports the dream owner.** `dream-owner-unbound` (naming a declared `primary_agent` as the requested owner), `dream-owner-elsewhere` (only where the declared `primary_agent` is the agent this machine runs as, so a machine that merely previews stays clean), `dream-owner-pending` and `dream-owner-agent-differs`, as advice in `o2b brain doctor` and `brain_doctor`.
+- **A dream pass names its owner.** On a brain with an owner the pass summary carries `owner` (device and agent) and `caller`, and its log event `dream_owner_device`, `dream_owner_agent` and `caller_agent`: any agent on the owner's device may start the pass.
+- **`o2b brain set-primary <name>` follows the owner.** On a brain with an owner it changes the owner's agent on the owner's device and refuses elsewhere with `dream_not_owner`; on a brain with no owner it writes the declared name as before.
+- **The managed instruction block says who runs dream.** The block `o2b install` writes no longer tells an agent not to run dream in that project; it says dream runs on the dream owner's device and to ask `o2b dream owner` (or `brain_dream_owner`) before a live pass.
+
 
 ### Fixed
 

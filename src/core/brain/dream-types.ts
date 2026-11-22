@@ -146,6 +146,16 @@ export interface DreamRunSummary {
    */
   readonly topics?: DreamTopicsOutcome;
   /**
+   * The dream owner the live pass ran under (change `agent-neutral-dream`):
+   * its device and agent. Absent on a brain with no owner and on a dry run.
+   */
+  readonly owner?: { readonly device: string; readonly agent: string };
+  /**
+   * The agent that started the pass, beside {@link owner}: any agent on
+   * the owner's device may start one. Absent where `owner` is.
+   */
+  readonly caller?: string;
+  /**
    * Sub-operations the dream pass attempted but could not fully
    * verify. Empty on every clean run; populated by future
    * uncertainty-surfacing paths (v0.10.16).

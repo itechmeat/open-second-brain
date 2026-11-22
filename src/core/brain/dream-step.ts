@@ -41,6 +41,12 @@
 
 import { scanBrain } from "./dream.ts";
 import { DREAM_PHASE, type DreamPhase } from "./dream-phases.ts";
+import {
+  assertDreamOwner,
+  recheckDreamOwner,
+  recheckUnboundDreamOwner,
+} from "./dream-owner/gate.ts";
+import { withDreamPassLock } from "./dream-owner/owner.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { vaultRelative } from "./paths.ts";
 import type { ProgressSink } from "./progress.ts";
@@ -169,6 +175,8 @@ export interface DreamStepOptions {
   readonly safeguard?: Safeguard;
   /** Where the step reports; absence means nobody asked. */
   readonly onProgress?: ProgressSink;
+  /** The machine config the dream owner gate reads; absent: the default config. */
+  readonly configPath?: string;
 }
 
 /**
@@ -198,14 +206,32 @@ export function runDreamStep(
       } satisfies DreamScanStepResult);
     }
     case DREAM_STEP.healEnrich: {
-      const result = runHealEnrichment(vault, opts);
-      return Object.freeze({
-        step: DREAM_STEP.healEnrich,
-        partial: true,
-        scanned: result.scanned,
-        enriched: result.enriched,
-        pages: Object.freeze([...result.pages]),
-      } satisfies DreamHealEnrichStepResult);
+      // The writing step is a live pass for the dream owner gate (design D2).
+      const gate = assertDreamOwner(vault, {
+        live: true,
+        ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+      });
+      const run = (): DreamHealEnrichStepResult => {
+        const result = runHealEnrichment(vault, opts);
+        return Object.freeze({
+          step: DREAM_STEP.healEnrich,
+          partial: true,
+          scanned: result.scanned,
+          enriched: result.enriched,
+          pages: Object.freeze([...result.pages]),
+        } satisfies DreamHealEnrichStepResult);
+      };
+      if (gate.status === "unbound" && gate.store !== null) {
+        return withDreamPassLock(gate.store, () => {
+          recheckUnboundDreamOwner(gate.store!);
+          return run();
+        });
+      }
+      if (gate.status !== "owner") return run();
+      return withDreamPassLock(gate.store, () => {
+        recheckDreamOwner(gate);
+        return run();
+      });
     }
     default:
       throw new DreamStepNotRunnableError(step, refusalReason(step));

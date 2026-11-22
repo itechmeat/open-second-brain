@@ -77,6 +77,17 @@ import {
 } from "./dream-plan-cross-topic.ts";
 import { planRefresh, scanApplyEvidence } from "./dream-refresh.ts";
 import { writeDreamLog } from "./dream-report.ts";
+import {
+  assertDreamOwner,
+  recheckDreamOwner,
+  recheckUnboundDreamOwner,
+} from "./dream-owner/gate.ts";
+import { withDreamPassLock } from "./dream-owner/owner.ts";
+import {
+  dreamOwnerGateOptions,
+  withOwnerTag,
+  type DreamOwnerTag,
+} from "./dream-owner/pass-record.ts";
 import { scanBrain } from "./dream-scan.ts";
 import { planSignalArchive } from "./signal-archive.ts";
 import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
@@ -213,6 +224,35 @@ function scanAsAdmitted(
  * the whole distinction `SafeguardAbortError` exists to preserve.
  */
 export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSummary {
+  // The dream owner gate (dream-owner/gate.ts) comes first, before the
+  // tail wrappers and the lane-id repair write: a live pass on a device
+  // that is not the owner writes nothing. The owner's live pass holds the
+  // device-local pass lock for its whole length and checks the role again
+  // once it holds it. A look that finds the lock held leaves its release
+  // to the next look; `o2b dream owner --release` refuses after the wait.
+  const gate = assertDreamOwner(vault, dreamOwnerGateOptions(opts));
+  if (gate.status === "preview") return dreamPass(vault, opts, null);
+  if (gate.status === "unbound") {
+    if (gate.store === null) return dreamPass(vault, opts, null);
+    return withDreamPassLock(gate.store, () => {
+      recheckUnboundDreamOwner(gate.store!);
+      return dreamPass(vault, opts, null);
+    });
+  }
+  return withDreamPassLock(gate.store, () => {
+    // A release written between the gate and the lock moved the role:
+    // look again under the lock, before any write.
+    const owner = recheckDreamOwner(gate);
+    return withOwnerTag(dreamPass(vault, opts, owner), owner, opts.agentName);
+  });
+}
+
+/** The pass itself, once the owner gate let it through (see {@link dream}). */
+function dreamPass(
+  vault: string | null,
+  opts: DreamOptions,
+  owner: DreamOwnerTag | null,
+): DreamRunSummary {
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
   // cannot be allowed to abort a pass that is otherwise succeeding. Nor
@@ -234,7 +274,7 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
     const summary = withViewPass(
       afterStep(
         withTopicPass(
-          afterStep(withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults))),
+          afterStep(withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults, owner))),
           opts,
           {
             start: () => progress.start(DREAM_STAGE.topics),
@@ -322,6 +362,7 @@ function dreamRun(
   opts: DreamOptions,
   progress: ProgressCounter,
   progressFaults: ReadonlyArray<string>,
+  owner: DreamOwnerTag | null,
 ): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
@@ -359,8 +400,12 @@ function dreamRun(
   const wikilinkToRun = logShardWikilink(isoDate(now));
 
   const callerAgent = opts.agentName?.trim() ?? "";
+  // A brain with a dream owner names the owner instead (`owner` below).
   const isNonPrimary =
-    cfg.primary_agent !== null && callerAgent.length > 0 && callerAgent !== cfg.primary_agent;
+    owner === null &&
+    cfg.primary_agent !== null &&
+    callerAgent.length > 0 &&
+    callerAgent !== cfg.primary_agent;
   const warnings = collectWarnings(isNonPrimary, callerAgent, cfg.primary_agent);
 
   // 0. Scan the whole Brain/ tree. Corrupted files (frontmatter
@@ -632,6 +677,7 @@ function dreamRun(
       gatedSlugs,
       isNonPrimary,
       callerAgent,
+      ...(owner !== null ? { owner } : {}),
       workrun,
     });
 

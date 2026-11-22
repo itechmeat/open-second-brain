@@ -349,6 +349,47 @@ If the view writer stays silent for more than 3 days, doctor on every
 machine reports `view-writer-silent` and names the command to move the
 role. Pages go stale meanwhile, but no data is lost.
 
+### The dream owner
+
+Exactly one device runs live dream passes on the brain: the **dream
+owner**, one agent installation on one device. The installation that
+creates the brain (`o2b init`, `o2b store init`) becomes the owner when
+its agent name is known; with no agent name the brain has no owner and
+the command prints how to choose one. Attaching another device, running
+init again, the migration and starting another agent's plugin never
+change the owner. Ask who it is on any machine:
+
+```bash
+o2b dream owner
+```
+
+The answer names the owner's device and agent, whether this machine is
+the owner, the revision and a transfer in progress. To move the role,
+run `o2b dream owner --here` on the machine that should own dream: on
+the owner's machine `--agent <name>` changes the agent at once; on
+another machine it records a request, and the owner's machine hands the
+role over the next time it looks (a dream pass, `o2b dream owner`, or a
+session start). `--here --force` takes the role at once when the old
+owner is lost; that machine may keep running passes until its first
+catch-up after the forced claim reaches it. `--release` gives the role
+up. Agents use the MCP tool `brain_dream_owner` (`status`, and `take`
+and `release` at local reach).
+
+On every other machine a live `o2b brain dream`, its staged lifecycle,
+`brain_dream` and the maintenance lane's dream task are refused with
+`dream_not_owner` before anything is asked or written (the lane skips
+its dream task and runs the rest); dry runs answer everywhere. A machine
+that took the role by its own claim runs its first live pass from the
+look after the one that first saw it, so a rival claim still in transit
+has a chance to arrive.
+
+A brain from before the dream owner has no owner record and works as
+before (a live pass from any machine) until you adopt it with
+`o2b dream owner --here` on the machine that should own dream; a
+declared `primary_agent` is shown as the requested owner. Run a release
+with the dream owner on every machine of the brain before you rely on
+the role: an older binary does not know the gate.
+
 ### Editing pages on a phone
 
 Sync the view folder to your phone and edit a page in any Markdown editor.
@@ -1583,6 +1624,10 @@ that come from the store, the migration and the view:
 | `legacy-tree-reappeared` | A `Brain/` folder is back in the vault after the legacy tree was removed. | Stop the writer the finding names and move the folder out of the vault. |
 | `migration-done-twice` | Two devices each ran the first migration of this vault, before either completion record had synced, so items both imported are in the store twice. | Nothing is lost and both records stay. Migrate every other machine only after one completion record has synced. |
 | `view-writer-silent` | The view writer has published nothing for more than 3 days. | Run `o2b view writer --here` on the machine that should render the view, with `--force` if the old writer is unreachable. |
+| `dream-owner-unbound` | No dream owner is bound, so a live dream pass runs from any machine; a declared `primary_agent` is named as the requested owner. Advice. | Run `o2b dream owner --here --agent <name>` on the machine that should run dream. |
+| `dream-owner-elsewhere` | Another machine is the dream owner although the declared `primary_agent` is the agent this machine runs as; this one runs no live pass and its maintenance lane skips dream. Not reported on a machine that merely previews, the normal state of every machine but the owner. Advice. | Nothing, or move the role with `o2b dream owner --here`. |
+| `dream-owner-pending` | A transfer of the dream owner role waits for the owner's machine to release it. Advice. | On the owner's machine, run `o2b dream owner` or start a session. |
+| `dream-owner-agent-differs` | The declared `primary_agent` is not the dream owner's agent. Advice. | On the owner's machine, run `o2b dream owner --here --agent <name>` or `o2b brain set-primary <name>`; both change the owner's agent, and `set-primary` also sets the declared name. On any other machine `set-primary <name>` refuses. |
 
 Other questions that come up:
 

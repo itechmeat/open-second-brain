@@ -278,6 +278,20 @@ export interface MaintenanceTask {
   readonly run: () => Promise<MaintenanceSpendReceipt | void>;
 }
 
+/**
+ * Thrown by a task that has nothing to do on this device, with the reason:
+ * the lane records the task as skipped, not failed, and runs the rest
+ * (the dream task on a device that is not the dream owner).
+ */
+export class MaintenanceTaskSkipped extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "MaintenanceTaskSkipped";
+    this.reason = reason;
+  }
+}
+
 export interface RunMaintenanceOptions extends EvaluateGatesOptions {
   readonly holder: string;
   readonly tasks: ReadonlyArray<MaintenanceTask>;
@@ -308,6 +322,8 @@ export interface MaintenanceTaskResult {
   readonly failure_streak?: number;
   /** Model spend the task accounted for, when its run returned a receipt. */
   readonly receipt?: MaintenanceSpendReceipt;
+  /** Why the task did nothing on this device ({@link MaintenanceTaskSkipped}); `ok` stays true. */
+  readonly skipped?: string;
 }
 
 export interface RunMaintenanceResult {
@@ -627,6 +643,7 @@ export async function runMaintenance(
       let error: string | undefined;
       let timedOut = false;
       let receipt: MaintenanceSpendReceipt | undefined;
+      let skipped: string | undefined;
       try {
         // Sequential by design: the lane exists to serialize heavy work.
         // eslint-disable-next-line no-await-in-loop
@@ -635,14 +652,18 @@ export async function runMaintenance(
         // it - a receipt is always an object.
         if (produced) receipt = produced;
       } catch (exc) {
-        ok = false;
-        timedOut = exc instanceof SafeguardTimeoutError;
-        // Caps keep a pathological error string from flooding the
-        // journal and every status render downstream.
-        error = capOutput(
-          exc instanceof Error ? exc.message : String(exc),
-          LANE_ERROR_MAX_BYTES,
-        ).text;
+        if (exc instanceof MaintenanceTaskSkipped) {
+          skipped = exc.reason;
+        } else {
+          ok = false;
+          timedOut = exc instanceof SafeguardTimeoutError;
+          // Caps keep a pathological error string from flooding the
+          // journal and every status render downstream.
+          error = capOutput(
+            exc instanceof Error ? exc.message : String(exc),
+            LANE_ERROR_MAX_BYTES,
+          ).text;
+        }
       }
       const duration = Date.now() - startedAt;
       results.push({
@@ -652,6 +673,7 @@ export async function runMaintenance(
         ...(error ? { error } : {}),
         ...(timedOut ? { timed_out: true } : {}),
         ...(receipt ? { receipt } : {}),
+        ...(skipped !== undefined ? { skipped } : {}),
       });
       appendJournal(vault, {
         ts: nowIso,
@@ -663,6 +685,7 @@ export async function runMaintenance(
         ...(error ? { error } : {}),
         ...(timedOut ? { timed_out: true } : {}),
         ...(receipt ? { receipt } : {}),
+        ...(skipped !== undefined ? { skipped } : {}),
       });
     }
     // The cap rewrite happens only here, while the lease is held -

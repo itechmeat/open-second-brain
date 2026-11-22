@@ -48,6 +48,7 @@ import {
   validateDreamBundle,
   type DreamRetriageEntry,
 } from "../../../core/brain/dream-stage.ts";
+import { assertDreamOwner, DreamNotOwnerError } from "../../../core/brain/dream-owner/gate.ts";
 import {
   createSafeguard,
   OPERATION,
@@ -140,6 +141,28 @@ function printStepResult(result: DreamStepResult): void {
 }
 
 export async function cmdBrainDream(argv: string[]): Promise<number> {
+  try {
+    return await brainDream(argv);
+  } catch (exc) {
+    // The dream owner gate (design D2): a live path on a device that is
+    // not the owner exits 1 with one `error:` line naming the owner and
+    // the transfer command, and wrote nothing.
+    if (!(exc instanceof DreamNotOwnerError)) throw exc;
+    if (argv.includes("--json")) {
+      okJson({
+        ok: false,
+        code: exc.code,
+        reason: exc.reason,
+        owner: exc.owner,
+        message: exc.message,
+      });
+      return 1;
+    }
+    return fail(exc.message);
+  }
+}
+
+async function brainDream(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     "dry-run": { type: "boolean" },
@@ -238,6 +261,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   const verbContext = brainVerbContext(flags, { vault: "optional" });
   const { config, vault } = verbContext;
   const vaultFor = (what: string): string => requireBrainVaultFor(verbContext, what);
+  const configOpt = config !== undefined ? { configPath: config } : {};
 
   const agentFlag = flags["agent"];
   let agent: string;
@@ -287,9 +311,11 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     try {
       result = runDreamStep(vaultFor("dream --step"), stepRequest, {
         safeguard: guard(),
+        ...(config !== undefined ? { configPath: config } : {}),
         ...(stepObservation?.sink !== undefined ? { onProgress: stepObservation.sink } : {}),
       });
     } catch (exc) {
+      if (exc instanceof DreamNotOwnerError) throw exc;
       if (exc instanceof DreamStepNotRunnableError) {
         return refuse(exc.message, asJson, {
           step: exc.requested,
@@ -348,6 +374,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     if (action === "stage") {
       const bundle = stageDream(vaultFor(`dream ${action}`), {
         now: now ?? new Date(),
+        ...configOpt,
         safeguard: guard(),
         ...stagedProgress,
         ...(agent ? { agentName: agent } : {}),
@@ -370,6 +397,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       const runId = positional[1]!;
       const stageOpts = {
         now: now ?? new Date(),
+        ...configOpt,
         safeguard: guard(),
         ...stagedProgress,
         ...(agent ? { agentName: agent } : {}),
@@ -411,6 +439,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       const runId = positional[1]!;
       const outcome = retriageDreamBundle(vaultFor(`dream ${action}`), runId, {
         now: now ?? new Date(),
+        ...configOpt,
         safeguard: guard(),
         ...(agent ? { agentName: agent } : {}),
       });
@@ -442,7 +471,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
 
     if (action === "discard") {
       const runId = positional[1]!;
-      const removed = discardDreamBundle(vaultFor(`dream ${action}`), runId);
+      const removed = discardDreamBundle(vaultFor(`dream ${action}`), runId, configOpt);
       if (asJson) okJson({ run_id: runId, removed });
       else ok(removed ? `discarded ${runId}` : `no staged bundle named ${runId}`);
       return 0;
@@ -474,6 +503,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (exc) {
+    if (exc instanceof DreamNotOwnerError) throw exc;
     // A bundle this verb understood and declined is a refusal, not an
     // operational failure: exit 2, with the bare reason beside the
     // sentence so a machine caller can branch on it.
@@ -560,6 +590,9 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     ...(config !== undefined ? { configPath: config } : {}),
     ...(now !== null ? { runAt: now } : {}),
   };
+  // The owner gate runs before the verdicts, so no model is asked for a
+  // pass that will be refused; `dream()` asks again for its own callers.
+  if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
   const topicVerdicts = dryRun ? undefined : await prepareTopicVerdicts(decideOptions);
   let summary;
   try {
@@ -574,6 +607,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ...(config !== undefined ? { configPath: config } : {}),
     });
   } catch (exc) {
+    if (exc instanceof DreamNotOwnerError) throw exc;
     if (exc instanceof SafeguardTimeoutError && asJson) {
       okJson({ ok: false, timed_out: true, message: exc.message });
       return 1;

@@ -208,6 +208,32 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b view writer --here",
         autoRepairable: false,
       },
+      // The dream owner (change agent-neutral-dream, design D7): advice on
+      // who runs live dream passes on this brain.
+      {
+        code: "dream-owner-unbound",
+        issueClass: "no dream owner is bound",
+        nextCommand: "o2b dream owner --here",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-owner-elsewhere",
+        issueClass: "another device is the dream owner",
+        nextCommand: "o2b dream owner",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-owner-pending",
+        issueClass: "a dream owner transfer is pending",
+        nextCommand: "o2b dream owner",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-owner-agent-differs",
+        issueClass: "the declared primary agent is not the dream owner's agent",
+        nextCommand: "o2b dream owner",
+        autoRepairable: false,
+      },
       {
         // The last topic planning pass made no topic: the records no topic
         // holds name no project. Linking the directory an agent works in

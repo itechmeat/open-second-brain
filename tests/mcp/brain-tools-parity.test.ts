@@ -83,7 +83,9 @@
  * watermark, grouped by partition, stream, scope and topic, answered from
  * the index after catch-up, local reach only); the shared-settings change
  * added `brain_settings` (get, list, set or unset one shared brain setting;
- * a write carries agent authority and never outvotes the operator).
+ * a write carries agent authority and never outvotes the operator); the
+ * agent-neutral dream change added `brain_dream_owner` (the dream owner's
+ * status, and take or release of the role at local reach).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -130,6 +132,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_distill_source",
   "brain_doctor",
   "brain_dream",
+  "brain_dream_owner",
   "brain_entity",
   "brain_event_trace",
   "brain_expire",
@@ -285,6 +288,7 @@ const FROZEN_BRAIN_WRITE_TOOL_NAMES = [
   "brain_distill_source",
   "brain_doctor",
   "brain_dream",
+  "brain_dream_owner",
   "brain_expire",
   "brain_extract_signals",
   "brain_feedback",
