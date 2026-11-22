@@ -25,10 +25,21 @@ import { bindStoreIdentity } from "../store/store-identity.ts";
 import { inspectStore, openStore, StoreOpenError } from "../store/store-open.ts";
 import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
 import { claimViewWriter } from "../view/writer.ts";
+import { isStoreOnly } from "../store/store-only.ts";
+import { claimDreamOwnerOnCreate } from "./dream-owner/create.ts";
 
 export interface EnsureBrainStoreOptions {
   /** The machine config the store root and the device id come from. */
   readonly configPath?: string;
+  /**
+   * Set by the commands that create a brain (`o2b init`, `o2b brain
+   * init`): a store this call creates for `vault` claims the dream owner
+   * role for this device and the configured agent (change
+   * `agent-neutral-dream`, design D5). Never set by the store migration:
+   * moving an existing brain to the store binds no owner. A vault that
+   * still holds a legacy `Brain/` tree is an existing brain too.
+   */
+  readonly dreamOwnerFor?: { readonly vault: string | null };
 }
 
 export interface EnsureBrainStoreResult {
@@ -39,6 +50,11 @@ export interface EnsureBrainStoreResult {
   readonly partitions: ReadonlyArray<string>;
   /** The view writer claim of a created store; `null` for an existing one. */
   readonly viewWriter: { readonly claimed: boolean; readonly message: string } | null;
+  /**
+   * The dream owner claim of a store created for a new brain; `null` for an
+   * existing store, or when the caller did not create a brain.
+   */
+  readonly dreamOwner: { readonly claimed: boolean; readonly message: string } | null;
 }
 
 /**
@@ -65,6 +81,11 @@ export function ensureBrainStore(options: EnsureBrainStoreOptions = {}): EnsureB
   // runs before the binding: otherwise the store this call made would be
   // bound to no device until a later init.
   const viewWriter = claimOnCreate(root, options.configPath);
+  const dreamOwner =
+    options.dreamOwnerFor !== undefined &&
+    isNewBrain(options.dreamOwnerFor.vault, options.configPath)
+      ? claimDreamOwnerOnCreate(root, options.configPath)
+      : null;
   bindThisDevice(root, created.storeId, options.configPath);
   return {
     status: "created",
@@ -72,6 +93,7 @@ export function ensureBrainStore(options: EnsureBrainStoreOptions = {}): EnsureB
     storeId: created.storeId,
     partitions: created.partitions,
     viewWriter,
+    dreamOwner,
   };
 }
 
@@ -87,6 +109,7 @@ function bindExisting(
     storeId: existing.storeId,
     partitions: STORE_PARTITIONS.filter((p) => existing.partitions.has(p)),
     viewWriter: null,
+    dreamOwner: null,
   };
 }
 
@@ -94,6 +117,13 @@ function bindExisting(
 function bindThisDevice(root: string, storeId: string, configPath: string | undefined): void {
   const device = readDeviceId(configPath ?? null);
   if (device !== null && isUsableLocalDeviceId(device)) bindStoreIdentity(root, storeId, device);
+}
+
+/** A brain with no legacy `Brain/` tree: there is nothing before this store to adopt. */
+function isNewBrain(vault: string | null, configPath: string | undefined): boolean {
+  return (
+    vault === null || isStoreOnly({ vault, ...(configPath !== undefined ? { configPath } : {}) })
+  );
 }
 
 function claimOnCreate(

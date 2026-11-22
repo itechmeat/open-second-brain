@@ -16,6 +16,7 @@
  */
 
 import { dream } from "../dream.ts";
+import { assertDreamOwner, DreamNotOwnerError } from "../dream-owner/gate.ts";
 import { decideBudgetWithin, prepareTopicVerdicts } from "../../topics/decide-auto.ts";
 import {
   discoverBridges,
@@ -35,7 +36,13 @@ import {
   resolveCustomTasks,
   type CustomTaskResolution,
 } from "./custom-tasks.ts";
-import { LANE_TASK, type LaneTask, type LaneTaskId, type MaintenanceTask } from "./lane.ts";
+import {
+  LANE_TASK,
+  MaintenanceTaskSkipped,
+  type LaneTask,
+  type LaneTaskId,
+  type MaintenanceTask,
+} from "./lane.ts";
 import { createLaneReindex, type LaneReindex } from "./reindex-task.ts";
 import { runRelinkAnchors, type RelinkAnchorsReport } from "./relink-anchors-task.ts";
 
@@ -109,6 +116,18 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
         // spends it first, never more than its own budget, and the dream
         // pass gets the same guard (as the MCP dream tool shares its call's).
         const safeguard = safeguardFor(LANE_TASK.dream);
+        // The dream owner gate before the verdicts (design D2): on a device
+        // that is not the owner the task is skipped with the reason, asks no
+        // model, and the lane's other tasks run.
+        try {
+          assertDreamOwner(vault, {
+            live: true,
+            ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+          });
+        } catch (exc) {
+          if (exc instanceof DreamNotOwnerError) throw new MaintenanceTaskSkipped(exc.message);
+          throw exc;
+        }
         const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, 0);
         // The model verdicts are decided before the pass (design D10,
         // D20); the lane runs live passes only.
@@ -121,13 +140,18 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
                 runAt: now,
                 ...(deadlineMs !== undefined ? { deadlineMs } : {}),
               });
-        dream(vault, {
-          now,
-          ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
-          ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
-          safeguard,
-          ...laneProgress,
-        });
+        try {
+          dream(vault, {
+            now,
+            ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+            ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
+            safeguard,
+            ...laneProgress,
+          });
+        } catch (exc) {
+          if (exc instanceof DreamNotOwnerError) throw new MaintenanceTaskSkipped(exc.message);
+          throw exc;
+        }
       },
     },
     reindex.task,

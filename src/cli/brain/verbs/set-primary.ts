@@ -1,7 +1,44 @@
 import { brainSettingsFromStore } from "../../../core/brain/policy/load.ts";
 import { setBrainSetting, unsetBrainSetting } from "../../../core/brain/policy/settings-write.ts";
 import { setPrimaryAgent, type SetPrimaryAgentResult } from "../../../core/brain/set-primary.ts";
+import { DreamNotOwnerError, openDreamOwnerStore } from "../../../core/brain/dream-owner/gate.ts";
+import {
+  readDreamOwner,
+  takeDreamOwner,
+  withDreamPassLock,
+} from "../../../core/brain/dream-owner/owner.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
+
+/**
+ * On a brain with a dream owner (change `agent-neutral-dream`, design D4)
+ * naming the primary agent names the owner's agent: on the owner's device
+ * the owner's agent becomes `name` at once (`o2b dream owner --here
+ * --agent <name>`), and anywhere else the verb refuses with
+ * `dream_not_owner`. A brain with no owner keeps the declared name only.
+ * Store-backed changes share the pass lock with live dream work.
+ */
+function setPrimaryWithOwner<T>(
+  vault: string | null,
+  config: string,
+  writer: string,
+  name: string | null,
+  write: () => T,
+): T | DreamNotOwnerError {
+  const opened = openDreamOwnerStore(vault, config);
+  if (opened.store === null) return write();
+  const store = opened.store;
+  return withDreamPassLock(store, () => {
+    const current = readDreamOwner(store);
+    const owner = current.owner;
+    if (owner !== null && owner.device !== store.device) {
+      return new DreamNotOwnerError("elsewhere", owner, store.device, false);
+    }
+    if (owner !== null && name !== null) {
+      takeDreamOwner(store, name, { writer, authority: "human", force: false });
+    }
+    return write();
+  });
+}
 
 /**
  * On a store-only machine (or with no vault) `primary_agent` is a shared
@@ -48,10 +85,20 @@ export async function cmdBrainSetPrimary(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result =
+    const agent = resolveBrainAgent(flags, config);
+    const bound = setPrimaryWithOwner(vault, config, agent, name, () =>
       vault === null || brainSettingsFromStore(vault)
-        ? setPrimaryInStore(vault, config, resolveBrainAgent(flags, config), name)
-        : setPrimaryAgent(vault, name);
+        ? setPrimaryInStore(vault, config, agent, name)
+        : setPrimaryAgent(vault, name),
+    );
+    if (bound instanceof DreamNotOwnerError) {
+      if (flags["json"]) {
+        okJson({ ok: false, code: bound.code, owner: bound.owner, message: bound.message });
+        return 1;
+      }
+      return fail(bound.message);
+    }
+    result = bound;
   } catch (exc) {
     return fail(`set-primary failed: ${(exc as Error).message ?? exc}`);
   }

@@ -339,6 +339,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
     "small fixed-shape answers: one setting, or the list of shared settings that are set, " +
     "bounded by the closed key classification",
   brain_observed_use: "write; returns a small fixed-shape ack (records/aggregates count)",
+  brain_dream_owner: "small fixed-shape answers: the owner, a pending transfer, or a move receipt",
   // The four note writers. Their receipts are no longer fixed-shape:
   // each carries an additive `lint` key over the pages it committed
   // (evidence-at-the-boundary, task A4). That key is what bounds them

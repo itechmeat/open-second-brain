@@ -461,7 +461,7 @@ export function bootstrapBrain(
       throw new Error("--starter drops example pages into a vault, and no vault is configured");
     }
     refusePrimaryAgentWithoutTree(opts.primaryAgent);
-    const store = ensureBrainStore({ configPath });
+    const store = ensureBrainStore({ configPath, dreamOwnerFor: { vault: null } });
     // The switch record that keeps a fresh install store-only, as `o2b
     // init` writes it. It never fails the init (the store exists, and the
     // next init records the switch), but its outcome is reported, so a

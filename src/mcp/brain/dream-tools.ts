@@ -20,6 +20,7 @@ import {
   validateDreamGateOverrides,
 } from "../../core/brain/dream-gates.ts";
 import { DreamStepNotRunnableError, runDreamStep } from "../../core/brain/dream-step.ts";
+import { assertDreamOwner } from "../../core/brain/dream-owner/gate.ts";
 import {
   applyDreamBundle,
   discardDreamBundle,
@@ -179,6 +180,8 @@ export async function toolBrainDream(
     throw new MCPError(INVALID_PARAMS, DREAM_LOCAL_REACH_ONLY);
   }
   const previewScope = previewReadable !== undefined ? { previewReadable } : {};
+  // The machine config the dream owner gate reads (`dream-owner/gate.ts`).
+  const configOpt = ctx.configPath ? { configPath: ctx.configPath } : {};
 
   // Single-step requests (no-dead-ends, Unit E - operator surface).
   // Deliberately checked before any environment work: a step the pass
@@ -215,6 +218,7 @@ export async function toolBrainDream(
       return {
         ...runDreamStep(ctx.vault, stepArg, {
           safeguard: toolSafeguard(ctx, OPERATION.dream),
+          ...configOpt,
           ...(onProgress ? { onProgress } : {}),
         }),
       };
@@ -248,6 +252,7 @@ export async function toolBrainDream(
     const stageOpts = {
       now,
       safeguard: toolSafeguard(ctx, OPERATION.dream),
+      ...configOpt,
       readable,
       ...(agent ? { agentName: agent } : {}),
       ...(onProgress ? { onProgress } : {}),
@@ -322,7 +327,11 @@ export async function toolBrainDream(
         };
       }
       case "discard": {
-        return { action, run_id: runIdArg, removed: discardDreamBundle(ctx.vault, runIdArg!) };
+        return {
+          action,
+          run_id: runIdArg,
+          removed: discardDreamBundle(ctx.vault, runIdArg!, configOpt),
+        };
       }
       default: {
         return {
@@ -394,6 +403,9 @@ export async function toolBrainDream(
     ...(nowDate ? { runAt: nowDate } : {}),
     ...(deadlineMs !== undefined ? { deadlineMs } : {}),
   };
+  // The owner gate runs before the verdicts, so no model is asked for a
+  // pass that will be refused (`dream_not_owner`); `dream()` asks again.
+  if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
   const topicVerdicts =
     dryRun || deadlineMs === 0 ? undefined : await prepareTopicVerdicts(decideOptions);
   const summary = dream(vault, {

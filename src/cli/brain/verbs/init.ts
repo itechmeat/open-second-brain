@@ -135,6 +135,7 @@ function reportStoreOnlyInit(result: BootstrapBrainResult, json: boolean): numbe
   info(`  store id:   ${store.storeId}`);
   info(`  partitions: ${store.partitions.join(", ")}`);
   if (store.viewWriter !== null) info(`  ${store.viewWriter.message}`);
+  if (store.dreamOwner !== null) info(`  ${store.dreamOwner.message}`);
   info(
     "  no vault is configured: the brain works without one; note tools and .base views need one",
   );

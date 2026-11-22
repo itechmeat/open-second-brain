@@ -60,6 +60,7 @@ import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
 import { handleStoreSubcommand } from "./store.ts";
 import { handleViewSubcommand } from "./view.ts";
+import { handleDreamSubcommand } from "./dream/owner.ts";
 import { handleTopicSubcommand } from "./topic.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { installMcpFaultGuard } from "./mcp-fault-guard.ts";
@@ -216,10 +217,15 @@ async function cmdStatus(argv: string[]): Promise<number> {
  * Create the brain store unless it exists, and print the outcome (and the
  * view writer line); `null` after printing the failure.
  */
-function ensureStoreAndReport(configPath: string): EnsureBrainStoreResult | null {
+function ensureStoreAndReport(
+  configPath: string,
+  vault: string | null,
+): EnsureBrainStoreResult | null {
   let store: EnsureBrainStoreResult;
   try {
-    store = ensureBrainStore({ configPath });
+    // A store created here is a new brain unless the vault holds a legacy
+    // tree: it claims the dream owner role for this device.
+    store = ensureBrainStore({ configPath, dreamOwnerFor: { vault } });
   } catch (exc) {
     process.stderr.write(
       `error: failed to create the brain store: ${(exc as Error).message ?? exc}\n`,
@@ -232,6 +238,7 @@ function ensureStoreAndReport(configPath: string): EnsureBrainStoreResult | null
       : `the brain store already exists: ${store.root}\n`,
   );
   if (store.viewWriter !== null) process.stdout.write(`${store.viewWriter.message}\n`);
+  if (store.dreamOwner !== null) process.stdout.write(`${store.dreamOwner.message}\n`);
   return store;
 }
 
@@ -240,7 +247,7 @@ function ensureStoreAndReport(configPath: string): EnsureBrainStoreResult | null
  * and bind the vault to it. Prints the outcome; false on a failure.
  */
 function initBrainStoreForVault(vault: string, configPath: string): boolean {
-  const store = ensureStoreAndReport(configPath);
+  const store = ensureStoreAndReport(configPath, vault);
   if (store === null) return false;
   try {
     const bound = bindVaultToStore(vault, {
@@ -269,7 +276,7 @@ function initWithoutVault(agentName: string | null, timezone: string | null): nu
     );
     return 1;
   }
-  if (ensureStoreAndReport(configPath) === null) return 1;
+  if (ensureStoreAndReport(configPath, null) === null) return 1;
   recordFreshSwitchQuietly(null, configPath);
   // The onboarding checklist below names the optional vault step and its
   // command, so this line does not repeat it.
@@ -1595,6 +1602,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleStoreSubcommand(rest);
       case "view":
         return await handleViewSubcommand(rest);
+      case "dream":
+        return await handleDreamSubcommand(rest);
       case "topic":
         return await handleTopicSubcommand(rest);
       case "vault":

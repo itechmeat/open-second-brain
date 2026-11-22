@@ -40,6 +40,13 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
 import { dream, type DreamOptions, type DreamRunSummary } from "./dream.ts";
+import {
+  assertDreamOwner,
+  recheckDreamOwner,
+  recheckUnboundDreamOwner,
+  type DreamOwnerGate,
+} from "./dream-owner/gate.ts";
+import { withDreamPassLock } from "./dream-owner/owner.ts";
 import { scanBrain } from "./dream-scan.ts";
 import { loadBrainConfig } from "./policy.ts";
 import {
@@ -177,6 +184,38 @@ export interface DreamStageOptions {
   readonly agentName?: string;
   /** Forwarded to the dream pass's link-candidate filter; see `DreamOptions.readable`. */
   readonly readable?: DreamOptions["readable"];
+  /**
+   * The machine config the dream owner gate reads the store and the
+   * device id from (`dream-owner/gate.ts`); absent: the default config.
+   */
+  readonly configPath?: string;
+}
+
+/**
+ * The dream owner gate of the staged lifecycle (design D2): `stage`,
+ * `apply`, `discard` and `retriage` write files under the brain tree,
+ * which syncs, so on a device that is not the owner they are refused
+ * like a live pass, before anything is read or written.
+ */
+function assertStagedOwner(vault: string, configPath: string | undefined): DreamOwnerGate {
+  return assertDreamOwner(vault, {
+    live: true,
+    ...(configPath !== undefined ? { configPath } : {}),
+  });
+}
+
+function withStagedOwnerLock<T>(gate: DreamOwnerGate, fn: () => T): T {
+  if (gate.status === "unbound" && gate.store !== null) {
+    return withDreamPassLock(gate.store, () => {
+      recheckUnboundDreamOwner(gate.store!);
+      return fn();
+    });
+  }
+  if (gate.status !== "owner") return fn();
+  return withDreamPassLock(gate.store, () => {
+    recheckDreamOwner(gate);
+    return fn();
+  });
 }
 
 /** Sorted-copy helper keeping projections order-insensitive. */
@@ -361,6 +400,7 @@ function renderReport(
  * Read-only against live Brain state.
  */
 export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBundle {
+  const gate = assertStagedOwner(vault, opts.configPath);
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const summary = dream(vault, {
@@ -389,50 +429,52 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
   const sourcesBody =
     sources.length === 0 ? "" : sources.map((s) => JSON.stringify(s)).join("\n") + "\n";
 
-  writeLaneText(vault, join(dir, "proposals.jsonl"), proposalsBody);
-  writeLaneText(vault, join(dir, "sources.jsonl"), sourcesBody);
-  writeLaneText(
-    vault,
-    join(dir, "REPORT.md"),
-    renderReport(runId, stagedAt, plan, salience) + "\n",
-  );
-  writeLaneText(
-    vault,
-    join(dir, "manifest.json"),
-    JSON.stringify(
-      {
-        schema: DREAM_STAGE_SCHEMA_VERSION,
-        run_id: runId,
-        staged_at: stagedAt,
-        proposals: proposals.length,
-        sources: sources.length,
-        plan,
-        plan_hash: sha256Hex(JSON.stringify(plan)),
-        sources_hash: sha256Hex(sourcesBody),
-        salience,
-      },
-      null,
-      2,
-    ) + "\n",
-  );
+  return withStagedOwnerLock(gate, () => {
+    writeLaneText(vault, join(dir, "proposals.jsonl"), proposalsBody);
+    writeLaneText(vault, join(dir, "sources.jsonl"), sourcesBody);
+    writeLaneText(
+      vault,
+      join(dir, "REPORT.md"),
+      renderReport(runId, stagedAt, plan, salience) + "\n",
+    );
+    writeLaneText(
+      vault,
+      join(dir, "manifest.json"),
+      JSON.stringify(
+        {
+          schema: DREAM_STAGE_SCHEMA_VERSION,
+          run_id: runId,
+          staged_at: stagedAt,
+          proposals: proposals.length,
+          sources: sources.length,
+          plan,
+          plan_hash: sha256Hex(JSON.stringify(plan)),
+          sources_hash: sha256Hex(sourcesBody),
+          salience,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
 
-  try {
-    appendMetric(vault, {
-      surface: "dream_stage",
-      runAt: stagedAt,
-      payload: {
-        action: "stage",
-        run_id: runId,
-        proposals: proposals.length,
-        sources: sources.length,
-        changed: plan.changed,
-      },
-    });
-  } catch {
-    // Metrics are observability, not correctness.
-  }
+    try {
+      appendMetric(vault, {
+        surface: "dream_stage",
+        runAt: stagedAt,
+        payload: {
+          action: "stage",
+          run_id: runId,
+          proposals: proposals.length,
+          sources: sources.length,
+          changed: plan.changed,
+        },
+      });
+    } catch {
+      // Metrics are observability, not correctness.
+    }
 
-  return Object.freeze({ runId, dir, plan, sources: Object.freeze(sources) });
+    return Object.freeze({ runId, dir, plan, sources: Object.freeze(sources) });
+  });
 }
 
 /** Parse one bundle manifest; null on any defect (fail-soft reads). */
@@ -557,6 +599,7 @@ export function applyDreamBundle(
   runId: string,
   opts: DreamStageOptions,
 ): DreamStageApplyOutcome {
+  const gate = assertStagedOwner(vault, opts.configPath);
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const validation = validateDreamBundle(vault, runId, opts);
@@ -568,38 +611,41 @@ export function applyDreamBundle(
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
   });
 
-  const dir = join(stagedRoot(vault), runId);
-  const manifest = readManifest(vault, dir);
-  const appliedDir = join(appliedRoot(vault), runId);
-  if (manifest !== null) {
-    writeLaneText(
-      vault,
-      join(dir, "manifest.json"),
-      JSON.stringify({ ...manifest, applied_at: isoSecond(opts.now) }, null, 2) + "\n",
-    );
-  }
-  moveLaneTree(vault, dir, appliedDir);
+  return withStagedOwnerLock(gate, () => {
+    const dir = join(stagedRoot(vault), runId);
+    const manifest = readManifest(vault, dir);
+    const appliedDir = join(appliedRoot(vault), runId);
+    if (manifest !== null) {
+      writeLaneText(
+        vault,
+        join(dir, "manifest.json"),
+        JSON.stringify({ ...manifest, applied_at: isoSecond(opts.now) }, null, 2) + "\n",
+      );
+    }
+    moveLaneTree(vault, dir, appliedDir);
 
-  try {
-    appendMetric(vault, {
-      surface: "dream_stage",
-      runAt: isoSecond(opts.now),
-      payload: {
-        action: "apply",
-        run_id: runId,
-        changed: summary.changed,
-        new_unconfirmed: summary.new_unconfirmed.length,
-        confirmed: summary.confirmed.length,
-        retired: summary.retired.length,
-      },
-    });
-  } catch {
-    // Metrics are observability, not correctness.
-  }
+    try {
+      appendMetric(vault, {
+        surface: "dream_stage",
+        runAt: isoSecond(opts.now),
+        payload: {
+          action: "apply",
+          run_id: runId,
+          changed: summary.changed,
+          new_unconfirmed: summary.new_unconfirmed.length,
+          confirmed: summary.confirmed.length,
+          retired: summary.retired.length,
+        },
+      });
+    } catch {
+      // Metrics are observability, not correctness.
+    }
 
-  return Object.freeze({ applied: true, validation, summary });
+    return Object.freeze({ applied: true, validation, summary });
+  });
 }
 
 // ----- retriage ------------------------------------------------------------
@@ -730,100 +776,112 @@ export function retriageDreamBundle(
   runId: string,
   opts: DreamStageOptions,
 ): DreamRetriageOutcome {
-  if (!isValidRunId(runId)) {
-    throw new DreamRetriageError(runId, "that is not an id this staging surface issues");
-  }
-  const manifest = readManifest(vault, join(stagedRoot(vault), runId));
-  if (manifest === null) {
-    throw new DreamRetriageError(
-      runId,
-      "there is no staged bundle by that name, or its manifest is unreadable",
-    );
-  }
-  const staged = readStagedSalience(runId, manifest["salience"]);
-
-  const cfg = loadBrainConfig(vault);
-  const currentThreshold = resolveSalienceThreshold(cfg);
-  const items = collectSalienceFoldSet({
-    vault,
-    preferences: scanBrain(vault).preferences,
-    cfg,
-    now: opts.now,
-  });
-  const verdict =
-    currentThreshold === null
-      ? openSalienceGate(items.length)
-      : gateFoldSet(items, currentThreshold);
-
-  const stagedScores = new Map(staged.excluded.map((e) => [e.pref_id, e.score]));
-  const currentExcluded = new Set(verdict.excluded.map((e) => e.pref_id));
-  const scoreById = new Map(items.map((i) => [i.pref_id, i]));
-
-  const newlyExcluded: DreamRetriageEntry[] = [];
-  for (const entry of verdict.excluded) {
-    if (stagedScores.has(entry.pref_id)) continue;
-    newlyExcluded.push(
-      Object.freeze({
-        pref_id: entry.pref_id,
-        path: entry.path,
-        score: entry.score,
-        staged_score: null,
-      }),
-    );
-  }
-
-  const newlyAdmitted: DreamRetriageEntry[] = [];
-  const notes: string[] = [];
-  for (const [prefId, stagedScore] of [...stagedScores].toSorted((a, b) =>
-    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
-  )) {
-    if (currentExcluded.has(prefId)) continue;
-    const item = scoreById.get(prefId);
-    if (item === undefined) {
-      // Gone from the fold set entirely: reporting it as "newly
-      // admitted" would claim the ladder will now fold a fact that no
-      // longer exists.
-      notes.push(`${prefId} was excluded at stage time and is no longer in the fold set`);
-      continue;
+  const gate = assertStagedOwner(vault, opts.configPath);
+  return withStagedOwnerLock(gate, () => {
+    if (!isValidRunId(runId)) {
+      throw new DreamRetriageError(runId, "that is not an id this staging surface issues");
     }
-    newlyAdmitted.push(
-      Object.freeze({
-        pref_id: prefId,
-        path: item.path,
-        score: item.score.score,
-        staged_score: stagedScore,
-      }),
-    );
-  }
-  if (staged.considered !== verdict.considered) {
-    notes.push(
-      `the fold set changed size: ${staged.considered} fact(s) at stage time, ${verdict.considered} now`,
-    );
-  }
+    const manifest = readManifest(vault, join(stagedRoot(vault), runId));
+    if (manifest === null) {
+      throw new DreamRetriageError(
+        runId,
+        "there is no staged bundle by that name, or its manifest is unreadable",
+      );
+    }
+    const staged = readStagedSalience(runId, manifest["salience"]);
 
-  return Object.freeze({
-    runId,
-    stagedThreshold: staged.threshold,
-    currentThreshold,
-    changed:
-      staged.threshold !== currentThreshold || newlyAdmitted.length > 0 || newlyExcluded.length > 0,
-    considered: verdict.considered,
-    admitted: verdict.admitted,
-    newlyAdmitted: Object.freeze(newlyAdmitted),
-    newlyExcluded: Object.freeze(newlyExcluded),
-    notes: Object.freeze(notes),
+    const cfg = loadBrainConfig(vault);
+    const currentThreshold = resolveSalienceThreshold(cfg);
+    const items = collectSalienceFoldSet({
+      vault,
+      preferences: scanBrain(vault).preferences,
+      cfg,
+      now: opts.now,
+    });
+    const verdict =
+      currentThreshold === null
+        ? openSalienceGate(items.length)
+        : gateFoldSet(items, currentThreshold);
+
+    const stagedScores = new Map(staged.excluded.map((e) => [e.pref_id, e.score]));
+    const currentExcluded = new Set(verdict.excluded.map((e) => e.pref_id));
+    const scoreById = new Map(items.map((i) => [i.pref_id, i]));
+
+    const newlyExcluded: DreamRetriageEntry[] = [];
+    for (const entry of verdict.excluded) {
+      if (stagedScores.has(entry.pref_id)) continue;
+      newlyExcluded.push(
+        Object.freeze({
+          pref_id: entry.pref_id,
+          path: entry.path,
+          score: entry.score,
+          staged_score: null,
+        }),
+      );
+    }
+
+    const newlyAdmitted: DreamRetriageEntry[] = [];
+    const notes: string[] = [];
+    for (const [prefId, stagedScore] of [...stagedScores].toSorted((a, b) =>
+      a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+    )) {
+      if (currentExcluded.has(prefId)) continue;
+      const item = scoreById.get(prefId);
+      if (item === undefined) {
+        // Gone from the fold set entirely: reporting it as "newly
+        // admitted" would claim the ladder will now fold a fact that no
+        // longer exists.
+        notes.push(`${prefId} was excluded at stage time and is no longer in the fold set`);
+        continue;
+      }
+      newlyAdmitted.push(
+        Object.freeze({
+          pref_id: prefId,
+          path: item.path,
+          score: item.score.score,
+          staged_score: stagedScore,
+        }),
+      );
+    }
+    if (staged.considered !== verdict.considered) {
+      notes.push(
+        `the fold set changed size: ${staged.considered} fact(s) at stage time, ${verdict.considered} now`,
+      );
+    }
+
+    return Object.freeze({
+      runId,
+      stagedThreshold: staged.threshold,
+      currentThreshold,
+      changed:
+        staged.threshold !== currentThreshold ||
+        newlyAdmitted.length > 0 ||
+        newlyExcluded.length > 0,
+      considered: verdict.considered,
+      admitted: verdict.admitted,
+      newlyAdmitted: Object.freeze(newlyAdmitted),
+      newlyExcluded: Object.freeze(newlyExcluded),
+      notes: Object.freeze(notes),
+    });
   });
 }
 
 /** Remove one staged bundle. True when it existed. */
-export function discardDreamBundle(vault: string, runId: string): boolean {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertLaneWrite(vault);
-  if (!isValidRunId(runId)) return false;
-  const dir = join(stagedRoot(vault), runId);
-  if (!lanePageExists(vault, dir)) return false;
-  removeLaneTree(vault, dir);
-  return true;
+export function discardDreamBundle(
+  vault: string,
+  runId: string,
+  opts: Pick<DreamStageOptions, "configPath"> = {},
+): boolean {
+  const gate = assertStagedOwner(vault, opts.configPath);
+  return withStagedOwnerLock(gate, () => {
+    // Vault-identity write guard (context-integrity-gates, Unit J).
+    assertLaneWrite(vault);
+    if (!isValidRunId(runId)) return false;
+    const dir = join(stagedRoot(vault), runId);
+    if (!lanePageExists(vault, dir)) return false;
+    removeLaneTree(vault, dir);
+    return true;
+  });
 }
 
 /** Staged + applied bundles, newest staged_at first. */

@@ -72,10 +72,13 @@ const FIXTURE_CLOCK_CODES: ReadonlySet<string> = new Set([STORE_CLOCK_AHEAD_CODE
  * reader: `migration-available` is reported only while a machine still
  * keeps the legacy tree, and `delivery-provenance-unknown` counts vault
  * pages, which a switched machine's memory records no longer are.
+ * `dream-owner-unbound` is reported only where the dream owner role can be
+ * held, the brain store: a legacy tree has no owner to bind.
  */
 const MODE_CODES: ReadonlySet<string> = new Set([
   "migration-available",
   "delivery-provenance-unknown",
+  "dream-owner-unbound",
 ]);
 
 /** Every reader the parity covers: name, how to call it, and its answer on the fixture. */

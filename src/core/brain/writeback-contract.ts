@@ -201,7 +201,7 @@ export const WRITEBACK_CONTRACT_REQUIREMENTS: ReadonlyArray<WritebackContractReq
  * gate - the `marker_writeback` guardrail token verbatim, the same-turn
  * rule, the atomic-fact rule - merged with the cross-project-pointer
  * usage content (read the active preferences at session start, `brain_feedback`,
- * `brain_apply_evidence`, the do-not-dream rule). One body, one block:
+ * `brain_apply_evidence`, the dream owner rule). One body, one block:
  * the editor holds exactly one pair per spelling, so the docs' pointer
  * block and the write gate must be the same block or they fight.
  *
@@ -222,8 +222,10 @@ export const CANONICAL_WRITEBACK_BLOCK_BODY: string = [
   "with `result: applied | violated | outdated` for any preference whose",
   "`scope` matches.",
   "",
-  "Do not run `o2b brain dream` here: the brain settings name its primary",
-  "dream-running agent (key `primary_agent`).",
+  "When a dream owner is bound, live dream runs only on the owner's device:",
+  "ask `o2b dream owner` (MCP `brain_dream_owner`) before a live",
+  "`o2b brain dream`. Unbound and legacy brains retain live passes from",
+  "any device. A dry run is always fine.",
   "",
   "Memory write gate: apply the marker_writeback guardrail. Record memory",
   "as atomic facts in the same turn each fact is learned, never batched.",

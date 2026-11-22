@@ -3,8 +3,8 @@
 When the coding work happens in a project directory that is not the
 Open Second Brain vault, the agent needs a pointer to find the vault
 on session start. This page describes the canonical snippet to drop
-into a project, the conventions around the vault's primary
-dream-running agent, and what changes when several devices share the
+into a project, the dream owner (the one device and agent that runs
+live dream passes), and what changes when several devices share the
 same vault.
 
 ## 1. Add the pointer snippet to your project
@@ -48,9 +48,10 @@ Record taste signals via `brain_feedback` (MCP) or
 `brain_apply_evidence` with `result: applied | violated | outdated`
 for any preference whose `scope` matches.
 
-Do not run `o2b brain dream` from this runtime. The vault has a
-primary dream-running agent declared in `<vault>/Brain/_brain.yaml`
-(key `primary_agent`).
+When a dream owner is bound, live dream runs only on the owner's device:
+ask `o2b dream owner` (MCP `brain_dream_owner`) before a live
+`o2b brain dream`. Unbound and legacy brains retain live passes from
+any device. A dry run is always fine.
 # <<< open-second-brain managed <<<
 ```
 
@@ -58,26 +59,49 @@ The snippet is intentionally short. The agent does not need
 configuration here — every operational detail lives in the vault
 itself (preferences, the active digest, the `_brain.yaml` config).
 
-## 2. Primary agent and the dream cron
+## 2. The dream owner
 
-A shared vault has exactly one runtime responsible for running the
-deterministic `dream` consolidation pass. Declare that runtime in
-`Brain/_brain.yaml`:
-
-```bash
-o2b brain set-primary <agent-name> --vault <vault-path>
-```
-
-`<agent-name>` is the value of `agent_name` in
-`~/.config/open-second-brain/config.yaml` on the host that runs the
-dream cron. To verify, run:
+A brain has one dream owner: one agent installation on one device. Only
+that device runs a live `dream` pass; every other device previews.
+The installation that creates the brain (`o2b init`, `o2b store init`)
+becomes the owner when its agent name is known; attaching another
+device, initialising again and switching a machine to the store never
+change it. Ask who it is from any device:
 
 ```bash
-grep agent_name ~/.config/open-second-brain/config.yaml
+o2b dream owner            # or the MCP tool brain_dream_owner, operation status
 ```
 
-When dream runs from a different agent, the response carries a
-structured warning:
+Move it with one operation:
+
+- `o2b dream owner --here --agent <name>` on the owner's device changes
+  the agent at once.
+- `o2b dream owner --here` on another device records a request; the
+  owner's device hands the role over the next time it looks (a dream
+  pass, its status, or a session start), and only then does the
+  requesting device run live passes.
+- `o2b dream owner --here --force` takes the role at once, for an owner
+  device that is lost. The old owner keeps passing its own gate, and may
+  run passes, until its first catch-up after the forced claim reaches it.
+- `o2b dream owner --release` gives the role up with no successor.
+
+Through MCP, `brain_dream_owner` offers `take` and `release` at local
+reach; there is no forced transfer there.
+
+On a device that is not the owner every live dream path refuses with
+`dream_not_owner` before it asks a model or writes anything: `o2b brain
+dream`, its staged `stage`, `apply`, `discard` and `retriage`, the
+writing step `--step heal-enrich`, `brain_dream`, and the maintenance
+lane's dream task, which is skipped with the reason while the lane's
+other tasks run. Dry runs answer on every device. Any agent on the
+owner's device may run the pass; its summary names the owner and the
+agent that started it.
+
+### A brain from before the dream owner
+
+A brain with no owner record behaves as before: a live pass runs from
+any device, and a declared `primary_agent` keeps producing the
+`non-primary-dream-run` warning for another agent:
 
 - The CLI prints
   `warning: non-primary-dream-run: dream run from agent '<caller>', ...`
@@ -85,26 +109,31 @@ structured warning:
 - The MCP `brain_dream` tool returns a `warnings` array containing
   `{ code: "non-primary-dream-run", message: "..." }` alongside the
   usual summary.
-- The dream summary log event (`Brain/log/<date>.md`) gains a
-  `non_primary_agent: <caller>` payload row so the breach is greppable
-  in the audit trail.
+- The dream summary log event gains a `non_primary_agent: <caller>`
+  payload row.
 
-The pass still completes — the declaration is observability, not
-access control. Pinning, rejecting, and toggling pins remain
-unrestricted: any agent on any device can mutate the protected set.
+`o2b dream owner` and doctor name a declared `primary_agent` as the
+requested owner. Adopt the brain by running `o2b dream owner --here` on
+the device that should own dream; ownership is never inferred from an
+installed agent, the last writer or the machine that ran an update.
+Every machine of the brain must run a release with the dream owner
+before the role is relied on: an older binary ignores the gate. A brain
+whose records still live in the legacy `Brain/` tree reports that the
+owner is enforced once the brain moves to the store.
 
-To clear the primary declaration (the vault becomes single-host
-again, or you want to disable the check during local
-experimentation):
+`o2b brain set-primary <name>` keeps working: on a brain with an owner
+it changes the owner's agent on the owner's device (and refuses
+elsewhere with `dream_not_owner`); on a brain with no owner it writes
+the declared name as before.
 
 ```bash
 o2b brain set-primary --clear --vault <vault-path>
 ```
 
-A vault initialised with `o2b brain init --primary-agent <name>`
-writes the value into the fresh `_brain.yaml` on the first run; on
-re-runs against an existing file `--primary-agent` is ignored — use
-`set-primary` instead.
+clears the declaration. A vault initialised with `o2b brain init
+--primary-agent <name>` writes the value into the fresh `_brain.yaml`
+on the first run; on re-runs against an existing file `--primary-agent`
+is ignored — use `set-primary` instead.
 
 ## 3. Multi-device through Syncthing
 
@@ -116,9 +145,8 @@ on any peer:
 - `@osb` markers added by hand in Daily notes from the phone (captured
   later by `o2b brain scan-inline` on any peer).
 
-All of these land in `Brain/inbox/`. The primary host's dream cron
-picks them up on the next pass, regardless of which peer wrote them.
-Use the `primary_agent` declaration to keep dream serialised to one
-host so signal processing does not race; the rest of the Brain
-layer is conflict-free because writes are append-only or
-locally-scoped (signals, daily logs, snapshots).
+All of these land in the brain. The dream owner's device picks them up
+on its next pass, regardless of which peer wrote them. The dream owner
+keeps dream serialised to one device so signal processing does not
+race; the rest of the Brain layer is conflict-free because writes are
+append-only or locally-scoped (signals, daily logs, snapshots).

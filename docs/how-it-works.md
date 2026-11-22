@@ -230,11 +230,11 @@ are both explicit.
 
 When coding work happens in a project directory that is not the vault itself, add a pointer snippet to your project's `CLAUDE.md` or `AGENTS.md` so the agent knows where to read preferences from. The canonical snippet, the rules for multi-device Syncthing setups, and the `o2b brain set-primary` invocation are in [`cross-project-pointer.md`](cross-project-pointer.md).
 
-A vault shared across hosts should declare a single `primary_agent` in `Brain/_brain.yaml` - the runtime that owns the dream cron. Dream runs from a different agent emit a non-fatal warning (stderr for CLI, `warnings` array for MCP) and tag the dream summary log with `non_primary_agent: <caller>`.
+A vault shared across hosts has one dream owner: one agent installation on one device, recorded in the brain store and shown by `o2b dream owner` (MCP `brain_dream_owner`). The installation that creates the brain becomes it; `o2b dream owner --here` moves it (on another device as a request the owner's device releases the next time it looks). On every other device a live dream pass is refused with `dream_not_owner` before anything is asked or written, and a dry run still answers. A brain from before the dream owner has no owner record and runs as before: a live pass from any device, with the non-fatal `non-primary-dream-run` warning when a declared `primary_agent` differs from the caller, until it is adopted with `o2b dream owner --here`. The walkthrough is in [`cross-project-pointer.md`](cross-project-pointer.md).
 
 ## The dream pass in detail
 
-A single dream invocation is a deterministic pipeline:
+A live dream pass runs on the dream owner's device only (see "Dream owner" below); a dry run runs anywhere. A single dream invocation is a deterministic pipeline:
 
 ```mermaid
 flowchart TD
@@ -1074,22 +1074,70 @@ shard; the empty device id writes the legacy un-suffixed name, and a
 legacy file stays readable without any migration. The full contract is in
 [`observability.md`](observability.md#the-per-device-shard-rule).
 
-## Primary agent declaration
+## Dream owner
 
-`Brain/_brain.yaml` carries an optional `primary_agent: <name> | null`
-key. When set, dream runs invoked from a different agent emit:
+A brain whose records live in the brain store has at most one dream
+owner: one agent installation on one device. Three record kinds in the
+`settings` stream of the `shared` partition hold the role, folded the
+same way on every device: `dream-owner-claim` (a device takes the role,
+or the owner's device changes its agent), `dream-owner-request` (another
+device asks for it) and `dream-owner-released` (the owner's device hands
+it to the request it answers, or gives it up). Two devices that claim
+before either claim has synced resolve to the lower (clock, device) on
+every device, and a device that holds the role through its own claim
+runs its first live pass only from the look after the one that first
+saw it hold the role, so a rival claim still in transit can arrive.
+
+One gate sits under every live dream path: `o2b brain dream`, the staged
+`stage`, `apply`, `discard` and `retriage`, the writing step
+`heal-enrich`, the MCP `brain_dream` tool and the maintenance lane's
+dream task. It runs before any model is asked and before the first
+write. On a device that is not the owner it refuses with
+`dream_not_owner`, naming the owner's device and agent and the transfer
+command; the lane records its dream task as skipped with the reason and
+runs its other tasks. Previews and dry runs answer on every device. The
+gate is the device, not the agent: any agent on the owner's device may
+start the pass, and the pass summary and its log event name the owner
+and the agent that started it. A live pass on the owner's device holds a
+device-local pass lock for its whole length and checks the role again
+once it holds the lock, before its first write; the owner's device
+writes a release under that lock. The lock records the holder's process
+and is taken over only once that process is gone, so a pass keeps it
+for as long as it runs, however long; only a holder whose process cannot
+be checked falls back to a 60 second age. A device that does not hold
+the `shared` partition cannot read the owner, so its live passes are
+refused with `dream_not_owner`, naming the missing partition, while its
+previews still answer.
+
+The owner's device releases a pending request when it next looks at the
+role, and a look that finds the pass lock held leaves the release to the
+following look; `o2b dream owner --release` that finds it held past the
+lock wait refuses. The looks are a live pass, `o2b dream owner`, and
+the background maintenance a session start and an MCP server start run.
+`o2b dream owner --here --force` takes the role without a release, for
+an owner device that is lost; the old owner may keep running until its first catch-up after the
+forced claim reaches it. Doctor reports `dream-owner-unbound`,
+`dream-owner-elsewhere`, `dream-owner-pending` and
+`dream-owner-agent-differs` as advice.
+
+`primary_agent` stays the declared name. On a brain with no owner record
+(every brain from before the dream owner, until it is adopted) a live
+pass runs from any device and a declared `primary_agent` keeps its
+warning for another agent:
 
 - a stderr warning of the form `warning: non-primary-dream-run: …`,
 - a `warnings` array entry on the MCP `brain_dream` response,
 - a `non_primary_agent: <caller>` payload row in the dream summary
   log event.
 
-The dream pass still completes — the declaration is observability,
-not access control. Set / clear via `o2b brain set-primary <name>`
-or `o2b brain set-primary --clear`. A vault initialised with
-`o2b brain init --primary-agent <name>` writes the value into the
-fresh `_brain.yaml`. The full multi-device walkthrough is in
-[`docs/cross-project-pointer.md`](./cross-project-pointer.md).
+Set / clear the declaration via `o2b brain set-primary <name>` or
+`o2b brain set-primary --clear`; on a brain with an owner, `set-primary
+<name>` changes the owner's agent on the owner's device and refuses
+elsewhere. A vault initialised with `o2b brain init --primary-agent
+<name>` writes the value into the fresh `_brain.yaml`. A brain whose
+records still live in the legacy `Brain/` tree has no owner: the role is
+enforced once the brain moves to the store. The full multi-device
+walkthrough is in [`docs/cross-project-pointer.md`](./cross-project-pointer.md).
 
 ## Hygiene: sanitisation and lints
 

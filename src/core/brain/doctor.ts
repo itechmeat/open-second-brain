@@ -110,6 +110,7 @@ import { configuredVaultMissing, storeOnlyMode } from "../store/store-only.ts";
 import { vaultBindingStatus } from "../vault-adapter/vault-binding.ts";
 import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
 import { viewWriterCheck } from "./doctor/view-writer-check.ts";
+import { dreamOwnerCheck } from "./doctor/dream-owner-check.ts";
 import { topicPlanCheck } from "./doctor/topic-plan-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
@@ -285,6 +286,8 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   storeCheck,
   // The human view writer (task 2.7): silent unless the store is in use.
   viewWriterCheck,
+  // The dream owner (agent-neutral dream): silent unless the role is enforced.
+  dreamOwnerCheck,
   // Topic planning made nothing: the unassigned records name no project.
   topicPlanCheck,
   // The store migration (task 2.12): another device's entries in this

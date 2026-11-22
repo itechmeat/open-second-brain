@@ -55,6 +55,8 @@ export interface DreamReportInput {
   /** True when the invoking agent differs from the vault's declared primary. */
   readonly isNonPrimary: boolean;
   readonly callerAgent: string;
+  /** The dream owner of a brain that has one (`dream-owner/`); absent on an unbound brain. */
+  readonly owner?: { readonly device: string; readonly agent: string };
   readonly workrun: WorkrunHandle | null;
 }
 
@@ -268,6 +270,13 @@ function buildSummaryBody(input: DreamReportInput): Record<string, string | Read
     // alongside `run_id` so a non-primary dream pass is greppable in
     // the log without parsing the structured warnings array.
     body["non_primary_agent"] = input.callerAgent;
+  }
+  if (input.owner !== undefined) {
+    // The pass ran on the owner's device; the row names the owner and the
+    // agent that started it, which may be another agent on that device.
+    body["dream_owner_device"] = input.owner.device;
+    body["dream_owner_agent"] = input.owner.agent;
+    if (input.callerAgent.length > 0) body["caller_agent"] = input.callerAgent;
   }
   // S3: record each fired rollup rung's counter reset in the dream
   // report. Absent below threshold, so a non-firing run's summary event

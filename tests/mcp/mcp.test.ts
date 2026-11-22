@@ -210,6 +210,8 @@ describe("tool listing", () => {
         // lifecycle review tools added in v0.17.0.
         "brain_feedback",
         "brain_dream",
+        // The dream owner: status, take and release (agent-neutral dream).
+        "brain_dream_owner",
         "brain_intent_review",
         "brain_retention",
         "brain_review_candidates",

@@ -70,6 +70,10 @@ const GUARD_RE =
  * be wrong, never because asserting was inconvenient.
  */
 const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/dream-owner/owner.ts":
+    "writes no vault file. Its one direct write is the dream owner's claim-seen note " +
+    "in the store's device-local state directory, never synced and never in a vault; " +
+    "the role's records go through the store appender.",
   "src/core/brain/architect/manifests.ts":
     "never writes. It names `openSync` only to open a project manifest " +
     "read-only (O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so " +
@@ -187,6 +191,8 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/intake/source-trust.ts": "never writes",
   "src/core/brain/doctor/migration-check.ts": "never writes",
   "src/core/brain/dedup-index-cache.ts": "writes only outside the vault (the user cache dir)",
+  "src/core/brain/dream-owner/owner.ts":
+    "writes only outside the vault (the store and its device-local state)",
   "src/core/brain/init.ts": ASKS_THE_GATE,
   "src/core/brain/gitignore-guard.ts":
     "called by the bootstrap, after `bootstrapBrain` asked the gate for the vault",

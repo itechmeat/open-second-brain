@@ -218,7 +218,7 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.architect,
     stage: "render",
   },
-  "core/brain/dream.ts#dream": {
+  "core/brain/dream.ts#dreamPass": {
     entryPoint: "o2b brain dream --progress",
     operation: OPERATION.dream,
     stage: "scan",

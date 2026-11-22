@@ -16,6 +16,7 @@
  * holds. State checks are cheap reads and also handle interrupted
  * migrations and downgrades correctly.
  */
+import { maintainDreamOwner } from "../brain/dream-owner/gate.ts";
 import { isPathInsideResolved } from "../store/store-paths.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { beginWorkerLogAttempt, workerLogAttemptHeader } from "../store-migration/worker-log.ts";
@@ -888,6 +889,16 @@ async function ensureVaultCurrentJudged(
     }
   } catch (e) {
     errors.push(`search-reindex: ${message(e)}`);
+  }
+
+  // 4. The dream owner's device hands a pending transfer over, and notes
+  //    its own fresh claim (change agent-neutral-dream, design D3): a few
+  //    settings records read, and a release written only on the owner's
+  //    device under its pass lock, so a pass in progress is never cut.
+  try {
+    maintainDreamOwner(vault, opts.configPath);
+  } catch (e) {
+    errors.push(`dream-owner: ${message(e)}`);
   }
 
   return {

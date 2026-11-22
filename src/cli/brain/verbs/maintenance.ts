@@ -526,7 +526,13 @@ function printMaintenanceRecipe(
 export function renderTaskLine(t: MaintenanceTaskResult): string {
   if (t.refused === true) return `${t.name}: REFUSED (${t.error})`;
   const outcome =
-    t.timed_out === true ? `TIMED OUT (${t.error})` : t.ok ? "ok" : `FAILED (${t.error})`;
+    t.timed_out === true
+      ? `TIMED OUT (${t.error})`
+      : t.skipped !== undefined
+        ? `skipped (${t.skipped})`
+        : t.ok
+          ? "ok"
+          : `FAILED (${t.error})`;
   const line = `${t.name}: ${outcome} in ${t.duration_ms}ms`;
   if (t.receipt === undefined) return line;
   return `${line} (${receiptFields(t.receipt)})`;

@@ -31,6 +31,8 @@ import {
   StoreRootInsideVaultError,
 } from "../core/store/store-paths.ts";
 import { claimViewWriter } from "../core/view/writer.ts";
+import { isStoreOnly } from "../core/store/store-only.ts";
+import { claimDreamOwnerOnCreate } from "../core/brain/dream-owner/create.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { sortedReplacer } from "./helpers.ts";
 import { cmdStoreDevice, STORE_DEVICE_USAGE } from "./store-device.ts";
@@ -129,14 +131,21 @@ function cmdStoreInit(argv: ReadonlyArray<string>): number {
       result.status === "created" || result.created.includes("shared")
         ? claimOnCreate(root, result.partitions, configPath)
         : null;
+    // The dream owner is claimed by the same run, for a new brain only: a
+    // vault that still holds a legacy tree is an existing brain (design D5).
+    const dreamOwner =
+      viewWriter !== null && result.partitions.includes("shared") && isNewBrain(configPath)
+        ? claimDreamOwnerOnCreate(root, configPath)
+        : null;
     const freshSwitch = recordFreshSwitch(configPath);
     const lines = [renderResult(result)];
     if (viewWriter !== null) lines.push(`${viewWriter.message}\n`);
+    if (dreamOwner !== null) lines.push(`${dreamOwner.message}\n`);
     if (freshSwitch.warning !== null) process.stderr.write(`warning: ${freshSwitch.warning}\n`);
     process.stdout.write(
       json
         ? `${JSON.stringify(
-            { ok: true, ...result, viewWriter, fresh_switch: freshSwitch.outcome },
+            { ok: true, ...result, viewWriter, dreamOwner, fresh_switch: freshSwitch.outcome },
             sortedReplacer,
             2,
           )}\n`
@@ -149,6 +158,14 @@ function cmdStoreInit(argv: ReadonlyArray<string>): number {
     process.stderr.write(`error: ${err.message}\n`);
     return STORE_EXIT.refused;
   }
+}
+
+/** A brain with no legacy `Brain/` tree in the configured vault (or no vault). */
+function isNewBrain(configPath: string | undefined): boolean {
+  const vault = resolveVault(configPath);
+  return (
+    vault === null || isStoreOnly({ vault, ...(configPath !== undefined ? { configPath } : {}) })
+  );
 }
 
 /**

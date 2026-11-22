@@ -45,9 +45,14 @@ o2b brain init --vault /path/to/vault \
     --primary-agent "<chosen-agent-name>"
 ```
 
-`--primary-agent` declares this Hermes install as the vault's
-dream-running host. Multi-device setups (Syncthing) benefit from
-a single dream-runner.
+`--primary-agent` declares the agent name you want to run dream. Dream
+runs on one device and agent, the dream owner: the installation that
+creates the brain becomes it when its agent name is known. Check with
+`o2b dream owner`; to make this Hermes install the owner of an existing
+brain, run `o2b dream owner --here --agent "<chosen-agent-name>"` on
+this machine (on another device it asks the current owner, which hands
+the role over the next time it looks). Other devices preview dream and
+refuse a live pass with `dream_not_owner`.
 
 ## 4. Enable the memory provider
 

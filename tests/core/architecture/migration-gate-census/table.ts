@@ -641,6 +641,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   status: r,
   "store device list": r,
   "store device retire": o("store"),
+  "dream owner": o("store"),
   "store init": o("store"),
   "store partition leave": o("store"),
   "store path": r,
@@ -785,6 +786,8 @@ export const MCP_CENSUS: Readonly<Record<string, McpRow>> = Object.freeze({
   brain_session_grep: { kind: "reader" },
   brain_session_summary: { kind: "writer", guard: V },
   brain_settings: { kind: "writer", guard: V, undriven: true },
+  // The dream owner role is three records in the store's shared settings.
+  brain_dream_owner: { kind: "outside", reason: "store" },
   brain_skill_proposals: { kind: "writer", guard: V },
   brain_skill_rewrite_status: { kind: "reader" },
   brain_sources: { kind: "reader" },
