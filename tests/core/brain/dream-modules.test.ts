@@ -18,6 +18,11 @@ import {
 import { buildReconcileOutcomes } from "../../../src/core/brain/reconcile-outcomes.ts";
 import { emptyPlan, filterWithinWindow } from "../../../src/core/brain/dream-plan.ts";
 import { scanApplyEvidence } from "../../../src/core/brain/dream-refresh.ts";
+import {
+  createWindowContext,
+  readWindowEvidence,
+} from "../../../src/core/brain/dream-replay/window.ts";
+import { scanBrain } from "../../../src/core/brain/dream-scan.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../../../src/core/brain/policy.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
@@ -117,7 +122,9 @@ describe("scanApplyEvidence", () => {
       body: { preference: "[[pref-new-rule]]", result: "violated", outcome: "failure" },
     });
 
-    const entries = scanApplyEvidence(vault);
+    const context = createWindowContext(NOW, scanBrain(vault));
+    context.setEvidence(readWindowEvidence(vault, context.signals));
+    const entries = scanApplyEvidence(context.evidence);
     expect(entries).toHaveLength(2);
     // The merge alias folds the old slug into the surviving one.
     expect(entries.map((e) => e.pref_slug)).toEqual(["new-rule", "new-rule"]);

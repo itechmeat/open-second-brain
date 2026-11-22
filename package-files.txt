@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6906787 bytes
-# Maximum unpacked size: 23435173 bytes
+# Maximum packed size: 6907785 bytes
+# Maximum unpacked size: 23439481 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -555,6 +555,7 @@ src/core/brain/dream-plan-retires.ts
 src/core/brain/dream-plan-topics.ts
 src/core/brain/dream-plan.ts
 src/core/brain/dream-refresh.ts
+src/core/brain/dream-replay/window.ts
 src/core/brain/dream-report.ts
 src/core/brain/dream-rollup.ts
 src/core/brain/dream-scan.ts
@@ -579,6 +580,7 @@ src/core/brain/entities/semantic-dedup.ts
 src/core/brain/entities/status-scope.ts
 src/core/brain/entities/types.ts
 src/core/brain/event-trace.ts
+src/core/brain/evidence-read.ts
 src/core/brain/evidence.ts
 src/core/brain/exact-state.ts
 src/core/brain/expiration-set.ts

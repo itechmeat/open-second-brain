@@ -261,6 +261,8 @@ export interface CrossTopicPlannerInput {
   readonly ledger: CrossTopicLedger | null;
   /** The pass's injected clock; the budget date comes from here. */
   readonly now: Date;
+  /** The window's UTC day, supplied by the pass context. */
+  readonly day?: string;
   /** Entries are pushed onto `plan.crossTopicRules`. */
   readonly plan: PlanState;
 }
@@ -306,7 +308,7 @@ export interface CrossTopicPlannerResult {
 export function planCrossTopicRules(input: CrossTopicPlannerInput): CrossTopicPlannerResult {
   const { scan, refresh, config, ledger, now, plan } = input;
   if (config === null) return { fired: false, ledger: null, skips: NO_SKIPS };
-  const today = isoDate(now);
+  const today = input.day ?? isoDate(now);
 
   const sources = collectSources(scan, refresh, plan);
   const clusters = electClusters(sources, config);

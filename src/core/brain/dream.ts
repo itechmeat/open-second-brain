@@ -94,6 +94,7 @@ import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
 import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, workrunPath, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
+import { createWindowContext, readWindowEvidence } from "./dream-replay/window.ts";
 import { logShardWikilink } from "./log.ts";
 import {
   OPERATION,
@@ -392,13 +393,6 @@ function dreamRun(
   // nothing writes the decision back to `_brain.yaml`.
   const healEnrichEnabled = opts.gates?.heal_enrich ?? cfg.dream.heal_enrich_enabled === true;
   let runId = formatRunId(now);
-  // The retired_by stamp every retire in this pass carries. Built
-  // through the shared helper so it names the log shard the pass's own
-  // events land in - with a configured device id, the bare-date shape
-  // names a file this device never writes, and the doctor reads the
-  // provenance as a broken link.
-  const wikilinkToRun = logShardWikilink(isoDate(now));
-
   const callerAgent = opts.agentName?.trim() ?? "";
   // A brain with a dream owner names the owner instead (`owner` below).
   const isNonPrimary =
@@ -425,16 +419,20 @@ function dreamRun(
     opts.previewReadable === undefined
       ? fullScan
       : scanAsAdmitted(vault, fullScan, opts.previewReadable);
+  const context = createWindowContext(now, scan);
+  // The retired_by stamp names the audit shard for this window.
+  const wikilinkToRun = logShardWikilink(context.day);
   progress.advance(DREAM_STAGE.scan);
   const intentReview = buildIntentReview(vault, {
-    now,
+    now: context.instant,
+    signals: context.signals.signals,
     ...(opts.previewReadable !== undefined ? { readable: opts.previewReadable } : {}),
   });
   progress.start(DREAM_STAGE.plan, scan.preferences.length);
 
   // 1-2. Plan per-topic transitions: new unconfirmed preferences,
   //      same-sign noted-redundant moves, rebuttal accumulation.
-  const plan = planTopics(scan, cfg, now);
+  const plan = planTopics(context.signals, cfg, context.instant);
   // A folded topic key claimed by two preferences is an ambiguity the pass
   // refuses to settle by scan order, so it planned nothing for that key. The
   // warning is how it says so - on the no-op summary as well as the changed
@@ -445,7 +443,9 @@ function dreamRun(
   // and that have left the contradiction window can never count toward a
   // candidate again, so they leave the inbox for `inbox/archived/`.
   // Planned after the topic plan so a consumed signal is never archived.
-  warnings.push(...planSignalArchive(scan, cfg, now, plan));
+  warnings.push(
+    ...planSignalArchive(context.signals, cfg, context.instant, context.wallClock, plan),
+  );
 
   // 3. Plan refresh: applied / violated / last_evidence / confidence,
   //    and unconfirmed → confirmed promotion. We need the log of all
@@ -455,13 +455,23 @@ function dreamRun(
   // The two walks that grow with the history: a pass past its deadline
   // stops inside them, before it has written anything.
   const checkpoint = (): void => opts.safeguard?.checkpoint();
-  const evidence = scanApplyEvidence(vault, checkpoint);
-  const refresh = planRefresh(vault, scan, evidence, cfg, now, plan, checkpoint);
+  context.setEvidence(readWindowEvidence(vault, context.signals, checkpoint));
+  const evidence = scanApplyEvidence(context.evidence);
+  const refresh = planRefresh(
+    vault,
+    scan,
+    evidence,
+    cfg,
+    context.instant,
+    plan,
+    context.evidence,
+    checkpoint,
+  );
 
   // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
   //    preferences get a `retain-pinned` log event instead of a real
   //    retire.
-  planAutoRetires(scan, cfg, now, plan, refresh);
+  planAutoRetires(context.signals, cfg, context.instant, plan, refresh);
 
   // 4b. Cross-topic rule promotion (t_642bc2b8). Planned after the
   //     refresh pass - the source pool reads post-refresh confirmation
@@ -479,11 +489,12 @@ function dreamRun(
     warnings.push({ code, message }),
   );
   const crossTopic = planCrossTopicRules({
-    scan,
+    scan: context.signals,
     refresh,
     config: crossTopicConfig,
     ledger: crossTopicConfig ? readCrossTopicLedger(vault) : null,
-    now,
+    now: context.instant,
+    day: context.day,
     plan,
   });
 
@@ -498,7 +509,7 @@ function dreamRun(
   // question. Computed in-memory before the `changed` gate so the
   // summary carries open_questions on both the no-op and changed paths;
   // the `reconcile` log events below are emitted only on a changed run.
-  const reconcile = buildReconcileOutcomes(scan, plan, cfg, now);
+  const reconcile = buildReconcileOutcomes(context.signals, plan, cfg, context.instant);
 
   // Deterministic salience gate over the ladder's fold set
   // (salience-lifecycle-enrichment, unit 1). The ladder counts facts and
@@ -506,7 +517,12 @@ function dreamRun(
   // change what the pass asks a model to fold. With
   // `dream.salience_threshold` unset the gate is open and reads nothing,
   // which is why an un-opted-in vault pays no I/O here.
-  const salienceGate = applySalienceGate({ vault, preferences: scan.preferences, cfg, now });
+  const salienceGate = applySalienceGate({
+    vault,
+    preferences: context.signals.preferences,
+    cfg,
+    now: context.instant,
+  });
 
   // The wikilink targets a fired rung's envelope offers, built at most
   // ONCE per dream run and only if a rung fires. The manifest is a whole
@@ -593,9 +609,9 @@ function dreamRun(
       const applied = applyDreamPlan({
         vault,
         cfg,
-        now,
         plan,
         refresh,
+        window: context,
         agentName: opts.agentName,
         wikilinkToRun,
         healEnrichEnabled,
@@ -664,9 +680,9 @@ function dreamRun(
   if (!dryRun) {
     writeDreamLog({
       vault,
-      now,
+      now: context.instant,
       runId,
-      scan,
+      scan: context.signals,
       plan,
       refresh,
       reconcile,
@@ -718,7 +734,7 @@ function dreamRun(
           log_path:
             vault === null || isStoreOnly({ vault })
               ? NO_VAULT_LOG_PATH
-              : join(brainDirsForWrite(vault).log, `${isoDate(now)}.md`),
+              : join(brainDirsForWrite(vault).log, `${context.day}.md`),
         },
     scan,
     plan,

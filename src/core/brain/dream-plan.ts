@@ -99,6 +99,8 @@ export function preferenceSlug(id: string): string {
 export interface SignalRecord {
   readonly path: string;
   readonly signal: BrainSignal;
+  /** The event time selected by the dream window; absent outside a pass. */
+  readonly effectiveTime?: string;
   /** True iff the file lives in `inbox/` (not `processed/` or `archived/`). */
   readonly active: boolean;
   /**
@@ -429,7 +431,7 @@ export function filterWithinWindow(
 ): SignalRecord[] {
   const minTime = now.getTime() - windowDays * 24 * 3600 * 1000;
   return sigs.filter((s) => {
-    const t = Date.parse(s.signal.created_at);
+    const t = Date.parse(s.effectiveTime ?? s.signal.created_at);
     return Number.isFinite(t) && t >= minTime;
   });
 }

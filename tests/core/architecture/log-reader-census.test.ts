@@ -144,9 +144,9 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
       "D2, settled rows",
     ),
     ...rows(
-      ["core/brain/dream-refresh.ts", "core/brain/evidence.ts"],
+      ["core/brain/evidence-read.ts"],
       "computation",
-      "dream and evidence (task 3.18)",
+      "window-owned evidence reads and the direct retire snapshot (dream-window-context)",
     ),
     ...rows(
       [

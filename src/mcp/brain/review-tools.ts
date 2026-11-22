@@ -50,7 +50,7 @@ async function toolBrainIntentReview(
   // moves no topic, count or decision (a-label-is-not-a-boundary, U3).
   const readable = readableAtContextReachOrUndefined(ctx);
   const report = buildIntentReview(ctx.vault, {
-    ...(nowDate ? { now: nowDate } : {}),
+    now: nowDate ?? new Date(),
     ...(readable !== undefined ? { readable } : {}),
   });
   return {

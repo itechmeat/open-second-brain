@@ -20,10 +20,15 @@ import {
 import { activeDigestPathForRead, renderActive } from "../../../../src/core/brain/active.ts";
 import { collectExplorerData } from "../../../../src/core/brain/explorer.ts";
 import { scanApplyEvidence } from "../../../../src/core/brain/dream-refresh.ts";
+import {
+  createWindowContext,
+  readWindowEvidence,
+} from "../../../../src/core/brain/dream-replay/window.ts";
+import { scanBrain } from "../../../../src/core/brain/dream-scan.ts";
 import { setExpiration } from "../../../../src/core/brain/expiration-set.ts";
 import { renderDigest } from "../../../../src/core/brain/digest.ts";
 import { computeAgentSummary } from "../../../../src/core/brain/digest-agent-summary.ts";
-import { collectEvidenceForSlug } from "../../../../src/core/brain/evidence.ts";
+import { collectEvidenceForSlug } from "../../../../src/core/brain/evidence-read.ts";
 import { collectPreferenceRows } from "../../../../src/core/brain/export.ts";
 import { buildIntentReview } from "../../../../src/core/brain/intent-review.ts";
 import { lessonsDigestPathForRead, regenerateLessons } from "../../../../src/core/brain/lessons.ts";
@@ -101,7 +106,11 @@ const READERS: ReadonlyArray<Reader> = [
   },
   {
     name: "dream refresh evidence",
-    read: (env) => scanApplyEvidence(env.vault),
+    read: (env) => {
+      const context = createWindowContext(FIXTURE_NOW, scanBrain(env.vault));
+      context.setEvidence(readWindowEvidence(env.vault, context.signals));
+      return scanApplyEvidence(context.evidence);
+    },
     holdsData: nonEmptyList,
   },
   {

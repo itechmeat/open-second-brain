@@ -16,7 +16,7 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
   });
   const { vault } = brainVerbContext(flags);
   const now = parseNow(flags["now"]);
-  const report = buildIntentReview(vault, now ? { now } : {});
+  const report = buildIntentReview(vault, { now: now ?? new Date() });
 
   if (flags["json"]) {
     // no-dead-ends, phase 3: the exit was computed on the human path and

@@ -421,7 +421,7 @@ function quarantineIfGuarded(
   const distinctAgents = new Set(dominant.map((s) => s.signal.agent)).size;
   let earliestSignalMs = Number.POSITIVE_INFINITY;
   for (const s of dominant) {
-    const t = Date.parse(s.signal.created_at);
+    const t = Date.parse(s.effectiveTime ?? s.signal.created_at);
     if (Number.isFinite(t) && t < earliestSignalMs) earliestSignalMs = t;
   }
   const ageDays = Number.isFinite(earliestSignalMs)
