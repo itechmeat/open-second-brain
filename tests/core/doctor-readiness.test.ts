@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import {
   DEFAULT_PROBES,
@@ -37,6 +39,7 @@ import { serializeMcpServerTable } from "../../src/core/install/grok-config.ts";
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
 import { manifestPath } from "../../src/core/install/manifest.ts";
 import { WRITEBACK_CONTRACT_RECOVERY } from "../../src/core/brain/writeback-contract.ts";
+import { OPEN_SECOND_BRAIN_VERSION } from "../../src/core/version.ts";
 
 // The probes read the embedding config through `resolveSearchConfig`, which
 // consults `process.env` before the config file. Clear the embedding env keys
@@ -293,7 +296,12 @@ describe("probeInstalledRuntimes", () => {
       env: {} as Record<string, string>,
       now: new Date(),
     };
-    const payload = buildPayload({ vault: tmp, agent_name: null, timezone: null });
+    const payload = buildPayload({
+      vault: tmp,
+      agent_name: null,
+      timezone: null,
+      configPath,
+    });
     adapter.apply(adapter.plan(payload, env), payload, env, {
       dryRun: false,
       force: false,
@@ -491,6 +499,86 @@ describe("probeRegisteredCommands", () => {
     expect(v.detail).toContain("cursor");
     expect(v.detail).toContain("does not exist");
     expect(v.detail).toContain("o2b install cursor --apply");
+  });
+
+  test("a missing registry launcher names stale registration and setup repair", async () => {
+    writeConfig("");
+    const bun = join(tmp, "bin", "bun");
+    const launcher = join(tmp, "global", "node_modules", "open-second-brain", "bin", "o2b.js");
+    mkdirSync(dirname(bun), { recursive: true });
+    writeFileSync(bun, "");
+    const cursorConfig = join(home, ".cursor", "mcp.json");
+    mkdirSync(dirname(cursorConfig), { recursive: true });
+    writeFileSync(
+      cursorConfig,
+      JSON.stringify({
+        mcpServers: {
+          "open-second-brain": { command: bun, args: ["run", launcher, "mcp"] },
+        },
+      }),
+    );
+    writeManifestEntries({
+      cursor: {
+        ...manifestEntry("cursor", cursorConfig),
+        origin: {
+          kind: "registry",
+          root: dirname(dirname(dirname(launcher))),
+          version: OPEN_SECOND_BRAIN_VERSION,
+        },
+      },
+    });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("stale_registration");
+    expect(v.detail).toContain("o2b setup --target cursor --apply --yes");
+  });
+
+  test("an older registry origin version is informational and names setup repair", async () => {
+    writeConfig("");
+    const launcher = join(tmp, "bin", "o2b");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, "");
+    const cursorConfig = join(home, ".cursor", "mcp.json");
+    clientConfig(cursorConfig, launcher);
+    writeManifestEntries({
+      cursor: {
+        ...manifestEntry("cursor", cursorConfig),
+        origin: {
+          kind: "registry",
+          root: join(tmp, "node_modules/open-second-brain"),
+          version: "0.1.0",
+        },
+      },
+    });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("registration_version");
+    expect(v.detail).toContain("0.1.0");
+    expect(v.detail).toContain("o2b setup --target cursor --apply --yes");
+  });
+
+  test("distinct o2b providers on PATH are informational and show the winner", async () => {
+    writeConfig("");
+    const first = join(tmp, "path-first", "o2b");
+    const second = join(tmp, "path-second", "o2b");
+    mkdirSync(dirname(first), { recursive: true });
+    mkdirSync(dirname(second), { recursive: true });
+    writeFileSync(first, "");
+    writeFileSync(second, "");
+    if (process.platform !== "win32") {
+      chmodSync(first, 0o755);
+      chmodSync(second, 0o755);
+    }
+    writeManifestEntries({});
+    const v = await probeRegisteredCommands({
+      ...installedRuntimeOpts(),
+      env: { PATH: [dirname(first), dirname(second)].join(delimiter) },
+    });
+    expect(v.status).toBe(READINESS_STATUS.skipped);
+    expect(v.detail).toContain("path_providers");
+    expect(v.detail).toContain(realpathSync(first));
+    expect(v.detail).toContain(realpathSync(second));
+    expect(v.detail).toContain("first runs");
   });
 
   test("a bare name that does not resolve is unknown and never a fail", async () => {

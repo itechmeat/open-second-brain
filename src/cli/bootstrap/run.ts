@@ -48,7 +48,7 @@
  *   5  --check found the runtime unreachable
  */
 
-import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
+import { defaultConfigPath, resolveVault } from "../../core/config.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import "../../core/install/adapters/all.ts";
 import { buildInstallEnv, VAULT_NOT_CONFIGURED_REASON } from "../../core/install/env.ts";
@@ -166,11 +166,13 @@ function resolveBootstrapVault(explicit: string | null, configPath: string): str
 
 /** The payload exactly as `o2b install` builds it: config, then env. */
 function buildBootstrapPayload(vault: string, configPath: string) {
-  const cfg = discoverConfig(configPath).data;
+  const env = buildInstallEnv({ vault, configPath });
   return buildPayload({
     vault,
-    agent_name: cfg["agent_name"] ?? process.env["VAULT_AGENT_NAME"] ?? null,
-    timezone: cfg["timezone"] ?? process.env["VAULT_TIMEZONE"] ?? null,
+    agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
+    timezone: env.env["VAULT_TIMEZONE"] ?? null,
+    origin: env.origin,
+    configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"],
   });
 }
 

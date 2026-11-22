@@ -22,6 +22,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { userBinDir } from "../core/platform-dirs.ts";
+import { underPluginCache } from "../core/install/origin.ts";
 import type { InstallResult, UninstallResult } from "../core/types.ts";
 import { healCliWindows, installCliWindows, uninstallCliWindows } from "./install-cli-windows.ts";
 
@@ -97,12 +98,6 @@ function linkResolves(link: string): boolean {
 function looksLikeOsbScript(absTarget: string, name: string): boolean {
   const parts = absTarget.split(sep);
   return parts[parts.length - 1] === name && parts[parts.length - 2] === "scripts";
-}
-
-/** Heuristic: the target lives inside a Claude Code plugin cache, which rotates
- * version directories on update (so the symlink is expected to go stale). */
-function underPluginCache(absTarget: string): boolean {
-  return absTarget.includes(`${sep}plugins${sep}cache${sep}`);
 }
 
 /** Absolute form of a symlink's stored target (resolved against the link dir). */

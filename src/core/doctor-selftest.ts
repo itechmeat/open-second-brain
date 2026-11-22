@@ -397,10 +397,15 @@ const createTempVaultStage: SelftestStageSpec = {
  * Real init + migration path: `resolveSearchConfig` over the temp config,
  * then a write-mode `Store.open` (create + apply every migration), asserting
  * the schema landed at the current version and MEASURING the journal mode
- * off the live connection. The two overrides are the isolation contract:
+ * off the live connection. The three overrides are the isolation contract:
  * `dbPath` pinned inside the throwaway vault (an operator's store-location
- * override must not move writes outside it) and semantic forced off (the
- * harness is network-free by construction).
+ * override must not move writes outside it), semantic forced off (the
+ * harness is network-free by construction) and no brain store. The machine's
+ * store is found from the environment, not from the temp config, so without
+ * the last one a configured machine catches the index up from its real
+ * store, and on a machine already switched to the store the walk skips the
+ * temp vault's `Brain/` tree as an archived legacy tree: the seeded notes
+ * live there, and the index pass found none of them.
  */
 const storeOpenStage: SelftestStageSpec = {
   name: "store-open",
@@ -412,6 +417,8 @@ const storeOpenStage: SelftestStageSpec = {
       overrides: {
         dbPath: ctx.dbPath,
         semantic: { enabled: false },
+        brainStore: null,
+        brainStoreUnknown: false,
       },
     });
     // The query stage probes the trigram lane, whose shadow an index

@@ -411,7 +411,7 @@ function applyViaEditor(
     owned_keys: ownedKeysFor(shapePath),
   };
   if (!opts.dryRun && (contentChanged || !existing)) {
-    recordEntry(env.vault, manifest);
+    recordEntry(env, manifest);
   }
   return {
     target: "opencode",
@@ -803,7 +803,7 @@ export const opencodeAdapter = {
       // too.
       const stored = readManifest(env.vault).installs[result.manifest.target] ?? result.manifest;
       const manifest = { ...stored, owned_paths: [plugin] };
-      recordEntry(env.vault, manifest);
+      recordEntry(env, manifest);
       return {
         ...result,
         manifest,

@@ -207,6 +207,7 @@ function o(reason: OutsideReason): CliRow {
 export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "aider wrap": u("host"),
   bootstrap: u("host"),
+  setup: u("host"),
   "brain actions": r,
   "brain activation": u("fixtureState"),
   "brain agenda": r,

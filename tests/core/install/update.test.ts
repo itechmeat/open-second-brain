@@ -7,7 +7,7 @@ import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { runUpdate } from "../../../src/core/install/update.ts";
 import { createRegistry } from "../../../src/core/install/registry.ts";
-import { readManifest } from "../../../src/core/install/manifest.ts";
+import { readManifest, recordEntry } from "../../../src/core/install/manifest.ts";
 import type {
   InstallAdapter,
   InstallEnv,
@@ -44,6 +44,7 @@ function makeEnv(): InstallEnv {
 function fakeAdapter(
   target: InstallTargetId,
   status: "installed" | "not-installed" = "installed",
+  operation: "json-merge" | "subprocess" = "json-merge",
 ): InstallAdapter {
   return {
     target,
@@ -59,7 +60,7 @@ function fakeAdapter(
     plan(): InstallPlan {
       return {
         target,
-        steps: [{ kind: "json-merge", path: "/tmp/c.json", preview: "merge" }],
+        steps: [{ kind: operation, path: "/tmp/c.json", preview: "merge" }],
         postNotes: ["restart " + target],
       };
     },
@@ -70,7 +71,7 @@ function fakeAdapter(
         manifest: {
           target,
           applied_at: new Date().toISOString(),
-          operation: "json-merge",
+          operation,
           config_path: "/tmp/c.json",
         },
       };
@@ -187,5 +188,29 @@ describe("runUpdate", () => {
     expect(entry).toBeDefined();
     expect(entry!.payload_hash).toBeDefined();
     expect(entry!.payload_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("reapplies hashless registry entries even when presence verification succeeds", () => {
+    const reg = createRegistry();
+    reg.register(fakeAdapter("codex", "installed", "subprocess"));
+    const env: InstallEnv = {
+      ...makeEnv(),
+      origin: {
+        kind: "registry",
+        root: join(home, "node_modules", "open-second-brain"),
+        version: "2.0.1",
+      },
+    };
+    recordEntry(env, {
+      target: "codex",
+      applied_at: "2026-05-20T12:00:00.000Z",
+      operation: "subprocess",
+      config_path: join(home, "cursor.json"),
+    });
+
+    const result = runUpdate(reg, env, { dryRun: false, force: false, target: null });
+
+    expect(result.targets[0]!.status).toBe("applied");
+    expect(readManifest(vault).installs.codex?.payload_hash).toBeDefined();
   });
 });

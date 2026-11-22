@@ -393,7 +393,7 @@ export const copilotCliAdapter: InstallAdapter = {
         ? {}
         : { owned_keys: [`mcpServers.${OSB_KEY_FULL}`, `mcpServers.${OSB_KEY_WRITER}`] }),
     };
-    if (!opts.dryRun) recordEntry(env.vault, manifest);
+    if (!opts.dryRun) recordEntry(env, manifest);
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 1 };
   },
 

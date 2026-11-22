@@ -130,7 +130,7 @@ export const genericAdapter: InstallAdapter = {
       config_path: outPath,
       ...(outPath ? { owned_paths: [outPath] } : {}),
     };
-    if (!opts.dryRun) recordEntry(env.vault, manifest);
+    if (!opts.dryRun) recordEntry(env, manifest);
 
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 1 };
   },

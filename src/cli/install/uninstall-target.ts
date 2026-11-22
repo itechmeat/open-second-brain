@@ -8,8 +8,6 @@
  *                                                   # (exact-payload match)
  */
 
-import { homedir } from "node:os";
-
 import { parseFlags } from "../argparse.ts";
 import { defaultConfigPath } from "../../core/config.ts";
 import { resolveInstallVault } from "./install.ts";
@@ -25,6 +23,7 @@ import "../../core/install/adapters/kiro.ts";
 import "../../core/install/adapters/opencode.ts";
 import "../../core/install/adapters/pi.ts";
 import { InstallError, type InstallEnv } from "../../core/install/types.ts";
+import { buildInstallEnv } from "../../core/install/env.ts";
 import { isInstallTargetId, type InstallTargetId } from "../../core/runtime/host-facts.ts";
 import {
   instructionBlockTargetFor,
@@ -109,13 +108,7 @@ export async function cmdUninstallTarget(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const env: InstallEnv = {
-    vault,
-    home: homedir(),
-    cwd: process.cwd(),
-    env: { ...process.env } as Record<string, string>,
-    now: new Date(),
-  };
+  const env: InstallEnv = buildInstallEnv({ vault, configPath: cfgPath });
   const opts = {
     dryRun,
     force: false,

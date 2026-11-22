@@ -203,7 +203,7 @@ export const grokAdapter = {
       atomicWriteFileSync(hp, state.hooksContent);
       steps += 1;
     }
-    recordEntry(env.vault, entry);
+    recordEntry(env, entry);
     return { target: TARGET, manifest: entry, steps_executed: steps };
   },
 

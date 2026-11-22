@@ -201,7 +201,7 @@ export const aiderAdapter: InstallAdapter = {
       owned_paths: [sidecar],
       owned_block_marker: "# >>> open-second-brain managed >>>",
     };
-    if (!opts.dryRun) recordEntry(env.vault, manifest);
+    if (!opts.dryRun) recordEntry(env, manifest);
 
     return { target: TARGET, manifest, steps_executed: opts.dryRun ? 0 : 2 };
   },

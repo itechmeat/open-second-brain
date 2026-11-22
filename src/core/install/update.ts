@@ -80,6 +80,8 @@ export function runUpdate(registry: Registry, env: InstallEnv, opts: UpdateOptio
         vault: env.vault,
         agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
         timezone: env.env["VAULT_TIMEZONE"] ?? null,
+        origin: env.origin,
+        configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"],
       });
     } catch (exc) {
       results.push({
@@ -110,11 +112,30 @@ export function runUpdate(registry: Registry, env: InstallEnv, opts: UpdateOptio
       continue;
     }
     const previous = manifest.installs[adapter.target];
-    if (previous?.payload_hash === currentHash && !opts.force) {
+    if (
+      previous?.operation !== "subprocess" &&
+      previous?.payload_hash === currentHash &&
+      !opts.force
+    ) {
       results.push({ target: adapter.target, status: "up-to-date", reason: "payload unchanged" });
       continue;
     }
-
+    // A subprocess host owns registration bytes we cannot compare with the
+    // generated payload. Its verification proves presence only, so refresh it.
+    if (
+      previous?.origin?.kind === "registry" &&
+      previous.operation !== "subprocess" &&
+      previous.payload_hash === undefined &&
+      !opts.force &&
+      adapter.verify(env).status === "ok"
+    ) {
+      results.push({
+        target: adapter.target,
+        status: "up-to-date",
+        reason: "registry registration verified",
+      });
+      continue;
+    }
     const plan = adapter.plan(payload, env);
 
     if (opts.dryRun) {
@@ -131,7 +152,7 @@ export function runUpdate(registry: Registry, env: InstallEnv, opts: UpdateOptio
 
     try {
       const applyResult = adapter.apply(plan, payload, env, applyOpts);
-      recordEntry(env.vault, { ...applyResult.manifest, payload_hash: currentHash });
+      recordEntry(env, { ...applyResult.manifest, payload_hash: currentHash });
     } catch (exc) {
       if (exc instanceof InstallError) {
         results.push({

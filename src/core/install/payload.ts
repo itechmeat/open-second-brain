@@ -9,6 +9,10 @@
  */
 
 import type { McpPayload, McpServerEntry } from "./types.ts";
+import type { InstallOrigin } from "./origin.ts";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { resolveDefaultConfigPath, type ConfigPathEnv } from "../config.ts";
 
 export class PayloadError extends Error {
   constructor(message: string) {
@@ -21,6 +25,21 @@ export interface PayloadConfig {
   readonly vault: string;
   readonly agent_name: string | null;
   readonly timezone: string | null;
+  readonly origin?: InstallOrigin;
+  readonly configPath?: string;
+}
+
+/** Whether the launched server needs an explicit path to find this config. */
+export function shouldIncludeConfigPath(
+  configPath: string | undefined,
+  source: ConfigPathEnv,
+): boolean {
+  if (!configPath) return false;
+  const env = { ...source.env };
+  delete env["OPEN_SECOND_BRAIN_CONFIG"];
+  delete env["XDG_CONFIG_HOME"];
+  const serverDefault = resolveDefaultConfigPath({ ...source, env });
+  return resolve(configPath) !== resolve(serverDefault);
 }
 
 const COMMAND = "o2b";
@@ -46,10 +65,21 @@ const COMMAND = "o2b";
  * quote stripping (`cmd /c "<path with a space>" ... "<vault>"`) breaks it
  * for any profile or vault path with a space in it.
  */
-export function launcherCommand(platform: string = process.platform): {
+export function launcherCommand(
+  originOrPlatform: InstallOrigin | string = process.platform,
+  requestedPlatform: string = process.platform,
+): {
   readonly command: string;
   readonly prefix: ReadonlyArray<string>;
 } {
+  const origin = typeof originOrPlatform === "string" ? undefined : originOrPlatform;
+  const platform = typeof originOrPlatform === "string" ? originOrPlatform : requestedPlatform;
+  if (origin?.kind === "registry") {
+    return {
+      command: process.execPath,
+      prefix: ["run", join(origin.root, "bin", "o2b.js")],
+    };
+  }
   if (platform === "win32") return { command: "cmd", prefix: ["/d", "/c", COMMAND] };
   return { command: COMMAND, prefix: [] };
 }
@@ -83,10 +113,18 @@ export const WINDOWS_LAUNCHER_ENV: Readonly<Record<string, string>> = Object.fre
  * authenticates the HTTP transport's hand-configured clients instead.
  */
 export function buildPayload(cfg: PayloadConfig, platform: string = process.platform): McpPayload {
-  if (!cfg.vault || typeof cfg.vault !== "string") {
-    throw new PayloadError("buildPayload: vault is required");
+  if (typeof cfg.vault !== "string") {
+    throw new PayloadError("buildPayload: vault must be a string");
   }
-  if (platform === "win32" && CMD_METACHARACTERS.test(cfg.vault)) {
+  const { command, prefix } = cfg.origin
+    ? launcherCommand(cfg.origin, platform)
+    : launcherCommand(platform);
+  if (
+    cfg.vault &&
+    platform === "win32" &&
+    command === "cmd" &&
+    CMD_METACHARACTERS.test(cfg.vault)
+  ) {
     throw new PayloadError(
       `buildPayload: the vault path ${cfg.vault} contains a character cmd.exe interprets ` +
         '(& | < > ^ % " !); MCP hosts on Windows start o2b through `cmd /c`, which would split ' +
@@ -94,15 +132,15 @@ export function buildPayload(cfg: PayloadConfig, platform: string = process.plat
     );
   }
   const env = buildEnv(cfg, platform);
-  const { command, prefix } = launcherCommand(platform);
+  const vaultArgs = cfg.vault ? ["--vault", cfg.vault] : [];
   const full: McpServerEntry = {
     command,
-    args: [...prefix, "mcp", "--vault", cfg.vault],
+    args: [...prefix, "mcp", ...vaultArgs],
     ...(env ? { env } : {}),
   };
   const writer: McpServerEntry = {
     command,
-    args: [...prefix, "mcp", "--writer-only", "--vault", cfg.vault],
+    args: [...prefix, "mcp", "--writer-only", ...vaultArgs],
     ...(env ? { env } : {}),
   };
   return { full, writer };
@@ -123,12 +161,31 @@ export function cliArgs(entry: McpServerEntry): ReadonlyArray<string> {
   const win = launcherCommand("win32");
   const hasPrefix =
     entry.command === win.command && win.prefix.every((word, i) => entry.args[i] === word);
-  return hasPrefix ? entry.args.slice(win.prefix.length) : entry.args;
+  if (hasPrefix) return entry.args.slice(win.prefix.length);
+  const launcher = entry.args[1];
+  if (
+    entry.command === process.execPath &&
+    entry.args[0] === "run" &&
+    typeof launcher === "string" &&
+    /(?:^|[\\/])bin[\\/]o2b\.js$/.test(launcher)
+  ) {
+    return entry.args.slice(2);
+  }
+  return entry.args;
 }
 
 function buildEnv(cfg: PayloadConfig, platform: string): Record<string, string> | undefined {
   const env: Record<string, string> = platform === "win32" ? { ...WINDOWS_LAUNCHER_ENV } : {};
   if (cfg.agent_name) env["VAULT_AGENT_NAME"] = cfg.agent_name;
   if (cfg.timezone) env["VAULT_TIMEZONE"] = cfg.timezone;
+  if (
+    shouldIncludeConfigPath(cfg.configPath, {
+      platform,
+      home: homedir(),
+      env: process.env,
+    })
+  ) {
+    env["OPEN_SECOND_BRAIN_CONFIG"] = resolve(cfg.configPath!);
+  }
   return Object.keys(env).length > 0 ? env : undefined;
 }

@@ -36,6 +36,7 @@ import type { LaneConsentVerdict } from "../../core/brain/diagnostics.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../../core/install/env.ts";
+import { assertNotRunnerCache } from "../../core/install/origin.ts";
 // The canonical adapter set registers itself into `defaultRegistry` at
 // module-load time via this barrel (single source of the adapter list).
 import "../../core/install/adapters/all.ts";
@@ -229,6 +230,8 @@ function loadPayload(args: ParsedInstallArgs, env: InstallEnv) {
     vault,
     agent_name: cfg["agent_name"] ?? process.env["VAULT_AGENT_NAME"] ?? null,
     timezone: cfg["timezone"] ?? process.env["VAULT_TIMEZONE"] ?? null,
+    origin: env.origin,
+    configPath: args.config,
   });
 }
 
@@ -443,6 +446,14 @@ async function runTarget(args: ParsedInstallArgs): Promise<number> {
   const adapter = defaultRegistry.get(args.target!);
   if (!adapter) return refuseUnknownTarget("--target", args.target!);
   const env = installEnvForArgs(args);
+  if (args.apply) {
+    try {
+      assertNotRunnerCache(env.origin);
+    } catch (e) {
+      process.stderr.write(`error: ${(e as Error).message}\n`);
+      return INSTALL_EXIT.usage;
+    }
+  }
   let payload;
   try {
     payload = loadPayload(args, env);

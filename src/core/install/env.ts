@@ -15,6 +15,7 @@
 import { homedir } from "node:os";
 
 import { discoverConfig } from "../config.ts";
+import { installOrigin } from "./origin.ts";
 import type { InstallEnv } from "./types.ts";
 
 /**
@@ -35,6 +36,10 @@ export interface InstallEnvInput {
   readonly vault: string;
   /** The config file that parameterises the whole run. */
   readonly configPath: string;
+  readonly home?: string;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly now?: Date;
 }
 
 /**
@@ -49,15 +54,16 @@ export interface InstallEnvInput {
  */
 export function buildInstallEnv(input: InstallEnvInput): InstallEnv {
   const cfg = discoverConfig(input.configPath).data;
-  const env = { ...process.env } as Record<string, string>;
+  const env = { ...(input.env ?? process.env) } as Record<string, string>;
   env["OPEN_SECOND_BRAIN_CONFIG"] = input.configPath;
   if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
   if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
   return {
     vault: input.vault,
-    home: homedir(),
-    cwd: process.cwd(),
+    home: input.home ?? homedir(),
+    cwd: input.cwd ?? process.cwd(),
     env,
-    now: new Date(),
+    now: input.now ?? new Date(),
+    origin: installOrigin(),
   };
 }

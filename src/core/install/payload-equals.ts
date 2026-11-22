@@ -17,6 +17,8 @@ export function expectedPayloadFromEnv(env: InstallEnv, target: InstallTargetId)
       vault: env.vault,
       agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
       timezone: env.env["VAULT_TIMEZONE"] ?? null,
+      origin: env.origin,
+      configPath: env.env["OPEN_SECOND_BRAIN_CONFIG"],
     }),
     env,
   );

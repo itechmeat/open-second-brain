@@ -15,10 +15,8 @@
  * `--skip-store-migration` skips it once.
  */
 
-import { homedir } from "node:os";
-
 import { parseFlags } from "./argparse.ts";
-import { defaultConfigPath, discoverConfig, resolveVault } from "../core/config.ts";
+import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { defaultRegistry } from "../core/install/registry.ts";
 import "../core/install/adapters/aider.ts";
 import "../core/install/adapters/codex.ts";
@@ -32,6 +30,7 @@ import "../core/install/adapters/opencode.ts";
 import "../core/install/adapters/pi.ts";
 
 import { runUpdate, type UpdateResult, type UpdateTargetResult } from "../core/install/update.ts";
+import { buildInstallEnv } from "../core/install/env.ts";
 import {
   describeUpdateStoreMigration,
   updateStoreMigration,
@@ -66,16 +65,8 @@ export function parseUpdateArgs(argv: string[]): ParsedUpdateArgs {
 
 function buildEnv(): InstallEnv {
   const configPath = defaultConfigPath();
-  const cfg = discoverConfig(configPath).data;
   const vault = resolveVault() ?? "";
-  const env = { ...process.env } as Record<string, string>;
-  // The one config file this run is parameterised by, published where
-  // `installSettingsSource` reads it - see `buildInstallEnv` in
-  // `./install/install.ts` for why the adapters may not re-derive it.
-  env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
-  if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
-  if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
-  return { vault, home: homedir(), cwd: process.cwd(), env, now: new Date() };
+  return buildInstallEnv({ vault, configPath });
 }
 
 function statusIcon(status: UpdateTargetResult["status"]): string {

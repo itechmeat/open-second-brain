@@ -16,11 +16,13 @@
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as pathResolve } from "node:path";
 
-import { validateTimezoneName } from "../../core/config.ts";
+import { defaultConfigPath, validateTimezoneName } from "../../core/config.ts";
 import { hasLegacyTree } from "../../core/store/store-only.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
+import { buildInstallEnv } from "../../core/install/env.ts";
+import { parseFlags } from "../argparse.ts";
 import "../../core/install/adapters/aider.ts";
 import "../../core/install/adapters/codex.ts";
 import "../../core/install/adapters/copilot-cli.ts";
@@ -45,6 +47,7 @@ export interface WizardOpts {
   stdout: NodeJS.WriteStream | NodeJS.WritableStream;
   stderr: NodeJS.WriteStream | NodeJS.WritableStream;
   runner: WizardRunner;
+  configPath?: string;
 }
 
 export interface WizardResult {
@@ -210,17 +213,15 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
   const lang = await ask(opts, "Language (ISO 639-1, optional)", "en");
 
   // 5. Runtimes
-  const env = {
+  const env = buildInstallEnv({
     vault,
-    home: homedir(),
-    cwd: process.cwd(),
+    configPath: opts.configPath ?? defaultConfigPath(),
     env: {
       ...process.env,
       VAULT_AGENT_NAME: agentName,
       VAULT_TIMEZONE: tz,
-    } as Record<string, string>,
-    now: new Date(),
-  };
+    },
+  });
   const detected = defaultRegistry.detectAll(env);
   opts.stdout.write("\nKnown runtimes:\n");
   for (const [i, d] of detected.entries()) {
@@ -264,11 +265,21 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
     : false;
 
   // 7. Plan + confirm
-  const initCmd = ["init", "--vault", vault, "--agent-name", agentName, "--timezone", tz];
-  // language and name persisted via o2b init's --name? language isn't a real flag yet — record only.
+  const configArgs = opts.configPath ? ["--config", opts.configPath] : [];
+  const initCmd = [
+    "init",
+    "--vault",
+    vault,
+    "--agent-name",
+    agentName,
+    "--timezone",
+    tz,
+    ...configArgs,
+  ];
+  // language and name persisted via o2b init's --name? language isn't a real flag yet - record only.
   actions.push(initCmd);
   if (brainInit) {
-    const cmd = ["brain", "init", "--vault", vault];
+    const cmd = ["brain", "init", "--vault", vault, ...configArgs];
     if (starter) cmd.push("--starter");
     actions.push(cmd);
   }
@@ -279,9 +290,9 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
     // the default runner's in-process install hit the headless refusal:
     // a piped run stopped at exit 6 halfway through setup, and a TTY run
     // asked twice for the same consent.
-    actions.push(["install", "--target", t, "--apply", "--yes"]);
+    actions.push(["install", "--target", t, "--apply", "--yes", ...configArgs]);
   }
-  actions.push(["install", "--check"]);
+  actions.push(["install", "--check", ...configArgs]);
 
   opts.stdout.write("\nPlanned commands:\n");
   for (const c of actions) opts.stdout.write(`  o2b ${c.join(" ")}\n`);
@@ -313,12 +324,16 @@ export async function runWizard(opts: WizardOpts): Promise<WizardResult> {
 
 // ---------- CLI entry ----------
 
-export async function cmdInitInteractive(_argv: string[]): Promise<number> {
+export async function cmdInitInteractive(argv: string[]): Promise<number> {
+  const parsed = parseFlags(argv, { config: { type: "string" } });
   const opts: WizardOpts = {
     reader: makeStdinReader(process.stdin),
     stdout: process.stdout,
     stderr: process.stderr,
     runner: defaultRunner(),
+    ...(parsed.flags["config"]
+      ? { configPath: pathResolve(parsed.flags["config"] as string) }
+      : {}),
   };
   const r = await runWizard(opts);
   return r.exitCode;

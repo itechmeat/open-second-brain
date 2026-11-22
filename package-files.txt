@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6939125 bytes
-# Maximum unpacked size: 23557869 bytes
+# Maximum packed size: 6947934 bytes
+# Maximum unpacked size: 23590516 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -330,6 +330,7 @@ src/cli/search/verbs/set-aside.ts
 src/cli/search/verbs/status.ts
 src/cli/search/verbs/vector-backfill.ts
 src/cli/search/verbs/watch.ts
+src/cli/setup.ts
 src/cli/state.ts
 src/cli/stdin.ts
 src/cli/stdout-guard.ts
@@ -1219,6 +1220,7 @@ src/core/install/env.ts
 src/core/install/friction.ts
 src/core/install/grok-asset.ts
 src/core/install/grok-config.ts
+src/core/install/host-kinds.ts
 src/core/install/host-probe.ts
 src/core/install/identity.ts
 src/core/install/instruction-block.ts
@@ -1227,6 +1229,7 @@ src/core/install/jsonc.ts
 src/core/install/managed-block.ts
 src/core/install/manifest.ts
 src/core/install/opencode-plugin-asset.ts
+src/core/install/origin.ts
 src/core/install/ownership-measure.ts
 src/core/install/ownership.ts
 src/core/install/payload-equals.ts

@@ -50,6 +50,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("force", "boolean"),
       flag("interactive", "boolean"),
     ]),
+    command("setup", "Configure the brain, connect an agent host, and verify the connection", [
+      flag("target", "string"),
+      flag("vault", "string"),
+      flag("no-vault", "boolean"),
+      flag("agent-name", "string"),
+      flag("timezone", "string"),
+      flag("config", "string"),
+      flag("apply", "boolean"),
+      flag("yes", "boolean"),
+      flag("json", "boolean"),
+    ]),
     command("doctor", "Run health checks on vault, config, and plugins", [
       flag("vault", "string"),
       flag("config", "string"),

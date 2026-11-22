@@ -141,7 +141,10 @@ function custodyAuditActions(): Array<Record<string, any>> {
 
 /** The bootstrap argv every provisioning case starts from. */
 function bootstrapArgs(extra: ReadonlyArray<string>): string[] {
-  return ["bootstrap", "--vault", vault, ...extra];
+  // Keep the machine config identity stable across runCli calls. The helper
+  // otherwise gives each invocation a fresh isolated config path, which is
+  // a different payload once OPEN_SECOND_BRAIN_CONFIG is carried by hosts.
+  return ["bootstrap", "--vault", vault, "--config", join(tempRoot, "config.yaml"), ...extra];
 }
 
 /**

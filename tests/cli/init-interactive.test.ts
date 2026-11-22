@@ -152,6 +152,36 @@ describe("init wizard", () => {
     expect(out).toContain("creates the brain store");
   });
 
+  test("explicit config path is used by wizard probes and every queued command", async () => {
+    const vaultPath = join(home, "vault");
+    const configPath = join(home, "alternate.yaml");
+    const answers = [vaultPath, "claude-vps", "UTC", "en", "none", "yes"];
+    const { runner, calls } = recordingRunner();
+    const { stdout, stderr } = silentStreams();
+    const r = await runWizard({
+      reader: scriptedReader(answers),
+      stdout,
+      stderr,
+      runner,
+      configPath,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(calls).toEqual([
+      [
+        "init",
+        "--vault",
+        vaultPath,
+        "--agent-name",
+        "claude-vps",
+        "--timezone",
+        "UTC",
+        "--config",
+        configPath,
+      ],
+      ["install", "--check", "--config", configPath],
+    ]);
+  });
+
   test("'no' at confirmation runs nothing", async () => {
     const vaultPath = join(home, "vault");
     const answers = [

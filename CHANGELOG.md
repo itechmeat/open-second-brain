@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Three cross-platform registry launchers provide `o2b`, `o2b-mcp` and `o2b-hook` with Bun on `PATH` as the prerequisite. `vault-log` is excluded because it dispatches to the nonexistent `append-event` command.
+- Added `o2b setup` to configure the machine and brain, connect one agent host, and verify the result. Registry installs register an absolute Bun launcher; doctor reports stale registrations, older registration versions, and multiple `o2b` providers on PATH.
+
 - The package has an explicit runtime file allowlist and a checked manifest of packed paths and size ceilings.
 ### Changed
 - Removed the `prepare` lifecycle script so package installation runs no lifecycle scripts. Git hooks remain available through `bun run hooks:install`.

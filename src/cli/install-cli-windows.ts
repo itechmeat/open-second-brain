@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
+import { underPluginCache } from "../core/install/origin.ts";
 import type { InstallResult, UninstallResult } from "../core/types.ts";
 
 /** The first words of the ownership marker line. */
@@ -95,10 +96,6 @@ function looksLikeOsbLauncherTarget(target: string, name: string): boolean {
     parts[parts.length - 1]?.toLowerCase() === launcherFileName(name).toLowerCase() &&
     parts[parts.length - 2]?.toLowerCase() === "scripts"
   );
-}
-
-function underPluginCache(target: string): boolean {
-  return resolve(target).toLowerCase().includes(`${sep}plugins${sep}cache${sep}`);
 }
 
 /** Where the checkout's own `scripts\<name>.cmd` lives, or `null` if absent. */
