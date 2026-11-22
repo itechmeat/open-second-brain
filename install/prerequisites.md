@@ -15,6 +15,8 @@ fallback exists.
 
 ## Get the `o2b` CLI
 
+The Open Second Brain package provides `o2b`, `o2b-mcp` and `o2b-hook` from a registry install. `vault-log` is excluded because its `append-event` CLI command does not exist. Bun `>= 1.1.0` must be on `PATH`; registry installation instructions will be added after publication.
+
 Plugin hosts (Claude Code, Codex, Hermes, OpenClaw) ship the launcher
 with the plugin; their install page shows how to publish it. For every
 other client, clone the repository and publish the launcher from the

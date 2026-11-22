@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe("o2b-mcp console script", () => {
   test("package bin exposes the launcher", () => {
-    expect(pkg.bin["o2b-mcp"]).toBe("./scripts/o2b-mcp");
+    expect(pkg.bin["o2b-mcp"]).toBe("./bin/o2b-mcp.js");
     const script = readFileSync(join(import.meta.dir, "../../scripts/o2b-mcp"), "utf8");
     expect(script).toContain(' mcp "$@"');
   });

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pre-commit gate: never commit unformatted or lint-erroring code.
 # Enabled via `git config core.hooksPath .githooks` (wired by the package
-# `prepare` script on `bun install`, or `bun run hooks:install`).
+# `bun run hooks:install` once in a new checkout).
 #
 # This is a fast local guard, not the source of truth - CI's required
 # `validate` check enforces the same on every PR. Bypass in a pinch with

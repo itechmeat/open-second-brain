@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  NPM_VERSION: 11.14.1
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -46,6 +49,8 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-26.04
+    env:
+      O2B_REQUIRE_REGISTRY_INSTALL: "1"
     # The full suite outgrew twenty minutes on a slow runner, then thirty
     # once the pledges wave added its thousand; the bound is there so a hung
     # run cannot hold a runner for GitHub's six-hour default.
@@ -60,6 +65,12 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+
+      - name: Pin npm for package manifests
+        run: |
+          npm_prefix="$RUNNER_TEMP/npm-global"
+          npm install --global --prefix "$npm_prefix" "npm@$NPM_VERSION"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -97,6 +108,9 @@ jobs:
       - parallel:
           - name: Verify manifest version sync
             run: bun run sync-version:check
+
+          - name: Verify packed package manifest
+            run: bun run pack:check
 
           # Codex caches only `plugins/codex/` and drops symlinks, so the Codex
           # plugin carries real copies of `skills/` and `hooks/hooks.json`.
@@ -246,6 +260,38 @@ jobs:
   # that: on Windows the hook and CLI tests that spawn `bun` slow down far more
   # than the rest, so with them three shards came out at 5, 10 and 16 minutes.
   # The shards balance by `.github/windows-test-timings.json` instead, measured
+  package-macos:
+    name: package (macOS)
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      O2B_REQUIRE_REGISTRY_INSTALL: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Pin npm for package manifests
+        run: |
+          npm_prefix="$RUNNER_TEMP/npm-global"
+          npm install --global --prefix "$npm_prefix" "npm@$NPM_VERSION"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify packed package manifest
+        run: bun run pack:check
+
+      - name: Test package installed from tarball
+        run: bun test tests/scripts/registry-install.test.ts --timeout 30000
+
   # on Windows, and each uploads what it measured as `windows-timings-<shard>`;
   # `.github/scripts/windows-timings.sh` folds a run's uploads back into the
   # committed file. A test file the file does not list yet still runs, it just
@@ -258,6 +304,8 @@ jobs:
   windows-tests:
     name: windows (${{ matrix.shard }}/10)
     needs: changes
+    env:
+      O2B_REQUIRE_REGISTRY_INSTALL: "1"
     # Runs unless the filter positively said "prose only": a failed or
     # empty filter falls back to running the shards, never to skipping them.
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
@@ -295,6 +343,13 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+
+      - name: Pin npm for package manifests
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'npm-global'
+          npm install --global --prefix "$prefix" "npm@$env:NPM_VERSION"
+          $prefix | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Set up Python (Hermes plugin tests)
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

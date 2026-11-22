@@ -17,23 +17,46 @@
     "url": "https://github.com/itechmeat/open-second-brain.git"
   },
   "bin": {
-    "o2b": "./scripts/o2b",
-    "o2b-mcp": "./scripts/o2b-mcp",
-    "vault-log": "./scripts/vault-log"
+    "o2b": "./bin/o2b.js",
+    "o2b-hook": "./bin/o2b-hook.js",
+    "o2b-mcp": "./bin/o2b-mcp.js"
   },
   "files": [
-    "bin/",
-    "openclaw/",
+    "bin/*.js",
+    "bin/o2b-discipline-report",
     "src/",
-    "skills/",
-    "scripts/",
-    "plugins/",
+    "hooks/",
     "schemas/",
+    "templates/",
+    "skills/",
+    "tests/fixtures/decision-model/",
+    "openclaw/index.js",
     "openclaw.plugin.json",
+    "plugins/codex/",
+    "plugins/hermes/",
+    "plugins/opencode/open-second-brain.ts",
+    ".claude-plugin/",
+    ".codex-plugin/",
+    "plugin.yaml",
+    "__init__.py",
+    "scripts/o2b",
+    "scripts/o2b-mcp",
+    "scripts/o2b-hook",
+    "scripts/vault-log",
+    "scripts/o2b.cmd",
+    "scripts/o2b-mcp.cmd",
+    "scripts/o2b-hook.cmd",
+    "scripts/vault-log.cmd",
+    "scripts/o2b-aider",
+    "scripts/o2b-aider.cmd",
+    "scripts/_bun-precheck.sh",
+    "scripts/_macos-sqlite.sh",
+    "scripts/discipline-report.ts",
     "README.md",
     "LICENSE",
     "pyproject.toml",
-    "tests/fixtures/decision-model"
+    "!**/__pycache__/**",
+    "!**/*.pyc"
   ],
   "type": "module",
   "scripts": {
@@ -58,7 +81,7 @@
     "check:paths:strict": "bun run scripts/check-hardcoded-paths.ts --strict",
     "check:hermes-scan": "bun run scripts/hermes-plugin-scan.ts",
     "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
-    "prepare": "bun scripts/prepare.ts || exit 0"
+    "pack:check": "bun run scripts/pack-manifest.ts --check"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2",
@@ -76,6 +99,9 @@
     "@node-rs/jieba": "^2.0.4",
     "sqlite-vec": "^0.1.9",
     "tiny-segmenter": "^0.2.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
   },
   "openclaw": {
     "extensions": [

@@ -78,3 +78,7 @@ Windows) folds its own CI run into the file with
 `.github/scripts/windows-timings.sh <run-id>` and commits the result.
 Prefer several files of one table, sharing a fixture module, over one
 file that runs for minutes.
+
+## Git hooks
+
+Run `bun run hooks:install` once in a new checkout to enable the local pre-commit hook.
