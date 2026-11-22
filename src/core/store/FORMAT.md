@@ -26,6 +26,7 @@ The store contains records in plain text JSON. Nothing in it is encrypted. Encry
     topics/<device>/<YYYY-MM>.jsonl          topic events
     settings/<device>/<YYYY-MM>.jsonl        shared settings
     digests/<device>/<YYYY-MM>.jsonl         state digests
+    dream-work/<device>/<YYYY-MM>.jsonl      dream work that needs a model
     blobs/<sha256[0:2]>/<sha256>             large bodies, immutable
   private/                                   same shape, for private-visibility records
 ```
@@ -61,6 +62,7 @@ A stream is a family of shards inside a partition:
 - `topics`: topic events.
 - `settings`: settings every machine must agree on.
 - `digests`: state digests that let machines compare their folded state.
+- `dream-work`: the queue of dream work that needs a model (see "Dream work").
 
 ### Shards
 
@@ -358,6 +360,22 @@ Every record the migration imports carries, beside `vault_id`, the field `legacy
 Topic planning reads an imported record's origin from its body rather than its envelope: the time is the log event's `timestamp` or the signal frontmatter's `created_at` (an ISO day, or a time with its zone), else the `YYYY-MM-DD` day in the file name of the `migrated` key, else the record's clock; the device is `legacy_device` when it is not empty, else the envelope device. Nothing is added to the body for this.
 
 Every other kind is defined by the feature that writes it, and a reader that does not know a kind keeps the record and leaves its body alone.
+
+## Dream work
+
+Dream work that needs a model (wording a summary, answering a closed question) waits in a queue of records in the `dream-work` stream. A store without these records has an empty queue. Only the dream owner's device writes them: a record is folded only when the device that wrote it is the dream owner at that record's place in the fold order (the dream owner records of the `settings` stream fold together with the queue in one order, clock, then device, then id), so a brain with no dream owner has no queue. An item, and every later record about it, is written to the partition of the most private record it is built from: `private` when any of them is private, otherwise `shared`. A machine folds the partitions it holds; a machine without `private` sees nothing of the private items.
+
+The id of an item is the hex sha256 of the canonical JSON of the list `[operation, subject, occurrence, input_hash, prompt_version, schema_version]`. The kinds:
+
+- `dream-work-item`: `{ "id", "operation", "subject", "occurrence", "input_hash": "<sha256>", "prompt_version", "schema_version", "answer_schema": { ... }, "after": ["<item id>", ...], "resources": ["<namespace>:<name>", ...], "private_resource_barriers": ["<sha256 resource key>", ...], "evidence": ["<record id or blob reference>", ...], "payload": { ... } }`, written to `dream-work`. One unit of work. A second item with an id already folded is ignored. `occurrence` is a sortable string (the window day and a sequence) that orders the queue. `after` names the items it comes after; `resources` the ordering resources it touches (`topic:<id>`, `chain:<preference id>`, `rung:<name>`). `private_resource_barriers` lists only sha256 keys of resource names held by earlier open private items; a device without `private` treats those shared items as blocked without seeing private item ids or subjects.
+- `dream-work-lease`: `{ "item", "generation": <n>, "lease_token": "<unique take token>", "run", "owner_revision", "expires_at": "<ISO-8601>" }`, written to `dream-work`. A take. Its generation is above every earlier lease of the item. If two leases have one generation after stale-lock takeover, the first in fold order wins; later same-generation leases are rejected. Only the winning lease token may answer, release or apply, and it is live only until `expires_at`.
+- `dream-work-answer`: `{ "item", "generation", "lease_token", "input_hash", "value": <json> | "text": "<text>", "agent", "model", "receipt": "<sha256>" }`, written to `dream-work`. An accepted answer, under the newest lease token and for the item's own input. `receipt` is the sha256 of the canonical JSON of `[item, generation, input_hash, value or null, text or null]`.
+- `dream-work-attempt`: `{ "item", "generation", "lease_token", "outcome": "failed" | "refused" | "released", "reason", "retry_at": "<ISO-8601>" | null }`, written to `dream-work`. A failed attempt ends its lease and sets when the item may be taken again; five failed attempts since the item or since its last retry park it. A released attempt ends its lease with no wait. A refused attempt records an answer that was not accepted and changes nothing else.
+- `dream-work-applied`: `{ "item", "generation", "lease_token", "receipt", "effects": ["<record id>", ...] }`, written to `dream-work`. The accepted answer named by `receipt` was applied by the operation that produced the item; the item is finished.
+- `dream-work-closed`: `{ "item", "reason": "cancelled" | "superseded", "note", "successor": "<item id>" | null, "authority": "human" | "agent" }`, written to `dream-work`. The item is closed. An item that names a superseded item in `after` follows to its successor.
+- `dream-work-retry`: `{ "item", "authority": "human" }`, written to `dream-work`. A person asked for the item to be offered again; its failed attempts count from zero.
+
+An item folds to one state: `waiting`, `leased`, `accepted` (an answer is recorded and not yet applied), `finished`, `parked` or `closed`. A waiting item is ready when every item in `after` is finished and no item earlier in the queue order that is neither finished nor closed shares a resource with it. A record that breaks these rules is listed as rejected and never applied. The `dream-work` fold is not one of the folds a state digest hashes. The stream is part of format version 1: a reader that does not know it leaves it alone.
 
 ## Device-local state
 

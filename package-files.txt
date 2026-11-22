@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6907785 bytes
-# Maximum unpacked size: 23439481 bytes
+# Maximum packed size: 6939125 bytes
+# Maximum unpacked size: 23557869 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -289,6 +289,7 @@ src/cli/deps-bootstrap.ts
 src/cli/discipline-install.ts
 src/cli/discipline.ts
 src/cli/dream/owner.ts
+src/cli/dream/queue.ts
 src/cli/help-render.ts
 src/cli/helpers.ts
 src/cli/install-cli-windows.ts
@@ -494,6 +495,7 @@ src/core/brain/doctor/delivery-provenance-check.ts
 src/core/brain/doctor/device-retire-check.ts
 src/core/brain/doctor/device-state-check.ts
 src/core/brain/doctor/dream-owner-check.ts
+src/core/brain/doctor/dream-queue-check.ts
 src/core/brain/doctor/embedding-sunset-check.ts
 src/core/brain/doctor/embeddings-health-check.ts
 src/core/brain/doctor/entity-alias-verdicts.ts
@@ -554,6 +556,14 @@ src/core/brain/dream-plan-cross-topic.ts
 src/core/brain/dream-plan-retires.ts
 src/core/brain/dream-plan-topics.ts
 src/core/brain/dream-plan.ts
+src/core/brain/dream-queue/constants.ts
+src/core/brain/dream-queue/fold.ts
+src/core/brain/dream-queue/operations.ts
+src/core/brain/dream-queue/pass.ts
+src/core/brain/dream-queue/queue.ts
+src/core/brain/dream-queue/records.ts
+src/core/brain/dream-queue/rollup-work.ts
+src/core/brain/dream-queue/status-view.ts
 src/core/brain/dream-refresh.ts
 src/core/brain/dream-replay/window.ts
 src/core/brain/dream-report.ts

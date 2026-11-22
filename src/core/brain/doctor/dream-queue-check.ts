@@ -1,0 +1,88 @@
+/**
+ * The dream work queue section of the doctor (change `dream-work-queue`,
+ * design D8 item 1), read without writing anything:
+ *
+ *  - `dream-queue-parked` (error, one per parked item): its operation,
+ *    the reason of its last failure and the command that retries it.
+ *  - `dream-queue-backlog` (warning): ready work older than the reporting
+ *    threshold, with the count and the oldest age.
+ *  - `dream-queue-no-executor` (advice, once): items wait and this
+ *    version has nothing that answers them.
+ *  - `dream-queue-unknown-operation` (warning): items of an operation
+ *    this build does not know (a newer release produced them).
+ *  - `dream-queue-rejected` (warning): records the fold rejected, by kind.
+ *
+ * Silent where there is no queue: a brain still in the legacy tree, a
+ * machine with no store. Below local reach the private partition is
+ * withheld, as everywhere.
+ */
+
+import { DREAM_QUEUE_COMMAND, DREAM_WORK_BACKLOG_MS } from "../dream-queue/constants.ts";
+import { queueStatus } from "../dream-queue/status-view.ts";
+import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
+
+export const DREAM_QUEUE_PARKED_CODE = "dream-queue-parked";
+export const DREAM_QUEUE_BACKLOG_CODE = "dream-queue-backlog";
+export const DREAM_QUEUE_NO_EXECUTOR_CODE = "dream-queue-no-executor";
+export const DREAM_QUEUE_UNKNOWN_OPERATION_CODE = "dream-queue-unknown-operation";
+export const DREAM_QUEUE_REJECTED_CODE = "dream-queue-rejected";
+
+export const dreamQueueCheck: StoreSideDoctorCheck = {
+  failSoft: true,
+  run(ctx: StoreSideCheckContext, out: DoctorFindings): void {
+    const status = queueStatus(ctx.vault, {
+      ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
+      now: ctx.now.getTime(),
+      withholdPrivate: ctx.withholdsPrivate === true,
+    });
+    if (!status.available) return;
+    for (const parked of status.parked) {
+      out.issues.push({
+        severity: "error",
+        code: DREAM_QUEUE_PARKED_CODE,
+        message:
+          `dream work ${parked.id} (${parked.operation}) is parked after repeated failures: ` +
+          `${parked.reason}; the work behind it waits. Retry it with \`${parked.retry_command}\``,
+      });
+    }
+    if (status.backlog && status.oldest_ready !== null) {
+      const hours = Math.floor(status.oldest_ready.age_ms / 3_600_000);
+      out.issues.push({
+        severity: "warning",
+        code: DREAM_QUEUE_BACKLOG_CODE,
+        message:
+          `${status.ready} dream work item(s) are ready and the oldest has waited ${hours} h ` +
+          `(more than ${DREAM_WORK_BACKLOG_MS / 3_600_000} h); list them with \`${DREAM_QUEUE_COMMAND}\``,
+      });
+    }
+    const open =
+      status.counts.waiting + status.counts.leased + status.counts.accepted + status.counts.parked;
+    if (open > 0 && !status.executor) {
+      out.uncertain.push({
+        code: DREAM_QUEUE_NO_EXECUTOR_CODE,
+        message:
+          `${open} dream work item(s) wait for a model, and this version has nothing that ` +
+          "answers them; they are kept, never decided by a fixed rule, and not counted as done",
+      });
+    }
+    for (const operation of status.unknown_operations) {
+      out.issues.push({
+        severity: "warning",
+        code: DREAM_QUEUE_UNKNOWN_OPERATION_CODE,
+        message:
+          `dream work of the operation ${operation} waits, and this version does not know that ` +
+          "operation (a newer release produced it); update Open Second Brain on this machine",
+      });
+    }
+    const rejected = Object.entries(status.rejected);
+    if (rejected.length > 0) {
+      out.issues.push({
+        severity: "warning",
+        code: DREAM_QUEUE_REJECTED_CODE,
+        message:
+          "the dream work queue holds records that break its rules and are ignored: " +
+          rejected.map(([kind, n]) => `${n} ${kind}`).join(", "),
+      });
+    }
+  },
+};

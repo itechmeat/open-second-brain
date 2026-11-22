@@ -327,7 +327,37 @@ export function collectSalienceFoldSet(
  * pays no I/O and behaves exactly as it did before the gate existed.
  */
 export function applySalienceGate(input: SalienceFoldSetInput): SalienceGateVerdict {
+  return gateSalience(input).verdict;
+}
+
+/** The verdict and the ids of the facts it admitted (the ladder's fold set). */
+export interface SalienceGateResult {
+  readonly verdict: SalienceGateVerdict;
+  /** Preference ids the ladder counts, in code unit order. */
+  readonly admitted_ids: ReadonlyArray<string>;
+}
+
+/**
+ * {@link applySalienceGate} with the identities of the admitted facts: the
+ * dream work queue hands exactly these to a fired rollup rung
+ * (change `dream-work-queue`, design D7). The verdict is the same.
+ */
+export function gateSalience(input: SalienceFoldSetInput): SalienceGateResult {
   const threshold = resolveSalienceThreshold(input.cfg);
-  if (threshold === null) return openSalienceGate(input.preferences.length);
-  return gateFoldSet(collectSalienceFoldSet(input), threshold);
+  if (threshold === null) {
+    return Object.freeze({
+      verdict: openSalienceGate(input.preferences.length),
+      admitted_ids: Object.freeze(input.preferences.map((c) => c.pref.id).toSorted()),
+    });
+  }
+  const items = collectSalienceFoldSet(input);
+  return Object.freeze({
+    verdict: gateFoldSet(items, threshold),
+    admitted_ids: Object.freeze(
+      items
+        .filter((i) => i.score.score >= threshold)
+        .map((i) => i.pref_id)
+        .toSorted(),
+    ),
+  });
 }

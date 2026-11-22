@@ -156,6 +156,16 @@ export interface DreamRunSummary {
    */
   readonly caller?: string;
   /**
+   * The dream work queue in this pass (change `dream-work-queue`): items
+   * produced, items not yet finished, answers applied. Present only on a
+   * live pass on the owner's device of a brain served from the store.
+   */
+  readonly model_work?: {
+    readonly produced: number;
+    readonly waiting: number;
+    readonly applied: number;
+  };
+  /**
    * Sub-operations the dream pass attempted but could not fully
    * verify. Empty on every clean run; populated by future
    * uncertainty-surfacing paths (v0.10.16).

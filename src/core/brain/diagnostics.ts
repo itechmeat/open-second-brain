@@ -228,6 +228,25 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b dream owner",
         autoRepairable: false,
       },
+      // The dream work queue (change dream-work-queue, design D8).
+      {
+        code: "dream-queue-parked",
+        issueClass: "dream work is parked after repeated failures",
+        nextCommand: "o2b dream queue",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-queue-backlog",
+        issueClass: "ready dream work has waited too long",
+        nextCommand: "o2b dream queue",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-queue-rejected",
+        issueClass: "the dream work queue holds records that break its rules",
+        nextCommand: "o2b dream queue",
+        autoRepairable: false,
+      },
       {
         code: "dream-owner-agent-differs",
         issueClass: "the declared primary agent is not the dream owner's agent",

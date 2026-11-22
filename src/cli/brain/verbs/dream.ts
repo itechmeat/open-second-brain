@@ -647,5 +647,12 @@ async function brainDream(argv: string[]): Promise<number> {
   if (archived > 0) ok(`archived_signals: ${archived}`);
   if (summary.topics !== undefined) ok(`topics: ${summary.topics.summary}`);
   if (summary.view !== undefined) ok(`view: ${summary.view.summary}`);
+  const work = summary.model_work;
+  if (work !== undefined) {
+    ok(
+      `model_work: ${work.produced} produced, ${work.waiting} waiting, ${work.applied} applied` +
+        (work.waiting > 0 ? " (nothing answers queued work in this version)" : ""),
+    );
+  }
   return 0;
 }

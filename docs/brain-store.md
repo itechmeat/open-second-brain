@@ -390,6 +390,36 @@ declared `primary_agent` is shown as the requested owner. Run a release
 with the dream owner on every machine of the brain before you rely on
 the role: an older binary does not know the gate.
 
+### The dream work queue
+
+Some dream work needs a model: today the summary a fired rollup rung
+asks for. A live pass on the dream owner's machine records that work as
+an item in the store's `dream-work` stream instead of dropping it, so it
+survives a crash, a restart and an owner transfer. An item built from
+private records stays in the `private` partition with everything later
+written about it; a machine without that partition sees none of it.
+
+```bash
+o2b dream queue
+```
+
+lists the items by state (waiting, leased, accepted, parked, finished,
+closed), how long the oldest ready item has waited and every parked
+item with its reason; `o2b dream owner` and doctor show the same
+counts. Work on one chain waits behind a stuck item, unrelated work
+does not.
+
+This version has nothing that answers queued work yet. Waiting means
+exactly that: the item is kept, it is never decided by a fixed rule in
+place of an answer, and no surface counts it as done; the pass summary
+reports it under `model_work` and doctor says so once
+(`dream-queue-no-executor`). A later release adds the executors that
+take and answer items. An item that fails its checks five times is
+parked and named by doctor; `o2b dream queue retry <id>` offers it
+again and `o2b dream queue cancel <id> --reason <text>` closes it, both
+on the owner's machine. A brain with no dream owner, and one whose
+records still live in the legacy tree, has no queue.
+
 ### Editing pages on a phone
 
 Sync the view folder to your phone and edit a page in any Markdown editor.

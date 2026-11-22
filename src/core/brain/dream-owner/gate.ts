@@ -232,7 +232,17 @@ export function assertDreamOwner(
   if (!options.live) return { status: "preview" };
   const opened = openDreamOwnerStore(vault, options.configPath);
   if (opened.store === null) return { status: "unbound", store: null };
-  const store = opened.store;
+  return assertDreamOwnerOn(opened.store, options);
+}
+
+/**
+ * The live gate on a store already open on this device: the dream work
+ * queue (`dream-queue/queue.ts`) gates every write through here.
+ */
+export function assertDreamOwnerOn(
+  store: StoreHandle,
+  options: { readonly configPath?: string; readonly now?: () => number },
+): Exclude<DreamOwnerGate, { status: "preview" }> {
   let look: ReturnType<typeof lookAtDreamOwner>;
   try {
     look = lookAtDreamOwner(store, options);
