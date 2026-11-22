@@ -49,6 +49,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { maskLogChainDigests } from "../../helpers/vault-digest.ts";
 import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { makeTestDreamWindow } from "../../helpers/dream-window.ts";
 
 let vault: string;
 let configHome: string;
@@ -384,7 +385,7 @@ describe("the mutation stage does not absorb a safeguard stop", () => {
     applyDreamPlan({
       vault,
       cfg: loadBrainConfig(vault),
-      now: NOW,
+      window: makeTestDreamWindow(vault, NOW, () => safeguard.checkpoint()),
       plan: emptyPlan(),
       refresh: emptyRefresh(),
       agentName: "claude",

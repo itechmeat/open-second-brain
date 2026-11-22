@@ -44,6 +44,7 @@ export const inboxArchivableCheck: DoctorCheck = {
       scan.archivedNames,
       windowDays,
       ctx.now,
+      new Date(),
     ).archivable.length;
     if (archivable === 0) return;
     const total = scan.inboxFiles;

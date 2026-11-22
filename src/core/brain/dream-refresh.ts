@@ -10,23 +10,20 @@
 
 import { BAND_RANK, computeConfidence, rebandConfidence } from "./confidence.ts";
 import type { PlanState, ScanResult } from "./dream-plan.ts";
-import { collectEvidenceForSlug, EVIDENCE_LOG_EVENTS, privateEvidenceCounts } from "./evidence.ts";
-import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
-import { countersForShared } from "../store/read/store-entities.ts";
-import { logDayReader } from "./log-days.ts";
-import { isPinned } from "./pin.ts";
-import { wouldRewritePreference } from "./preference.ts";
-import { classifyFreshnessTrend } from "./temporal/freshness-trend.ts";
-import { parseWikilink, renderPrefLink } from "./wikilink.ts";
 import {
-  BRAIN_APPLY_RESULT,
   BRAIN_LOG_EVENT_KIND,
-  BRAIN_PREFERENCE_STATUS,
-  BRAIN_RETIRED_REASON,
   type BrainConfidence,
   type BrainConfig,
   type BrainPreference,
 } from "./types.ts";
+import type { WindowEvidence } from "./dream-replay/window.ts";
+import { preferencesStoreOnly, storePreferenceEntry } from "./preference-store.ts";
+import { countersForShared } from "../store/read/store-entities.ts";
+import { isPinned } from "./pin.ts";
+import { wouldRewritePreference } from "./preference.ts";
+import { classifyFreshnessTrend } from "./temporal/freshness-trend.ts";
+import { parseWikilink, renderPrefLink } from "./wikilink.ts";
+import { BRAIN_APPLY_RESULT, BRAIN_PREFERENCE_STATUS, BRAIN_RETIRED_REASON } from "./types.ts";
 
 export interface RefreshUpdate {
   readonly slug: string;
@@ -143,27 +140,11 @@ export interface ApplyEvidenceEntry {
  * months of days, and a pass past its deadline stops here, before it has
  * written anything, rather than after the whole walk.
  */
-export function scanApplyEvidence(
-  vault: string | null,
-  checkpoint: () => void = () => {},
-): ApplyEvidenceEntry[] {
+export function scanApplyEvidence(evidence: WindowEvidence): ApplyEvidenceEntry[] {
   const out: ApplyEvidenceEntry[] = [];
-  const mergeAliases = new Map<string, string>();
-  // Shard-aware (Memory Integrity Suite): merged per-day reads.
-  const log = logDayReader(vault, { eventTypes: EVIDENCE_LOG_EVENTS });
-  for (const date of log.dates) {
-    checkpoint();
-    const { entries } = log.day(date);
-    for (const e of entries) {
+  for (const day of evidence.days) {
+    for (const e of day.entries) {
       if (e.eventType === BRAIN_LOG_EVENT_KIND.merge) {
-        const keep = parseWikilinkFromBodyValue(e.body["keep"]);
-        const drop = parseWikilinkFromBodyValue(e.body["drop"]);
-        if (keep?.startsWith("pref-") && drop?.startsWith("pref-")) {
-          mergeAliases.set(
-            drop.slice("pref-".length),
-            resolveMergeAlias(keep.slice("pref-".length), mergeAliases),
-          );
-        }
         continue;
       }
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
@@ -180,7 +161,7 @@ export function scanApplyEvidence(
       const target = parseWikilink(prefRaw);
       if (!target || !target.startsWith("pref-")) continue;
       out.push({
-        pref_slug: target.slice("pref-".length),
+        pref_slug: resolveMergeAlias(target.slice("pref-".length), evidence.mergeAliases),
         timestamp: e.timestamp,
         result: result as ApplyEvidenceEntry["result"],
         ...(e.body["outcome"] === "success" || e.body["outcome"] === "failure"
@@ -190,23 +171,11 @@ export function scanApplyEvidence(
       });
     }
   }
-  // A private event counts only toward a private preference (`evidence.ts`),
-  // judged after the merge aliases name the preference it lands on.
-  const takesPrivate = new Map<string, boolean>();
-  const counts = (slug: string): boolean => {
-    let known = takesPrivate.get(slug);
-    if (known === undefined) {
-      known = privateEvidenceCounts(slug);
-      takesPrivate.set(slug, known);
-    }
-    return known;
-  };
-  const resolved = out
-    .map((entry) => ({
-      ...entry,
-      pref_slug: resolveMergeAlias(entry.pref_slug, mergeAliases),
-    }))
-    .filter((entry) => entry.fromPrivatePartition !== true || counts(entry.pref_slug));
+  // A private event counts only toward a private preference after resolving
+  // merge aliases. The window snapshot caches this fold before any retire.
+  const resolved = out.filter(
+    (entry) => entry.fromPrivatePartition !== true || evidence.isPrivate(entry.pref_slug),
+  );
   // Stable order: by timestamp ascending. Multiple entries at the same
   // second keep their parse order (parseLogDay returns insertion order).
   resolved.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
@@ -223,10 +192,6 @@ function priorCounters(
   if (entry === undefined) return { applied: pref.applied_count, violated: pref.violated_count };
   const counters = countersForShared(entry);
   return { applied: counters.applied_count, violated: counters.violated_count };
-}
-
-function parseWikilinkFromBodyValue(value: unknown): string | null {
-  return typeof value === "string" ? parseWikilink(value) : null;
 }
 
 function resolveMergeAlias(slug: string, aliases: ReadonlyMap<string, string>): string {
@@ -248,6 +213,7 @@ export function planRefresh(
   cfg: BrainConfig,
   now: Date,
   plan: PlanState,
+  windowEvidence: WindowEvidence,
   /** Called before each preference (the pass's safeguard); planning writes nothing. */
   checkpoint: () => void = () => {},
 ): RefreshResult {
@@ -306,7 +272,11 @@ export function planRefresh(
 
     let status = rec.pref.status;
     let confirmedAt = rec.pref.confirmed_at;
-    if (status === BRAIN_PREFERENCE_STATUS.unconfirmed && firstApplied) {
+    if (
+      status === BRAIN_PREFERENCE_STATUS.unconfirmed &&
+      firstApplied &&
+      Date.parse(firstApplied.timestamp) <= Date.parse(rec.pref.unconfirmed_until)
+    ) {
       status = BRAIN_PREFERENCE_STATUS.confirmed;
       confirmedAt = firstApplied.timestamp;
       confirmed.add(slug);
@@ -414,7 +384,7 @@ export function planRefresh(
     const stampTrend = countersChanged || rec.pref.freshness_trend !== undefined;
     let trendLabel: string | undefined;
     if (stampTrend) {
-      const trendEv = collectEvidenceForSlug(vault, slug, {
+      const trendEv = windowEvidence.lookup(slug, {
         sinceIso: rec.pref.created_at,
         maxApplied: 1000,
         maxViolated: 1000,
@@ -472,7 +442,7 @@ export function planRefresh(
     };
 
     if (!countersChanged) {
-      const ev2 = collectEvidenceForSlug(vault, slug, {
+      const ev2 = windowEvidence.lookup(slug, {
         sinceIso: rec.pref.created_at,
       });
       if (

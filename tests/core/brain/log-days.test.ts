@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
-import { collectEvidenceForSlug } from "../../../src/core/brain/evidence.ts";
+import { collectEvidenceForSlug } from "../../../src/core/brain/evidence-read.ts";
 import { logDayReader, logReadStats, withLogReadPass } from "../../../src/core/brain/log-days.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";

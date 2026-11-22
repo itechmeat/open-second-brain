@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { OUTCOME_REGRESSION_PENALTY } from "../../../src/core/brain/dream-refresh.ts";
-import { collectEvidenceForSlug } from "../../../src/core/brain/evidence.ts";
+import { collectEvidenceForSlug } from "../../../src/core/brain/evidence-read.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { readLogDay } from "../../../src/core/brain/log-jsonl.ts";
 import { preferencePath } from "../../../src/core/brain/paths.ts";

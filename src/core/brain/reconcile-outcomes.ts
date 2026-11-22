@@ -23,7 +23,7 @@ import { BRAIN_SIGNAL_SIGN, type BrainConfig, type DreamOpenQuestion } from "./t
 /** Project a scanned signal onto the minimal reconcile view. */
 function toReconcileSignal(r: SignalRecord): ReconcileSignal {
   return {
-    created_at: r.signal.created_at,
+    created_at: r.effectiveTime ?? r.signal.created_at,
     ...(r.signal.recorded_at ? { recorded_at: r.signal.recorded_at } : {}),
     ...(r.signal.source ? { source: r.signal.source } : {}),
   };

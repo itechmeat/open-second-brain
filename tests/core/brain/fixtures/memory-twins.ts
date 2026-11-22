@@ -44,6 +44,7 @@ import { deviceMintTag } from "../../../../src/core/brain/record-name.ts";
 import { isStoreOnly } from "../../../../src/core/store/store-only.ts";
 import { retireSignal } from "../../../../src/core/brain/signal-retire.ts";
 import { makeStoreEnv, type StoreEnv } from "../../store/fixtures/store-env.ts";
+import { makeTestDreamWindow } from "../../../helpers/dream-window.ts";
 import { switchDevice as switchDeviceAt } from "../store-only/fixtures.ts";
 
 /** Which machine a single-machine fixture ({@link withMemoryFixture}) builds. */
@@ -170,7 +171,7 @@ export function writeMemoryFixture(env: StoreEnv): void {
   applyDreamPlan({
     vault,
     cfg: loadBrainConfig(vault),
-    now: FIXTURE_NOW,
+    window: makeTestDreamWindow(vault, FIXTURE_NOW),
     plan,
     refresh: { confirmed: new Set(), updated: new Map(), bandDrops: [], outcomeRegressions: [] },
     agentName: "claude",
@@ -260,7 +261,7 @@ function writeOperatorRecords(vault: string): void {
   applyDreamPlan({
     vault,
     cfg: loadBrainConfig(vault),
-    now: FIXTURE_NOW,
+    window: makeTestDreamWindow(vault, FIXTURE_NOW),
     plan,
     refresh: { confirmed: new Set(), updated: new Map(), bandDrops: [], outcomeRegressions: [] },
     agentName: "claude",

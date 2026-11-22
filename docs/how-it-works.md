@@ -85,8 +85,8 @@ A preference moves between five states from first signal to retirement:
 stateDiagram-v2
     [*] --> Inbox: brain_feedback
     Inbox --> Unconfirmed: dream (≥candidate_threshold<br/>same-sign signals on topic)
-    Unconfirmed --> Confirmed: brain_apply_evidence applied<br/>(first such event)
-    Unconfirmed --> Retired_Expired: dream (now > unconfirmed_until,<br/>no applied evidence)
+    Unconfirmed --> Confirmed: brain_apply_evidence applied<br/>(event time ≤ unconfirmed_until)
+    Unconfirmed --> Retired_Expired: dream (now > unconfirmed_until,<br/>no qualifying applied evidence)
     Confirmed --> Quarantine: dream (violated_count ≥ applied_count<br/>AND applied_count > low_max_applied)
     Quarantine --> Confirmed: dream (applied_count > violated_count)
     Quarantine --> Retired_Quarantine: dream (one further violated)

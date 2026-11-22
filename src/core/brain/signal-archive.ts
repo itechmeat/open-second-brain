@@ -84,7 +84,7 @@ export function isOutsideWindow(createdAt: string, windowDays: number, now: Date
  * The instant the archive rule runs against: `now`, or the wall clock when
  * `now` lies ahead of it (see "The clock" above).
  */
-export function archiveClock(now: Date, wallClock: Date = new Date()): Date {
+export function archiveClock(now: Date, wallClock: Date): Date {
   return now.getTime() > wallClock.getTime() ? wallClock : now;
 }
 
@@ -111,12 +111,18 @@ export function selectArchivableSignals(
   archivedNames: ReadonlySet<string>,
   windowDays: number,
   now: Date,
+  wallClock: Date,
 ): ArchiveSelection {
-  const clock = archiveClock(now);
+  const clock = archiveClock(now, wallClock);
   const archivable: SignalRecord[] = [];
   const collisions: SignalRecord[] = [];
   for (const rec of signals) {
-    if (!rec.active || !isOutsideWindow(rec.signal.created_at, windowDays, clock)) continue;
+    if (
+      !rec.active ||
+      !isOutsideWindow(rec.effectiveTime ?? rec.signal.created_at, windowDays, clock)
+    ) {
+      continue;
+    }
     if (archivedNames.has(basename(rec.path))) collisions.push(rec);
     else archivable.push(rec);
   }
@@ -132,6 +138,7 @@ export function planSignalArchive(
   scan: ScanResult,
   cfg: BrainConfig,
   now: Date,
+  wallClock: Date,
   plan: PlanState,
 ): DreamWarning[] {
   if (!archiveEnabled(cfg)) return [];
@@ -140,6 +147,7 @@ export function planSignalArchive(
     scan.archivedNames ?? archivedRecordNames(scan),
     cfg.dream.contradiction_window_days,
     now,
+    wallClock,
   );
   const consumed = (rec: SignalRecord): boolean =>
     plan.signalsToMove.has(rec.signal.id) || plan.signalsToArchive.has(rec.signal.id);

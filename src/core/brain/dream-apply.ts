@@ -35,7 +35,6 @@ import { SafeguardAbortError, SafeguardTimeoutError, type Safeguard } from "./sa
 import type { RefreshResult } from "./dream-refresh.ts";
 import type { DreamGatedRetireEntry } from "./dream-types.ts";
 import { WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
-import { collectEvidenceForSlug } from "./evidence.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { CHAIN_DECAY_STALE_DAYS } from "./inject-governor.ts";
 import { appendLogEvent } from "./log.ts";
@@ -68,6 +67,7 @@ import { listShards } from "../store/shard-list.ts";
 import type { StoreInspection } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
+import type { WindowContext, WindowEvidence } from "./dream-replay/window.ts";
 
 /**
  * The authority of every dream write under brain store dual writes: dream
@@ -84,9 +84,9 @@ const DEFAULT_DREAM_AGENT = "dream";
 export interface DreamApplyInput {
   readonly vault: string | null;
   readonly cfg: BrainConfig;
-  readonly now: Date;
   readonly plan: PlanState;
   readonly refresh: RefreshResult;
+  readonly window: WindowContext<WindowEvidence>;
   /** Identity threaded into edit-history and decision receipts. */
   readonly agentName: string | undefined;
   /** `[[Brain/log/<date>]]`, stamped as `retired_by` on each move. */
@@ -129,7 +129,8 @@ export function plannedSignalArchiveIds(plan: PlanState): string[] {
 }
 
 export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
-  const { vault, cfg, now, plan, refresh, wikilinkToRun, workrun } = input;
+  const { vault, cfg, plan, refresh, wikilinkToRun, workrun } = input;
+  const now = input.window.instant;
   const agent = input.agentName ?? DEFAULT_DREAM_AGENT;
 
   // This module renames signal files directly, so it owes the vault-identity
@@ -155,7 +156,15 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   workrun?.checkpoint(WORKRUN_PHASE.promoteComplete);
   workrun?.checkpoint(WORKRUN_PHASE.synthesizeComplete);
 
-  const gatedRetires = executeRetires(vault, cfg, now, plan, wikilinkToRun, input.safeguard);
+  const gatedRetires = executeRetires(
+    vault,
+    cfg,
+    now,
+    plan,
+    wikilinkToRun,
+    input.window,
+    input.safeguard,
+  );
 
   // Every planned retire has been moved (or explicitly gated) by here.
   workrun?.checkpoint(WORKRUN_PHASE.retireComplete);
@@ -193,7 +202,8 @@ function writePreferences(
   agent: string,
   receipts: ConfidenceReceipts,
 ): void {
-  const { vault, cfg, now, plan, refresh } = input;
+  const { vault, cfg, plan, refresh } = input;
+  const now = input.window.instant;
   const historyOpts = { agent, now: () => now };
 
   for (const np of plan.newUnconfirmed) {
@@ -283,7 +293,7 @@ function writePreferences(
     // pref body stays in sync with the counters even when the
     // counters themselves stayed put (e.g. dropping the
     // v0.9.x placeholder body during a no-counter-change run).
-    const ev = collectEvidenceForSlug(vault, update.slug, {
+    const ev = input.window.evidence.lookup(update.slug, {
       sinceIso: update.created_at,
     });
     // The freshness trend was classified at PLAN time (planRefresh)
@@ -410,6 +420,7 @@ function executeRetires(
   now: Date,
   plan: PlanState,
   wikilinkToRun: string,
+  window: WindowContext<WindowEvidence>,
   safeguard?: Safeguard,
 ): DreamGatedRetireEntry[] {
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
@@ -487,10 +498,16 @@ function executeRetires(
       }
     }
     try {
+      const createdAt = window.signals.preferences.find(
+        (entry) => entry.pref.id === `pref-${r.slug}`,
+      )?.pref.created_at;
+      const evidence = window.evidence.lookup(r.slug, { sinceIso: createdAt ?? "" });
       moveToRetired(vault, fromPath, r.reason, {
         now,
         authority: DREAM_AUTHORITY,
         retired_by: wikilinkToRun,
+        evidenceApplied: evidence.applied,
+        evidenceViolated: evidence.violated,
         ...(r.supersededBy ? { superseded_by: r.supersededBy } : {}),
         ...(storeEntry !== undefined ? { storeEntry } : {}),
       });

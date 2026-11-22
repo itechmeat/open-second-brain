@@ -44,6 +44,7 @@ import { withOperationPrivacy } from "../../../src/core/store/operation-scope.ts
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
 import { brainOutsideLog, switchDevice as switchDeviceAt } from "./store-only/fixtures.ts";
+import { makeTestDreamWindow } from "../../helpers/dream-window.ts";
 
 let env: StoreEnv | undefined;
 
@@ -145,7 +146,7 @@ describe("signals once switched", () => {
     const result = applyDreamPlan({
       vault: env.vault,
       cfg: loadBrainConfig(env.vault),
-      now: NOW,
+      window: makeTestDreamWindow(env.vault, NOW),
       plan,
       refresh: { confirmed: new Set(), updated: new Map(), bandDrops: [], outcomeRegressions: [] },
       agentName: "claude",

@@ -2009,11 +2009,11 @@ export function moveToRetired(
       // retired file is the canonical historical snapshot in both paths.
       let renderInputWithEvidence: WritePreferenceInput = renderInput;
       if (renderInput.recentApplied === undefined && renderInput.recentViolated === undefined) {
-        // Late-bound import to avoid a cyclic dependency: evidence.ts
-        // imports nothing from preference.ts at module load time.
+        // Late-bound import keeps the command-line read outside dream's
+        // evidence window while avoiding a dependency cycle.
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const ev = (
-          require("./evidence.ts") as typeof import("./evidence.ts")
+          require("./evidence-read.ts") as typeof import("./evidence-read.ts")
         ).collectEvidenceForSlug(vault, slug, { sinceIso: renderInput.created_at });
         renderInputWithEvidence = {
           ...renderInput,
