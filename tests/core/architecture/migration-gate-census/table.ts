@@ -642,6 +642,8 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "store device list": r,
   "store device retire": o("store"),
   "dream owner": o("store"),
+  "dream queue cancel": o("store"),
+  "dream queue retry": o("store"),
   "store init": o("store"),
   "store partition leave": o("store"),
   "store path": r,

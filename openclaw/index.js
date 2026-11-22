@@ -2598,7 +2598,8 @@ var init_constants = __esm(() => {
     "ledgers",
     "topics",
     "settings",
-    "digests"
+    "digests",
+    "dream-work"
   ]);
   ENVELOPE_FIELDS = Object.freeze([
     "v",

@@ -1422,7 +1422,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
     ),
     command(
       "dream",
-      "Dream owner verbs: who runs live dream passes on this brain",
+      "Dream owner and dream work queue verbs: who runs live dream passes, and the work that waits for a model",
       [],
       [
         command(
@@ -1436,6 +1436,29 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("vault", "string"),
             flag("config", "string"),
             flag("json", "boolean"),
+          ],
+        ),
+        command(
+          "queue",
+          "List the dream work queue: counts by state, the oldest ready item, parked items",
+          [
+            flag("state", "string"),
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("json", "boolean"),
+          ],
+          [
+            command("retry", "Offer a parked dream work item again (the dream owner's device)", [
+              flag("vault", "string"),
+              flag("config", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("cancel", "Cancel a dream work item (the dream owner's device)", [
+              flag("reason", "string"),
+              flag("vault", "string"),
+              flag("config", "string"),
+              flag("json", "boolean"),
+            ]),
           ],
         ),
       ],

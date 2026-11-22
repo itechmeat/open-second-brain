@@ -52,6 +52,19 @@ export interface DoctorExitExclusion {
 }
 
 const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
+  // --- The dream work queue (change dream-work-queue) --------------------
+  {
+    code: "dream-queue-no-executor",
+    reason:
+      "queued dream work waits for an executor this version does not have; there is nothing to " +
+      "run until a release that answers it is installed, and the work is kept meanwhile",
+  },
+  {
+    code: "dream-queue-unknown-operation",
+    reason:
+      "the work was produced by a newer release; the remedy is installing that release on this " +
+      "machine, which is an update of the program, not a command of it",
+  },
   // --- The brain store (task 1.11, a phase 1 trial) ------------------------
   {
     code: "store-dual-write-failures",

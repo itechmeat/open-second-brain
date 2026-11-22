@@ -39,6 +39,8 @@ export interface DreamReportInput {
   readonly refresh: RefreshResult;
   readonly reconcile: ReconcileOutcomes;
   readonly rollupPlan: RollupLadderPlan;
+  /** Keep the prior baseline when the fired work could not be fully queued. */
+  readonly rollupProductionComplete?: boolean;
   /**
    * The updated cross-topic daily budget (t_642bc2b8) to persist when a
    * promotion fired this run; null when none did, so a below-threshold
@@ -178,7 +180,9 @@ export function writeDreamLog(input: DreamReportInput): void {
   // S3: persist the advanced rollup-ladder counters only when a rung
   // fired. A below-threshold run never touches the ledger, so its
   // absence is the byte-identical opt-out.
-  if (input.rollupPlan.fired) writeRollupLedger(vault, input.rollupPlan.ledger);
+  if (input.rollupPlan.fired && input.rollupProductionComplete !== false) {
+    writeRollupLedger(vault, input.rollupPlan.ledger);
+  }
 
   // Cross-topic promotion (t_642bc2b8): persist the advanced per-owner
   // daily budget beside the rollup ledger, under the same discipline -

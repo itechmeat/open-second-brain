@@ -26,6 +26,7 @@ import {
   describeDreamOwnerStatus,
   dreamOwnerStatus,
 } from "../../core/brain/dream-owner/status.ts";
+import { queueStatus, queueSummaryJson } from "../../core/brain/dream-queue/status-view.ts";
 import { coerceStr, unknownOperationError } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import {
@@ -72,6 +73,8 @@ async function toolBrainDreamOwner(
       unsettled: status.unsettled,
       declared_primary_agent: status.declaredPrimaryAgent,
       summary: describeDreamOwnerStatus(status).join(" "),
+      // Below local reach the private partition's work is withheld.
+      queue: queueSummaryJson(queueStatus(vault, { ...configOpt, withholdPrivate: !local })),
     };
   }
 

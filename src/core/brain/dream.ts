@@ -112,7 +112,14 @@ import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
 import { buildRollupPlan, memoizedLinkCandidates } from "./dream-rollup.ts";
 import { collectWarnings, hasStateChange, withRetireSiblings } from "./dream-outcome.ts";
-import { applySalienceGate } from "./salience-gate.ts";
+import { gateSalience } from "./salience-gate.ts";
+import {
+  applyAtPassStart,
+  openQueuePass,
+  produceAtPassEnd,
+  withModelWork,
+  type DreamQueuePass,
+} from "./dream-queue/pass.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { compactRunStamp, isoDate } from "./time.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
@@ -232,19 +239,25 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
   // once it holds it. A look that finds the lock held leaves its release
   // to the next look; `o2b dream owner --release` refuses after the wait.
   const gate = assertDreamOwner(vault, dreamOwnerGateOptions(opts));
-  if (gate.status === "preview") return dreamPass(vault, opts, null);
+  if (gate.status === "preview") return dreamPass(vault, opts, null, null);
   if (gate.status === "unbound") {
-    if (gate.store === null) return dreamPass(vault, opts, null);
+    if (gate.store === null) return dreamPass(vault, opts, null, null);
     return withDreamPassLock(gate.store, () => {
       recheckUnboundDreamOwner(gate.store!);
-      return dreamPass(vault, opts, null);
+      return dreamPass(vault, opts, null, null);
     });
   }
   return withDreamPassLock(gate.store, () => {
     // A release written between the gate and the lock moved the role:
     // look again under the lock, before any write.
     const owner = recheckDreamOwner(gate);
-    return withOwnerTag(dreamPass(vault, opts, owner), owner, opts.agentName);
+    // The dream work queue lives only here: a live pass on the owner's
+    // device of a brain served from the store (dream-queue/pass.ts).
+    const queue = openQueuePass(vault, gate.store, owner, opts);
+    return withModelWork(
+      withOwnerTag(dreamPass(vault, opts, owner, queue), owner, opts.agentName),
+      queue,
+    );
   });
 }
 
@@ -253,6 +266,7 @@ function dreamPass(
   vault: string | null,
   opts: DreamOptions,
   owner: DreamOwnerTag | null,
+  queue: DreamQueuePass | null,
 ): DreamRunSummary {
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
@@ -275,7 +289,9 @@ function dreamPass(
     const summary = withViewPass(
       afterStep(
         withTopicPass(
-          afterStep(withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults, owner))),
+          afterStep(
+            withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults, owner, queue)),
+          ),
           opts,
           {
             start: () => progress.start(DREAM_STAGE.topics),
@@ -364,6 +380,7 @@ function dreamRun(
   progress: ProgressCounter,
   progressFaults: ReadonlyArray<string>,
   owner: DreamOwnerTag | null,
+  queue: DreamQueuePass | null,
 ): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
@@ -387,6 +404,9 @@ function dreamRun(
       // The next pass tries again.
     }
   }
+  // Answers accepted since the last pass are applied first, on the
+  // owner's device only (dream-queue/pass.ts; never on a dry run).
+  if (queue !== null && !dryRun) applyAtPassStart(queue);
   // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
   // this run, the configured value decides when it is absent. Resolved
   // once, here, so the heal branch below has a single source of truth and
@@ -517,7 +537,7 @@ function dreamRun(
   // change what the pass asks a model to fold. With
   // `dream.salience_threshold` unset the gate is open and reads nothing,
   // which is why an un-opted-in vault pays no I/O here.
-  const salienceGate = applySalienceGate({
+  const { verdict: salienceGate, admitted_ids: admittedIds } = gateSalience({
     vault,
     preferences: context.signals.preferences,
     cfg,
@@ -678,6 +698,9 @@ function dreamRun(
   const gatedSlugs = gatedRetireSlugs(exec.gatedRetires);
 
   if (!dryRun) {
+    const rollupProductionComplete =
+      queue === null ||
+      produceAtPassEnd(queue, { plan: rollupPlan, admittedIds, day: isoDate(now) });
     writeDreamLog({
       vault,
       now: context.instant,
@@ -687,6 +710,7 @@ function dreamRun(
       refresh,
       reconcile,
       rollupPlan,
+      rollupProductionComplete,
       crossTopicLedger: crossTopic.ledger,
       moved: exec.moved,
       archived: exec.archived,

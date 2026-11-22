@@ -22,6 +22,8 @@ import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { makeMachines, type Machines } from "../../view/fixtures/machines.ts";
 import { blobPath, partitionDir } from "../../../../src/core/store/store-paths.ts";
 import { openStore } from "../../../../src/core/store/store-open.ts";
+import { STORE_ROOT_ENV } from "../../../../src/core/store/constants.ts";
+import { homeEnv } from "../../../helpers/platform.ts";
 import { listShards } from "../../../../src/core/store/shard-list.ts";
 import { appendRecord } from "../../../../src/core/store/appender.ts";
 import { readShard } from "../../../../src/core/store/reader.ts";
@@ -218,7 +220,17 @@ describe("dream owner role", () => {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        ...homeEnv(join(m.parent, "home", "dev-b")),
+        XDG_CONFIG_HOME: join(m.parent, "config"),
+        XDG_DATA_HOME: join(m.parent, "data"),
+        XDG_STATE_HOME: join(m.parent, "state", "dev-b"),
+        XDG_CACHE_HOME: join(m.parent, "cache"),
+        OPEN_SECOND_BRAIN_CONFIG: join(m.parent, "config.yaml"),
+        [STORE_ROOT_ENV]: m.root("dev-a"),
+        O2B_DEVICE_ID: "dev-b",
+      },
     });
     const reader = writer.stdout.getReader();
     const ready = await reader.read();

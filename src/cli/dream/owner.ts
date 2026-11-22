@@ -34,11 +34,18 @@ import { StoreOpenError } from "../../core/store/store-open.ts";
 import { isLockContention } from "../../core/store/local-lock.ts";
 import { CliError, parseFlags } from "../argparse.ts";
 import { sortedReplacer } from "../helpers.ts";
+import { cmdQueue, DREAM_QUEUE_USAGE } from "./queue.ts";
+import {
+  describeQueueStatus,
+  queueStatus,
+  queueSummaryJson,
+} from "../../core/brain/dream-queue/status-view.ts";
 
 const USAGE = [
   "usage: o2b dream owner [--vault <path>] [--config <file>] [--json]",
   "       o2b dream owner --here [--agent <name>] [--force] [--vault <path>] [--config <file>] [--json]",
   "       o2b dream owner --release [--vault <path>] [--config <file>] [--json]",
+  DREAM_QUEUE_USAGE.replace(/^usage: /, "       "),
 ].join("\n");
 
 const DREAM_EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
@@ -54,6 +61,8 @@ export async function handleDreamSubcommand(argv: ReadonlyArray<string>): Promis
     switch (verb) {
       case "owner":
         return cmdOwner(rest);
+      case "queue":
+        return cmdQueue(rest);
       default:
         process.stderr.write(`error: unknown dream verb: ${verb}\n${USAGE}\n`);
         return DREAM_EXIT.usage;
@@ -122,8 +131,13 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
 
   if (!here && !release) {
     const status = dreamOwnerStatus(vault, { ...configOpt, look: true });
-    if (json) writeJson({ ok: true, ...dreamOwnerStatusJson(status) });
-    else process.stdout.write(`${describeDreamOwnerStatus(status).join("\n")}\n`);
+    const queue = queueStatus(vault, configOpt);
+    if (json)
+      writeJson({ ok: true, ...dreamOwnerStatusJson(status), queue: queueSummaryJson(queue) });
+    else {
+      const lines = [...describeDreamOwnerStatus(status), ...describeQueueStatus(queue)];
+      process.stdout.write(`${lines.join("\n")}\n`);
+    }
     return DREAM_EXIT.ok;
   }
 

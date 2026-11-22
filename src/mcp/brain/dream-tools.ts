@@ -497,6 +497,7 @@ export async function toolBrainDream(
           reuse: entry.reuse,
         })),
     },
+    ...(summary.model_work !== undefined ? { model_work: { ...summary.model_work } } : {}),
     snapshot_path: summary.snapshot_path ? toolPath(ctx, summary.snapshot_path) : null,
     log_path: summary.log_path ? toolPath(ctx, summary.log_path) : null,
   };
