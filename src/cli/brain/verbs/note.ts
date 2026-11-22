@@ -15,7 +15,7 @@ import {
   ok,
   okJson,
   parse,
-  resolveOptionalVault,
+  servedOptionalVault,
 } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
@@ -56,7 +56,7 @@ export async function cmdBrainNote(argv: string[]): Promise<number> {
   if (vaultFlag !== undefined && normalizeFlagString(vaultFlag) === null) {
     throw new CliError(NO_VAULT_ERROR);
   }
-  const vault = resolveOptionalVault(vaultFlag, config);
+  const vault = servedOptionalVault(vaultFlag, config);
   const explicitAgent = normalizeFlagString(flags["agent"]);
 
   let res;

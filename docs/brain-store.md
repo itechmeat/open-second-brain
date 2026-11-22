@@ -1485,7 +1485,34 @@ still on disk (the store is the truth there):
   examined or is gone, its MCP server answers each call as a server with
   no vault does (the brain tools from the store, a tool that needs the
   vault refuses with `vault_unreadable`), and never recreates a vault
-  folder that is gone.
+  folder that is gone. The command line and the hooks take the same
+  decision, in both shapes alike. The store-backed `o2b brain` verbs
+  (`feedback`, `note`, `query`, `doctor`, `dream`, `export`, `claims`,
+  `rollback --list`) answer from the store. A verb that needs the vault's
+  own files (`migrate-store`, which inventories the legacy tree) refuses
+  with one line naming the reason. The session start injects the digest
+  from the store, led by an `UNAVAILABLE:` line for the operator's rules,
+  which live in the vault and are therefore unknown, never absent. Every
+  other hook serves the store as on a machine with no vault.
+- **A vault folder that is gone, on a machine that has not switched.**
+  The machine config names a vault and the folder is not there (an
+  unmounted disk, a renamed folder). This is not a fresh installation:
+  the brain is somewhere else, and the folder the config names is the
+  only trace of where. So every surface says so before it says "there is
+  nothing here yet". The session context leads with the notice - in the
+  slot the `UNAVAILABLE:` block uses, so the operator's rules are
+  reported as unknown rather than absent - and keeps `present: false`.
+  Every refusal names the missing folder before any advice to initialise
+  a new brain, and the advice it carried stays, second. The doctor
+  (`brain_doctor` and `o2b brain doctor`) reports the missing folder
+  ahead of the "brain root absent" entry, whose `o2b brain init` advice
+  stays, behind the new `o2b status` exit. The command line writes the
+  notice on stderr before the verb's own error, and the session start
+  carries it in its runtime notices; that start no longer runs the
+  background maintenance either, which would have created the very
+  folder that is missing. A machine with no vault configured is not in
+  this case: there is no folder to be missing, and a new installation
+  keeps today's guidance word for word.
 
 ## What the partitions protect, and what they do not
 

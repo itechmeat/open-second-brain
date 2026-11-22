@@ -17,7 +17,8 @@ import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
 import { NOTE_WRITE_OPS } from "../../core/brain/notes/write-record.ts";
 import { AGENT_SOURCE_CONTRIBUTION_KINDS } from "../../core/brain/agent-source/types.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import { contextReach } from "../tool-contract.ts";
+import { contextReach, contextVault } from "../tool-contract.ts";
+import { laneVaultRoot } from "../../core/store/lane-pages.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
@@ -160,18 +161,37 @@ async function toolBrainQuery(
   });
   const queryKind = preference !== null ? "preference" : topic !== null ? "topic" : "since";
 
+  // The lookups read the brain store's folds where the machine keeps its
+  // brain there, so they work with no vault and on a switched machine
+  // whose vault cannot be reached (`servedVault`), from the no-vault
+  // stand-in root; the telemetry row has no vault to land in then.
+  const served = contextVault(ctx);
+  const vault = laneVaultRoot(served);
+
   // Owner-scoped fact recall (Knowledge Provenance suite, v1.7). Off by
   // default: when the guardrail flag is off (or no scope is requested) the
   // scope is null and every fact is visible exactly as before.
-  const requestedScope = coerceAgentScope(ctx, args, false);
-  const ownerScope = loadGuardrailsConfigSafe(ctx.vault).owner_scoped_facts
+  // The scope is authorized against the vault the lookups read, never the
+  // vault getter, which refuses here with no vault and on such a machine;
+  // the caller's identity is still read lazily, only for a scoped call.
+  const requestedScope = coerceAgentScope(
+    {
+      vault,
+      get agentName() {
+        return ctx.agentName;
+      },
+    },
+    args,
+    false,
+  );
+  const ownerScope = loadGuardrailsConfigSafe(vault).owner_scoped_facts
     ? normalizeAgentScope(requestedScope)
     : null;
 
   // Root C's rule over the reference-shaped rows this tool returns:
   // a signal, a log event and a preference each NAME an artifact, and a
   // row naming one the caller may not see discloses it by naming it.
-  const queryView = reachView(ctx.vault, contextReach(ctx));
+  const queryView = reachView(vault, contextReach(ctx));
   // The delivery binding (delivery-trust, lane A): one reach resolution
   // and one frontmatter cache for every payload body this tool returns.
   const delivery = deliveryView(ctx);
@@ -181,7 +201,7 @@ async function toolBrainQuery(
     // Lazy emit kernel (t_5d7aa7c5): gate off = thunk never runs; a
     // throwing continuity write can never fail the query itself.
     emitGatedTelemetry(telemetry || undefined, () =>
-      emitRecallTelemetry(ctx.vault, {
+      emitRecallTelemetry(served, {
         ...telemetryEnvelope,
         mode: "query",
         status,
@@ -203,7 +223,7 @@ async function toolBrainQuery(
         if (!queryView.row(...recordRefs(preference))) {
           throw new BrainNotFoundError(preference);
         }
-        const res = queryByPreference(ctx.vault, preference);
+        const res = queryByPreference(vault, preference);
         // Fail closed: an owner-private fact outside the requested scope is
         // indistinguishable from absent, so it cannot leak across owners.
         // Retirement KEEPS ownership (context-integrity-gates, A7), so a
@@ -244,7 +264,7 @@ async function toolBrainQuery(
       // expiration_date; show_expired re-includes them for audit, and
       // `at` moves the clock that filter compares against.
       const showExpired = coerceBoolOptional(args, "show_expired") ?? false;
-      const res = queryByRuleTopic(ctx.vault, topic, {
+      const res = queryByRuleTopic(vault, topic, {
         showExpired,
         transportReach: contextReach(ctx),
         ...(asOf !== null ? { now: asOf } : {}),
@@ -266,14 +286,14 @@ async function toolBrainQuery(
       return {
         mode: "topic",
         topic,
-        signals: signals.map((s) => shapeSignalPayload(delivery, ctx.vault, s)),
+        signals: signals.map((s) => shapeSignalPayload(delivery, vault, s)),
         preference: topicPrefVisible ? shapePreferencePayload(delivery, res.preference!) : null,
         all_log_events: logEvents.map(serializeLogEntry),
       };
     }
 
     // since
-    const res = queryByLogSince(ctx.vault, since!);
+    const res = queryByLogSince(vault, since!);
     const events = logEntriesAtReach(queryView, res);
     emitQueryTelemetry(events.length > 0 ? "ok" : "empty", events.length);
     return {

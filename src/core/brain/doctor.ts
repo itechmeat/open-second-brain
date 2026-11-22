@@ -106,7 +106,7 @@ import { migrationCheck } from "./doctor/migration-check.ts";
 import { storeCheck } from "./doctor/store-check.ts";
 import { runStoreSideDoctor, STORE_SIDE_CHECKS } from "./doctor/store-side-pass.ts";
 import { configuredStore } from "../store/read/store-entities.ts";
-import { storeOnlyMode } from "../store/store-only.ts";
+import { configuredVaultMissing, storeOnlyMode } from "../store/store-only.ts";
 import { vaultBindingStatus } from "../vault-adapter/vault-binding.ts";
 import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
 import { viewWriterCheck } from "./doctor/view-writer-check.ts";
@@ -304,6 +304,9 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
 /** Issue code for a resolved root that carries no Brain layer. */
 const BRAIN_ROOT_ABSENT_CODE = "brain-root-absent";
 
+/** Issue code for a configured vault whose folder is not there. */
+const VAULT_FOLDER_MISSING_CODE = "vault-folder-missing";
+
 /** Subsystem name the pass reports a Brain layer it could not reach under. */
 const BRAIN_ROOT_SITE = "brain.doctor.root";
 
@@ -398,7 +401,40 @@ function runDoctorWithoutVault(opts: RunDoctorOptions): RunDoctorResult {
 export function runDoctor(vault: string | null, opts: RunDoctorOptions = {}): RunDoctorResult {
   // The doctor writes nothing: a shard gone since this machine read it is
   // reported, and no shard is recorded as seen.
-  return withoutSeenRecording(() => runDoctorPass(vault, opts));
+  return withoutSeenRecording(() => withMissingVaultEntry(runDoctorPass(vault, opts), vault, opts));
+}
+
+/**
+ * The missing-folder entry, in front of the pass's own warnings.
+ *
+ * A configured vault whose folder is not there (an unmounted disk, a
+ * renamed folder) is not a fresh installation, and the pass cannot tell
+ * it from one: the Brain layer it looks for is absent either way, and it
+ * says so with `brain-root-absent` and the advice to run `o2b brain init`
+ * - advice that starts a SECOND brain beside the real one. The entry
+ * names the folder that is missing first, so the advice that stays is
+ * read second.
+ *
+ * The entry is a warning of the pass, not a replacement for one: the
+ * `brain-root-absent` finding and its advice stay exactly as they were.
+ */
+function withMissingVaultEntry(
+  result: RunDoctorResult,
+  vault: string | null,
+  opts: RunDoctorOptions,
+): RunDoctorResult {
+  if (vault === null) return result;
+  const missing = configuredVaultMissing(
+    vault,
+    opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+  );
+  if (missing === null) return result;
+  const entry: DoctorIssue = {
+    severity: "warning",
+    code: VAULT_FOLDER_MISSING_CODE,
+    message: missing.notice,
+  };
+  return Object.freeze({ ...result, warnings: Object.freeze([entry, ...result.warnings]) });
 }
 
 function runDoctorPass(vault: string | null, opts: RunDoctorOptions): RunDoctorResult {

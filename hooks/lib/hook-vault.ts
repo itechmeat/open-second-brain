@@ -19,15 +19,52 @@
 import { resolveVault } from "../../src/core/config.ts";
 import { noVaultRoot } from "../../src/core/platform-dirs.ts";
 import { configuredStore } from "../../src/core/store/read/store-entities.ts";
+import type { UnreachableVault } from "../../src/core/store/store-only.ts";
+import { lookAtDirectory } from "../../src/core/vault-unexaminable.ts";
 
-/** The configured vault, or `null` when there is none or it cannot be resolved. */
+type StoreOnlyModule = typeof import("../../src/core/store/store-only.ts");
+
+/**
+ * The configured vault, or `null` when there is none, it cannot be
+ * resolved, or this machine switched to the brain store and the vault
+ * folder is gone or cannot be examined (`servedVault`): such a hook
+ * serves the brain from the store, as with no vault.
+ */
 export function resolveHookVault(): string | null {
+  return configuredHookVault().vault;
+}
+
+function configuredHookVault(): ServedHookVault {
+  let vault: string | null;
   try {
-    const vault = resolveVault();
-    return vault === null || vault.trim() === "" ? null : vault;
+    vault = resolveVault();
   } catch {
-    return null;
+    return { vault: null, unreachable: null };
   }
+  if (vault === null || vault.trim() === "") return { vault: null, unreachable: null };
+  // The common case costs one look and loads nothing more: a hook runs on
+  // every tool call, and the store-only module pulls in the lock modules.
+  if (lookAtDirectory(vault) === "present") return { vault, unreachable: null };
+  try {
+    const storeOnly = require("../../src/core/store/store-only.ts") as StoreOnlyModule;
+    const served = storeOnly.servedVault(vault);
+    const missing = storeOnly.configuredVaultMissing(vault);
+    return {
+      vault: served.vault,
+      unreachable: served.unreachable,
+      ...(missing !== null ? { missing: { vault: missing.vault, notice: missing.notice } } : {}),
+    };
+  } catch {
+    return { vault, unreachable: null };
+  }
+}
+
+/** What the hook learned about the vault: where it is, and what is wrong with it. */
+interface ServedHookVault {
+  readonly vault: string | null;
+  readonly unreachable: UnreachableVault | null;
+  /** The configured vault's folder is not there, on a machine that has not switched. */
+  readonly missing?: { readonly vault: string; readonly notice: string };
 }
 
 /** Where a hook does its work: a vault, or the brain store with none. */
@@ -39,21 +76,36 @@ export interface HookTarget {
   readonly vault: string;
   /** Whether a vault is configured: the vault part of a hook runs only then. */
   readonly hasVault: boolean;
+  /** Set when a switched machine's vault cannot be reached: what a hook could not read, and why. */
+  readonly unreachable?: UnreachableVault;
+  /**
+   * Set when the configured vault's folder is not there, on a machine that
+   * has NOT switched: the brain is not a fresh installation, and the hook
+   * says so in its runtime notices.
+   */
+  readonly missing?: { readonly vault: string; readonly notice: string };
 }
 
 /**
  * The hook's target (design D14, task 2.10): the configured vault; with no
  * vault the brain store, when this machine has one, so the hook does the
  * store-side part of its job and skips the vault part; `null` when there is
- * neither, and the hook returns quietly.
+ * neither, and the hook returns quietly. A switched machine whose vault
+ * cannot be reached is served from the store, and the target names why.
  */
 export function resolveHookTarget(): HookTarget | null {
-  const vault = resolveHookVault();
-  if (vault !== null) return { vault, hasVault: true };
+  const { vault, unreachable, missing } = configuredHookVault();
+  if (vault !== null) {
+    return { vault, hasVault: true, ...(missing !== undefined ? { missing } : {}) };
+  }
   try {
     if (configuredStore() === null) return null;
   } catch {
     return null;
   }
-  return { vault: noVaultRoot(), hasVault: false };
+  return {
+    vault: noVaultRoot(),
+    hasVault: false,
+    ...(unreachable !== null ? { unreachable } : {}),
+  };
 }

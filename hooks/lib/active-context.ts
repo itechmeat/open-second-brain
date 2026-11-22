@@ -292,6 +292,13 @@ export function assembleActiveContext(
      * The configured budget stays in characters.
      */
     readonly measure?: (text: string) => number;
+    /**
+     * The configured vault's folder is not there, on a machine that has not
+     * switched: the notice rides the runtime notices, so the session is
+     * told the brain is not a fresh installation before anything else says
+     * what an empty vault looks like.
+     */
+    readonly missing?: { readonly vault: string; readonly notice: string };
   } = {},
 ): string {
   const measure = opts.measure ?? ((text: string) => text.length);
@@ -310,7 +317,10 @@ export function assembleActiveContext(
   // what it claimed is put back first, so this start shows it.
   if (startsSession) recoverClaimedAutoMigrationNotices(vault);
   const pending = startsSession ? readAutoMigrationNotice(vault) : null;
-  const notices = collectRuntimeNotices(vault, { oneTime: startsSession });
+  const notices = collectRuntimeNotices(vault, {
+    oneTime: startsSession,
+    ...(opts.missing !== undefined ? { missing: opts.missing } : {}),
+  });
 
   // `Brain/active.md` on an unswitched machine; on a store-only one the
   // digest rendered on demand into the device-local cache (D14 item 7).

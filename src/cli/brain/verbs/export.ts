@@ -97,7 +97,7 @@ function released(
 }
 
 async function exportJson(flags: BrainVerbFlags): Promise<FormatOutcome> {
-  const { vault } = brainVerbContext(flags);
+  const { vault } = brainVerbContext(flags, { vault: "store" });
   const verdict = redactForEgress(EGRESS_SITE, exportPreferencesJson(vault));
   if (verdict.outcome !== EGRESS_OUTCOME.released) {
     return { kind: "refused", detail: verdict.detail };
@@ -112,7 +112,7 @@ async function exportJson(flags: BrainVerbFlags): Promise<FormatOutcome> {
 }
 
 async function exportLlmsTxt(flags: BrainVerbFlags): Promise<FormatOutcome> {
-  const { vault } = brainVerbContext(flags);
+  const { vault } = brainVerbContext(flags, { vault: "store" });
   const detail = exportPreferencesLlmsTxtDetailed(vault);
   const verdict = redactForEgress(EGRESS_SITE, detail.text);
   if (verdict.outcome !== EGRESS_OUTCOME.released) {

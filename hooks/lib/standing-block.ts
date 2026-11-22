@@ -24,7 +24,12 @@
  */
 
 import type { DigestCut } from "../../src/core/agent-context/digest-cut-note.ts";
-import { brainStandingRulesPath } from "../../src/core/brain/paths.ts";
+import {
+  brainStandingRulesPath,
+  BRAIN_ROOT_REL,
+  BRAIN_STANDING_RULES_FILE,
+} from "../../src/core/brain/paths.ts";
+import type { UnreachableVault } from "../../src/core/store/store-only.ts";
 import { RECEIPT_ITEM_STANDING_RULES } from "../../src/core/brain/context-receipts.ts";
 import {
   readStandingRules,
@@ -115,15 +120,27 @@ export function renderStandingBlock(
   vault: string,
   maxChars: number,
   meter?: InjectionMeter,
+  unreachable?: UnreachableVault,
 ): string {
   const path = brainStandingRulesPath(vault);
   let block: string;
-  try {
-    const rules = readStandingRules(vault, { maxChars });
-    if (rules === null) return "";
-    block = renderStandingRules(rules);
-  } catch (err) {
-    block = renderStandingRulesFailure(path, err);
+  // A switched machine whose vault cannot be reached: the rules live in
+  // the vault, so they are unknown, never "there are none". The block says
+  // so, with the vault-relative path (the vault itself is named in the
+  // reason), as `brain_context` does.
+  if (unreachable !== undefined) {
+    block = renderStandingRulesFailure(
+      `${BRAIN_ROOT_REL}/${BRAIN_STANDING_RULES_FILE}`,
+      new Error(unreachable.reason),
+    );
+  } else {
+    try {
+      const rules = readStandingRules(vault, { maxChars });
+      if (rules === null) return "";
+      block = renderStandingRules(rules);
+    } catch (err) {
+      block = renderStandingRulesFailure(path, err);
+    }
   }
   meter?.sources.push({
     name: SOURCE_STANDING_RULES,

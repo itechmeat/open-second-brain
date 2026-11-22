@@ -173,6 +173,8 @@ test("the operator's rules are reported as unread, with the reason, when the vau
 const STORE_BACKED: ReadonlyArray<readonly [string, object]> = [
   ["brain_context", {}],
   ["brain_search", { query: "otters herons" }],
+  // A preference lookup reads the store's folds, not vault files.
+  ["brain_query", { preference: "pref-otters-first" }],
   ["brain_pinned_context", { operation: "read" }],
   [
     "brain_feedback",
@@ -244,6 +246,16 @@ for (const { shape, skip, cutOff } of UNREACHABLE)
 
         const context = text(await call(server, "brain_context", {}));
         expect(context).toContain(RULE);
+        const query = text(await call(server, "brain_query", { topic: "otters-first" }));
+        expect(query).toContain(RULE);
+        // An explicit owner scope is authorized against the vault the store
+        // is served from, not the vault getter: it answers like the unscoped one.
+        const scoped = await request(server, "brain_query", {
+          topic: "otters-first",
+          agent_scope: "otter-keeper",
+        });
+        expect(scoped.error?.data?.code ?? errorCode(scoped.result!)).toBeNull();
+        expect(text(scoped.result!)).toContain(RULE);
         const pinned = text(await call(server, "brain_pinned_context", { operation: "read" }));
         expect(pinned).toContain("Otter rota.");
         if (reach === "remote") {
@@ -256,3 +268,104 @@ for (const { shape, skip, cutOff } of UNREACHABLE)
       60_000,
     );
   }
+
+/**
+ * A search result past the preview budget is parked as an artifact. The
+ * server parked it under the configured vault, and on a switched machine
+ * that resolves machine state through a look at `<vault>/Brain`: with the
+ * vault at mode 000 the look failed and the search refused at local reach
+ * (where the rows are long enough to be parked), while a folder that is
+ * gone, and the shorter rows at remote reach, answered. The payload is now
+ * parked where a server with no vault parks it, and fetched back from there.
+ */
+for (const { shape, skip, cutOff } of UNREACHABLE) {
+  test.skipIf(skip)(
+    `a search result past the preview budget is parked while the vault is ${shape}`,
+    async () => {
+      const { env: e, server } = switchedMachine(`osb-mcp-switched-park-${shape}-`);
+      for (let i = 0; i < 30; i += 1) {
+        writePreference(e.vault, {
+          slug: `otters-${i}`,
+          topic: `otters-${i}`,
+          principle: `Feed the otters of pool ${i} first. ${"Keep the otter pool clean. ".repeat(8)}`,
+          created_at: "2026-11-01T00:00:00Z",
+          unconfirmed_until: "2026-11-02T00:00:00Z",
+          status: "confirmed",
+          confirmed_at: "2026-11-02T00:00:00Z",
+          evidenced_by: ["[[sig-x]]"],
+          confidence_value: 0.9,
+        });
+      }
+      cutOff(e.vault);
+      const search = await call(server, "brain_search", { query: "otters", limit: 30 });
+      expect(errorCode(search)).toBeNull();
+      const envelope = JSON.parse(text(search)) as {
+        preview_truncated?: boolean;
+        artifact_id: string;
+      };
+      expect(envelope.preview_truncated).toBe(true);
+      const full = await call(server, "brain_artifact_get", { artifact_id: envelope.artifact_id });
+      expect(errorCode(full)).toBeNull();
+      expect(text(full)).toContain("Feed the otters of pool");
+      if (shape === "gone") expect(existsSync(e.vault)).toBe(false);
+    },
+    60_000,
+  );
+}
+
+/** Thirty long confirmed preferences, so a search for them is parked past its preview budget. */
+function manyOtters(vault: string): void {
+  for (let i = 0; i < 30; i += 1) {
+    writePreference(vault, {
+      slug: `otters-${i}`,
+      topic: `otters-${i}`,
+      principle: `Feed the otters of pool ${i} first. ${"Keep the otter pool clean. ".repeat(8)}`,
+      created_at: "2026-11-01T00:00:00Z",
+      unconfirmed_until: "2026-11-02T00:00:00Z",
+      status: "confirmed",
+      confirmed_at: "2026-11-02T00:00:00Z",
+      evidenced_by: ["[[sig-x]]"],
+      confidence_value: 0.9,
+    });
+  }
+}
+
+/** The vault back as it was before `cutOff`. */
+function bringBack(shape: "gone" | "unreadable", vault: string): void {
+  if (shape === "gone") renameSync(`${vault}-away`, vault);
+  else chmodSync(vault, 0o755);
+}
+
+/**
+ * A handle names a parked payload for the whole run, whatever happened
+ * to the vault between the search that parked it and the fetch: a payload
+ * parked while the vault was out of reach is fetched after it is back,
+ * and one parked while it was there is fetched while it is out of reach.
+ */
+for (const { shape, skip, cutOff } of UNREACHABLE) {
+  for (const parkedWhile of ["out of reach", "there"] as const) {
+    test.skipIf(skip)(
+      `a handle parked while the vault is ${parkedWhile} resolves after it changes (${shape})`,
+      async () => {
+        const { env: e, server } = switchedMachine(`osb-mcp-switched-handle-${shape}-`);
+        manyOtters(e.vault);
+        if (parkedWhile === "out of reach") cutOff(e.vault);
+        const search = await call(server, "brain_search", { query: "otters", limit: 30 });
+        expect(errorCode(search)).toBeNull();
+        const envelope = JSON.parse(text(search)) as {
+          preview_truncated?: boolean;
+          artifact_id: string;
+        };
+        expect(envelope.preview_truncated).toBe(true);
+        if (parkedWhile === "out of reach") bringBack(shape, e.vault);
+        else cutOff(e.vault);
+        const full = await call(server, "brain_artifact_get", {
+          artifact_id: envelope.artifact_id,
+        });
+        expect(errorCode(full)).toBeNull();
+        expect(text(full)).toContain("Feed the otters of pool");
+      },
+      60_000,
+    );
+  }
+}

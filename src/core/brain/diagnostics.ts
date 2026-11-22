@@ -1032,6 +1032,27 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The configured vault's folder is not there (an unmounted disk, a
+        // renamed folder). The exit is the CONFIG, not a repair: the
+        // operator has to mount the disk or point the machine config at
+        // the vault, and `o2b status` is where the configured path is
+        // shown. `o2b brain init` stays the exit of the layer that is
+        // missing from it - it is simply no longer the first thing the
+        // doctor says.
+        code: "vault-folder-missing",
+        issueClass: "configured vault folder is missing",
+        nextCommand: "o2b status",
+        autoRepairable: false,
+      },
+      {
+        // The same condition, in the runtime-notice channel's own spelling
+        // (the channel's wire records are snake case).
+        code: "vault_folder_missing",
+        issueClass: "configured vault folder is missing",
+        nextCommand: "o2b status",
+        autoRepairable: false,
+      },
+      {
         // The exit is the REVIEW, not the repair: what follows it is
         // `tier-drift-restore` or `tier-drift-accept`, registered above,
         // and which of the two applies is per drifted note.

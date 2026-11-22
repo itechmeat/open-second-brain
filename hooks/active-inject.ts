@@ -203,7 +203,11 @@ async function main(): Promise<void> {
     // reindex runs detached so it survives this short-lived hook). Best-effort,
     // never blocks injection. In background mode the synchronous part (brain
     // upgrade + spawning the reindex) completes before this awaits.
-    if (hookEventName === "SessionStart" && hasVault) {
+    //
+    // A vault whose folder is not there is skipped: the worker would
+    // create the very folder that is missing, and a fresh tree in its
+    // place hides the real vault (the write guard's rule, applied here).
+    if (hookEventName === "SessionStart" && hasVault && target.missing === undefined) {
       // Fire-and-forget: never put maintenance on the hook's critical path.
       // background:true spawns the reindex detached; we do not await the result.
       void ensureVaultCurrent(vault, { background: true }).catch(() => {
@@ -224,7 +228,12 @@ async function main(): Promise<void> {
     // a split payload (this block included, when it spills past part 1) is
     // queued in the per-session hook-state file for re-grounding, until the
     // next SessionStart replaces the queue.
-    const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
+    const standingBlock = renderStandingBlock(
+      vault,
+      limits.standingRulesMaxChars,
+      meter,
+      target.unreachable,
+    );
 
     // The scoped operator rules for the project this session runs in (the
     // payload's `cwd`, else this process's) and for this device. Outside
@@ -296,6 +305,7 @@ async function main(): Promise<void> {
         const context = assembleActiveContext(vault, memoryBudget, meter, {
           startsSession: hookEventName === "SessionStart",
           ...(memoryRoom !== undefined ? { roomChars: memoryRoom, measure } : {}),
+          ...(target.missing !== undefined ? { missing: target.missing } : {}),
         });
         const cuts = meter.cuts.filter((cut) => cut.source !== "pinned-context");
         return context.length === 0 && cuts.length === 0
