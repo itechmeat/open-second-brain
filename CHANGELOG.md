@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Three cross-platform registry launchers provide `o2b`, `o2b-mcp` and `o2b-hook` with Bun on `PATH` as the prerequisite. `vault-log` is excluded because it dispatches to the nonexistent `append-event` command.
+- The package has an explicit runtime file allowlist and a checked manifest of packed paths and size ceilings.
+
+### Changed
+
+- Removed the `prepare` lifecycle script so package installation runs no lifecycle scripts. Git hooks remain available through `bun run hooks:install`.
+
 ### Fixed
 
 - **A machine whose vault folder is gone no longer looks like a fresh installation.** When the machine config named a vault and that folder was not there (an unmounted disk, a renamed folder), the product answered as on a brand-new machine: the session context was empty, the write and search tools advised `o2b store init` and `o2b search index`, and the doctor advised `o2b brain init` - advice that starts a second brain beside the real one. Every surface now says that the configured vault folder is missing, and that it may be on a disk that is not mounted, before any advice to initialise: `brain_context` leads with the notice in the slot the `UNAVAILABLE:` block uses and keeps `present: false`, every refusal names the missing folder first and keeps the advice it carried, `brain_doctor` and `o2b brain doctor` report the missing folder ahead of the "brain root absent" entry (whose `o2b brain init` advice stays, second, beside the new `o2b status` exit), the command line writes the notice on stderr before the verb's own error, and the session-start hook carries it in its runtime notices. The notice names the configured vault, so a caller at remote reach reads it with the vault as `<vault>`, never the host path, also when it leads a tool error. A machine with no vault configured keeps today's guidance word for word, and the session-start hook no longer starts the background maintenance that would have created the missing folder.
