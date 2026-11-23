@@ -35,6 +35,7 @@ export const STORE_STREAMS = Object.freeze([
   "settings",
   "digests",
   "dream-work",
+  "dream-replay",
 ] as const);
 export type StoreStream = (typeof STORE_STREAMS)[number];
 

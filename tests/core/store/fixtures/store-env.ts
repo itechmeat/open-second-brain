@@ -32,6 +32,8 @@ export interface StoreEnv {
 }
 
 export interface StoreEnvOptions {
+  /** Parent for this fixture's isolated files (default `O2B_TEST_TMPDIR`, then the system temp directory). */
+  readonly tempRoot?: string;
   /** Bootstrap a legacy `Brain/` tree in the vault (default true). */
   readonly legacyTree?: boolean;
   /** Configure the vault in the machine config (default true). */
@@ -47,7 +49,8 @@ export interface StoreEnvOptions {
 export function makeStoreEnv(prefix: string, options: StoreEnvOptions = {}): StoreEnv {
   const saved = new Map<string, string | undefined>();
   for (const key of ENV_KEYS) saved.set(key, process.env[key]);
-  const parent = mkdtempSync(join(tmpdir(), prefix));
+  const tempRoot = options.tempRoot ?? process.env["O2B_TEST_TMPDIR"] ?? tmpdir();
+  const parent = mkdtempSync(join(tempRoot, prefix));
   const restoreEnv = (): void => {
     for (const key of ENV_KEYS) {
       const value = saved.get(key);

@@ -18,6 +18,7 @@
  * made earlier does not block it.
  */
 
+import { replayStatus, replayStatusJson } from "../../core/brain/dream-replay/status-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { openDreamOwnerStore } from "../../core/brain/dream-owner/gate.ts";
 import { releaseDreamOwner, takeDreamOwner } from "../../core/brain/dream-owner/owner.ts";
@@ -80,6 +81,12 @@ async function toolBrainDreamOwner(
       // Below local reach the private partition's work is withheld.
       queue: ((queue) => queueSummaryJson(queue, waitingByOperation(queue, configOpt)))(
         queueStatus(vault, { ...configOpt, withholdPrivate: !local }),
+      ),
+      replay: replayStatusJson(
+        replayStatus(vault, {
+          ...configOpt,
+          queue: queueStatus(vault, { ...configOpt, withholdPrivate: !local }),
+        }),
       ),
     };
   }

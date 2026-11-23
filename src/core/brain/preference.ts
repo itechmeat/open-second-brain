@@ -40,6 +40,7 @@
  */
 
 import type { StorePreference } from "../store/read/store-entities.ts";
+import { canonicalJson } from "../integrity/digest.ts";
 import { loadPermissionsDocumentFor } from "./permissions/document-source.ts";
 import { legacyVaultOf } from "./no-vault.ts";
 import type { Authority } from "../store/constants.ts";
@@ -642,12 +643,6 @@ function writeStorePreference(
   const slug = id.slice("pref-".length);
   const found = storePreferenceEntry(slug, options.configPath);
   const live = found !== undefined && !isRetiredEntry(found) ? found : undefined;
-  if (live !== undefined && options.overwrite !== true) {
-    throw new FileAlreadyExistsError(path, {
-      kind: "preference",
-      displayPath: vault === null ? path : relative(vault, path),
-    });
-  }
   const frontmatter = preferenceFrontmatter(owned, id);
   const written = withGuidance(
     storeFieldsOf(frontmatter),
@@ -656,6 +651,21 @@ function writeStorePreference(
     renderPreferenceBody(owned),
   );
   const privacy = preferencePrivacy(vault, written, [callerInput(input, PREFERENCE_OPAQUE_FIELDS)]);
+  if (live !== undefined && options.overwrite !== true) {
+    // The records and the receipt of a keyed create are two writes. A
+    // create whose records landed and whose receipt did not (a crash or a
+    // failed write between them) is this write: the fold holds its
+    // payload, so its retry records the receipt and dedupes instead of
+    // refusing the preference it created itself.
+    if (idKey !== undefined && idContentHash !== undefined && samePayload(written, live)) {
+      recordPreferenceKey(vault, idKey, idContentHash, owned.created_at, id, path, privacy);
+      return { path, id, deduped: true };
+    }
+    throw new FileAlreadyExistsError(path, {
+      kind: "preference",
+      displayPath: vault === null ? path : relative(vault, path),
+    });
+  }
   // A record only proposes the fields it names, so the fields a retired
   // life left in the fold are cleared explicitly (`null`): a retire's
   // metadata never rides on a live preference, and a slug brought back
@@ -1012,6 +1022,26 @@ function preferencePayloadFields(
     // the idempotency hash (mirrors the write path at recordPreference).
     owner: input.owner?.trim(),
   };
+}
+
+/** The store fields {@link preferencePayloadFields} hashes, besides the slug. */
+const PAYLOAD_STORE_FIELDS: ReadonlyArray<string> = Object.freeze([
+  "topic",
+  "principle",
+  "scope",
+  "status",
+  "evidenced_by",
+  "owner",
+]);
+
+/** The payload part of a preference's store fields, comparable as a string. */
+function payloadOf(fields: Readonly<Record<string, unknown>>): string {
+  return canonicalJson(PAYLOAD_STORE_FIELDS.map((name) => fields[name] ?? null));
+}
+
+/** Whether the preference the fold holds carries the payload of the store fields `written`. */
+function samePayload(written: Readonly<Record<string, unknown>>, held: StorePreference): boolean {
+  return payloadOf(written) === payloadOf(held.state.fields);
 }
 
 /**

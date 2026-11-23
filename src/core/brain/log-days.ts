@@ -13,6 +13,7 @@
  * holds a few stores at most; outside a pass every call reads.
  */
 
+import { activeStoreReadView } from "../store/read/read-view.ts";
 import { legacyVaultOf } from "./no-vault.ts";
 import { statSync } from "node:fs";
 
@@ -137,7 +138,9 @@ export function storeLogDays(vault: string | null, context: LogDaysContext = {})
   if (passCache === null || source.store === null) return readDays(readContext, types);
   // A read of some types is cached apart from the whole read.
   const typesKey = types === undefined ? "*" : [...types].toSorted().join(",");
-  const key = `${source.store.root}\u0000${vault}\u0000${typesKey}`;
+  // A dream window's view (`read-view.ts`) reads another log than the whole one.
+  const viewKey = activeStoreReadView()?.token ?? "";
+  const key = `${source.store.root}\u0000${vault}\u0000${typesKey}\u0000${viewKey}`;
   const fingerprint = logFingerprint(source.store);
   const cached = passCache.get(key);
   if (cached !== undefined && cached.fingerprint === fingerprint) {

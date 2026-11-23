@@ -27,6 +27,7 @@ The store contains records in plain text JSON. Nothing in it is encrypted. Encry
     settings/<device>/<YYYY-MM>.jsonl        shared settings
     digests/<device>/<YYYY-MM>.jsonl         state digests
     dream-work/<device>/<YYYY-MM>.jsonl      dream work that needs a model
+    dream-replay/<device>/<YYYY-MM>.jsonl    windows the dream pass admitted, planned and covered
     blobs/<sha256[0:2]>/<sha256>             large bodies, immutable
   private/                                   same shape, for private-visibility records
 ```
@@ -63,6 +64,7 @@ A stream is a family of shards inside a partition:
 - `settings`: settings every machine must agree on.
 - `digests`: state digests that let machines compare their folded state.
 - `dream-work`: the queue of dream work that needs a model (see "Dream work").
+- `dream-replay`: the windows the dream pass admitted, planned and covered, and the ledgers it keeps between them (see "Dream replay"). In `shared` only.
 
 ### Shards
 
@@ -253,7 +255,7 @@ Kinds of the mutable-entity folds, with their bodies (fields marked optional may
 
 - `preference-set`: `{ "authority", "preference": "<id>", "fields": { "<name>": <json>, ... } }`, written to `events`. Proposes a value for each named field (lowercase words joined by underscores) and that the preference exists.
 - `preference-remove`: `{ "authority", "preference": "<id>" }`, written to `events`. The tombstone of a preference.
-- `preference-evidence`: `{ "preference": "<id>", "result": "applied" | "violated" | "outdated", "artifact": "<reference>" (optional), "merged_from": "<record id>" (optional) }`, written to `events`. One application of a preference; it carries no authority. A merge copies each evidence record of the dropped preference to the kept one with `merged_from` naming the copied record, so a merge retried after a partial run copies each record once.
+- `preference-evidence`: `{ "preference": "<id>", "result": "applied" | "violated" | "outdated", "artifact": "<reference>" (optional), "merged_from": "<record id>" (optional), "at": "<ISO-8601>" (optional) }`, written to `events`. One application of a preference; it carries no authority. `at` is when the rule was applied (a record written before it existed is placed by the physical part of its clock). A merge copies each evidence record of the dropped preference to the kept one with `merged_from` naming the copied record, so a merge retried after a partial run copies each record once.
 - `pinned-set`: `{ "authority", "content": "<text>" }`, written to `events`. Replaces the pinned context.
 - `pinned-clear`: `{ "authority" }`, written to `events`. The tombstone of the pinned context.
 - `setting-set`: `{ "authority", "key": "<key>", "value": <json, not null> }`, written to `settings` in `shared`.
@@ -376,6 +378,20 @@ The id of an item is the hex sha256 of the canonical JSON of the list `[operatio
 - `dream-work-retry`: `{ "item", "authority": "human" }`, written to `dream-work`. A person asked for the item to be offered again; its failed attempts count from zero.
 
 An item folds to one state: `waiting`, `leased`, `accepted` (an answer is recorded and not yet applied), `finished`, `parked` or `closed`. A waiting item is ready when every item in `after` is finished and no item earlier in the queue order that is neither finished nor closed shares a resource with it. A device holding only `shared` may take only resource-free shared items; this lets it preserve resource order without seeing private items that may arrive later. Status uses the same eligibility rule as take. A record that breaks these rules is listed as rejected and never applied. The `dream-work` fold is not one of the folds a state digest hashes. The stream is part of format version 1: a reader that does not know it leaves it alone.
+
+## Dream replay
+
+The dream pass works in windows of one UTC day, oldest first, and keeps what it covered in the `dream-replay` stream, so another machine that becomes the dream owner continues where the last one stopped. A window is named by its day; a day evaluated again (today's window, by a later pass of the same day) is named `<day>#<n>`, `n` counting the earlier evaluations. A record of the stream lives in the `shared` partition unless it names what the window read from private records: a plan or an inventory page that names a private signal, a private preference or a record of the `private` partition goes to `private`, and the late and clamped records an admission read from `private` are named only in its `dream-admission-private` part. A device folds the stream of every partition it holds. The coverage, the shared admission and the ledger records stay in `shared`. A window's records are written in this order:
+
+- `dream-admission-private`: `{ "day", "window", "late": [...], "clamped": [...], "run" }`, in `private`, only when the admission read late or clamped records from the `private` partition: those records, named nowhere else. It is written before its admission, which names it; a part that no admission names (a pass stopped between the two writes) is ignored, and the next pass admits the window again.
+- `dream-admission`: `{ "day", "window", "from", "to", "positions": [{ "partition", "stream", "device", "shard", "offset", "prefix_hash" }, ...], "gaps": [{ "partition", "stream", "shard", "reason", "since" }, ...], "late": [{ "id", "at" }, ...], "clamped": [{ "id", "at" }, ...], "left_out": [{ "partition", "stream", "shard", "offset", "since" }, ...], "rebased": { "shards": [...], "seen": <n> } | null, "admitted_at", "run", "private_part"?: "<record id>" }`. The window's input boundary: per shard of the `events` and `log` streams, the first byte not admitted, with the sha256 of the bytes before it. `late` names the records first seen after their day was covered (judged from the window's start, `from`), `clamped` the records dated after the moment of admission (judged at that moment). An admission with `gaps` is not followed by a plan; a later admission of the same window replaces it. A shard that stayed incomplete for three days is listed in `left_out` and its records are admitted, as late, once it reads again. `rebased` counts the records of a replaced or rewritten shard that were taken as seen. `private_part` names the admission's `dream-admission-private` record; a device that holds `private` folds that part into the admission.
+- `dream-window-plan`: `{ "day", "window", "bounds": { "from", "to" }, "instant", "version": <n>, "effects": [...], "audit": { ... }, "engine_version", "policy_digest", "run" }`. What the window decided, with the payload of every effect frozen, so a window interrupted after its plan is finished from the plan and never planned again. A plan whose `version` (the encoding of its payloads) is not the reader's is not applied: the window is planned again and the new plan record is the window's. Each effect has an `effect` id: the sha256 of the canonical JSON of `[window, kind, subject]`.
+- `dream-coverage`: `{ "day", "window", "admission": "<record id>", "plan": "<record id>", "owner", "run", "behind": <n> }`. The window is finished. The newest covered day is where the next pass starts.
+- `dream-bootstrap`: `{ "cursor", "counts": { ... }, "start" | null, "done": <bool>, "run" }`. The first pass's inventory of a brain that predates the replay, page by page.
+- `dream-cross-topic-spent`: `{ "day", "owner_token", "effect", "window" }`. The cross-topic allowance of one owner token was spent on that day. One record per effect counts.
+- `dream-rollup-baseline`: `{ "rung", "baseline", "produced", "window", "effect" }`. A rollup rung's counter after a window fired it. One record per effect counts; the newest window's wins.
+
+The fold of the stream gives the last covered day, the window that has an admission and no coverage (it is finished first), and the positions the next admission reads from. Signal captures and applications of a rule (the `apply-evidence` events of the log and the `preference-evidence` records) are the inputs of a window: each window sees those below its boundary whose time is not after its instant. Every other record is state and is read as it is. The stream is part of format version 1: a reader that does not know it leaves it alone.
 
 ## Device-local state
 

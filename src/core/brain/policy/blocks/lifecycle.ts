@@ -36,6 +36,7 @@ const DREAM_OPTIONAL_KEYS = [
   "salience_threshold",
   "archive_stale_signals",
   "model_budget_ms",
+  "replay_budget_ms",
 ] as const;
 
 /** A boolean key; anything else is refused rather than coerced. */
@@ -96,6 +97,9 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
   if (dream.model_budget_ms !== undefined) {
     requirePositiveInteger("dream.model_budget_ms", dream.model_budget_ms, ctx.source);
   }
+  if (dream.replay_budget_ms !== undefined) {
+    requirePositiveInteger("dream.replay_budget_ms", dream.replay_budget_ms, ctx.source);
+  }
   return {
     candidate_threshold: dream.candidate_threshold as number,
     unconfirmed_window_days: dream.unconfirmed_window_days as number,
@@ -125,6 +129,9 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
       : {}),
     ...(dream.model_budget_ms !== undefined
       ? { model_budget_ms: dream.model_budget_ms as number }
+      : {}),
+    ...(dream.replay_budget_ms !== undefined
+      ? { replay_budget_ms: dream.replay_budget_ms as number }
       : {}),
   };
 }

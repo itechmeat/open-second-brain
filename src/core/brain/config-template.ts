@@ -211,6 +211,12 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
         "model answer them. Questions it does not reach wait for the next",
         "pass; nothing is decided without an answer.",
       ]),
+      example("replay_budget_ms", 60000, [
+        "Unset by default, which allows 60000 (one minute). The time one dream",
+        "pass may spend replaying the days it missed, window by window; a pass",
+        "that spends it stops between windows or between effects, keeps what it",
+        "finished, and the next pass continues.",
+      ]),
     ],
   },
   {

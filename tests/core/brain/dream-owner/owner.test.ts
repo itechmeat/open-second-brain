@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { startDreamPassHolder } from "../../../helpers/dream-pass-holder.ts";
-import { chmodSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -208,45 +208,70 @@ describe("dream owner role", () => {
   test("--release rereads ownership after waiting for the lock", async () => {
     const a = m.open("dev-a");
     claimDreamOwner(a, "claude", human);
-    const holder = await startDreamPassHolder(a, 250);
+    // The release starts waiting on the pass lock, then dev-b's forced take
+    // lands, then the lock frees: the take is started by `go`, which is
+    // written just before the release, and the holder keeps the lock until
+    // the take reports its claim written in `claimed`. Each step waits on
+    // the one before, not on a clock, so the release can only refuse by
+    // reading ownership again under the lock.
+    const go = join(m.parent, "go");
+    const claimed = join(m.parent, "claimed");
+    const holder = await startDreamPassHolder(a, 10_000, claimed);
     const script = [
+      'import { existsSync, writeFileSync } from "node:fs";',
       'import { takeDreamOwner } from "./src/core/brain/dream-owner/owner.ts";',
       'import { openStore } from "./src/core/store/store-open.ts";',
       "const raw = JSON.parse(Bun.argv[1]);",
-      'setTimeout(() => takeDreamOwner(openStore({ root: raw.root, device: "dev-b" }), "codex", { writer: "o2b", authority: "human", force: true }), 20);',
+      "const files = JSON.parse(Bun.argv[2]);",
       'process.stdout.write("ready\\n");',
+      "while (!existsSync(files.go)) await Bun.sleep(5);",
+      'takeDreamOwner(openStore({ root: raw.root, device: "dev-b" }), "codex", { writer: "o2b", authority: "human", force: true });',
+      'writeFileSync(files.claimed, "");',
     ].join("\n");
-    const writer = Bun.spawn([process.execPath, "-e", script, JSON.stringify(a)], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...homeEnv(join(m.parent, "home", "dev-b")),
-        XDG_CONFIG_HOME: join(m.parent, "config"),
-        XDG_DATA_HOME: join(m.parent, "data"),
-        XDG_STATE_HOME: join(m.parent, "state", "dev-b"),
-        XDG_CACHE_HOME: join(m.parent, "cache"),
-        OPEN_SECOND_BRAIN_CONFIG: join(m.parent, "config.yaml"),
-        [STORE_ROOT_ENV]: m.root("dev-a"),
-        O2B_DEVICE_ID: "dev-b",
+    const writer = Bun.spawn(
+      [process.execPath, "-e", script, JSON.stringify(a), JSON.stringify({ go, claimed })],
+      {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          ...homeEnv(join(m.parent, "home", "dev-b")),
+          XDG_CONFIG_HOME: join(m.parent, "config"),
+          XDG_DATA_HOME: join(m.parent, "data"),
+          XDG_STATE_HOME: join(m.parent, "state", "dev-b"),
+          XDG_CACHE_HOME: join(m.parent, "cache"),
+          OPEN_SECOND_BRAIN_CONFIG: join(m.parent, "config.yaml"),
+          [STORE_ROOT_ENV]: m.root("dev-a"),
+          O2B_DEVICE_ID: "dev-b",
+        },
       },
-    });
+    );
     const reader = writer.stdout.getReader();
     const ready = await reader.read();
     reader.releaseLock();
     expect(new TextDecoder().decode(ready.value)).toContain("ready");
+    let released: ReturnType<typeof releaseDreamOwner>;
     try {
-      process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = "1000";
-      expect(releaseDreamOwner(a, { writer: "o2b", now: () => NOW + 6000 })).toMatchObject({
-        status: "not-owner",
-        owner: { device: "dev-b", agent: "codex" },
-      });
+      // Past the holder's cap, so the lock frees on the claim, not on time.
+      process.env["OPEN_SECOND_BRAIN_LOCK_WAIT_MS"] = "20000";
+      writeFileSync(go, "");
+      released = releaseDreamOwner(a, { writer: "o2b", now: () => NOW + 6000 });
     } finally {
       await holder.exited;
-      await writer.exited;
+      const exit = await writer.exited;
+      // The take's own failure, with its stderr, before the release's result.
+      expect({ exit, stderr: await new Response(writer.stderr).text() }).toMatchObject({
+        exit: 0,
+      });
     }
+    expect(existsSync(claimed)).toBe(true);
+    expect(released).toMatchObject({
+      status: "not-owner",
+      owner: { device: "dev-b", agent: "codex" },
+    });
     expect(readDreamOwner(a).owner).toMatchObject({ device: "dev-b", agent: "codex" });
-  });
+  }, 30_000);
 
   test("a changed pending request is reread and the current requester receives the role", () => {
     const a = m.open("dev-a");

@@ -63,6 +63,13 @@ import { listShards } from "../shard-list.ts";
 import { inspectStore, type StoreInspection } from "../store-open.ts";
 import { partitionDir, pendingBlobStampLines, resolveConfiguredStoreRoot } from "../store-paths.ts";
 import { readStreamRecords, type ShardTails } from "./stream-read.ts";
+import {
+  activeStoreReadView,
+  eventTimeOf,
+  effectiveTimeOf,
+  type StoreReadView,
+} from "./read-view.ts";
+import { readStreamViewed } from "./viewed-read.ts";
 import { appendedByThisProcess, type AppendStamp } from "../own-appends.ts";
 import { quarantineStamp } from "../shard-quarantine.ts";
 
@@ -163,6 +170,12 @@ export interface StoreEntities {
    * scan that built `signals`, so the two always describe one read.
    */
   readonly pendingSignalLifecycle: number;
+  /**
+   * Read through a window's view only (`read-view.ts`): signal id to the
+   * time the window judges the signal by, for the signals whose capture
+   * the admission gave another time than their own `created_at`.
+   */
+  readonly signalTimes?: ReadonlyMap<string, string>;
 }
 
 interface Cached {
@@ -289,7 +302,31 @@ function signalIsPrivate(record: StoreRecord, partition: StorePartition): boolea
   );
 }
 
-function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
+/**
+ * A boundary for an entity read: per partition, the byte limit of each
+ * `events` shard (`./shards-from.ts` `untilOf`). A shard it does not name
+ * is not read.
+ */
+export type StoreReadLimit = ReadonlyMap<StorePartition, ReadonlyMap<string, number>>;
+
+/** What an entity read takes. */
+export interface StoreEntitiesOptions {
+  readonly checkpoint?: () => void;
+  /**
+   * Read only up to this boundary. Such a read is built fresh every time:
+   * it neither answers from nor replaces the one cached read per store
+   * root, and uses no kept tails, so a pass reading many boundaries does
+   * not thrash the cache other readers rely on.
+   */
+  readonly until?: StoreReadLimit;
+}
+
+function build(
+  store: StoreInspection,
+  checkpoint?: () => void,
+  until?: StoreReadLimit,
+  view?: StoreReadView,
+): StoreEntities {
   const all: Array<{ record: StoreRecord; partition: StorePartition }> = [];
   const unreadable: string[] = [];
   const pinned = new Map<StorePartition, PinnedFold>();
@@ -297,11 +334,20 @@ function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
   const pendingBlobs: string[] = [];
   let pendingSignalLifecycle = 0;
   for (const partition of store.partitions) {
-    const read = readStreamRecords(store.root, partition, EVENTS, {
-      tails: tailsOf(store, partition),
-      keep: isEntityRecord,
-      ...(checkpoint !== undefined ? { checkpoint } : {}),
-    });
+    const read =
+      view !== undefined
+        ? readStreamViewed(store.root, partition, EVENTS, view, {
+            keep: isEntityRecord,
+            cacheKey: "entities",
+            ...(checkpoint !== undefined ? { checkpoint } : {}),
+          })
+        : readStreamRecords(store.root, partition, EVENTS, {
+            ...(until === undefined
+              ? { tails: tailsOf(store, partition) }
+              : { until: until.get(partition) ?? new Map<string, number>() }),
+            keep: isEntityRecord,
+            ...(checkpoint !== undefined ? { checkpoint } : {}),
+          });
     if (read.skippedPending) skippedPending = true;
     for (const sha of read.pendingBlobs) pendingBlobs.push(`${partition}/${sha}`);
     pendingSignalLifecycle +=
@@ -386,14 +432,37 @@ function build(store: StoreInspection, checkpoint?: () => void): StoreEntities {
     skippedPending,
     pendingBlobs,
     pendingSignalLifecycle,
+    ...(view !== undefined ? { signalTimes: signalTimesOf(signalFold.signals, view) } : {}),
   };
+}
+
+/**
+ * The time each signal is judged by in the view's window: the effective
+ * time of its first capture, when the admission gave it one other than its
+ * own `created_at` (a late or a clamped record).
+ */
+function signalTimesOf(
+  signals: ReadonlyMap<string, { readonly history: ReadonlyArray<StoreRecord> }>,
+  view: StoreReadView,
+): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const [id, entry] of signals) {
+    const first = entry.history.find((record) => record.kind === SIGNAL_KIND);
+    if (first === undefined) continue;
+    const at = effectiveTimeOf(view, first);
+    if (at !== null && at !== eventTimeOf(first)) out.set(id, at);
+  }
+  return out;
 }
 
 /** The entities of the store at `store.root`, cached until an `events` shard changes. */
 export function readEntitiesOf(
   store: StoreInspection,
-  options: { readonly checkpoint?: () => void } = {},
+  options: StoreEntitiesOptions = {},
 ): StoreEntities {
+  if (options.until !== undefined) return build(store, options.checkpoint, options.until);
+  const view = activeStoreReadView();
+  if (view !== null) return viewedEntities(store, view, options.checkpoint);
   const cached = cache.get(store.root);
   // The stamp a stored read must still match: the shard part plus the
   // availability of the blobs that read skipped (one stat each, no shard
@@ -421,6 +490,29 @@ export function readEntitiesOf(
   return entities;
 }
 
+/** One viewed read per store root, kept while the view and the shards are the ones it read. */
+const viewedCache = new Map<string, { readonly key: string; readonly entities: StoreEntities }>();
+
+/**
+ * The entities of `store` as the window of `view` sees them (`read-view.ts`),
+ * kept for the next reader of the same window while no `events` shard
+ * changed. Never stored in, or answered from, the cache of whole reads.
+ */
+function viewedEntities(
+  store: StoreInspection,
+  view: StoreReadView,
+  checkpoint?: () => void,
+): StoreEntities {
+  const key = `${view.token}\n${fingerprintOf(store)}`;
+  const cached = viewedCache.get(store.root);
+  if (cached !== undefined && cached.key === key) return cached.entities;
+  const entities = build(store, checkpoint, undefined, view);
+  if (entities.unreadable.length === 0 && !entities.skippedPending) {
+    viewedCache.set(store.root, { key, entities });
+  } else viewedCache.delete(store.root);
+  return entities;
+}
+
 /**
  * The configured store, read-only, or `null` when there is none or it
  * cannot be read (a broken identity file, partitions of two stores).
@@ -433,10 +525,17 @@ export function configuredStore(configPath?: string): StoreInspection | null {
   }
 }
 
-/** The entities of the configured store, or `null` when no store can be read. */
-export function readStoreEntities(configPath?: string): StoreEntities | null {
+/**
+ * The entities of the configured store, or `null` when no store can be
+ * read. With `until`, only what lies below that boundary
+ * ({@link StoreEntitiesOptions.until}).
+ */
+export function readStoreEntities(
+  configPath?: string,
+  options: { readonly until?: StoreReadLimit } = {},
+): StoreEntities | null {
   const store = configuredStore(configPath);
-  return store === null ? null : readEntitiesOf(store);
+  return store === null ? null : readEntitiesOf(store, options);
 }
 
 /**

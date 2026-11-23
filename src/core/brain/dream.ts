@@ -61,6 +61,7 @@ import { join } from "node:path";
 
 import { regenerateActiveQuiet } from "./active.ts";
 import {
+  runHealEnrichmentSafely,
   applyDreamPlan,
   gatedRetireSlugs,
   plannedSignalArchiveIds,
@@ -69,7 +70,7 @@ import {
 } from "./dream-apply.ts";
 import { planAutoRetires } from "./dream-plan-retires.ts";
 import { planTopics, topicKeyContentionWarnings } from "./dream-plan-topics.ts";
-import type { ScanResult } from "./dream-plan.ts";
+import type { PlanState, ScanResult } from "./dream-plan.ts";
 import {
   planCrossTopicRules,
   readCrossTopicLedger,
@@ -95,6 +96,13 @@ import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.
 import { openWorkrun, WORKRUN_PHASE, workrunPath, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
 import { createWindowContext, readWindowEvidence } from "./dream-replay/window.ts";
+import { replayWindows, type WindowLedgers } from "./dream-replay/loop.ts";
+import { openReplayPass } from "./dream-replay/pass.ts";
+import type { FrozenWindow } from "./dream-replay/plan.ts";
+import { emptyPlan } from "./dream-plan.ts";
+import type { BrainConfig } from "./types.ts";
+import type { StoreHandle } from "../store/store-open.ts";
+import { readStoreEntities } from "../store/read/store-entities.ts";
 import { logShardWikilink } from "./log.ts";
 import {
   OPERATION,
@@ -239,12 +247,12 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
   // once it holds it. A look that finds the lock held leaves its release
   // to the next look; `o2b dream owner --release` refuses after the wait.
   const gate = assertDreamOwner(vault, dreamOwnerGateOptions(opts));
-  if (gate.status === "preview") return dreamPass(vault, opts, null, null);
+  if (gate.status === "preview") return dreamPass(vault, opts, null, null, null);
   if (gate.status === "unbound") {
-    if (gate.store === null) return dreamPass(vault, opts, null, null);
+    if (gate.store === null) return dreamPass(vault, opts, null, null, null);
     return withDreamPassLock(gate.store, () => {
       recheckUnboundDreamOwner(gate.store!);
-      return dreamPass(vault, opts, null, null);
+      return dreamPass(vault, opts, null, null, gate.store);
     });
   }
   return withDreamPassLock(gate.store, () => {
@@ -255,7 +263,7 @@ export function dream(vault: string | null, opts: DreamOptions = {}): DreamRunSu
     // device of a brain served from the store (dream-queue/pass.ts).
     const queue = openQueuePass(vault, gate.store, owner, opts);
     return withModelWork(
-      withOwnerTag(dreamPass(vault, opts, owner, queue), owner, opts.agentName),
+      withOwnerTag(dreamPass(vault, opts, owner, queue, gate.store), owner, opts.agentName),
       queue,
     );
   });
@@ -267,6 +275,7 @@ function dreamPass(
   opts: DreamOptions,
   owner: DreamOwnerTag | null,
   queue: DreamQueuePass | null,
+  store: StoreHandle | null,
 ): DreamRunSummary {
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
@@ -290,7 +299,9 @@ function dreamPass(
       afterStep(
         withTopicPass(
           afterStep(
-            withLogReadPass(() => dreamRun(vault, opts, progress, progressFaults, owner, queue)),
+            withLogReadPass(() =>
+              dreamRun(vault, opts, progress, progressFaults, owner, queue, store),
+            ),
           ),
           opts,
           {
@@ -355,6 +366,15 @@ function withLateProgressFault(
 /** Ladder attempts for a no-vault run id, as many as a snapshot run gets. */
 const NO_VAULT_RUN_ID_ATTEMPTS = 100;
 
+/** The first `<base>[-N]` run id whose workrun journal in `vault` does not exist yet. */
+function uniqueRunId(vault: string, base: string): string {
+  for (let attempt = 1; attempt <= NO_VAULT_RUN_ID_ATTEMPTS; attempt++) {
+    const candidate = collisionCandidateName(base, attempt);
+    if (!existsSync(workrunPath(vault, candidate))) return candidate;
+  }
+  throw new Error(`dream: no free run id after ${NO_VAULT_RUN_ID_ATTEMPTS} attempts (${base})`);
+}
+
 /** The first `<base>[-N]` run id whose no-vault workrun journal does not exist yet. */
 function uniqueNoVaultRunId(base: string): string {
   for (let attempt = 1; attempt <= NO_VAULT_RUN_ID_ATTEMPTS; attempt++) {
@@ -375,6 +395,48 @@ function regenerateDigestPages(vault: string | null, now: Date): void {
   regenerateLessonsQuiet(vault, { now });
 }
 
+/** What one window of a pass runs with (design D1). */
+interface WindowRun {
+  readonly vault: string | null;
+  readonly opts: DreamOptions;
+  readonly cfg: BrainConfig;
+  readonly progress: ProgressCounter;
+  readonly progressFaults: ReadonlyArray<string>;
+  readonly owner: DreamOwnerTag | null;
+  readonly queue: DreamQueuePass | null;
+  /** The real moment of the run. */
+  readonly now: Date;
+  readonly runId: string;
+  /** The window's day and the instant its rules judge against. */
+  readonly day: string;
+  readonly instant: Date;
+  /** Whether the scan stage is already open (the first window a pass evaluates). */
+  readonly scanOpen: boolean;
+  /** A window of a replay: digests wait for the end of the pass. */
+  readonly replay: boolean;
+  /** Called right before the window's first effect (the replay writes its records by then). */
+  readonly beforeEffects?: (frozen: FrozenWindow) => void;
+  /** The window's name (`<day>` or `<day>#<n>`): the identity of its effects. */
+  readonly window?: string;
+  /** A window resumed from its plan record: nothing is decided again. */
+  readonly resume?: FrozenWindow;
+  /** The reconciliations of the window's late applications (design D5a). */
+  readonly reconcileLate?: () => {
+    readonly entries: FrozenWindow["reconciliations"];
+    readonly notCheckable: number;
+  };
+  /** Records the window's admission took as seen after a rebase. */
+  readonly rebasedSeen?: number;
+  /** The first replay's count of archived signals that may have missed a promotion. */
+  readonly unrecoverable?: number;
+  /** State shared by the windows of one pass. */
+  readonly pass?: { snapshotTaken: boolean };
+  /** The effect ids of the audit events this window already wrote (a resumed window). */
+  readonly auditWritten?: () => ReadonlySet<string>;
+  /** A replayed window's ledgers, kept in the brain store (`dream-replay/ledgers.ts`). */
+  readonly ledgers?: WindowLedgers;
+}
+
 function dreamRun(
   vault: string | null,
   opts: DreamOptions,
@@ -382,6 +444,7 @@ function dreamRun(
   progressFaults: ReadonlyArray<string>,
   owner: DreamOwnerTag | null,
   queue: DreamQueuePass | null,
+  store: StoreHandle | null,
 ): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
@@ -408,12 +471,91 @@ function dreamRun(
   // Answers accepted since the last pass are applied first, on the
   // owner's device only (dream-queue/pass.ts; never on a dry run).
   if (queue !== null && !dryRun) applyAtPassStart(queue);
+  const runId = formatRunId(now);
+  const base = {
+    vault,
+    opts,
+    cfg,
+    progress,
+    progressFaults,
+    owner,
+    queue,
+    now,
+    runId,
+  };
+  // A live pass on a brain served from the store replays the windows it
+  // missed (dream-replay/); every other pass is the single window of today.
+  const replay = openReplayPass(vault, store, opts, now, runId, owner?.device ?? null);
+  if (replay === null) {
+    return dreamWindow({ ...base, day: isoDate(now), instant: now, replay: false, scanOpen: true });
+  }
+  // Progress stages are per window: each window reports scan, plan, apply,
+  // log and finalize, and a window the budget cuts short ends in the stage
+  // it was in. The scan opened above is the first evaluated window's; a
+  // pass that evaluates none closes it itself. Whether a window took it is
+  // tracked here, not by the window's index: the budget can end the first
+  // window anywhere, and a window resumed from a plan of no effect is never
+  // evaluated.
+  let scanOpen = true;
+  const replayed = replayWindows({
+    vault,
+    pass: replay,
+    opts,
+    cfg,
+    evaluate: (window) => {
+      const opened = scanOpen;
+      scanOpen = false;
+      return dreamWindow({ ...base, ...window, scanOpen: opened });
+    },
+    noWindow: () => {
+      if (scanOpen) progress.advance(DREAM_STAGE.scan);
+      scanOpen = false;
+      return buildNoOpSummary({
+        runId,
+        dryRun,
+        plan: emptyPlan(),
+        refresh: {
+          confirmed: new Set(),
+          updated: new Map(),
+          bandDrops: [],
+          outcomeRegressions: [],
+        },
+        reconcile: { openQuestions: [], autoResolved: [] },
+        intentReviews: [],
+        warnings: [],
+        salienceGate: { threshold: null, considered: 0, admitted: 0, excluded: [] },
+      });
+    },
+  });
+  // Heal enrichment has no subject to make it converge, so a replay runs it
+  // once, after its last window; the digests too (design D1).
+  const healEnrichEnabled = opts.gates?.heal_enrich ?? cfg.dream.heal_enrich_enabled === true;
+  if (healEnrichEnabled && replayed.windows.covered > 0) {
+    runHealEnrichmentSafely(vault, opts.safeguard);
+  }
+  regenerateDigestPages(vault, now);
+  return {
+    ...replayed.summary,
+    windows: {
+      evaluated: replayed.windows.covered,
+      covered: replayed.windows.lastCovered,
+      behind: replayed.windows.behind,
+      open: replayed.windows.stoppedAt,
+      ...(replayed.windows.waitingForSync === true ? { outcome: "waiting-for-sync" as const } : {}),
+    },
+  };
+}
+
+function dreamWindow(run: WindowRun): DreamRunSummary {
+  const { vault, opts, cfg, progress, progressFaults, owner, queue, now } = run;
+  const dryRun = opts.dryRun === true;
+  if (!run.scanOpen) progress.start(DREAM_STAGE.scan);
   // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
   // this run, the configured value decides when it is absent. Resolved
   // once, here, so the heal branch below has a single source of truth and
   // nothing writes the decision back to `_brain.yaml`.
   const healEnrichEnabled = opts.gates?.heal_enrich ?? cfg.dream.heal_enrich_enabled === true;
-  let runId = formatRunId(now);
+  let runId = run.runId;
   const callerAgent = opts.agentName?.trim() ?? "";
   // A brain with a dream owner names the owner instead (`owner` below).
   const isNonPrimary =
@@ -440,7 +582,10 @@ function dreamRun(
     opts.previewReadable === undefined
       ? fullScan
       : scanAsAdmitted(vault, fullScan, opts.previewReadable);
-  const context = createWindowContext(now, scan);
+  // Inside a replayed window the scan read the window's view: a signal the
+  // admission gave another time is judged by that time.
+  const signalTimes = run.replay ? readStoreEntities(opts.configPath)?.signalTimes : undefined;
+  const context = createWindowContext(run.instant, scan, signalTimes);
   // The retired_by stamp names the audit shard for this window.
   const wikilinkToRun = logShardWikilink(context.day);
   progress.advance(DREAM_STAGE.scan);
@@ -449,120 +594,201 @@ function dreamRun(
     signals: context.signals.signals,
     ...(opts.previewReadable !== undefined ? { readable: opts.previewReadable } : {}),
   });
-  progress.start(DREAM_STAGE.plan, scan.preferences.length);
+  // A window resumed from its plan record decides nothing again (design
+  // D5): it reads the evidence its effects are written with, and takes
+  // every decision from the frozen plan.
+  const rollupLedger = run.ledgers !== undefined ? run.ledgers.rollup : undefined;
+  const planFresh = () => {
+    progress.start(DREAM_STAGE.plan, scan.preferences.length);
 
-  // 1-2. Plan per-topic transitions: new unconfirmed preferences,
-  //      same-sign noted-redundant moves, rebuttal accumulation.
-  const plan = planTopics(context.signals, cfg, context.instant);
-  // A folded topic key claimed by two preferences is an ambiguity the pass
-  // refuses to settle by scan order, so it planned nothing for that key. The
-  // warning is how it says so - on the no-op summary as well as the changed
-  // one, because a run that decided nothing is exactly the run that must
-  // still explain itself.
-  warnings.push(...topicKeyContentionWarnings(plan));
-  // Archive step (issue #195): inbox signals the topic plan did not consume
-  // and that have left the contradiction window can never count toward a
-  // candidate again, so they leave the inbox for `inbox/archived/`.
-  // Planned after the topic plan so a consumed signal is never archived.
-  warnings.push(
-    ...planSignalArchive(context.signals, cfg, context.instant, context.wallClock, plan),
-  );
+    // 1-2. Plan per-topic transitions: new unconfirmed preferences,
+    //      same-sign noted-redundant moves, rebuttal accumulation.
+    const plan = planTopics(context.signals, cfg, context.instant);
+    // A folded topic key claimed by two preferences is an ambiguity the pass
+    // refuses to settle by scan order, so it planned nothing for that key. The
+    // warning is how it says so - on the no-op summary as well as the changed
+    // one, because a run that decided nothing is exactly the run that must
+    // still explain itself.
+    warnings.push(...topicKeyContentionWarnings(plan));
+    // Archive step (issue #195): inbox signals the topic plan did not consume
+    // and that have left the contradiction window can never count toward a
+    // candidate again, so they leave the inbox for `inbox/archived/`.
+    // Planned after the topic plan so a consumed signal is never archived.
+    warnings.push(
+      ...planSignalArchive(context.signals, cfg, context.instant, context.wallClock, plan),
+    );
 
-  // 3. Plan refresh: applied / violated / last_evidence / confidence,
-  //    and unconfirmed → confirmed promotion. We need the log of all
-  //    apply-evidence entries up to `now` — we read every day file
-  //    referenced by `last_evidence_at` plus today's file. Since the
-  //    plan doesn't yet know dates, we scan the entire log/ directory.
-  // The two walks that grow with the history: a pass past its deadline
-  // stops inside them, before it has written anything.
-  const checkpoint = (): void => opts.safeguard?.checkpoint();
-  context.setEvidence(readWindowEvidence(vault, context.signals, checkpoint));
-  const evidence = scanApplyEvidence(context.evidence);
-  const refresh = planRefresh(
-    vault,
-    scan,
-    evidence,
-    cfg,
-    context.instant,
+    // 3. Plan refresh: applied / violated / last_evidence / confidence,
+    //    and unconfirmed → confirmed promotion. We need the log of all
+    //    apply-evidence entries up to `now` — we read every day file
+    //    referenced by `last_evidence_at` plus today's file. Since the
+    //    plan doesn't yet know dates, we scan the entire log/ directory.
+    // The two walks that grow with the history: a pass past its deadline
+    // stops inside them, before it has written anything.
+    const checkpoint = (): void => opts.safeguard?.checkpoint();
+    context.setEvidence(readWindowEvidence(vault, context.signals, checkpoint));
+    const evidence = scanApplyEvidence(context.evidence);
+    const refresh = planRefresh(
+      vault,
+      scan,
+      evidence,
+      cfg,
+      context.instant,
+      plan,
+      context.evidence,
+      checkpoint,
+    );
+
+    // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
+    //    preferences get a `retain-pinned` log event instead of a real
+    //    retire.
+    planAutoRetires(context.signals, cfg, context.instant, plan, refresh);
+
+    // 4b. Cross-topic rule promotion (t_642bc2b8). Planned after the
+    //     refresh pass - the source pool reads post-refresh confirmation
+    //     state - and after the retire plan, so a preference this pass is
+    //     about to retire is never cited as evidence. Before the `changed`
+    //     gate, so a fired promotion counts as a state change and a
+    //     below-threshold or budgeted-out pass stays byte-identical; the
+    //     rollup ladder is the structural precedent (plan before the
+    //     gate, persist the ledger only when fired). The ledger read is
+    //     skipped entirely when the feature is off: an un-opted-in vault
+    //     pays no I/O here. The disclosure sink is the run's warning list:
+    //     a declared knob the resolver floored (finding 62) is named on
+    //     the summary, never applied silently.
+    const crossTopicConfig = resolveCrossTopicConfig(cfg, (code, message) =>
+      warnings.push({ code, message }),
+    );
+    const crossTopic = planCrossTopicRules({
+      scan: context.signals,
+      refresh,
+      config: crossTopicConfig,
+      ledger: crossTopicConfig
+        ? run.ledgers !== undefined
+          ? run.ledgers.crossTopic
+          : readCrossTopicLedger(vault)
+        : null,
+      now: context.instant,
+      day: context.day,
+      plan,
+    });
+
+    // 5. §7.3 step "move consumed signals out of inbox/" needs no pass of
+    //    its own: both routes that consume a signal - the topic loop and
+    //    the active-pref handler - already enqueued it into
+    //    `plan.signalsToMove` at the moment they decided to consume it.
+
+    // Reconcile phase (F3): classify each contradiction topic into a
+    // domain. Source-freshness with a clear gap auto-resolves (recorded,
+    // never a sub-threshold mutation); everything else becomes an open
+    // question. Computed in-memory before the `changed` gate so the
+    // summary carries open_questions on both the no-op and changed paths;
+    // the `reconcile` log events below are emitted only on a changed run.
+    const reconcile = buildReconcileOutcomes(context.signals, plan, cfg, context.instant);
+
+    // Deterministic salience gate over the ladder's fold set
+    // (salience-lifecycle-enrichment, unit 1). The ladder counts facts and
+    // nothing else, so this is the only seam where a salience judgement can
+    // change what the pass asks a model to fold. With
+    // `dream.salience_threshold` unset the gate is open and reads nothing,
+    // which is why an un-opted-in vault pays no I/O here.
+    const { verdict: salienceGate, admitted_ids: admittedIds } = gateSalience({
+      vault,
+      preferences: context.signals.preferences,
+      cfg,
+      now: context.instant,
+    });
+
+    // The wikilink targets a fired rung's envelope offers, built at most
+    // ONCE per dream run and only if a rung fires. The manifest is a whole
+    // -vault walk (a frontmatter read per note under owner-scope delivery),
+    // the ladder is planned before the `changed` gate, and the runId
+    // collision path below re-plans - so an eager build paid that walk on
+    // every dry run that fires nothing, and twice on a collision.
+    const linkCandidates = memoizedLinkCandidates(vault, opts.agentName, opts.readable);
+
+    // Count-triggered fact rollup ladder (S3): pure counters over the
+    // ADMITTED fact artifacts (preferences) against the persisted per-tier
+    // baselines. Computed before the `changed` gate so a run whose ONLY
+    // effect is a rollup still counts as changed; below threshold it fires
+    // nothing and the ledger is never written, so the run stays
+    // byte-identical.
+    const rollupPlan = buildRollupPlan(
+      vault,
+      cfg,
+      salienceGate.admitted,
+      runId,
+      linkCandidates,
+      rollupLedger,
+    );
+
+    return {
+      plan,
+      refresh,
+      crossTopicLedger: crossTopic.ledger,
+      reconcile,
+      salienceGate,
+      admittedIds,
+      rollupPlan,
+      linkCandidates,
+    };
+  };
+  const resume = run.resume;
+  const planned =
+    resume === undefined
+      ? planFresh()
+      : (() => {
+          progress.start(DREAM_STAGE.plan, scan.preferences.length);
+          context.setEvidence(
+            readWindowEvidence(vault, context.signals, () => opts.safeguard?.checkpoint()),
+          );
+          warnings.push(...resume.warnings);
+          return {
+            plan: resume.plan,
+            refresh: resume.refresh,
+            crossTopicLedger: resume.crossTopicLedger,
+            reconcile: resume.reconcile,
+            salienceGate: resume.salienceGate,
+            admittedIds: resume.admittedIds,
+            rollupPlan: resume.rollupPlan,
+            linkCandidates: memoizedLinkCandidates(vault, opts.agentName, opts.readable),
+          };
+        })();
+  const { plan, refresh, reconcile, salienceGate, admittedIds, linkCandidates } = planned;
+  const crossTopic = { ledger: planned.crossTopicLedger };
+  let rollupPlan = planned.rollupPlan;
+  // The late applications of this window that came in time for a trial
+  // already retired (design D5a): recorded, never a revival.
+  const reconciliation =
+    resume !== undefined
+      ? { entries: resume.reconciliations, notCheckable: resume.notCheckable }
+      : (run.reconcileLate?.() ?? { entries: [], notCheckable: 0 });
+  // Everything the window's effects and audit are built from, frozen into
+  // its plan record before the first effect (design D4).
+  const frozen = (): FrozenWindow => ({
     plan,
-    context.evidence,
-    checkpoint,
-  );
-
-  // 4. Plan retires (expired-unconfirmed, stale-no-evidence). Pinned
-  //    preferences get a `retain-pinned` log event instead of a real
-  //    retire.
-  planAutoRetires(context.signals, cfg, context.instant, plan, refresh);
-
-  // 4b. Cross-topic rule promotion (t_642bc2b8). Planned after the
-  //     refresh pass - the source pool reads post-refresh confirmation
-  //     state - and after the retire plan, so a preference this pass is
-  //     about to retire is never cited as evidence. Before the `changed`
-  //     gate, so a fired promotion counts as a state change and a
-  //     below-threshold or budgeted-out pass stays byte-identical; the
-  //     rollup ladder is the structural precedent (plan before the
-  //     gate, persist the ledger only when fired). The ledger read is
-  //     skipped entirely when the feature is off: an un-opted-in vault
-  //     pays no I/O here. The disclosure sink is the run's warning list:
-  //     a declared knob the resolver floored (finding 62) is named on
-  //     the summary, never applied silently.
-  const crossTopicConfig = resolveCrossTopicConfig(cfg, (code, message) =>
-    warnings.push({ code, message }),
-  );
-  const crossTopic = planCrossTopicRules({
-    scan: context.signals,
     refresh,
-    config: crossTopicConfig,
-    ledger: crossTopicConfig ? readCrossTopicLedger(vault) : null,
-    now: context.instant,
-    day: context.day,
-    plan,
+    crossTopicLedger: crossTopic.ledger,
+    reconcile,
+    rollupPlan,
+    salienceGate,
+    admittedIds,
+    corrupted: (resume?.corrupted ?? scan.corrupted).map((c) => ({ path: c.path })),
+    warnings: resume?.warnings ?? [...warnings],
+    reconciliations: reconciliation.entries,
+    notCheckable: reconciliation.notCheckable,
+    rebasedSeen: run.rebasedSeen ?? 0,
+    unrecoverable: resume?.unrecoverable ?? run.unrecoverable ?? 0,
+    runId,
   });
 
-  // 5. §7.3 step "move consumed signals out of inbox/" needs no pass of
-  //    its own: both routes that consume a signal - the topic loop and
-  //    the active-pref handler - already enqueued it into
-  //    `plan.signalsToMove` at the moment they decided to consume it.
-
-  // Reconcile phase (F3): classify each contradiction topic into a
-  // domain. Source-freshness with a clear gap auto-resolves (recorded,
-  // never a sub-threshold mutation); everything else becomes an open
-  // question. Computed in-memory before the `changed` gate so the
-  // summary carries open_questions on both the no-op and changed paths;
-  // the `reconcile` log events below are emitted only on a changed run.
-  const reconcile = buildReconcileOutcomes(context.signals, plan, cfg, context.instant);
-
-  // Deterministic salience gate over the ladder's fold set
-  // (salience-lifecycle-enrichment, unit 1). The ladder counts facts and
-  // nothing else, so this is the only seam where a salience judgement can
-  // change what the pass asks a model to fold. With
-  // `dream.salience_threshold` unset the gate is open and reads nothing,
-  // which is why an un-opted-in vault pays no I/O here.
-  const { verdict: salienceGate, admitted_ids: admittedIds } = gateSalience({
-    vault,
-    preferences: context.signals.preferences,
-    cfg,
-    now: context.instant,
-  });
-
-  // The wikilink targets a fired rung's envelope offers, built at most
-  // ONCE per dream run and only if a rung fires. The manifest is a whole
-  // -vault walk (a frontmatter read per note under owner-scope delivery),
-  // the ladder is planned before the `changed` gate, and the runId
-  // collision path below re-plans - so an eager build paid that walk on
-  // every dry run that fires nothing, and twice on a collision.
-  const linkCandidates = memoizedLinkCandidates(vault, opts.agentName, opts.readable);
-
-  // Count-triggered fact rollup ladder (S3): pure counters over the
-  // ADMITTED fact artifacts (preferences) against the persisted per-tier
-  // baselines. Computed before the `changed` gate so a run whose ONLY
-  // effect is a rollup still counts as changed; below threshold it fires
-  // nothing and the ledger is never written, so the run stays
-  // byte-identical.
-  let rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId, linkCandidates);
-
-  if (!hasStateChange(plan, refresh, scan.corrupted.length, rollupPlan)) {
-    if (!dryRun) regenerateDigestPages(vault, now);
+  const corrupted = resume?.corrupted ?? scan.corrupted;
+  if (
+    !hasStateChange(plan, refresh, corrupted.length, rollupPlan) &&
+    reconciliation.entries.length === 0 &&
+    (resume?.unrecoverable ?? run.unrecoverable ?? 0) === 0
+  ) {
+    if (!dryRun && !run.replay) regenerateDigestPages(vault, now);
     // A run that changed nothing still finished (`dream` ends the stream
     // after the tail steps). Reporting it as an unterminated stream would
     // make an idempotent rerun - the common case - indistinguishable from
@@ -615,6 +841,9 @@ function dreamRun(
     const baseRunId = runId;
     const applyRun = (): { applied: DreamApplyResult; handle: WorkrunHandle } => {
       opts.safeguard?.checkpoint();
+      // A replayed window's admission and plan record are written here,
+      // with the run id final, before its first effect (design D5).
+      run.beforeEffects?.(frozen());
       const handle = openWorkrun(vault, runId);
       // Truthful checkpoints (no-dead-ends, Unit E). A marker means every
       // durable effect attributed to that phase is already on disk, so a
@@ -635,20 +864,36 @@ function dreamRun(
         window: context,
         agentName: opts.agentName,
         wikilinkToRun,
-        healEnrichEnabled,
+        // A replay enriches once, after its last window (design D1).
+        healEnrichEnabled: healEnrichEnabled && !run.replay,
         ...(opts.safeguard ? { safeguard: opts.safeguard } : {}),
         workrun: handle,
+        ...(run.replay && run.window !== undefined ? { effectWindow: run.window } : {}),
       });
       return { applied, handle };
     };
-    if (vault === null) {
+    // A replay takes one snapshot per pass, before the first window that
+    // changes anything (design D1); later windows apply directly.
+    const snapshotTaken = run.pass?.snapshotTaken === true;
+    if (vault === null || snapshotTaken) {
       // No vault (design D14 item 9): the store's shards are append-only
       // and need no pre-run snapshot, so the plan applies directly. The
       // run id climbs the same `-N` ladder a snapshot run does, so two
       // passes in one second never share a workrun journal.
-      runId = uniqueNoVaultRunId(runId);
-      if (rollupPlan.fired && runId !== baseRunId) {
-        rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId, linkCandidates);
+      // A window of a replay that takes no snapshot names its workrun after
+      // the window, so a pass of many windows never runs the run id ladder dry.
+      const base =
+        run.replay && run.window !== undefined ? `${runId}-${run.window.replace("#", "-")}` : runId;
+      runId = vault === null ? uniqueNoVaultRunId(base) : uniqueRunId(vault, base);
+      if (rollupPlan.fired && runId !== baseRunId && resume === undefined) {
+        rollupPlan = buildRollupPlan(
+          vault,
+          cfg,
+          salienceGate.admitted,
+          runId,
+          linkCandidates,
+          rollupLedger,
+        );
       }
       const ran = applyRun();
       exec = ran.applied;
@@ -662,8 +907,16 @@ function dreamRun(
           // The rollup plan (and each envelope's target_path) was built
           // with the pre-collision runId; if the ladder corrected it,
           // rebuild the plan so every target_path embeds the final run_id.
-          if (rollupPlan.fired && runId !== baseRunId) {
-            rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId, linkCandidates);
+          // A resumed window keeps the paths its plan froze (design D4.6).
+          if (rollupPlan.fired && runId !== baseRunId && resume === undefined) {
+            rollupPlan = buildRollupPlan(
+              vault,
+              cfg,
+              salienceGate.admitted,
+              runId,
+              linkCandidates,
+              rollupLedger,
+            );
           }
           return applyRun();
         },
@@ -679,6 +932,7 @@ function dreamRun(
         },
       );
       snapshotPathStr = gated.snapshot.path;
+      if (run.pass !== undefined) run.pass.snapshotTaken = true;
       exec = gated.result.applied;
       workrun = gated.result.handle;
     }
@@ -701,25 +955,42 @@ function dreamRun(
   if (!dryRun) {
     const rollupProductionComplete =
       queue === null ||
-      produceAtPassEnd(queue, { plan: rollupPlan, admittedIds, day: isoDate(now) });
+      produceAtPassEnd(queue, { plan: rollupPlan, admittedIds, day: context.day });
+    // A replayed window reports what its plan moved and the store now
+    // holds moved, whichever run moved it: a resumed window writes the
+    // audit an uninterrupted one writes (design D4.4).
+    const settled = run.replay ? settledMoves(plan, opts.configPath) : null;
     writeDreamLog({
       vault,
       now: context.instant,
       runId,
-      scan: context.signals,
+      scan: { ...context.signals, corrupted: [...corrupted] },
       plan,
       refresh,
       reconcile,
       rollupPlan,
       rollupProductionComplete,
       crossTopicLedger: crossTopic.ledger,
-      moved: exec.moved,
-      archived: exec.archived,
+      moved: settled?.moved ?? exec.moved,
+      archived: settled?.archived ?? exec.archived,
       gatedSlugs,
       isNonPrimary,
       callerAgent,
       ...(owner !== null ? { owner } : {}),
       workrun,
+      ...(run.ledgers !== undefined ? { ledgerSink: run.ledgers.write } : {}),
+      ...(run.replay && run.window !== undefined
+        ? {
+            audit: {
+              window: run.window,
+              existing: run.auditWritten?.() ?? new Set<string>(),
+              reconciliations: reconciliation.entries,
+              notCheckable: reconciliation.notCheckable,
+              rebasedSeen: run.rebasedSeen ?? 0,
+              unrecoverable: resume?.unrecoverable ?? run.unrecoverable ?? 0,
+            },
+          }
+        : {}),
     });
 
     // Retention already ran inside the gate, immediately after the
@@ -727,7 +998,7 @@ function dreamRun(
     // this run creates no further archives - and the gate is where the
     // refusal and the removal list are reported, so a second prune here
     // would be a second rule for one directory.
-    regenerateDigestPages(vault, now);
+    if (!run.replay) regenerateDigestPages(vault, now);
   }
 
   // Pre-finalize safeguard checkpoint (no-dead-ends, Unit E). Everything
@@ -762,7 +1033,9 @@ function dreamRun(
               : join(brainDirsForWrite(vault).log, `${context.day}.md`),
         },
     scan,
-    plan,
+    // A resumed window reports what this pass did: the effects an earlier
+    // run of the window already made are in its audit, not in this summary.
+    plan: resume === undefined ? plan : doneBefore(plan, scan),
     refresh,
     reconcile,
     rollupPlan,
@@ -783,6 +1056,34 @@ function dreamRun(
     // same confirmed-evidence gate the apply step will.
     previewGateThreshold: dryRun ? cfg.retire.confirmed_evidence_min_threshold : undefined,
   });
+}
+
+/** `plan` without the retires and new preferences a pass before this one already made. */
+function doneBefore(plan: PlanState, scan: ScanResult): PlanState {
+  const active = new Set(scan.preferences.map((p) => p.pref.id));
+  return {
+    ...plan,
+    retires: plan.retires.filter((r) => active.has(`pref-${r.slug}`)),
+    newUnconfirmed: plan.newUnconfirmed.filter((n) => !active.has(`pref-${n.slug}`)),
+    crossTopicRules: plan.crossTopicRules.filter((c) => !active.has(`pref-${c.slug}`)),
+  };
+}
+
+/**
+ * The signals `plan` moved that the store holds in their new state now:
+ * planned moves another run of the same window already made count too.
+ */
+function settledMoves(
+  plan: PlanState,
+  configPath?: string,
+): { moved: string[]; archived: string[] } {
+  const signals = readStoreEntities(configPath)?.signals;
+  const inState = (ids: Iterable<string>, state: string): string[] =>
+    [...ids].filter((id) => signals?.get(id)?.state === state);
+  return {
+    moved: inState(plan.signalsToMove.keys(), "consumed"),
+    archived: inState(plan.signalsToArchive.keys(), "archived"),
+  };
 }
 
 /** What a no-vault run names as its log: the brain log is a store record stream. */

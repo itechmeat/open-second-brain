@@ -37,6 +37,8 @@ export interface WindowContext<Evidence> {
 export function createWindowContext<Evidence = WindowEvidence>(
   instant: Date,
   scan: ScanResult,
+  /** Signal id to the time a replayed window judges it by, when not its own (`read-view.ts`). */
+  signalTimes?: ReadonlyMap<string, string>,
 ): WindowContext<Evidence> {
   let evidenceSet = false;
   let evidenceValue: Evidence;
@@ -44,7 +46,7 @@ export function createWindowContext<Evidence = WindowEvidence>(
     ...scan,
     signals: scan.signals.map((record) => ({
       ...record,
-      effectiveTime: record.signal.created_at,
+      effectiveTime: signalTimes?.get(record.signal.id) ?? record.signal.created_at,
     })),
   };
   return {

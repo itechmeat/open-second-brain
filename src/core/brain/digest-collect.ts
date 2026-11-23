@@ -35,6 +35,7 @@ import {
 } from "./types.ts";
 import type { BrainRetired } from "./types.ts";
 import type {
+  DigestReplay,
   DigestData,
   DigestJsonConfidenceShift,
   DigestJsonConfirmed,
@@ -261,6 +262,28 @@ export function collectDigestData(
       (action) => [action.target],
     ),
     collect_errors: collectErrors,
+    replay: extractReplay(logEntries),
+  };
+}
+
+/** The windows and reconciliations the `dream` events of the interval name (dream replay). */
+export function extractReplay(entries: ReadonlyArray<BrainLogEntry>): DigestReplay {
+  const windows = new Set<string>();
+  const reconciliations: string[] = [];
+  for (const e of entries) {
+    if (e.eventType !== BRAIN_LOG_EVENT_KIND.dream) continue;
+    if (typeof e.body["window"] === "string") windows.add(e.body["window"]);
+    const rows = e.body["reconciliations"];
+    if (Array.isArray(rows)) {
+      for (const row of rows) if (typeof row === "string") reconciliations.push(row);
+    }
+  }
+  const sorted = [...windows].toSorted();
+  return {
+    first_window: sorted[0] ?? null,
+    last_window: sorted.at(-1) ?? null,
+    windows: sorted.length,
+    reconciliations,
   };
 }
 

@@ -183,3 +183,58 @@ function buildPhaseSummaries(input: DreamChangedSummaryInput): ReadonlyArray<Dre
 function phaseSummary(phase: DreamPhase, metrics: Record<string, number>): DreamPhaseSummary {
   return { phase, metrics };
 }
+
+/**
+ * The summary of a pass that evaluated several windows (change
+ * `dream-replay`): what each window did, in window order. Lists are
+ * joined, the pass changed something when any window did, the phase
+ * counts add up, and every value that describes one moment (the salience
+ * verdict, the run id, the log path) is the last window's.
+ */
+export function mergeWindowSummaries(summaries: ReadonlyArray<DreamRunSummary>): DreamRunSummary {
+  if (summaries.length === 1) return summaries[0]!;
+  const last = summaries.at(-1)!;
+  const all = <T>(pick: (s: DreamRunSummary) => ReadonlyArray<T> | undefined): T[] =>
+    summaries.flatMap((s) => [...(pick(s) ?? [])]);
+  const phases = new Map<
+    string,
+    { phase: DreamPhaseSummary["phase"]; metrics: Record<string, number> }
+  >();
+  for (const summary of summaries) {
+    for (const entry of summary.phases) {
+      const into = phases.get(entry.phase) ?? { phase: entry.phase, metrics: {} };
+      for (const [name, value] of Object.entries(entry.metrics)) {
+        into.metrics[name] = (into.metrics[name] ?? 0) + value;
+      }
+      phases.set(entry.phase, into);
+    }
+  }
+  const archived = all((s) => s.archived_signals);
+  const crossTopic = all((s) => s.cross_topic_rules);
+  const snapshot = summaries.find((s) => s.snapshot_path !== undefined)?.snapshot_path;
+  return Object.freeze({
+    ...last,
+    changed: summaries.some((s) => s.changed),
+    new_unconfirmed: all((s) => s.new_unconfirmed),
+    confirmed: all((s) => s.confirmed),
+    retired: all((s) => s.retired),
+    contradictions: [...new Set(all((s) => s.contradictions))],
+    moved_to_processed: all((s) => s.moved_to_processed),
+    ...(archived.length > 0 ? { archived_signals: archived } : {}),
+    ...(crossTopic.length > 0 ? { cross_topic_rules: crossTopic } : {}),
+    suppressed: all((s) => s.suppressed),
+    warnings: all((s) => s.warnings),
+    uncertain: all((s) => s.uncertain),
+    quarantined: last.quarantined,
+    intent_reviews: last.intent_reviews,
+    // A declined retire is declined again by every later window: once each.
+    gated_retires: [
+      ...new Map(all((s) => s.gated_retires).map((g) => [g.pref_id, g] as const)).values(),
+    ],
+    outcome_regressions: last.outcome_regressions,
+    phases: last.phases.length === 0 && phases.size === 0 ? last.phases : [...phases.values()],
+    rollups: all((s) => s.rollups),
+    open_questions: last.open_questions,
+    ...(snapshot !== undefined ? { snapshot_path: snapshot } : {}),
+  } satisfies DreamRunSummary);
+}

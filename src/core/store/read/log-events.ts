@@ -25,6 +25,8 @@ import type { BrainLogEventKind } from "../../brain/types.ts";
 import { LOG_EVENT_KIND, STORE_PARTITIONS, type StorePartition } from "../constants.ts";
 import { compareRecords, type StoreRecord } from "../envelope.ts";
 import { readSource, type ReadContext } from "./read-context.ts";
+import { activeStoreReadView } from "./read-view.ts";
+import { readStreamViewed } from "./viewed-read.ts";
 import { readStreamRecords } from "./stream-read.ts";
 
 /** An inclusive range of `YYYY-MM-DD` dates. */
@@ -120,7 +122,7 @@ export function readLogEventsReport(
     const entries = dates.flatMap((date) => [...readLogDay(source.vault, date, shards).entries]);
     return { entries, unreadable: [] };
   }
-  const read = storeLogEvents(range, source.store, options.eventTypes);
+  const read = storeLogEvents(range, source.store, options);
   return { entries: read.dated.map((d) => d.entry), unreadable: read.unreadable };
 }
 
@@ -153,7 +155,7 @@ export function readStoreLogEventsReport(
   const source = readSource(context);
   if (source.kind === "legacy") return null;
   if (range.from > range.to) return { events: [], unreadable: [] };
-  const read = storeLogEvents(range, source.store, options.eventTypes);
+  const read = storeLogEvents(range, source.store, options);
   return {
     events: read.dated.map((d) => ({
       entry: d.entry,
@@ -186,17 +188,24 @@ export interface StoreLogReadOptions {
    * the rest of a long migrated log. Absent, every event.
    */
   readonly eventTypes?: ReadonlySet<string>;
+  /**
+   * Read only up to this boundary: per partition, the byte limit of each
+   * `log` shard (`./shards-from.ts` `untilOf`); a shard it does not name
+   * is not read.
+   */
+  readonly until?: ReadonlyMap<StorePartition, ReadonlyMap<string, number>>;
 }
 
 function storeLogEvents(
   range: LogDateRange,
   store: Extract<ReturnType<typeof readSource>, { kind: "store" }>["store"],
-  eventTypes?: ReadonlySet<string>,
+  options: StoreLogReadOptions,
 ): {
   dated: Array<{ entry: BrainLogEntry; record: StoreRecord; partition: StorePartition }>;
   unreadable: string[];
 } {
   if (store === null) return { dated: [], unreadable: [] };
+  const { eventTypes, until } = options;
   const first = shiftMonth(range.from.slice(0, 7), -1);
   // The records of both partitions by record id: a record appended to
   // `private` and copied (or synced) into `shared` counts once, as
@@ -205,17 +214,32 @@ function storeLogEvents(
   const unreadable: string[] = [];
   for (const partition of STORE_PARTITIONS) {
     if (!store.partitions.has(partition)) continue;
-    const read = readStreamRecords(
-      store.root,
-      partition,
-      { stream: "log" },
-      {
-        month: (m) => m >= first,
-        keep: (record) =>
-          record.kind === LOG_EVENT_KIND &&
-          (eventTypes === undefined || eventTypes.has(String(record.body["event_type"]))),
-      },
-    );
+    const keep = (record: StoreRecord): boolean =>
+      record.kind === LOG_EVENT_KIND &&
+      (eventTypes === undefined || eventTypes.has(String(record.body["event_type"])));
+    // Inside a dream window (`read-view.ts`) the log is the window's: its
+    // applications below the boundary up to the instant, and the rest of
+    // the log as it is now.
+    const view = until === undefined ? activeStoreReadView() : null;
+    const read =
+      view !== null
+        ? readStreamViewed(store.root, partition, { stream: "log" }, view, {
+            month: (m) => m >= first,
+            keep,
+            cacheKey: `log\n${first}\n${eventTypes === undefined ? "*" : [...eventTypes].toSorted().join(",")}`,
+          })
+        : readStreamRecords(
+            store.root,
+            partition,
+            { stream: "log" },
+            {
+              month: (m) => m >= first,
+              ...(until !== undefined
+                ? { until: until.get(partition) ?? new Map<string, number>() }
+                : {}),
+              keep,
+            },
+          );
     unreadable.push(...read.unreadable.map((rel) => `${partition}/${rel}`));
     for (const record of read.records) {
       if (record.kind !== LOG_EVENT_KIND) continue;

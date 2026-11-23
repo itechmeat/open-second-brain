@@ -1529,6 +1529,13 @@ export interface BrainDreamConfig {
    */
   readonly archive_stale_signals?: boolean;
   /**
+   * Dream replay (design D6): the time one pass may spend replaying missed
+   * windows, in milliseconds. Checked before each window and between
+   * effects; a pass that spends it ends normally and the next one
+   * continues. Absent means 60000.
+   */
+  readonly replay_budget_ms?: number;
+  /**
    * Salience-lifecycle-enrichment (unit 1). Minimum combined salience
    * score, in `[0, 1]`, a fact must reach to enter the rollup ladder's
    * fold set. See `salience-gate.ts` for the formula. Absent (the

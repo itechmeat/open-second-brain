@@ -198,6 +198,8 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "dream-queue-backlog",
   "dream-queue-parked",
   "dream-queue-rejected",
+  "dream-replay-gap",
+  "dream-replay-rebased",
   "duplicate-preferences",
   "embedding-model-sunset-announced",
   "embeddings-backlog",

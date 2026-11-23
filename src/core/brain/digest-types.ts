@@ -237,6 +237,8 @@ export interface DigestJson {
   readonly retired: ReadonlyArray<DigestJsonRetired>;
   readonly confidence_shifts: ReadonlyArray<DigestJsonConfidenceShift>;
   readonly contradictions: ReadonlyArray<DigestJsonContradiction>;
+  /** Dream replay: present only when a replayed pass wrote audit events in the interval. */
+  readonly replay?: DigestReplay;
   readonly top_applied: ReadonlyArray<DigestJsonTopApplied>;
   readonly top_referenced: ReadonlyArray<DigestJsonTopReferenced>;
   readonly merge_suggestions: ReadonlyArray<DigestJsonMergeSuggestion>;
@@ -306,4 +308,17 @@ export interface DigestData {
   readonly actions: ReadonlyArray<ActionItem>;
   /** Raw collected failures; rendered on the wire as `{scan, message}` rows. */
   readonly collect_errors: ReadonlyArray<MaintenanceCollectError>;
+  /**
+   * Dream replay (design D10.3): the windows the passes of the digest's
+   * interval evaluated (first and last), and the late applications that
+   * came in time for a trial already retired. Empty without a replay.
+   */
+  readonly replay: DigestReplay;
+}
+
+export interface DigestReplay {
+  readonly first_window: string | null;
+  readonly last_window: string | null;
+  readonly windows: number;
+  readonly reconciliations: ReadonlyArray<string>;
 }

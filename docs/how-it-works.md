@@ -234,7 +234,17 @@ A vault shared across hosts has one dream owner: one agent installation on one d
 
 ## The dream pass in detail
 
-A live dream pass runs on the dream owner's device only (see "Dream owner" below); a dry run runs anywhere. A single dream invocation is a deterministic pipeline:
+A live dream pass runs on the dream owner's device only (see "Dream owner" below); a dry run runs anywhere.
+
+### Windows: one pass after any silence
+
+On a brain served from the brain store a live pass works in **windows** of one UTC day. It evaluates every day from the one after the last covered day through today, oldest first: a past day at its last millisecond, today at the real moment of the run. Every rule that reads the present (the contradiction window, expiry, the archive rule, trial deadlines, staleness and chain decay, confidence freshness, the guardrail's minimum age, the cross-topic allowance per day) reads the window's instant and day, and each window sees what the previous one left. So a machine that was off for three weeks ends where three weeks of daily passes would have ended: three matching signals on the first day of the silence are promoted on the day they met the threshold instead of being archived unconsidered, and a trial whose deadline passed in the silence retires on its deadline's day. A pass with no gap has one window, today's, and behaves as before.
+
+A window's **inputs** are the signal captures and the applications of a rule below its boundary (the shard positions its admission froze) whose time is not after its instant; everything else (preferences, signal moves, retirements, settings) is read as it is now, so a rule a person retired during the silence is retired in every replayed window. A record that reaches the machine after its day was covered is **late**: it counts from the window that first sees it and reopens nothing (two signals already archived stay archived; a late application in time for a trial already retired is recorded as a reconciliation in the window's audit event and the digest, and the rule stays retired). A record dated ahead of the moment of admission is judged at that moment, as before.
+
+Each window writes, in the `dream-replay` stream: its **admission** (the boundary and the late and clamped records), its **plan** (every effect with an effect id built from the window and the effect's subject, and the payloads frozen), the effects, its **audit** events (each carrying its window and effect id; none is written twice), then its **coverage**. A crash, a stop or a spent budget (`dream.replay_budget_ms`, one minute by default) leaves the window open, and the next pass finishes the same plan instead of planning it again. A source that cannot be read completely (a blob still syncing, a corrupt line) stops the replay at its window; after three days the window goes on without it and its records come in late once it reads. The first pass on an existing brain inventories its retained signals and starts at the oldest that can still change an outcome; the archived signals that may have missed a promotion are counted once. The heal enrichment, the digests, the topic pass and the view pass run once, after the last window.
+
+Within one window the pass is a deterministic pipeline:
 
 ```mermaid
 flowchart TD

@@ -68,6 +68,8 @@ import type { StoreInspection } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
 import type { WindowContext, WindowEvidence } from "./dream-replay/window.ts";
+import { effectId } from "./dream-replay/ledgers.ts";
+import { preferenceEffectKey } from "./dream-replay/plan.ts";
 
 /**
  * The authority of every dream write under brain store dual writes: dream
@@ -102,6 +104,13 @@ export interface DreamApplyInput {
    */
   readonly safeguard?: Safeguard;
   readonly workrun: WorkrunHandle | null;
+  /**
+   * The window a replay applies (`dream-replay/`): a new preference is
+   * written under the window's effect id as its idempotency key, so a
+   * resumed window writes it once, and the chain-decay event carries its
+   * effect id.
+   */
+  readonly effectWindow?: string;
 }
 
 export interface DreamApplyResult {
@@ -164,6 +173,7 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
     wikilinkToRun,
     input.window,
     input.safeguard,
+    input.effectWindow,
   );
 
   // Every planned retire has been moved (or explicitly gated) by here.
@@ -237,6 +247,9 @@ function writePreferences(
         ...(np.valid_until ? { valid_until: np.valid_until } : {}),
         // The strictest visibility of the records it was drafted from.
         ...(np.visibility.length > 0 ? { visibility: np.visibility } : {}),
+        ...(input.effectWindow !== undefined
+          ? { idempotency_key: preferenceEffectKey(input.effectWindow, np.slug) }
+          : {}),
       },
       [],
       { overwrite: false, authority: DREAM_AUTHORITY },
@@ -276,6 +289,9 @@ function writePreferences(
         // The sources' shared owner token, so owner-scoped recall keeps
         // the rule as private as its sources; ownerless rules omit it.
         ...(ct.owner ? { owner: ct.owner } : {}),
+        ...(input.effectWindow !== undefined
+          ? { idempotency_key: preferenceEffectKey(input.effectWindow, ct.slug) }
+          : {}),
       },
       [],
       { overwrite: false, authority: DREAM_AUTHORITY },
@@ -422,6 +438,7 @@ function executeRetires(
   wikilinkToRun: string,
   window: WindowContext<WindowEvidence>,
   safeguard?: Safeguard,
+  effectWindow?: string,
 ): DreamGatedRetireEntry[] {
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
   // Always an array (even when no gate is configured) so the eventual
@@ -522,6 +539,16 @@ function executeRetires(
             preference: `[[ret-${r.slug}]]`,
             reason: r.reason,
             stale_days: String(CHAIN_DECAY_STALE_DAYS),
+            ...(effectWindow !== undefined
+              ? {
+                  window: effectWindow,
+                  effect: effectId(
+                    effectWindow,
+                    BRAIN_LOG_EVENT_KIND.chainDecay,
+                    `[[ret-${r.slug}]]`,
+                  ),
+                }
+              : {}),
           },
         });
       }
@@ -824,7 +851,10 @@ function readFrontmatterOf(path: string): Record<string, unknown> {
  * absorbing it here only ever bought a wrong `heal_enriched: 0` on the
  * way to the same error.
  */
-function runHealEnrichmentSafely(vault: string | null, safeguard: Safeguard | undefined): number {
+export function runHealEnrichmentSafely(
+  vault: string | null,
+  safeguard: Safeguard | undefined,
+): number {
   // Heal enrichment rewrites user notes; with no vault there are none.
   if (vault === null) return 0;
   try {
