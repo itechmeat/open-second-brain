@@ -329,21 +329,6 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     ],
   },
   {
-    id: "hermes_discipline_jobs",
-    label: "Hermes cron jobs for the discipline report",
-    location:
-      "~/.hermes/cron/jobs.json of the user running the verb, or the file OSB_HERMES_JOBS names",
-    carries_memory: false,
-    created_by:
-      "`o2b discipline install`, which adds or updates the daily or the weekly job of each vault in that file, so a vault can own two entries",
-    removed_by:
-      "`o2b discipline uninstall`, which removes this tool's jobs and leaves every other job in the file alone",
-    note:
-      "The jobs file belongs to Hermes; this tool edits only the entries whose ids it derives from the " +
-      "vault path. Each job names the vault, the report script and the delivery target, not memory content.",
-    sources: ["src/cli/discipline-install.ts"],
-  },
-  {
     id: "bench_run_artifacts",
     label: "benchmark run artifacts",
     location: ".open-second-brain/bench-runs, resolved against the working directory",
@@ -491,6 +476,16 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
     "it only BUILDS the environment that points a child process at a caller-supplied scratch " +
       "root (home, XDG and Bun directories inside it) for the smoke script and the packed " +
       "install tests; it writes nothing itself and names no real per-user location",
+  ],
+  [
+    "src/core/discipline/legacy-jobs.ts",
+    "it resolves the old job-file location only to read and identify entries left by a removed " +
+      "installer; it changes no Hermes scheduler state and writes no path outside the vault",
+  ],
+  [
+    "src/core/install/integrations.ts",
+    "it resolves the Hermes plugin directory only to test whether the adapter is installed; it " +
+      "reads no plugin files and creates or changes no path outside the vault",
   ],
   [
     "src/core/install/payload.ts",

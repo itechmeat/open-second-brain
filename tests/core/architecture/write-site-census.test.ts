@@ -1711,8 +1711,10 @@ const DIRECT_WRITE_ROWS = 86;
  * progress file beside the search index with the shared atomic writer.
  * 117 -> 118: `src/core/search/store/lifecycle.ts` writes the park record a
  * swap leaves beside the search index with the shared atomic writer.
+ * 118 -> 119: the dream digest delivery ledger writes device-local state.
+ * 119 -> 120: the discipline verdict cache writes device-local state.
  */
-const SHARED_HELPER_ROWS = 118;
+const SHARED_HELPER_ROWS = 120;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1995,8 +1997,10 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * written through the shared atomic writer, machine state and no note.
  * 113 -> 114: the park record a swap writes beside the search index,
  * through the shared atomic writer, machine state and no note.
+ * 114 -> 115: the dream digest delivery ledger is device-local state.
+ * 115 -> 116: the discipline verdict cache is device-local state.
  */
-const UNSTAMPED_SHARED_ROWS = 114;
+const UNSTAMPED_SHARED_ROWS = 116;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

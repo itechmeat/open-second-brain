@@ -20,7 +20,7 @@
  * The script keeps the lane's exit code. Exit 0 (ran, or skipped by a
  * gate) prints nothing, so cron mails nothing; any other exit prints the
  * lane's JSON verdict and exits with the same code, so cron mail or a
- * Hermes job surfaces it.
+ * scheduled-run mail surfaces it.
  */
 
 import { createHash } from "node:crypto";
@@ -50,8 +50,7 @@ const VAULT_SUFFIX_LENGTH = 8;
 
 /**
  * The job name for one vault: the stem plus the first hex characters of
- * `sha256(resolve(vault))`, the same scheme `discipline install` uses for
- * its job id. The script, the Hermes job and the systemd units all take
+ * `sha256(resolve(vault))`. The script and systemd units take
  * this name, so a second vault's recipe never overwrites the first's, and
  * re-rendering for the same vault yields the same name.
  */
@@ -185,12 +184,6 @@ function renderMaintenanceBody(o2bBin: string, opts: MaintenanceCronOptions): st
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     "",
-    "# Pick up OPEN_SECOND_BRAIN_EMBEDDING_* from the Hermes env file if it",
-    "# exists: the lane's reindex task embeds when maintenance_embeddings is on.",
-    'if [[ -f "$HOME/.hermes/.env" ]]; then',
-    '  set -a; . "$HOME/.hermes/.env"; set +a',
-    "fi",
-    "",
     "# The lane decides whether work happens; a gate skip exits 0. Keep its",
     "# exit code: `|| status=$?` stops set -e from ending the script before",
     "# a failure can be reported.",
@@ -215,7 +208,6 @@ export function maintenanceRecipe(vault: string): CronRecipeSpec<MaintenanceCron
       "(then chmod +x). Silent when the lane exits 0, including a gate",
       "skip; any other exit prints the lane's JSON and keeps its code.",
     ]),
-    schedulerNote: "(when Hermes owns the schedule)",
     buildScriptBody: (opts) => renderMaintenanceBody(opts.o2bBin, opts),
     buildVerifyCommand: ({ o2bBin, vault: target }) =>
       o2bBin + " " + STATUS_COMMAND + " --vault " + shellQuote(singleLinePath(VAULT_LABEL, target)),

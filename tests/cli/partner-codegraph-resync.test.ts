@@ -15,7 +15,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,8 +73,9 @@ describe("the resync recipe renders", () => {
     const body = renderCodegraphResyncTemplate("/srv/projects/demo", "6h");
     expect(body).toContain("# interval: 6 hours");
     expect(body).toContain("0 */6 * * *    ~/.local/bin/osb-codegraph-resync.sh");
-    expect(body).toContain("--name osb-codegraph-resync");
-    expect(body).toContain("hermes cron create");
+    expect(body).not.toContain("hermes cron create");
+    expect(body).not.toContain(".hermes");
+    expect(body).toContain("OPEN_SECOND_BRAIN_ENV_FILE");
     expect(body).toContain('codegraph init "$project"');
     expect(body).toContain("project='/srv/projects/demo'");
   });
@@ -170,7 +179,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
     const res = await runCli(["partner", "codegraph", "resync", "--cron-template"], { cwd: repo });
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("cat >~/.local/bin/osb-codegraph-resync.sh");
-    expect(res.stdout).toContain(`project='${repo}'`);
+    expect(res.stdout).toContain(`project='${realpathSync(repo)}'`);
     expect(listTree(tmp)).toEqual(before);
   });
 
@@ -214,7 +223,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
     });
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("0 */6 * * *    ~/.local/bin/osb-codegraph-resync.sh");
-    expect(res.stdout).toContain("hermes cron create");
+    expect(res.stdout).not.toContain("hermes cron create");
     expect(res.stdout).not.toContain("OnUnitActiveSec=");
   });
 
@@ -229,7 +238,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
     expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.service");
     expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.timer");
     expect(res.stdout).toContain("OnUnitActiveSec=6h");
-    expect(res.stdout).toContain(`project='${repo}'`);
+    expect(res.stdout).toContain(`project='${realpathSync(repo)}'`);
     expect(res.stdout).not.toContain("hermes cron create");
     expect(listTree(tmp)).toEqual(before);
   });

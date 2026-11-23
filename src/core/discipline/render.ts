@@ -1,4 +1,3 @@
-import { escapeMarkdownV2 as e } from "./telegram.ts";
 import type { BrainEventCounts } from "./log-counts.ts";
 import {
   transcriptConfirmed,
@@ -17,25 +16,25 @@ export interface RenderInput {
 
 export function renderReport(r: RenderInput): string {
   const lines: string[] = [];
-  lines.push(`🧠 OSB discipline — ${e(r.localDate)} \\(${e(r.timezone)}\\)`);
+  lines.push(`Open Second Brain discipline - ${r.localDate} (${r.timezone})`);
   lines.push("");
-  lines.push(`Status: ${e(r.status)}`);
+  lines.push(`Status: ${r.status}`);
   lines.push("");
 
   lines.push("Brain events:");
   const knownEntries = Object.entries(r.events.byAgent);
   if (knownEntries.length === 0) {
-    lines.push("\\- \\(no known agents configured\\)");
+    lines.push("- (no known agents configured)");
   } else {
     for (const [agent, c] of knownEntries) {
       lines.push(
-        `\\- ${e(agent)}: ${c.feedback} feedback, ${c.apply_evidence} apply\\-evidence, ${c.note} note, ${c.other} other \\(total ${c.total}\\)`,
+        `- ${agent}: ${c.feedback} feedback, ${c.apply_evidence} apply-evidence, ${c.note} note, ${c.other} other (total ${c.total})`,
       );
     }
   }
   for (const u of r.events.unknownAgents) {
     lines.push(
-      `\\- ${e(u.agent)} \\(unknown\\): ${u.counts.feedback} feedback, ${u.counts.apply_evidence} apply\\-evidence, ${u.counts.note} note, ${u.counts.other} other \\(total ${u.counts.total}\\)`,
+      `- ${u.agent} (unknown): ${u.counts.feedback} feedback, ${u.counts.apply_evidence} apply-evidence, ${u.counts.note} note, ${u.counts.other} other (total ${u.counts.total})`,
     );
   }
   lines.push("");
@@ -43,20 +42,20 @@ export function renderReport(r: RenderInput): string {
   lines.push("Activity:");
   for (const row of r.activity.repo) {
     lines.push(
-      `\\- ${e(row.path)} — ${row.git.commits} commits, ${row.git.filesChanged} files, \\+${row.git.insertions}/\\-${row.git.deletions}`,
+      `- ${row.path} - ${row.git.commits} commits, ${row.git.filesChanged} files, +${row.git.insertions}/-${row.git.deletions}`,
     );
   }
   for (const row of r.activity.nonRepo) {
-    lines.push(`\\- ${e(row.path)} — ${row.modifiedFiles} modified files`);
+    lines.push(`- ${row.path} - ${row.modifiedFiles} modified files`);
   }
   const vd = r.activity.vaultDelta;
   lines.push(
-    `\\- vault — ${vd.newSignals} new signals, ${vd.newPreferences} new preferences, ${vd.newRetired} new retired`,
+    `- vault - ${vd.newSignals} new signals, ${vd.newPreferences} new preferences, ${vd.newRetired} new retired`,
   );
   const complexity = r.activity.complexity;
   if (complexity !== undefined) {
     lines.push(
-      `\\- complexity — score ${complexity.score}, thinking ${complexity.thinking_activity}, ratio ${formatRatio(complexity.ratio)}`,
+      `- complexity - score ${complexity.score}, thinking ${complexity.thinking_activity}, ratio ${formatRatio(complexity.ratio)}`,
     );
   }
   const transcripts = r.activity.transcripts;
@@ -66,44 +65,38 @@ export function renderReport(r: RenderInput): string {
       // store has something to say precisely because its count is zero.
       .filter((b) => b.fileCount > 0 || b.detail || b.unreadable.length > 0)
       .map((b) => {
-        const base = `${e(b.runtime)}: ${b.fileCount}`;
+        const base = `${b.runtime}: ${b.fileCount}`;
         const scanned =
-          b.unreadable.length > 0 ? `${base} \\[${e(b.scan)}: ${b.unreadable.length}\\]` : base;
+          b.unreadable.length > 0 ? `${base} [${b.scan}: ${b.unreadable.length}]` : base;
         if (b.detail) {
-          return `${scanned} \\(${b.detail.sessionCount} sessions, ${b.detail.messageCount} messages\\)`;
+          return `${scanned} (${b.detail.sessionCount} sessions, ${b.detail.messageCount} messages)`;
         }
         return scanned;
       });
     if (parts.length > 0) {
-      lines.push(`\\- transcripts — ${parts.join(", ")}`);
+      lines.push(`- transcripts - ${parts.join(", ")}`);
     }
   }
 
   if (r.status === "alert") {
     lines.push("");
-    // Unescaped wrapper underscores so Telegram MarkdownV2 reads the line
-    // as italic; the period in the middle stays escaped because it is a
-    // reserved character. With both underscores escaped (as before) the
-    // styling intent silently failed and rendered literal "_" instead.
     lines.push(
-      "_Activity present; zero brain events recorded\\. Stop guardrail likely bypassed or hook regressed\\._",
+      "Activity present; zero brain events recorded. Stop guardrail may be bypassed or a hook may have regressed.",
     );
     if (transcriptConfirmed(r.activity)) {
-      lines.push(
-        "_Sub\\-reason: transcript\\-confirmed — runtime session files dated to this window\\._",
-      );
+      lines.push("Sub-reason: transcript-confirmed - runtime session files dated to this window.");
     }
     // An unread store is not a quiet one. Without this line the alert would
     // present a permissions failure as evidence about the agent's day.
     const unread = transcriptsUnreadable(r.activity);
     if (unread.length > 0) {
       lines.push(
-        `_Sub\\-reason: transcript\\-unreadable — ${e(unread.join(", "))}: store present, not enumerable\\._`,
+        `Sub-reason: transcript-unreadable - ${unread.join(", ")}: store present, not enumerable.`,
       );
     }
     if (complexity?.warning === true) {
       lines.push(
-        "_Sub\\-reason: productivity\\-trap — vault structure grew faster than recorded thinking\\._",
+        "Sub-reason: productivity-trap - vault structure grew faster than recorded thinking.",
       );
     }
   }

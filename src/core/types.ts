@@ -51,6 +51,10 @@ export interface UninstallPlan {
   readonly vaultPath: string | null;
   readonly applyLocal: boolean;
   readonly hermesCommands: ReadonlyArray<string>;
+  readonly legacyDisciplineJobs: {
+    readonly file: string;
+    readonly ids: ReadonlyArray<string>;
+  } | null;
   readonly removedPaths: ReadonlyArray<string>;
   readonly skippedPaths: ReadonlyArray<readonly [string, string]>;
   readonly errors: ReadonlyArray<readonly [string, string]>;

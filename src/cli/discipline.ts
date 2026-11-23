@@ -1,13 +1,11 @@
 /**
  * `o2b discipline` subcommand dispatcher.
  *
- * Routes discipline verbs to their handlers. Currently only `report` is
- * implemented; `install` and `uninstall` are reserved for Task 2.13.
+ * Routes the plain discipline report command.
  */
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { runDisciplineReport } from "../core/discipline/report.ts";
-import { disciplineInstallVerb, disciplineUninstallVerb } from "./discipline-install.ts";
 
 const NO_VAULT_ERROR =
   "error: no vault configured. Pass --vault <path> explicitly, " +
@@ -61,18 +59,6 @@ export async function handleDisciplineSubcommand(argv: ReadonlyArray<string>): P
       const config = defaultConfigPath();
       const vault = resolveDisciplineVault(vaultFlag, config);
       return await disciplineReportVerb(rest, vault);
-    }
-    case "install": {
-      // Let the verb handle missing --vault itself (returns exit 2).
-      const config = defaultConfigPath();
-      const vault = vaultFlag ?? resolveVault(config ?? undefined) ?? "";
-      return await disciplineInstallVerb(rest, vault);
-    }
-    case "uninstall": {
-      // Let the verb handle missing --vault itself (returns exit 2).
-      const config = defaultConfigPath();
-      const vault = vaultFlag ?? resolveVault(config ?? undefined) ?? "";
-      return await disciplineUninstallVerb(rest, vault);
     }
     default:
       process.stderr.write(`error: unknown discipline subcommand: ${verb ?? "(none)"}\n`);

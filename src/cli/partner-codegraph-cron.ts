@@ -205,7 +205,6 @@ export const CODEGRAPH_RESYNC_RECIPE: CronRecipeSpec<CodegraphResyncOptions> = O
     "(then chmod +x). The repository is baked into the script, so a",
     "second repository needs its own script path and cron job name.",
   ]),
-  schedulerNote: "(preferred when Hermes owns the host's scheduled jobs)",
   buildScriptBody: ({ o2bBin, projectPath }) => renderResyncBody(o2bBin, projectPath),
   buildVerifyCommand: ({ o2bBin }) => `${o2bBin} ${REPORT_COMMAND} ${FAIL_ON_HEALTH_FLAG}`,
 });
@@ -217,7 +216,7 @@ export interface RenderCodegraphResyncOptions extends CronRecipeOptions {
 }
 
 /**
- * Render the resync recipe for one repository, as a crontab and Hermes
+ * Render the resync recipe for one repository, as a crontab
  * recipe (the default) or as a systemd user timer. Pure text: nothing is
  * created, spawned or scheduled here.
  */

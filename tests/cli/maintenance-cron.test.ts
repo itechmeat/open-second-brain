@@ -47,7 +47,6 @@ function namesIn(vault: string): string {
   const cron = renderMaintenanceCronTemplate("1h", { vault });
   const systemd = renderMaintenanceCronTemplate("1h", { vault, format: "systemd" });
   expect(cron).toContain(`cat >~/.local/bin/${name}.sh <<'OSBEOF'`);
-  expect(cron).toContain(`  --name ${name} \\`);
   expect(systemd).toContain(`${name}.service`);
   expect(systemd).toContain(`${name}.timer`);
   return name;
@@ -63,8 +62,10 @@ describe("renderMaintenanceCronTemplate", () => {
     expect(out).toContain("# interval: 1 hours");
     expect(out).toContain(`0 */1 * * *    ~/.local/bin/${name}.sh`);
     expect(out).toContain(`cat >~/.local/bin/${name}.sh <<'OSBEOF'`);
-    expect(out).toContain(`  --name ${name} \\`);
-    expect(out).toContain("(when Hermes owns the schedule)");
+    expect(out).not.toContain("hermes cron create");
+    expect(out).not.toContain(".hermes");
+    expect(out).toContain("OPEN_SECOND_BRAIN_ENV_FILE");
+    expect(out).toContain("${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env");
   });
 
   test("the script runs the lane against the baked-in vault as JSON", () => {
@@ -73,6 +74,50 @@ describe("renderMaintenanceCronTemplate", () => {
     expect(body).not.toContain("--window");
     expect(body).not.toContain("--tz");
   });
+
+  test.skipIf(IS_WINDOWS)(
+    "the script sources the optional product env file when readable and skips it when absent",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "o2b-env-recipe-"));
+      try {
+        const home = join(dir, "home");
+        mkdirSync(home, { recursive: true });
+        const envFile = join(dir, "product.env");
+        writeFileSync(envFile, "ENV_PROBE=loaded\n");
+        const stub = join(dir, "o2b-stub");
+        writeFileSync(
+          stub,
+          '#!/bin/sh\nprintf \'{"probe":"%s"}\\n\' "${ENV_PROBE:-missing}"\nexit 3\n',
+        );
+        chmodSync(stub, 0o755);
+        const script = join(dir, "run.sh");
+        writeFileSync(
+          script,
+          scriptBody(renderMaintenanceCronTemplate("1h", { vault: "/v", o2bBin: stub })),
+        );
+        const run = (path: string) =>
+          Bun.spawnSync(["bash", script], {
+            env: {
+              PATH: process.env["PATH"] ?? "",
+              HOME: home,
+              OPEN_SECOND_BRAIN_ENV_FILE: path,
+            },
+          });
+
+        const sourced = run(envFile);
+        expect(sourced.exitCode).toBe(3);
+        expect(sourced.stdout.toString()).toBe('{"probe":"loaded"}\n');
+        expect(sourced.stderr.toString()).toBe("");
+
+        const missing = run(join(dir, "missing.env"));
+        expect(missing.exitCode).toBe(3);
+        expect(missing.stdout.toString()).toBe('{"probe":"missing"}\n');
+        expect(missing.stderr.toString()).toBe("");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("the window and the zone reach the command only when given", () => {
     const both = scriptBody(

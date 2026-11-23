@@ -48,8 +48,7 @@ const POSIX_PLAIN_WORD = /^[A-Za-z0-9_./-]+$/u;
 const WINDOWS_PLAIN_WORD = /^[A-Za-z0-9_.:\\/-]+$/u;
 
 /**
- * Single-quote a value for bash, the way `discipline-install.ts` quotes
- * the vault it bakes into its job: a quote inside the value closes the
+ * Single-quote a value for bash: a quote inside the value closes the
  * string, emits an escaped quote and reopens it. Inside single quotes a
  * backslash, a `$` and a backtick are literal, so nothing else needs
  * escaping.

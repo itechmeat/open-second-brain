@@ -45,8 +45,8 @@ Ask the user which provider they want. The default is
 which covers tens of thousands of vault pages). Any OpenAI-compatible
 endpoint works — Groq, Together, a local LM Studio server, etc.
 
-Required env vars (write to `~/.hermes/.env` or the configured env
-file, never to a tracked file):
+Required env vars (write to `~/.config/open-second-brain/env` or the
+file named by `OPEN_SECOND_BRAIN_ENV_FILE`, never to a tracked file):
 
 ```bash
 OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER=openai-compat
@@ -55,6 +55,19 @@ OPEN_SECOND_BRAIN_EMBEDDING_KEY=<placeholder; user pastes the key>
 # Optional — only when not using OpenAI:
 # OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL=https://api.together.xyz/v1
 ```
+
+Interactive `o2b` commands read these values from their process environment
+or the `embedding_api_key` config setting; they do not load this file. Before
+running an interactive command, export the file's values in the same shell:
+
+```bash
+set -a; . "${OPEN_SECOND_BRAIN_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env}"; set +a
+o2b search check
+```
+
+The generated scheduler recipe sources the product env file when it runs, so
+scheduled reindex jobs can use the values from that file without an interactive
+shell export.
 
 The base URL must be `https://`. Plain `http://` works only for a
 loopback host (`localhost`, `127.0.0.1`, `::1`). When the user's
@@ -227,10 +240,10 @@ o2b search reindex --cron-template
 
 Prints a watchdog script (a heredoc that, when the operator runs
 the printed block, lands at `~/.local/bin/osb-reindex.sh`), a
-native crontab line, and a `hermes cron create` command. Pure
-stdout — the verb writes nothing on its own; pick the path that
-matches the host and paste the relevant section into your
-shell / crontab. Recommended cadence:
+crontab line. Add `--format systemd` to print a systemd user timer
+instead. The verb writes nothing on its own. Choose any scheduler and
+add the matching printed recipe.
+Recommended cadence:
 
 - 30 minutes when the vault sees active multi-agent work.
 - 6 hours when changes are sporadic.
@@ -240,12 +253,11 @@ Override with `--interval 6h` (or any `<N>m|h|d` value below 60m / 24h
 
 ## Multi-agent note
 
-Only the agent that runs `reindex` needs
-`OPEN_SECOND_BRAIN_EMBEDDING_KEY`. Read-only consumers (sibling
-Claude Code / Codex / OpenClaw sessions on the same vault) query
-the already-computed vectors and never see the key. When designating
-the reindex owner, the canonical choice is Hermes (it carries the
-cron infrastructure); the others stay credential-free.
+Each agent that runs semantic queries needs access to
+`OPEN_SECOND_BRAIN_EMBEDDING_KEY`; without it, search falls back to
+keyword-only results and prints a warning, even when vectors are already
+stored. Only the agent that runs `reindex` needs the key for scheduled
+reindexing, and the scheduler recipe loads it from the product env file.
 
 ## What this SKILL does NOT do
 
@@ -254,5 +266,5 @@ cron infrastructure); the others stay credential-free.
 - Does not paste an API key into the env file silently. Always use
   a placeholder, then ask the user to substitute.
 - Does not commit env files. They live outside the tracked tree.
-- Does not launch a long-running watcher inside OSB — the
-  `--cron-template` recipe is the endorsed automation path.
+- Does not launch a long-running watcher inside Open Second Brain. The
+  printed `--cron-template` recipe is an optional automation path.

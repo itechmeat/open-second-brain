@@ -177,7 +177,7 @@ clone affects every profile that uses it.
 
 ### How Hermes discovers the provider
 
-The primary route needs no packaging metadata at all: `hermes plugins
+The plugin install path needs no packaging metadata: `hermes plugins
 install` git-clones the repo into `~/.hermes/plugins/open-second-brain/`,
 and Hermes discovers the provider by scanning that plugin directory -
 the `plugins/hermes` package ships `plugin.yaml` declaring

@@ -143,6 +143,7 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
       "computation",
       "D2, settled rows",
     ),
+    ...rows(["core/brain/digest-brief.ts"], "local-only", "SessionStart and MCP digest delivery"),
     ...rows(
       ["core/brain/evidence-read.ts"],
       "computation",

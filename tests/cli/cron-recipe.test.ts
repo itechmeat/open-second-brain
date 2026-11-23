@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import {
   CronTemplateError,
@@ -33,7 +34,6 @@ const SENTINEL = Object.freeze({
   cronName: "probe-job",
   scriptStem: "probe-runner",
   note: "probe note line",
-  schedulerNote: "(probe scheduler note)",
   bodyMarker: "probe_body_marker",
   verify: "probe-verify --now",
 });
@@ -43,7 +43,6 @@ const SPEC: CronRecipeSpec = Object.freeze<CronRecipeSpec>({
   cronName: SENTINEL.cronName,
   scriptPath: operatorScriptPath(SENTINEL.scriptStem),
   scriptNotes: Object.freeze([SENTINEL.note]),
-  schedulerNote: SENTINEL.schedulerNote,
   buildScriptBody: ({ o2bBin }) => `#!/usr/bin/env bash\n${SENTINEL.bodyMarker} ${o2bBin}\n`,
   buildVerifyCommand: ({ o2bBin }) => `${o2bBin} ${SENTINEL.verify}`,
 });
@@ -59,10 +58,8 @@ describe("renderCronRecipe", () => {
     const out = renderCronRecipe(SPEC, "30m", {});
     for (const value of [
       SENTINEL.title,
-      SENTINEL.cronName,
       SCRIPT_PATH,
       SENTINEL.note,
-      SENTINEL.schedulerNote,
       SENTINEL.bodyMarker,
       SENTINEL.verify,
     ]) {
@@ -70,13 +67,9 @@ describe("renderCronRecipe", () => {
     }
   });
 
-  test("the cron job is named once, the script written once, the verify stated once", () => {
+  test("the script is written once and the verify is stated once", () => {
     const out = renderCronRecipe(SPEC, "30m", {});
-    // The job name appears only where the scheduler is told it.
-    expect(occurrences(out, SENTINEL.cronName)).toBe(1);
-    // The script path appears in four places by design (section heading,
-    // heredoc, chmod, crontab line) but is CREATED exactly once - a second
-    // heredoc would silently overwrite the first.
+    // The script path appears in four places by design, but is created once.
     expect(occurrences(out, `cat >${SCRIPT_PATH} <<`)).toBe(1);
     expect(occurrences(out, SENTINEL.verify)).toBe(1);
   });
@@ -86,29 +79,20 @@ describe("renderCronRecipe", () => {
     for (const section of [
       "## 1. Watchdog script - save to ",
       "## 2. Native crontab - open 'crontab -e' and append:",
-      "## 3. Hermes cron ",
     ]) {
       expect(`${section} present: ${out.includes(section)}`).toBe(`${section} present: true`);
     }
-    expect(out).toContain("hermes cron create \\");
-    expect(out).toContain(`  --name ${SENTINEL.cronName} \\`);
-    expect(out).toContain("  --no-agent");
+    expect(out).not.toContain(".hermes");
+    expect(out).toContain("OPEN_SECOND_BRAIN_ENV_FILE");
+    expect(out).toContain("${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env");
+    expect(out).toContain('if [[ -r "$env_file" && -f "$env_file" ]]');
     expect(out).toContain("# After install, verify with: ");
   });
 
-  test("the interval is rendered as cron in both the crontab and the scheduler line", () => {
+  test("the interval is rendered as cron in the crontab recipe", () => {
     const out = renderCronRecipe(SPEC, "6h", {});
     expect(out).toContain("# interval: 6 hours");
     expect(out).toContain(`0 */6 * * *    ${SCRIPT_PATH}`);
-    expect(out).toContain("  --schedule '0 */6 * * *' \\");
-  });
-
-  test("the scheduler command uses the $HOME form the shell will expand", () => {
-    // A quoted "~/..." argument is not tilde-expanded, so the scheduler
-    // would store a path that resolves to nothing.
-    const out = renderCronRecipe(SPEC, "30m", {});
-    expect(out).toContain(`  --command "$HOME/.local/bin/${SENTINEL.scriptStem}.sh" \\`);
-    expect(out).not.toContain(`  --command "~/`);
   });
 
   test("the binary override reaches both builders", () => {
@@ -124,13 +108,12 @@ describe("renderCronRecipe", () => {
 });
 
 /**
- * The synthetic spec rendered at 30m, captured BEFORE the header and the
- * script section were extracted into a helper shared with the systemd
- * renderer. The extraction is only correct if the cron path changed by
- * zero bytes, and only a pinned string can say so.
+ * The synthetic output stays pinned so recipe changes remain reviewable.
  */
-const PINNED_CRON_30M =
-  "# ----------------------------------------------------------------------\n# Synthetic Suite - probe recipe\n# interval: 30 minutes\n#\n# Pick ONE of the three paths below. The watchdog script is the\n# common piece; both crontab and Hermes-cron rely on it.\n# ----------------------------------------------------------------------\n\n\n## 1. Watchdog script - save to ~/.local/bin/probe-runner.sh\n##    probe note line\n\ncat >~/.local/bin/probe-runner.sh <<'OSBEOF'\n#!/usr/bin/env bash\nprobe_body_marker o2b\nOSBEOF\nchmod +x ~/.local/bin/probe-runner.sh\n\n\n## 2. Native crontab - open 'crontab -e' and append:\n\n*/30 * * * *    ~/.local/bin/probe-runner.sh\n\n\n## 3. Hermes cron (probe scheduler note):\n\nhermes cron create \\\n  --name probe-job \\\n  --schedule '*/30 * * * *' \\\n  --command \"$HOME/.local/bin/probe-runner.sh\" \\\n  --no-agent\n\n\n# ----------------------------------------------------------------------\n# After install, verify with: o2b probe-verify --now\n# ----------------------------------------------------------------------\n";
+const PINNED_CRON_30M = readFileSync(
+  new URL("../fixtures/cron-recipe/synthetic-30m.txt", import.meta.url),
+  "utf8",
+);
 
 /** The watchdog section: from its heading through the chmod that closes it. */
 function scriptSection(out: string): string {
@@ -181,6 +164,7 @@ describe("renderSystemdTimer", () => {
     ]) {
       expect(`${needle} present: ${out.includes(needle)}`).toBe(`${needle} present: true`);
     }
+    expect(out).toContain(SENTINEL.cronName);
   });
 
   test("the monotonic timer carries no Persistent= line", () => {
