@@ -61,7 +61,17 @@ function resolveConfPath(env: InstallEnv): string {
   return join(env.home, ".aider.conf.yml");
 }
 
+// The sidecar lives in the vault. With no vault the path would be relative
+// to wherever setup ran, and Aider started elsewhere would not find it.
 function resolveSidecarPath(env: InstallEnv, opts: { aiderContextPath?: string }): string {
+  if (!opts.aiderContextPath && !env.vault) {
+    throw new InstallError(
+      "aider: Aider reads its context from a file in the vault, and no vault is configured",
+      TARGET,
+      "config-missing",
+      "pass --vault <path>",
+    );
+  }
   return resolveAiderSidecarPath(env, opts);
 }
 

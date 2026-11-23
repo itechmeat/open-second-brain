@@ -1,9 +1,46 @@
-# Dream: who answers what
+# Dream
 
-Dream turns what agents captured into a maintained brain. Most of a pass
-works on counts and rules. Some work needs a model; it waits in the dream
-work queue (`o2b dream queue`) until something answers it, and no fixed
-rule decides it meanwhile.
+Dream turns what agents captured into a maintained brain: it promotes
+repeated signals to rules, confirms, quarantines and retires rules by
+their evidence, keeps topics, and writes summaries. Most of a pass works
+on counts and rules. Some work needs a model; it waits in the dream work
+queue (`o2b dream queue`) until something answers it, and no fixed rule
+decides it meanwhile.
+
+This page covers, in order: who owns dream, who answers its model work,
+how it starts by itself, what waiting means, catch-up after missed days,
+the dream agent, and drafts. Every verb is in the
+[CLI reference](cli-reference.md); the store side is in
+[brain-store.md](brain-store.md#the-dream-owner).
+
+## The dream owner
+
+Every brain in the brain store has at most one dream owner: one agent
+installation on one device. Only the owner's device runs a live pass;
+every other device previews (dry runs answer everywhere) and refuses a
+live pass with `dream_not_owner` before it asks a model or writes
+anything.
+
+1. **Who it is.** The installation that creates the brain (`o2b setup`,
+   `o2b init`, `o2b store init`) becomes the owner when its agent name is
+   known. With no agent name the brain has no owner, and the command says
+   how to choose one. Attaching another machine, running init again and
+   the store migration never change the owner.
+2. **How to see it.** `o2b dream owner` (MCP `brain_dream_owner`) names
+   the owner's device and agent, whether this machine is the owner, a
+   pending transfer, the queue, the dream agent and the replay.
+3. **How to move it.** `o2b dream owner --here` on the machine that should
+   own dream. On the owner's device `--agent <name>` changes the agent at
+   once; on another device it records a request that the owner's device
+   hands over the next time it looks (a pass, `o2b dream owner`, a session
+   start). `--here --force` takes the role at once when the old owner is
+   lost; `--release` gives it up.
+4. **Any agent on the owner's device** may start the pass; the gate is the
+   device. The pass summary names the owner and the agent that started it.
+
+A brain from before 2.0 has no owner record and runs live passes from any
+device until you adopt it with `o2b dream owner --here` (see
+[updating.md](updating.md#upgrading-to-200)).
 
 ## Who answers
 
@@ -34,10 +71,12 @@ owner's machine starts the day's pass by itself:
 1. **Where the check runs.** In the session start hook of the hosts that
    have one (Claude Code, Codex, Grok), on every start, resume, clear and
    compact; and in the MCP server at `initialize` and at the first tool
-   call of a new UTC day, which covers every other host and a server that
-   lives for days. A host that reaches Open Second Brain only through the
-   command line (`pi`) has no session entry: its passes come from another
-   agent on the same machine, or from `o2b dream run`.
+   call of a new UTC day, which covers every other MCP host and a server
+   that lives for days. A host that reaches Open Second Brain without MCP
+   or a hook (Pi through the command line, Aider through its context file
+   and `o2b aider wrap`, OpenClaw through its own plugin) has no session
+   entry: its passes come from another agent on the same machine, or from
+   `o2b dream run`.
 2. **What it costs.** On a closed day the check reads the machine config
    the session already loaded and one small record under the device state
    directory (`dream-trigger/<key>.json`), and returns. It opens no store,
@@ -118,6 +157,72 @@ is the owner, today, whether the day is closed and why not, the last run
 with its outcome, and the retry time. Doctor reports `dream-day-open` when
 the day has stayed open for more than one day, with the reason and the
 retry time.
+
+## Waiting
+
+Work that needs a model waits until something can answer it. Nothing
+decides it in its place:
+
+1. A record whose topic question waits stays unassigned; a group whose
+   approval or wording waits is not created as a topic; a summary that
+   waits is not written.
+2. Work on one chain or topic waits behind a stuck item; unrelated work
+   goes on.
+3. An item that fails its checks five times is parked;
+   `o2b dream queue retry <id>` offers it again and
+   `o2b dream queue cancel <id> --reason <text>` closes it, both on the
+   owner's device.
+
+`o2b dream queue`, `o2b dream owner` and doctor say per operation how many
+items wait, the age of the oldest and why: `no-model` (no decision model
+for the question), `shadow` (the decision model is asked and recorded,
+but its use is in shadow mode), `needs-local-executor`, `retry-at`,
+`not-reached` (the pass ran out of time) or `no-executor`, each with the
+action that changes it. Doctor adds `dream-questions-waiting`,
+`dream-queue-no-executor` and `dream-work-unanswerable`.
+
+### The order of fallbacks
+
+Before a live pass on the owner's device:
+
+1. The decision model chain answers the closed questions whose use is
+   `enforce`, one item per request, within `dream.model_budget_ms`
+   (default 20000). Its providers fall through in their configured order.
+2. The dream agent answers what is left that it may answer, with the
+   verified `dream_agent_command`. When a session fails to start, exits
+   with an error or answers nothing, one entry of
+   `dream_agent_fallbacks` is tried, in order.
+3. Whatever is still unanswered waits for the next pass.
+
+## Catch-up after missed days
+
+On a brain served from the brain store, a live pass works in windows of
+one UTC day. When the owner's machine was off, the next pass replays every
+missed day, oldest first: each past day is judged as at its end, today at
+the moment of the run. A machine that was off for weeks therefore ends
+where daily passes would have ended: trials, staleness and confidence are
+judged day by day, and signals are not archived before the promotion they
+qualified for was considered.
+
+1. **Coverage is in the store.** A new owner continues where the old one
+   stopped, after the old owner's last covered window has synced.
+2. **A source with a gap stops coverage.** A shard that cannot be read
+   completely is not treated as empty; doctor names it
+   (`dream-replay-gap`).
+3. **A budget can stop a pass between windows or inside one.** The next
+   pass continues from there, and the day stays open until nothing is
+   behind.
+4. **Late records count from when they arrive.** A record that syncs late
+   is never archived unseen and does not reopen a window already judged.
+5. **The staged flow waits.** While windows are behind,
+   `o2b brain dream stage`, `validate`, `apply` and `retriage` are refused
+   with `dream_replay_behind`, naming `o2b brain dream`.
+
+`o2b dream owner` and `o2b dream status` show the last covered window,
+how many windows are behind, and the windows whose model work still
+waits. A brain whose records still live in the legacy `Brain/` tree runs
+its single pass as before; its first live pass after the move to the
+store starts the replay.
 
 ## Setting the agent
 

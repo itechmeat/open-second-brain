@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { dreamDayCheck } from "../../src/core/brain/dream-trigger/check.ts";
 import { dreamWorkerLogPath } from "../../src/core/brain/dream-trigger/due.ts";
 import { dreamTriggerClaimPath } from "../../src/core/brain/dream-trigger/record.ts";
+import * as gate from "../../src/core/brain/dream-owner/gate.ts";
 import * as ownerModule from "../../src/core/brain/dream-owner/owner.ts";
 import * as outcomeModule from "../../src/core/brain/dream-trigger/outcome.ts";
 import * as o2bCommand from "../../src/core/maintenance/o2b-command.ts";
@@ -76,6 +77,27 @@ describe("o2b dream run", () => {
     const doc = JSON.parse(res.stdout) as Record<string, unknown>;
     expect(doc).toMatchObject({ ok: true, day: { closed: true, failures: 0 } });
     expect(typeof doc["run_id"]).toBe("string");
+  });
+
+  test("--no-vault runs on no vault, not the one the machine config resolves to", async () => {
+    process.env["VAULT_DIR"] = join(f.tmp, "config-vault");
+    const gated = spyOn(gate, "assertDreamOwner");
+    let res;
+    let vaults: unknown[] = [];
+    try {
+      res = await cli(["--no-vault", "--json"]);
+      vaults = gated.mock.calls.map((c) => c[0]);
+    } finally {
+      gated.mockRestore();
+    }
+    expect(res.returncode).toBe(0);
+    expect(vaults.length).toBeGreaterThan(0);
+    expect(vaults.every((v) => v === null)).toBe(true);
+  });
+
+  test("--vault and --no-vault together are a usage error", async () => {
+    const res = await cli(["--no-vault", "--vault", join(f.tmp, "v")]);
+    expect(res.returncode).toBe(2);
   });
 
   test("is refused on a device that is not the owner, and records nothing", async () => {

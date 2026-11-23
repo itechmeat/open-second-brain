@@ -22,6 +22,11 @@ for Windows; Claude Code's hooks need Git for Windows installed (see below).
 
 ## 2. Get the code and publish the CLI
 
+The registry package works on Windows too: `bun add -g open-second-brain`
+provides `o2b`, `o2b-mcp` and `o2b-hook`, and `o2b setup --target <host>
+... --apply --yes` connects a host (see [`install.md`](../install.md)). The
+clone below is the alternative; do not use both on one machine.
+
 ```powershell
 git clone https://github.com/itechmeat/open-second-brain $env:USERPROFILE\projects\open-second-brain
 cd $env:USERPROFILE\projects\open-second-brain
@@ -40,8 +45,10 @@ terminal afterwards. Claude Code's native installer already puts it on PATH.
 
 ```powershell
 o2b init --vault C:\Users\you\Vault --agent-name "<runtime>-<host>-agent" --timezone Europe/Belgrade
-o2b brain init --vault C:\Users\you\Vault
 ```
+
+This creates the brain store and binds the vault to it; a separate
+`o2b brain init` is not needed.
 
 `~\Vault` is accepted as well as `~/Vault`.
 

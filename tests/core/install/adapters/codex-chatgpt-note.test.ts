@@ -12,7 +12,7 @@
  * docs rows - and refuses the regressions the review gate names: a
  * detection or status change, and a new install target id.
  *
- * The docs assertions at the bottom are content checks over README.md
+ * The docs assertions at the bottom are content checks over docs/features.md
  * and install/codex.md, so a docs row that drops the install command or
  * the shared-config naming fails here rather than drifting silently.
  */
@@ -185,9 +185,9 @@ describe("ChatGPT desktop is a reader of the shared config, not a target", () =>
 describe("the docs name ChatGPT desktop and the codex install command", () => {
   const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
 
-  test("the README supported-clients row names ChatGPT desktop, the command and the guide", () => {
-    const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
-    const rows = readme.split("\n").filter((line) => line.includes("ChatGPT desktop"));
+  test("the features supported-clients row names ChatGPT desktop, the command and the guide", () => {
+    const features = readFileSync(join(repoRoot, "docs", "features.md"), "utf8");
+    const rows = features.split("\n").filter((line) => line.includes("ChatGPT desktop"));
     expect(rows.length).toBeGreaterThan(0);
     expect(
       rows.some(

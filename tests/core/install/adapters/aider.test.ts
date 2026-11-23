@@ -68,6 +68,25 @@ describe("aider adapter", () => {
     expect(r.configPath).toBe(aiderConfPath());
   });
 
+  test("with no vault, plan and apply refuse instead of using a relative sidecar path", () => {
+    const noVault = { ...env(), vault: "" };
+    for (const run of [
+      () => aiderAdapter.plan(payload, noVault),
+      () => aiderAdapter.apply(aiderAdapter.plan(payload, env()), payload, noVault, applyOpts()),
+    ]) {
+      let err: unknown;
+      try {
+        run();
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(InstallError);
+      expect((err as InstallError).kind).toBe("config-missing");
+      expect((err as InstallError).hint).toContain("--vault");
+    }
+    expect(existsSync(aiderConfPath())).toBe(false);
+  });
+
   test("apply creates ~/.aider.conf.yml with managed block + sidecar context file", () => {
     aiderAdapter.apply(aiderAdapter.plan(payload, env()), payload, env(), applyOpts());
     expect(existsSync(aiderConfPath())).toBe(true);

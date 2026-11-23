@@ -15,12 +15,22 @@ fallback exists.
 
 ## Get the `o2b` CLI
 
-The Open Second Brain package provides `o2b`, `o2b-mcp` and `o2b-hook` from a registry install. `vault-log` is excluded because its `append-event` CLI command does not exist. Bun `>= 1.1.0` must be on `PATH`. Install it with `bun add -g open-second-brain`.
+Install the package from the registry. It provides `o2b`, `o2b-mcp` and
+`o2b-hook`, with Bun `>= 1.1.0` on `PATH` as the only prerequisite:
 
-Plugin hosts (Claude Code, Codex, Hermes, OpenClaw) ship the launcher
-with the plugin; their install page shows how to publish it. For other
-clients, choose either the registry install above or this clone-based
-alternative. Do not install both:
+```bash
+bun add -g open-second-brain
+o2b version
+```
+
+Then run `o2b setup --target <host> ... --apply --yes` as
+[`install.md`](../install.md#install-from-the-registry) shows. The package
+does not ship `vault-log`; use `o2b brain note` instead.
+
+Plugin hosts (Claude Code, Codex, Hermes, OpenClaw) also ship the launcher
+with the plugin; their install page shows how to publish it. As an
+alternative to the registry install, use a clone. Do not install both:
+doctor reports several different `o2b` on `PATH`.
 
 ```bash
 git clone https://github.com/itechmeat/open-second-brain ~/open-second-brain
@@ -33,7 +43,8 @@ o2b version
 Add that directory to `PATH` in your shell profile. A client that starts
 MCP servers with a bare `o2b` command needs it on the `PATH` it runs with;
 if it does not have it, use the absolute path `~/.local/bin/o2b` (expanded)
-as the command.
+as the command. `o2b setup` from a registry install avoids this: it
+registers absolute paths.
 On native Windows, follow [`windows.md`](windows.md) instead.
 
 ## Supported platforms
@@ -58,23 +69,29 @@ Git for Windows.
 
 ## Identity (agent name + timezone)
 
-`o2b init` persists two values into `~/.config/open-second-brain/config.yaml`:
+`o2b setup` (or `o2b init`) persists two values into the machine config
+(`~/.config/open-second-brain/config.yaml` on Linux and macOS):
 
-- **`agent_name`** — prefix attached to every `Brain/log/` event the
-  MCP server records against this vault. Pick a deliberate value
-  (`<runtime>-<host>` is a good default).
+- **`agent_name`** — the name attached to every event the MCP server
+  records for this machine. The installation that creates the brain
+  becomes its dream owner under this name. Pick a deliberate value
+  (`<runtime>-<host>` is a good default). Grok, opencode and OpenClaw
+  write under a name derived from it: the vendor token is swapped for the
+  runtime (`claude-vps-agent` becomes `grok-vps-agent`; a name outside the
+  `<vendor>-<host>-agent` shape gets the runtime as a prefix).
 - **`timezone`** — IANA name (`Europe/Belgrade`, `America/New_York`,
   `UTC`). Used to stamp event timestamps regardless of the host's
   local clock.
 
-If the vault was initialized previously, check the registry first:
+If the machine was set up before, check what it already uses:
 
-- the config file above (`agent_name`, authoritative)
-- `<vault>/Brain/_brain.yaml` `primary_agent` (when set)
-- `<vault>/Brain/log/*.{md,jsonl}` (recurring `agent` field)
+- the config file above (`agent_name`, authoritative), shown by `o2b status`;
+- the dream owner's agent, shown by `o2b dream owner`;
+- on a vault from 1.x, `<vault>/Brain/_brain.yaml` `primary_agent` (when set).
 
 A repeat `o2b init --agent-name X` is safe — it updates the
-machine-local config in place.
+machine-local config in place. It does not move the dream owner; use
+`o2b dream owner --here --agent X` for that.
 
 ## Vault path discovery
 
@@ -112,20 +129,24 @@ o2b install --check
 
 `o2b install --check` is the runtime-install health check
 (per-target managed-block / MCP-ping verification). `o2b doctor`
-covers vault invariants — they are complementary, not substitutes.
+covers the machine, the brain store and the vault — they are
+complementary, not substitutes. On a `--no-vault` machine, run
+`o2b doctor` without `--vault`.
 
-Then call `brain_note` once (via MCP or `o2b brain note "..."` on the
-CLI) and confirm that the new line in `Brain/log/<today>.md` carries
-the chosen `agent` value, not the literal `agent` placeholder.
+Then record one test signal through the host (the `brain_feedback`
+tool, or `o2b brain feedback` on the CLI) and confirm that it carries
+the chosen agent name, not the literal `agent` placeholder. On Grok,
+opencode and OpenClaw it carries the runtime-derived name described under
+Identity above (`grok-vps-agent` for a chosen `claude-vps-agent`).
 
 ## Plays well with codegraph
 
-If your vault sits next to code repositories, OSB cooperates with
+If your vault sits next to code repositories, Open Second Brain cooperates with
 [codegraph](https://github.com/colbymchenry/codegraph) as a partner
 tool: codegraph owns the symbol graph and call relationships in a
-codebase, OSB owns the prose / Brain / preferences in the vault. When
+codebase, Open Second Brain owns the prose / Brain / preferences in the vault. When
 `o2b doctor` runs from inside or beside a code project, it adds a
 `code_graph` line that summarises whether codegraph is installed and
 indexed there. Installation is performed by codegraph's own installer,
-not by OSB. See `skills/codegraph-partner/SKILL.md` for the agent-side
+not by Open Second Brain. See `skills/codegraph-partner/SKILL.md` for the agent-side
 playbook.

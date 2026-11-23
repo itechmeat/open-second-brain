@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
   "keywords": [
@@ -23,7 +23,6 @@
   },
   "files": [
     "bin/*.js",
-    "bin/o2b-discipline-report",
     "src/",
     "hooks/",
     "schemas/",
@@ -51,7 +50,6 @@
     "scripts/o2b-aider.cmd",
     "scripts/_bun-precheck.sh",
     "scripts/_macos-sqlite.sh",
-    "scripts/discipline-report.ts",
     "README.md",
     "LICENSE",
     "pyproject.toml",

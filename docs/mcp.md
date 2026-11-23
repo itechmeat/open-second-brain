@@ -1,8 +1,9 @@
 # MCP tool server
 
 The optional Model Context Protocol (MCP) server exposes Open Second Brain's
-deterministic operations as tools that Hermes Agent (or any other MCP client)
-can route through its tool registry.
+operations as tools that any MCP client can route through its tool
+registry. Every supported host gets the same tools; only the wiring differs
+([`install.md`](../install.md#supported-clients)).
 
 The server is **optional**: the `o2b` CLI remains the supported baseline. Nothing
 in Open Second Brain depends on the MCP server being running.
@@ -1354,6 +1355,23 @@ answer work of the dream queue (see [dream.md](dream.md)). It is exact:
    again: a refused call writes nothing.
 4. It is not a value of `mcp_tool_profile` and not an install profile:
    that key names it as an unknown profile and `o2b mcp` refuses to start.
+
+### Dream at session entry
+
+The server runs the dream day check (see
+[dream.md](dream.md#how-dream-starts)) at `initialize` and at the first
+tool call of a new UTC day, so a host without a session start hook still
+starts the day's dream pass on the dream owner's machine, and a server
+that lives for days checks again each day. On a closed day the check reads
+one small device-local record and returns; when a pass is due it starts
+one detached worker and the call does not wait for it. A server started
+inside a dream session (`OPEN_SECOND_BRAIN_DREAM_RUN` set) runs no check.
+
+When a dream digest is pending, the `initialize` instructions announce
+it: "A dream digest is available: read osb://digest/latest or call
+brain_brief with view=digest." This is how a host without a session start
+hook learns of it; hosts with a session start hook also show the digest
+once at session start.
 
 ## Skill surface (since v0.37.0)
 

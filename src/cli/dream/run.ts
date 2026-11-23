@@ -1,11 +1,12 @@
 /**
- * `o2b dream run [--claim <token>] [--vault <path>] [--config <file>]
- * [--json]` (change `dream-session-trigger`, design D3): the one command
- * that runs a whole live dream pass and records its day. The owner gate,
- * the front door (the closed questions produced and asked, the decision
- * model executor, the dream agent executor), the pass itself, then the
- * outcome (`dream-trigger/outcome.ts`), all under one deadline: the dream
- * safeguard's, as the maintenance lane's dream task spends it.
+ * `o2b dream run [--claim <token>] [--vault <path> | --no-vault]
+ * [--config <file>] [--json]` (change `dream-session-trigger`, design
+ * D3): the one command that runs a whole live dream pass and records its
+ * day. The owner gate, the front door (the closed questions produced and
+ * asked, the decision model executor, the dream agent executor), the pass
+ * itself, then the outcome (`dream-trigger/outcome.ts`), all under one
+ * deadline: the dream safeguard's, as the maintenance lane's dream task
+ * spends it.
  *
  * With `--claim` it is the worker the dream day check started: it runs
  * only when the trigger's claim file holds that token, writes its pid
@@ -19,6 +20,10 @@
  * Exit codes: 0 when the pass ran, 1 when it failed or was refused (a
  * device that is not the owner, a claim this run does not hold, another
  * pass running), 2 on a usage error (the dispatcher's).
+ *
+ * `--no-vault` runs the pass on no vault, as a day check that served none
+ * (an MCP server serving no vault) asks; without `--vault` or it, the
+ * vault the machine config resolves to.
  */
 
 import { discoverConfig, resolveVault } from "../../core/config.ts";
@@ -48,7 +53,7 @@ import { describeErrorChain } from "../brain/helpers.ts";
 import { sortedReplacer } from "../helpers.ts";
 
 export const DREAM_RUN_USAGE =
-  "usage: o2b dream run [--claim <token>] [--vault <path>] [--config <file>] [--json]";
+  "usage: o2b dream run [--claim <token>] [--vault <path> | --no-vault] [--config <file>] [--json]";
 
 const EXIT = Object.freeze({ ok: 0, failed: 1 } as const);
 
@@ -86,6 +91,7 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
   const { flags, positional } = parseFlags(argv, {
     claim: { type: "string" },
     vault: { type: "string" },
+    "no-vault": { type: "boolean" },
     config: { type: "string" },
     json: { type: "boolean" },
   });
@@ -94,6 +100,10 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
   const json = flags["json"] === true;
   const token = flags["claim"] as string | undefined;
   if (token !== undefined && token.trim() === "") throw new CliError("--claim needs a token");
+  const noVault = flags["no-vault"] === true;
+  if (noVault && flags["vault"] !== undefined) {
+    throw new CliError("--vault and --no-vault cannot be given together");
+  }
   const configOpt = configPath !== undefined ? { configPath } : {};
 
   // The worker proves its claim before anything else and writes its pid
@@ -126,7 +136,7 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
   let keepClaim = false;
   try {
     const ran = await runPass(
-      (flags["vault"] as string | undefined) ?? resolveVault(configPath),
+      noVault ? null : ((flags["vault"] as string | undefined) ?? resolveVault(configPath)),
       configOpt,
       json,
       token !== undefined ? "worker" : "cli",

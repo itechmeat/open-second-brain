@@ -1,61 +1,107 @@
 # Open Second Brain after install
 
-Open Second Brain works with any supported agent. Finish setup for your vault,
-choose the agent identity that writes to it, and verify the connection.
+These steps are the same for every supported agent host. They assume the
+package is installed and one host is connected ([`install.md`](install.md)).
 
 ## 1. Check the installation
 
 ```bash
 o2b install --check
-o2b brain doctor --vault /path/to/vault
+o2b doctor
 ```
 
-The setup check verifies the host integration. Doctor reports vault and store
-health.
+`o2b install --check` verifies each connected host. `o2b doctor` reports
+the machine, the brain store and, when one is configured, the vault. Add
+`--vault /path/to/vault` to check a specific vault.
 
-## 2. Choose the dream agent and owner
+## 2. Confirm the dream owner
 
-Set the primary agent name when initializing Brain:
+Dream runs on one installation, the dream owner. The installation that
+created the brain is the owner when its agent name was known. Check it:
 
 ```bash
-o2b brain init --vault /path/to/vault --primary-agent "<agent-name>"
+o2b dream owner
 ```
 
-The dream owner is one device and agent. Check the current owner with
-`o2b dream owner`. To assign this device, run:
+To make this machine and agent the owner, run:
 
 ```bash
 o2b dream owner --here --agent "<agent-name>"
 ```
 
-Dream runs for its owner. Other devices can preview a pass and request a
-transfer from the current owner.
+On the owner's machine this changes the agent at once. On another machine
+it records a request, and the owner's machine hands the role over the next
+time it looks. Other machines preview dream and refuse a live pass with
+`dream_not_owner`. The full model is in [`docs/dream.md`](docs/dream.md).
 
-## 3. Read the human view
+## 3. Set and verify the dream agent
 
-Open the vault in Obsidian or another Markdown editor. `Brain/_BRAIN.md` links
-to the generated views, active preferences, lessons, and recent activity.
+On the owner's machine, set the command that starts your own agent for
+dream's model work, then verify it with a real short session. No preset
+commands ship: you choose the command and the flags that restrict the
+session to the one MCP server it is given.
 
-## 4. Schedule optional maintenance
+```bash
+o2b dream agent set '["/path/to/agent", "--your-flags", "{prompt}", "--mcp-config", "{mcp_config}"]'
+o2b dream agent check
+```
 
-Dream starts through the configured owner flow. No scheduler entry is needed
-for dream. For periodic reindexing or maintenance, print a recipe and choose a
-scheduler for the host:
+Until a verified command exists, that work waits in the dream queue and
+doctor reports `dream-agent-unset` or `dream-agent-unverified`. A decision
+model is an optional accelerator for dream's closed questions:
+[`docs/decision-models.md`](docs/decision-models.md).
+
+## 4. Check that dream starts
+
+Nothing needs to be scheduled. The first session of a day on the owner's
+machine starts the day's pass. See the state of the day:
+
+```bash
+o2b dream status
+```
+
+To keep model-written text for review before it is applied:
+
+```bash
+o2b brain settings set dream.apply_drafts review
+```
+
+## 5. Read the human view
+
+Name a folder for the readable pages with `view_target` in the machine
+config (it can be inside your vault), then render once:
+
+```bash
+o2b view render
+```
+
+The pages are plain Markdown: `about-me.md`, weekly history, decisions and
+one page per topic. Editing a rule on `about-me.md` records your
+correction; deleting its line retires the rule. Details:
+[`docs/brain-store.md`](docs/brain-store.md#the-human-view).
+
+## 6. Optional maintenance
+
+Dream needs no scheduler. For periodic reindexing and other upkeep, print a
+recipe and choose a scheduler yourself:
 
 ```bash
 o2b brain maintenance run --vault /path/to/vault --cron-template
 ```
 
-The recipe prints shell and systemd options. It does not install a schedule.
+The recipe prints crontab and systemd forms. It does not install a
+schedule.
+
+## More machines
+
+To share one brain between machines, sync the store's partitions with a
+sync tool you choose; Open Second Brain does not sync them itself. See
+[`docs/brain-store.md`](docs/brain-store.md#more-machines).
 
 ## Agent guides
 
-- Hermes: [install/hermes.md](install/hermes.md)
-- Claude Code: [install/claudecode.md](install/claudecode.md)
-- Codex: [install/codex.md](install/codex.md)
-- Cursor: [install/cursor.md](install/cursor.md)
-- OpenClaw: [install/openclaw.md](install/openclaw.md)
-- Other supported runtimes: [install.md](install.md)
+Every supported host has its own page; the router is
+[`install.md`](install.md#supported-clients).
 
 ## Uninstall
 
@@ -65,5 +111,5 @@ Review the detected integrations before removing local files:
 o2b uninstall
 ```
 
-Add `--apply-local` to remove the local Open Second Brain config directory.
-Your vault and Markdown notes are kept.
+Add `--apply-local` to remove the local Open Second Brain config
+directory. Your vault, your Markdown notes and the brain store are kept.

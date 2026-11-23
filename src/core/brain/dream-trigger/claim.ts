@@ -32,11 +32,16 @@ export interface DreamTriggerClaim {
   readonly worker_pid: number | null;
 }
 
-/** A claim as read: the record, one that cannot be read (with its file's age), or none. */
+/**
+ * A claim as read: the record; one read whole that is not a claim (with
+ * its file's age); one that is there and cannot be read now (permissions,
+ * I/O), which says nothing about its holder; or none.
+ */
 export type ClaimSeen =
   | { readonly kind: "absent" }
   | { readonly kind: "claim"; readonly claim: DreamTriggerClaim }
-  | { readonly kind: "unreadable"; readonly mtimeMs: number };
+  | { readonly kind: "unreadable"; readonly mtimeMs: number }
+  | { readonly kind: "inconclusive" };
 
 function parseClaim(text: string): DreamTriggerClaim | null {
   try {
@@ -56,23 +61,22 @@ function parseClaim(text: string): DreamTriggerClaim | null {
 /** The claim at `path` as it is now. */
 export function readClaim(path: string): ClaimSeen {
   let text: string;
-  let mtimeMs: number | null = null;
+  let mtimeMs: number;
   try {
     mtimeMs = statSync(path).mtimeMs;
     text = readFileSync(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
-    // A claim that exists and cannot be read is judged by its file's age
-    // (it ages like any claim); only one that cannot even be looked at is
-    // judged as made now.
-    return { kind: "unreadable", mtimeMs: mtimeMs ?? Date.now() };
+    // A claim that is there and cannot be read now hides its worker's
+    // pid: it is never aged out, only one read whole is.
+    return { kind: "inconclusive" };
   }
   const claim = parseClaim(text);
   return claim === null ? { kind: "unreadable", mtimeMs } : { kind: "claim", claim };
 }
 
 /** When the claim seen was made, for its age. */
-export function claimMadeAt(seen: Exclude<ClaimSeen, { kind: "absent" }>): number {
+export function claimMadeAt(seen: Extract<ClaimSeen, { kind: "claim" | "unreadable" }>): number {
   return seen.kind === "claim" ? seen.claim.at : seen.mtimeMs;
 }
 
@@ -87,6 +91,7 @@ export function createClaim(
   now: number,
   workerPid: number | null = null,
 ): string | null {
+  retryFailedReleases(path);
   const claim: DreamTriggerClaim = {
     token: randomBytes(16).toString("hex"),
     at: now,
@@ -122,9 +127,67 @@ export function removeClaimIf(path: string, matches: (seen: ClaimSeen) => boolea
   });
 }
 
-/** Remove the claim at `path` when it still holds `token`. */
+/**
+ * Claims this process failed to give back, by path. A claim a whole live
+ * run holds carries this process's pid, so it would stand for as long as
+ * the process lives: the next claim this process makes at the same path
+ * gives it back first.
+ */
+const failedReleases = new Map<string, Set<string>>();
+
+function retryFailedReleases(path: string): void {
+  const tokens = failedReleases.get(path);
+  if (tokens === undefined) return;
+  for (const token of tokens) {
+    try {
+      releaseClaim(path, token);
+    } catch {
+      // still not given back: the next claim tries again
+    }
+  }
+}
+
+/**
+ * Remove the claim at `path` when it still holds `token`. A failure is
+ * thrown and remembered: the next claim this process makes at `path`
+ * gives the claim back first. A claim that cannot be read stays
+ * remembered too: the token is forgotten only once the claim is removed,
+ * gone, or read whole holding another token.
+ */
 export function releaseClaim(path: string, token: string): boolean {
-  return removeClaimIf(path, (seen) => seen.kind === "claim" && seen.claim.token === token);
+  let outcome: "removed" | "settled" | "unsure";
+  try {
+    // No claim, nothing to judge: the lock (and its folder) is not made.
+    outcome = !existsSync(path)
+      ? "settled"
+      : withLocalLock(path, () => {
+          const seen = readClaim(path);
+          if (seen.kind === "claim" && seen.claim.token === token) {
+            removeIfThere(path);
+            return "removed";
+          }
+          return seen.kind === "absent" || seen.kind === "claim" ? "settled" : "unsure";
+        });
+  } catch (err) {
+    remember(path, token);
+    throw err;
+  }
+  if (outcome === "unsure") {
+    remember(path, token);
+    return false;
+  }
+  const tokens = failedReleases.get(path);
+  if (tokens !== undefined) {
+    tokens.delete(token);
+    if (tokens.size === 0) failedReleases.delete(path);
+  }
+  return outcome === "removed";
+}
+
+function remember(path: string, token: string): void {
+  const tokens = failedReleases.get(path) ?? new Set<string>();
+  tokens.add(token);
+  failedReleases.set(path, tokens);
 }
 
 /**

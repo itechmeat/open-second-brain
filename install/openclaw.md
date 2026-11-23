@@ -1,6 +1,6 @@
 # OpenClaw
 
-OpenClaw installs OSB through its native plugin system. Tools are
+OpenClaw installs Open Second Brain through its native plugin system. Tools are
 registered by the bundled JS plugin entry, not via a separate MCP
 server.
 
@@ -40,13 +40,23 @@ by default):
 "$(find ~/.openclaw -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)" install-cli
 ```
 
+Or install the CLI from the registry instead (Bun is the only
+prerequisite; do not combine it with `install-cli` on one machine):
+
+```bash
+bun add -g open-second-brain
+```
+
 ## 3. Initialize the vault
 
 ```bash
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" --timezone "<chosen-tz>"
-o2b brain init --vault /path/to/vault
 ```
+
+On a fresh machine `o2b init` creates the brain store outside the vault,
+binds the vault to it, and makes this installation the dream owner (check
+with `o2b dream owner`). A separate `o2b brain init` is not needed.
 
 ## 4. Configure vault path, agent name, timezone
 

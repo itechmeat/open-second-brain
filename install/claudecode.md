@@ -1,6 +1,6 @@
 # Claude Code
 
-Claude Code installs OSB through its marketplace subsystem. The
+Claude Code installs Open Second Brain through its marketplace subsystem. The
 `mcpServers` block in the bundled `.claude-plugin/plugin.json`
 auto-registers both MCP servers, so there is no explicit
 `claude mcp add` step.
@@ -22,13 +22,23 @@ O2B_SCRIPT="$(find ~/.claude/plugins/cache -path '*open-second-brain*/scripts/o2
 "$O2B_SCRIPT" install-cli
 ```
 
+Or install the CLI from the registry instead (Bun is the only
+prerequisite; do not combine it with `install-cli` on one machine):
+
+```bash
+bun add -g open-second-brain
+```
+
 ## 3. Initialize the vault
 
 ```bash
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" --timezone "<chosen-tz>"
-o2b brain init --vault /path/to/vault
 ```
+
+On a fresh machine `o2b init` creates the brain store outside the vault,
+binds the vault to it, and makes this installation the dream owner (check
+with `o2b dream owner`). A separate `o2b brain init` is not needed.
 
 `o2b init` persists `vault`, `agent_name`, and `timezone` into
 `~/.config/open-second-brain/config.yaml`. The auto-registered
@@ -73,7 +83,7 @@ o2b brain unprotect --target claudecode --vault /path/to/vault
 
 The sidecar manifest at
 `<vault>/.open-second-brain/protect.lock.json` records exactly the
-`permissions.deny` / `permissions.allow` entries OSB owns.
+`permissions.deny` / `permissions.allow` entries Open Second Brain owns.
 
 ## Update
 
@@ -88,4 +98,10 @@ claude plugin update open-second-brain@open-second-brain
 claude plugin uninstall open-second-brain@open-second-brain
 claude plugin marketplace remove open-second-brain
 o2b uninstall --apply-local --remove-cli
+```
+
+With the registry package, also remove the package:
+
+```bash
+bun remove -g open-second-brain
 ```

@@ -36,17 +36,23 @@ below are the same, with the Windows paths from
 Creates symlinks for `o2b`, `vault-log`, and `o2b-hook` in
 `~/.local/bin`. Survives `hermes plugins update`.
 
+Or install the CLI from the registry instead (Bun is the only
+prerequisite; do not combine it with `install-cli` on one machine):
+
+```bash
+bun add -g open-second-brain
+```
+
 ## 3. Initialize the vault
 
 ```bash
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" --timezone "<chosen-tz>"
-o2b brain init --vault /path/to/vault \
-    --primary-agent "<chosen-agent-name>"
 ```
 
-`--primary-agent` declares the agent name you want to run dream. Dream
-runs on one device and agent, the dream owner: the installation that
+On a fresh machine `o2b init` creates the brain store outside the vault
+and binds the vault to it; a separate `o2b brain init` is not needed.
+Dream runs on one device and agent, the dream owner: the installation that
 creates the brain becomes it when its agent name is known. Check with
 `o2b dream owner`; to make this Hermes install the owner of an existing
 brain, run `o2b dream owner --here --agent "<chosen-agent-name>"` on

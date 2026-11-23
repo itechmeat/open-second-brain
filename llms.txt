@@ -1,0 +1,87 @@
+# Open Second Brain
+
+> Open Second Brain is a program that runs on the person's machine and gives their AI coding agents a shared memory: agents save corrections, decisions and notes through its tools into a brain store outside the person's notes, a daily pass called dream turns corrections that repeat into rules, and connected agents read those rules in later sessions. It is the npm package `open-second-brain`, installed with Bun 1.1 or later, MIT licensed. The package puts three binaries on `PATH`: `o2b` (the command line), `o2b-mcp` and `o2b-hook`. It registers two MCP servers with an agent host: `open-second-brain` (the full server) and `open-second-brain-writer` (the always-loaded writer server). These instructions describe version 2.0.0 and later. Relative links below resolve against https://raw.githubusercontent.com/itechmeat/open-second-brain/main/.
+
+## Agent setup
+
+Follow these steps in order. Do not skip the stop in step 6. Never ask the person to paste a secret into the chat.
+
+1. **Find the host and the system.** Name the agent host you run in, as one `--target` value: `claude-code`, `codex`, `hermes`, `openclaw`, `opencode`, `grok`, `cursor`, `kiro`, `copilot-cli`, `gemini-cli`, `zcode`, `aider`, `pi`, or `generic` for any other MCP host. Name the operating system. On native Windows, read the Windows limits below before going on. WSL counts as Linux.
+2. **Check what is already there.** Run `bun --version` (1.1.0 or later is needed). Run `command -v o2b` (in PowerShell on native Windows, `Get-Command o2b`); when it exists, run `o2b version`, `o2b status` and `o2b dream owner`. An existing configuration, agent name, vault or dream owner is kept unless the person asks to change it. A version below 2.0.0 is an upgrade, not a fresh install: follow docs/updating.md instead of this procedure. Two different `o2b` on `PATH` (a clone install and a registry install) is a fault: stop and report it; never install the second kind beside the first.
+3. **Install only what is missing, with approval.** If Bun is missing, show the person the install command from install/prerequisites.md (on Windows, install/windows.md) and run it only after they agree. If `o2b` is missing, show `bun add -g open-second-brain` and run it after they agree. Then run `o2b version`; if it is below 2.0.0, stop and tell the person that the published package is older than these instructions.
+4. **Ask the person these questions, and no others.** Skip a question whose answer step 2 already found.
+   1. Vault or no vault: the path of their Obsidian vault (a folder that contains `.obsidian/`; look in the home folder, `~/Documents`, `~/Sync`, `~/Dropbox` and offer what you find), a new folder at `~/vault`, or no vault.
+   2. Agent name: the name this agent writes under, for example `claude-laptop`.
+   3. Time zone: an IANA name such as `Europe/Berlin`, or `UTC`.
+   4. Dream ownership: whether this installation should own dream. Only one installation in a brain does. On a new brain the installation that creates it becomes the owner.
+   5. The dream agent command: the command that starts this agent non-interactively with a prompt and one MCP configuration file, as a JSON array (see step 8). No presets ship. If the person does not know it, leave it unset and say that dream's model work will wait in the queue.
+5. **Print the plan.** Run, with the answers, without `--apply`:
+   `o2b setup --target <host> --vault <path> --agent-name "<name>" --timezone <zone>`
+   (with `--no-vault` in place of `--vault <path>` when there is no vault). This writes nothing.
+6. **Stop and wait.** Show the person the plan as printed, and add what it means: the paths it writes, that a detached dream worker starts once a day on the dream owner's machine (automatic dream is on by default; `o2b brain settings set dream.auto false` turns it off), that dream's sessions use the person's agent subscription or provider allowance, that items built from private records go to the dream agent by default (and to its provider when it uses a hosted model; turn that off with the `dream_agent_private` setting), and that model-written drafts are applied by the next pass unless `o2b brain settings set dream.apply_drafts review` is chosen. Then wait for the person's explicit approval. Anything other than a clear yes means you stop here.
+7. **Apply the approved plan.** Run the same command with `--apply --yes` added. Read the exit code: `0` passed; `2` a choice is missing (ask for it); `4` a configuration block the person edited needs their attention (stop and show it); `5` the host could not be reached; `6` consent was refused; `7` a host step remains for the person, such as installing a host plugin or merging printed entries: show the step setup printed and the guide for the host. Any other code: stop and report the output.
+8. **Dream owner and dream agent.** If the person wants this installation to own dream and `o2b dream owner` names another, run `o2b dream owner --here --agent "<name>"`. If the person does not want this installation to own dream and setup just made it the owner of a new brain, run `o2b dream owner --release`; never release an owner that existed before setup and that the person chose to keep. On the owner's machine, if the person gave a dream agent command, run `o2b dream agent set '<json array>'` and then `o2b dream agent check`. The array is the program first and then its arguments; it may use the placeholders `{prompt}`, `{mcp_config}`, `{mcp_command}` and `{mcp_args_json}` (docs/dream.md, "Setting the agent"). Never invent a flag of the person's agent: use only flags its own documentation or the person gives. A command that fails the check is not used; report the failure as it was printed.
+9. **Restart.** Tell the person to restart the host (or start a new session) so it loads the new servers and hooks. Continue after the restart.
+10. **Verify.** Run each command and report its result:
+    1. With a vault: `o2b install --check --target <host>`: the line for the host must say `ok` (`installed` for `generic`). Exit `0` alone is not enough, because a host that is not installed also exits `0`. Without a vault this command exits `2` before it checks any host: skip it, and checks 5 and 6 are the host check.
+    2. `o2b doctor` (add `--vault <path>` when there is a vault): no failure.
+    3. `o2b status`: shows the chosen agent name.
+    4. `o2b dream status`: whether automatic dream is on and whether this machine is the dream owner.
+    5. For an MCP host (every host except `aider`, `pi`, `openclaw` and `generic`): the host's own MCP listing shows `open-second-brain` and `open-second-brain-writer`.
+    6. On a host that exposes the tools (every host except `aider` and `pi`), record one test signal through the host's `brain_feedback` tool (topic `setup-check`, signal `positive`, principle `Setup check: this agent writes under its own name.`) Read the record through the tool's answer, not a file: its `agent` field must be the chosen name (on `grok`, `opencode` and `openclaw` the runtime-derived name, install/prerequisites.md), not the literal `agent`, and `signal_path` names the record it wrote (`store:<id>` on a machine that writes to the brain store, where no file is written). On `aider` and `pi`, which reach Open Second Brain through the command line, run `o2b brain feedback --topic setup-check --signal positive --principle "Setup check: this agent writes under its own name."` instead: it must exit `0`, and step 3 is the identity check.
+    If any check fails, the installation is incomplete: say which step failed and do not report success.
+11. **Undo.** Tell the person how to undo it: `o2b uninstall --target <host> --apply` removes what setup wrote for the host (a host that ships its own plugin is removed with that host's plugin command, see its guide; entries the person merged by hand for `generic` or `zcode` are removed by deleting the `open-second-brain` and `open-second-brain-writer` entries from that host's configuration); `o2b uninstall --apply-local` removes the local configuration directory; `bun remove -g open-second-brain` removes the package. The vault, its notes and the brain store are kept.
+
+## Limits and refusals
+
+- Bun 1.1 or later is required. Where Bun cannot be installed, Open Second Brain does not work; there is no other runtime.
+- Native Windows: Windows 10 and 11 on x64. Claude Code's hooks need Git for Windows; without it the hooks are skipped and only the MCP tools work. Grok Build's hooks are unverified on Windows, and its commands break when the Bun or repository path holds a space. Setup refuses a vault path that contains `& | < > ^ % " !`. Codex marks its plugin hooks untrusted until the person approves them in `/hooks`.
+- Claude Code, Hermes Agent, OpenClaw and ZCode are connected through a step setup cannot do for the person (a host plugin, or MCP entries added by hand): setup exits `7` and names it.
+- Aider has no MCP and no hooks: it gets a context file in the vault, so it needs a vault: setup for `aider` with no vault stops and asks for `--vault`. Pi has no MCP: it gets a skill over the command line. OpenClaw registers its tools through its own plugin, not MCP. None of the three starts dream by itself; on a machine with only these hosts, dream runs with `o2b dream run`.
+- `generic` prints the MCP server entries for the person to merge into their host's configuration; nothing is written.
+- GitHub Copilot CLI registration depends on the `copilot mcp add` flags of the installed Copilot version; a change shows up in `o2b install --check`.
+- Hermes Agent: do not install separate copies of the plugin in several profile homes on one machine (install/hermes.md).
+- Open Second Brain does not sync between machines. Sharing one brain needs a sync tool the person chooses (docs/brain-store.md).
+- The brain store is append-only: retiring a rule does not erase its record. Do not store secrets in it.
+
+## Install and setup
+
+- [Installation](install.md): the registry install, `o2b setup` for each host, its exit codes, the supported clients, verification, uninstall and the readiness criteria
+- [Prerequisites](install/prerequisites.md): Bun, getting the `o2b` CLI, the agent name and timezone, vault discovery, consent and verification
+- [After install](after-install.md): the finishing steps: checks, the dream owner, the dream agent, the human view, optional maintenance, local cleanup
+- [Windows](install/windows.md): native Windows paths, launchers and behaviour
+
+## Client guides
+
+- [Claude Code](install/claudecode.md): marketplace plugin with MCP servers and hooks
+- [Codex](install/codex.md): MCP registration, the marketplace plugin for hooks, ChatGPT desktop
+- [Hermes Agent](install/hermes.md): plugin and memory provider
+- [OpenClaw](install/openclaw.md): native plugin without MCP
+- [opencode](install/opencode.md): MCP servers and a native plugin
+- [Grok Build](install/grok.md): MCP servers and native hooks
+- [Cursor](install/cursor.md): MCP servers with the catalog tool profile
+- [kiro](install/kiro.md): MCP servers
+- [GitHub Copilot CLI](install/copilot-cli.md): MCP servers through `copilot mcp add`
+- [Gemini CLI](install/gemini-cli.md): MCP servers in the Gemini settings
+- [ZCode](install/zcode.md): MCP servers added by hand
+- [Aider](install/aider.md): a managed context file, no MCP
+- [Pi](install/pi.md): a skill over the CLI
+- [Any other MCP host](install/generic.md): the printed server entries to merge
+
+## Operate
+
+- [How it works](docs/how-it-works.md): capture, the brain store, the dream pass, delivery at session start, the preference lifecycle
+- [Dream](docs/dream.md): the dream owner, how dream starts by itself, waiting, catch-up after missed days, the dream agent and drafts
+- [Brain store](docs/brain-store.md): setup on one or more machines, syncing, the human view, what the store protects and what it does not
+- [Features](docs/features.md): what Open Second Brain can do and which page documents each part
+- [Decision models](docs/decision-models.md): the optional judgment model, its uses, privacy and cost gate
+
+## Reference
+
+- [CLI reference](docs/cli-reference.md): every `o2b` verb, flag and exit code, and every path by which data leaves the machine
+- [MCP reference](docs/mcp.md): the MCP servers, tools, profiles and resources
+- [Documentation index](docs/README.md): every page, grouped by task
+
+## Upgrade
+
+- [Updating](docs/updating.md): what an upgrade from 1.x to 2.0 does and needs, and the notes of earlier releases

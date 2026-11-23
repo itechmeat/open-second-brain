@@ -22,8 +22,9 @@
  *     or a retry time that has not come, gives the claim back.
  *  5. Start the worker, `o2b dream run --claim <token>`, detached; its
  *     error output goes to a capped device-local log, one header per
- *     attempt. A spawn that throws gives the claim back and records a
- *     failed attempt.
+ *     attempt. A spawn that throws, or an attempt that cannot be
+ *     recorded before it, gives the claim back and records a failed
+ *     attempt.
  *
  * Unknown is never read as an answer: a settings stream or an owner fold
  * that cannot be read completely starts nothing and caches nothing.
@@ -51,7 +52,11 @@ import {
 import { isoDate } from "../time.ts";
 import { readDreamAuto } from "./auto.ts";
 import { claimMadeAt, createClaim, releaseClaim, removeClaimIf, type ClaimSeen } from "./claim.ts";
-import { DREAM_RUN_CLAIM_FLAG, DREAM_TRIGGER_CLAIM_GRACE_MS } from "./constants.ts";
+import {
+  DREAM_RUN_CLAIM_FLAG,
+  DREAM_RUN_NO_VAULT_FLAG,
+  DREAM_TRIGGER_CLAIM_GRACE_MS,
+} from "./constants.ts";
 import { silentOwnerLineFor } from "./line.ts";
 import { retryDelayMs } from "./outcome.ts";
 import {
@@ -150,7 +155,8 @@ export function judgeClaim(
   grace: number,
   passLockHeld: () => boolean,
 ): ClaimVerdict {
-  if (seen.kind === "absent") return "standing";
+  // No claim, or one that cannot be read now: nothing says its worker ended.
+  if (seen.kind === "absent" || seen.kind === "inconclusive") return "standing";
   const age = nowMs - claimMadeAt(seen);
   if (seen.kind === "claim") {
     const worker = seen.claim.worker_pid;
@@ -176,8 +182,12 @@ export function dueDreamDayCheck(input: DueCheckInput): DreamDayCheckResult {
   const vault = input.vault !== undefined ? input.vault : resolveVault(config.path);
   const opened = openDreamOwnerStore(vault, config.path);
   if (opened.store === null || !opened.store.partitions.has("shared")) {
-    // Nothing here can be started today: no store, a legacy tree, no
-    // device id, or no shared partition. Cached for the day.
+    // A legacy tree is the served vault's own: the record is the store
+    // root's, shared by every vault served on this machine, so it is not
+    // cached as this device's answer.
+    if (opened.store === null && opened.reason === "legacy-tree") return NOTHING;
+    // Nothing here can be started today: no store, no device id, or no
+    // shared partition. Cached for the day.
     update((r) => ({ ...r, owner: ownerOf(null, false), owner_checked_day: today }));
     return NOTHING;
   }
@@ -281,26 +291,33 @@ export function dueDreamDayCheck(input: DueCheckInput): DreamDayCheckResult {
     return NOTHING;
   }
 
-  // The attempt is recorded before its worker starts, so the worker's
-  // outcome, written when its pass ends, is the last word on it.
-  update((r) => ({
-    ...r,
-    last_run: {
-      started_at: new Date(nowMs).toISOString(),
-      ended_at: null,
-      outcome: null,
-      by: "worker",
-    },
-  }));
   try {
+    // The attempt is recorded before its worker starts, so the worker's
+    // outcome, written when its pass ends, is the last word on it; a
+    // record that cannot be written gives the claim back like a spawn
+    // that throws.
+    update((r) => ({
+      ...r,
+      last_run: {
+        started_at: new Date(nowMs).toISOString(),
+        ended_at: null,
+        outcome: null,
+        by: "worker",
+      },
+    }));
     beginWorkerLogAttempt(
       log,
       workerLogAttemptHeader(new Date(nowMs), `started by process ${process.pid}`),
     );
     // The worker runs on the vault the check served, not the one its own
-    // config would resolve to.
+    // config would resolve to; a check that served none starts a worker
+    // that serves none.
     const vaultArgs =
-      input.vault !== undefined && input.vault !== null ? ["--vault", input.vault] : [];
+      input.vault === undefined
+        ? []
+        : input.vault === null
+          ? [DREAM_RUN_NO_VAULT_FLAG]
+          : ["--vault", input.vault];
     spawnSelfDetached([...command, "dream", "run", ...vaultArgs, DREAM_RUN_CLAIM_FLAG, token], {
       env: { ...input.env, OPEN_SECOND_BRAIN_CONFIG: config.path },
       stderrLog: log,
