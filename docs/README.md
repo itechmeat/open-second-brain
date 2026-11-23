@@ -17,7 +17,6 @@ The user documentation, grouped by what you are trying to do. Agents that instal
 - [OpenClaw](../install/openclaw.md): native plugin without MCP
 - [opencode](../install/opencode.md): MCP servers and a native plugin
 - [Grok Build](../install/grok.md): MCP servers and hooks
-- [Cursor](../install/cursor.md): MCP servers
 - [kiro](../install/kiro.md): MCP servers
 - [GitHub Copilot CLI](../install/copilot-cli.md): MCP servers through `copilot mcp add`
 - [Gemini CLI](../install/gemini-cli.md): MCP servers in the Gemini settings

@@ -75,6 +75,14 @@ const PIPELINE_HOSTED_DOCS: Readonly<Record<string, string>> = Object.freeze({
   "zcode.md": "manual MCP config in ZCode's own file; no install adapter yet",
 });
 
+/**
+ * Install targets that keep a working adapter but no runtime document:
+ * the documentation no longer lists the host as a supported client.
+ */
+const UNDOCUMENTED_TARGETS: Readonly<Record<string, string>> = Object.freeze({
+  cursor: "the setup target still works; the host is not listed as a supported client",
+});
+
 interface Harness {
   readonly vault: string;
   readonly home: string;
@@ -270,7 +278,7 @@ function readDocumentedBlock(docPath: string): DocumentedBlock | null {
 const adapters = registerAllAdapters().list();
 
 describe("install documents — expected output matches verify()", () => {
-  for (const adapter of adapters) {
+  for (const adapter of adapters.filter((a) => !(a.target in UNDOCUMENTED_TARGETS))) {
     const docRel = `install/${adapter.target}.md`;
     const docPath = join(REPO_ROOT, docRel);
 
@@ -305,6 +313,18 @@ describe("install documents — completeness", () => {
     expect(unbound).toEqual([]);
   });
 
+  test("every undocumented target has a written reason, a registered adapter and no document", () => {
+    const registered = new Set<string>(adapters.map((a) => a.target));
+    const docs = readdirSyncSorted(INSTALL_DOCS_DIR);
+    for (const [target, reason] of Object.entries(UNDOCUMENTED_TARGETS)) {
+      expect(reason.trim().length).toBeGreaterThan(0);
+      expect(`${target}: registered = ${registered.has(target)}`).toBe(
+        `${target}: registered = true`,
+      );
+      expect(docs).not.toContain(`${target}.md`);
+    }
+  });
+
   test("every pipeline-hosted document carries a written reason and still exists", () => {
     for (const [name, reason] of Object.entries(PIPELINE_HOSTED_DOCS)) {
       expect(reason.trim().length).toBeGreaterThan(0);
@@ -320,10 +340,10 @@ describe("registry install documentation", () => {
     const release = readFileSync(join(REPO_ROOT, "docs/releasing.md"), "utf8");
     expect(install).toContain("bun add -g open-second-brain");
     expect(install).toContain(
-      'o2b setup --target cursor --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
+      'o2b setup --target grok --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
     );
     expect(install).toContain(
-      'o2b setup --target cursor --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
+      'o2b setup --target grok --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
     );
     expect(install).toMatch(/exited `0` with host verification `ok`/);
     expect(prerequisites).toContain("bun add -g open-second-brain");

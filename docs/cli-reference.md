@@ -11,7 +11,7 @@ o2b status                    Show config / vault status, and a `store_root:` li
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
 o2b setup --target <host>     Configure the brain, connect an agent host and verify; --vault <path> or --no-vault, --agent-name, --timezone, --apply, --yes, --config, --json
-o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes (consent-gated), --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one; --apply for a target whose host reads an agent-instruction file also writes the Open Second Brain write-gate managed block into that file at the vault root under the same consent verdict (codex, cursor, opencode and aider read AGENTS.md; gemini-cli reads GEMINI.md, name-implied only; copilot-cli, grok, kiro, pi and generic install no instruction step and the plan says so), preserving every byte outside the block, refusing a hand-edited block with exit 4 unless --force, and recording the ownership entry at <vault>/.open-second-brain/instruction-block.lock.json
+o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes (consent-gated), --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one; --apply for a target whose host reads an agent-instruction file also writes the Open Second Brain write-gate managed block into that file at the vault root under the same consent verdict (codex, opencode and aider read AGENTS.md; gemini-cli reads GEMINI.md, name-implied only; copilot-cli, grok, kiro, pi and generic install no instruction step and the plan says so), preserving every byte outside the block, refusing a hand-edited block with exit 4 unless --force, and recording the ownership entry at <vault>/.open-second-brain/instruction-block.lock.json
 o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
 o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
@@ -420,8 +420,8 @@ because a binary was absent would be the same over-claim as a blanket
 `unknown` carries the reason nobody has established one. Collapsing the
 third into the second is the misleading default the whole substrate exists
 to remove, because the layer above it selects a tool surface fail-open.
-Today exactly one row is `declared` - Cursor, at 40 tools across every
-enabled MCP server - and no row is `unbounded`; the member exists so a host
+Today exactly one row is `declared`, at 40 tools across every enabled MCP
+server, and no row is `unbounded`; the member exists so a host
 that documents "no limit" is not recorded as unchecked.
 
 **`o2b mcp --host-target <runtime>`** tells a running server which runtime
@@ -464,11 +464,11 @@ regenerates the registration. An unchecked ceiling is never an absent one.
 **The tool-profile ladder has three tiers, highest first**, and the
 generated registration is what it parameterises:
 
-| Tier | Source                                                                                    |
-| ---- | ----------------------------------------------------------------------------------------- |
-| 1    | `install.tool_profile` in `<vault>/Brain/_brain.yaml` - the COMMITTED tier                |
-| 2    | `mcp_tool_profile` in the machine-local `config.yaml`                                     |
-| 3    | the host's own `RUNTIME_FACTS` row - `catalog` for Cursor, nothing for every other target |
+| Tier | Source                                                                                                                       |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `install.tool_profile` in `<vault>/Brain/_brain.yaml` - the COMMITTED tier                                                   |
+| 2    | `mcp_tool_profile` in the machine-local `config.yaml`                                                                        |
+| 3    | the host's own `RUNTIME_FACTS` row - `catalog` for the one host that declares a tool ceiling, nothing for every other target |
 
 Tier 1 above tier 2 is the reverse of the guess, and it is the point.
 Install verification works by RE-CONSTRUCTION rather than a stored hash, so
@@ -937,7 +937,7 @@ lock's own budget like any lock changing hands.
 ### Trusted recall and memory write surface (since v1.35.0)
 
 ```text
-o2b doctor                    gains --readiness: nine functional probes (model-inference key resolvable, embedding provider loadable with model and dims, the recorded provider-consent decision named beside the provider environment variables still present (skipped when none is recorded, unknown when the record cannot be read), runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify; since v1.64.0 every registered client command still resolvable - a proved-absent absolute path fails naming the client and `o2b install <target> --apply`, a relative path is unresolved because the client resolves it from its own working directory, an unresolvable bare name is unknown because the host spawns with its own PATH - and the workspace agent-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) carrying the marker write-back contract block, conforming / missing-block / malformed-block / missing-clauses / absent / symlink / unreadable; a file without the block is graded skipped because the block is not installed, while a malformed or incomplete block fails; placement shadowing fails too: a host whose preferred instruction file carries no managed block while another candidate file carries the block (the host-to-file precedence table lives in `brain/writeback-contract.ts`: claude-code reads `CLAUDE.md`; codex, cursor, opencode and aider read `AGENTS.md`; gemini-cli reads `GEMINI.md`) is one fail finding naming the host, the file the host reads, the file carrying the contract and the same read-only recovery clause, so a workspace whose every per-file row is clean can still fail on where the contract was installed, and the fail census counts findings, not files; symlinked candidates keep their refused unknown treatment, and a workspace with no instruction file at all stays skipped because nothing installed is not a contract violation; and the optional decision-model config checked without sending anything - skipped when the feature is off, keyless or opted out, failing only an enabled config with an invalid value; since v1.95.0 the `client_versions` probe asks each detected agent client its version through its own version argv under the per-probe timeout, one row per target (`pass` with the raw first stdout line, `unknown` naming why - a thrown runner, a non-zero exit, a timeout, empty stdout - or `skipped` when the target has no version argv or no manifest entry), and an all-unknown probe keeps doctor at exit 6, never 1, because a version it cannot read proves nothing broken) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure and an unmeasured probe exit with different non-zero codes (see "`o2b doctor` exit codes" below); without the flag output stays byte-identical
+o2b doctor                    gains --readiness: nine functional probes (model-inference key resolvable, embedding provider loadable with model and dims, the recorded provider-consent decision named beside the provider environment variables still present (skipped when none is recorded, unknown when the record cannot be read), runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify; since v1.64.0 every registered client command still resolvable - a proved-absent absolute path fails naming the client and `o2b install <target> --apply`, a relative path is unresolved because the client resolves it from its own working directory, an unresolvable bare name is unknown because the host spawns with its own PATH - and the workspace agent-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) carrying the marker write-back contract block, conforming / missing-block / malformed-block / missing-clauses / absent / symlink / unreadable; a file without the block is graded skipped because the block is not installed, while a malformed or incomplete block fails; placement shadowing fails too: a host whose preferred instruction file carries no managed block while another candidate file carries the block (the host-to-file precedence table lives in `brain/writeback-contract.ts`: claude-code reads `CLAUDE.md`; codex, opencode and aider read `AGENTS.md`; gemini-cli reads `GEMINI.md`) is one fail finding naming the host, the file the host reads, the file carrying the contract and the same read-only recovery clause, so a workspace whose every per-file row is clean can still fail on where the contract was installed, and the fail census counts findings, not files; symlinked candidates keep their refused unknown treatment, and a workspace with no instruction file at all stays skipped because nothing installed is not a contract violation; and the optional decision-model config checked without sending anything - skipped when the feature is off, keyless or opted out, failing only an enabled config with an invalid value; since v1.95.0 the `client_versions` probe asks each detected agent client its version through its own version argv under the per-probe timeout, one row per target (`pass` with the raw first stdout line, `unknown` naming why - a thrown runner, a non-zero exit, a timeout, empty stdout - or `skipped` when the target has no version argv or no manifest entry), and an all-unknown probe keeps doctor at exit 6, never 1, because a version it cannot read proves nothing broken) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure and an unmeasured probe exit with different non-zero codes (see "`o2b doctor` exit codes" below); without the flag output stays byte-identical
 o2b brain morning-brief       renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and a relative age label; the underlying JSON data arrays are unchanged
 ```
 
@@ -1522,8 +1522,8 @@ hand. A corrupt or unknown-schema ledger is a hard error rather than a
 silent reset, which would report an operator's entire imported machine as
 outstanding.
 
-**A Cursor database is counted as `unparsable`, not as a gap.** Cursor keeps
-per-workspace chat state in `state.vscdb`, a SQLite file this build can
+**A host database this build cannot read is counted as `unparsable`, not as a
+gap.** One host keeps per-workspace chat state in `state.vscdb`, a SQLite file this build can
 LOCATE and no adapter it ships can read. A gap is work an operator can close;
 an unreadable format is not, and folding the two would put a permanent
 number in a column an operator is trying to drive to zero. So the identity

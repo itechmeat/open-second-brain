@@ -3,7 +3,7 @@
 Open Second Brain runs natively on Windows 10 and 11 (x64). WSL is a Linux
 host and follows the Linux instructions instead; this page is for agents that
 run on Windows itself - Hermes Agent's desktop app or `install.ps1` build,
-Claude Code's native `claude.exe`, opencode, Cursor and the other MCP hosts.
+Claude Code's native `claude.exe`, opencode and the other MCP hosts.
 
 ## 1. Prerequisites
 
@@ -81,7 +81,7 @@ carries the host.
   Windows Claude Code falls back to PowerShell, the hook commands fail to
   parse there and are skipped (exit 1, non-blocking) - the MCP tools still
   work. Install Git for Windows to get the hooks.
-- **opencode, Cursor, Gemini CLI, Copilot CLI, kiro, Codex** -
+- **opencode, Gemini CLI, Copilot CLI, kiro, Codex** -
   `o2b install --target <name> --apply --yes` writes the MCP entry as
   `cmd /d /c o2b mcp ...`, the `cmd /c <name>` form several hosts document
   for `npx` on Windows (`/d` skips cmd's AutoRun, whose output would corrupt

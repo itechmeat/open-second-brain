@@ -1010,7 +1010,7 @@ Optional flags:
 - `--writer-only` — alias for `--scope writer`.
 - `--tool-profile full|writer|catalog|recall|minimal` — a named scope-plus-window bundle (see "Tool-surface profiles" below).
 - `--host-target <runtime>` — name the runtime that launched this server, so the capability report can cite that host's published tool ceiling. Install adapters write it into the registration they generate; an unrecognised value exits `2` naming the known ids. It also stands in for `--harness` when that option is absent, and changes nothing else.
-- `--harness <id>` — name the harness this server runs under (since v1.70.0), from a closed list: `aider`, `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini-cli`, `generic`, `grok`, `hermes`, `kiro`, `openclaw`, `opencode`, `pi`. It selects which `Brain/standing-rules/harness/<id>.md` file `brain_context` renders (see "Scoped operator rules" in [`how-it-works.md`](how-it-works.md)); the Claude Code plugin passes `--harness claude-code` and the Hermes plugin `--harness hermes`. An unrecognised value exits `2` naming the accepted ids. No tool argument names the harness.
+- `--harness <id>` — name the harness this server runs under (since v1.70.0), from the closed list under "Tool ceilings, `--host-target`, and the tool-profile ladder" in [`cli-reference.md`](cli-reference.md). It selects which `Brain/standing-rules/harness/<id>.md` file `brain_context` renders (see "Scoped operator rules" in [`how-it-works.md`](how-it-works.md)); the Claude Code plugin passes `--harness claude-code` and the Hermes plugin `--harness hermes`. An unrecognised value exits `2` naming the accepted ids. No tool argument names the harness.
 - `--probe` — start an in-process handshake and print whether the server can advertise tools, then exit.
 - `--transport stdio|http` — choose stdio (default) or Streamable HTTP.
 - `--host HOST` — HTTP bind host (default `127.0.0.1`).
@@ -1291,9 +1291,9 @@ A server started by hand, or by a registration written before
 flag and the `o2b install --target <runtime> --apply` that regenerates a
 registration carrying it. That is an UNCHECKED ceiling, not an absent one.
 
-Today exactly one runtime declares a limit — Cursor, 40 tools across every
-enabled MCP server — which is why the generated Cursor registration selects
-the `catalog` profile. No runtime is `unbounded`; the member exists so a
+Today exactly one runtime declares a limit, 40 tools across every enabled
+MCP server, which is why the registration generated for that runtime
+selects the `catalog` profile. No runtime is `unbounded`; the member exists so a
 host that publishes "no limit" is not recorded as unchecked. The full
 resolution ladder for the profile that ends up in a registration is
 documented under "Tool ceilings, `--host-target`, and the tool-profile

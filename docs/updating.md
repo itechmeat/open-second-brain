@@ -1004,19 +1004,18 @@ left to be discovered at the terminal.
 
 **The first `o2b install --check` after upgrading reports `drift` on a
 target installed by an earlier release.** A generated registration now
-carries `--host-target <runtime>` on both server entries, and Cursor's also
-carries `--tool-profile catalog`. Verification works by re-construction, so
+carries `--host-target <runtime>` on both server entries, and the entry of
+the one host that declares a tool ceiling also carries `--tool-profile catalog`. Verification works by re-construction, so
 an entry written by 1.49.0 no longer equals what this build would write.
-Seven targets gain the flags — `codex`, `copilot-cli`, `cursor`,
-`gemini-cli`, `grok`, `kiro`, `opencode` — and the ones whose `verify`
-compares the entry byte for byte will say so. (`aider`, `generic` and `pi`
+Every target that writes an MCP command line gains the flags, and the ones
+whose `verify` compares the entry byte for byte will say so. (`aider`, `generic` and `pi`
 write no MCP command line and are unaffected; a Codex installed through
 `codex mcp add` is also unaffected, because there `verify` checks only that
 the two tables are still declared, the CLI's own serialisation having no
 published grammar to compare against.) **Fix:** `o2b install --target <name> --apply`, or
 `o2b update`, which now hashes the payload AS WRITTEN and so stops reporting
 "up-to-date, payload unchanged" for a target whose host dimensions moved.
-The Cursor case is not cosmetic: without the profile that host silently
+The catalog profile is not cosmetic: without it that host silently
 drops every tool past its 40-tool ceiling.
 
 **`codex` joins `copilot-cli` as a target that can exit `5`.** `o2b install

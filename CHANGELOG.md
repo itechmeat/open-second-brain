@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The documentation no longer lists Cursor as a supported client, and its install guide is gone; the `cursor` setup target still works.
+
 ## [2.0.0] - 2026-11-23
 
 ### Added
@@ -9056,6 +9062,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/itechmeat/open-second-brain/compare/v1.98.0...v2.0.0
 [1.98.0]: https://github.com/itechmeat/open-second-brain/compare/v1.97.0...v1.98.0
 [1.97.0]: https://github.com/itechmeat/open-second-brain/compare/v1.96.0...v1.97.0
