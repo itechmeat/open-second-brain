@@ -1,4 +1,14 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { spawnNpmSync } from "./npm.ts";
 
 export interface PackSizes {
@@ -26,8 +36,63 @@ export const FORBIDDEN_PACKED_PATHS = [
   "*.pyc",
 ] as const;
 
-function normalize(path: string): string {
+export function normalize(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+export function checkTarball(tarball: string, manifest: PackManifest): string[] {
+  const absolute = resolve(tarball);
+  const listing = Bun.spawnSync(["tar", "-tzf", absolute], { stdout: "pipe", stderr: "pipe" });
+  if (listing.exitCode !== 0)
+    throw new Error(new TextDecoder().decode(listing.stderr).trim() || "cannot list tarball");
+  const entries = new TextDecoder().decode(listing.stdout).split(/\r?\n/).filter(Boolean);
+  const details = Bun.spawnSync(["tar", "-tvzf", absolute], { stdout: "pipe", stderr: "pipe" });
+  if (details.exitCode !== 0)
+    throw new Error(
+      new TextDecoder().decode(details.stderr).trim() || "cannot inspect tarball entries",
+    );
+  if (
+    new TextDecoder()
+      .decode(details.stdout)
+      .split(/\r?\n/)
+      .some((line) => /^[lh]/.test(line))
+  )
+    throw new Error("tarball links are not supported by the manifest checker");
+  const paths = entries
+    .filter((entry) => !entry.endsWith("/"))
+    .map((entry) => {
+      const normalized = normalize(entry);
+      if (!normalized.startsWith("package/") || normalized.split("/").includes(".."))
+        throw new Error(`unsafe tarball path: ${entry}`);
+      return normalized.slice("package/".length);
+    });
+  const root = mkdtempSync(join(tmpdir(), "o2b-tarball-check-"));
+  try {
+    const extracted = Bun.spawnSync(["tar", "-xzf", absolute, "-C", root], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (extracted.exitCode !== 0)
+      throw new Error(
+        new TextDecoder().decode(extracted.stderr).trim() || "cannot extract tarball",
+      );
+    let unpackedSize = 0;
+    const walk = (path: string): void => {
+      for (const name of readdirSync(path)) {
+        const child = join(path, name);
+        const stat = lstatSync(child);
+        if (stat.isDirectory()) walk(child);
+        else if (stat.isFile()) unpackedSize += stat.size;
+      }
+    };
+    walk(root);
+    return [
+      ...comparePathLists(paths, manifest.paths),
+      ...checkSizes({ packedSize: statSync(absolute).size, unpackedSize }, manifest.ceilings),
+    ];
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 export function comparePathLists(packedPaths: string[], manifestPaths: string[]): string[] {
@@ -152,6 +217,20 @@ function manifestText(paths: string[], sizes: PackSizes): string {
 }
 
 function main(): void {
+  const tarballFlag = process.argv.indexOf("--tarball");
+  if (tarballFlag >= 0) {
+    const tarball = process.argv[tarballFlag + 1];
+    if (!tarball) throw new Error("--tarball requires a file path");
+    const manifest = parseManifest(readFileSync("package-files.txt", "utf8"));
+    const errors = checkTarball(tarball, manifest);
+    if (errors.length) {
+      for (const error of errors) process.stderr.write(`${error}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write("tarball paths and sizes verified\n");
+    return;
+  }
   const packed = runPack();
   const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as unknown;
   if (process.argv.includes("--write")) {

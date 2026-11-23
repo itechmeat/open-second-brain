@@ -313,6 +313,33 @@ describe("install documents — completeness", () => {
   });
 });
 
+describe("registry install documentation", () => {
+  test("documents registry install, setup, and release requirements", () => {
+    const install = readFileSync(join(REPO_ROOT, "install.md"), "utf8");
+    const prerequisites = readFileSync(join(REPO_ROOT, "install/prerequisites.md"), "utf8");
+    const release = readFileSync(join(REPO_ROOT, "docs/releasing.md"), "utf8");
+    expect(install).toContain("bun add -g open-second-brain");
+    expect(install).toContain(
+      'o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes',
+    );
+    expect(install).toContain(
+      'o2b setup --target cursor --no-vault --agent-name "Your Name" --timezone UTC --apply --yes',
+    );
+    expect(install).toContain("For a brain-store install made with `--no-vault`");
+    expect(install).toMatch(/reports host\s+verification as `ok`/);
+    expect(prerequisites).toContain("bun add -g open-second-brain");
+    expect(prerequisites).toContain("registry install above or this clone-based");
+    expect(release).toContain(
+      'bun run scripts/registry-smoke.ts "open-second-brain@<version>" "<version>"',
+    );
+    expect(release).toContain("**Allow npm publish**");
+    expect(release).toContain("Leave **Allow npm dist-tag** disabled.");
+    expect(prerequisites).not.toContain(
+      "registry installation instructions will be added after publication",
+    );
+  });
+});
+
 function readdirSyncSorted(dir: string): string[] {
   return readdirSync(dir)
     .filter((name) => name.endsWith(".md"))

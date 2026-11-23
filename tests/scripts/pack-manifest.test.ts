@@ -9,6 +9,8 @@ import {
   findForbiddenPaths,
   checkSizes,
   findLifecycleScripts,
+  checkTarball,
+  parseManifest,
 } from "../../scripts/pack-manifest.ts";
 
 const FORBIDDEN = [
@@ -40,6 +42,23 @@ describe("package manifest checks", () => {
       JSON.parse(new TextDecoder().decode(proc.stdout)) as [{ files: { path: string }[] }]
     )[0]!.files.map((file) => file.path);
     expect(comparePathLists(packed, expected)).toEqual([]);
+  });
+
+  test("checks a real tarball's paths and packed and unpacked sizes", () => {
+    const root = makeTemp("pack-tarball-check-");
+    const proc = spawnNpmSync(["pack", "--ignore-scripts", "--pack-destination", root]);
+    expect(proc.exitCode).toBe(0);
+    const tarball = join(root, new TextDecoder().decode(proc.stdout).trim());
+    const manifest = parseManifest(readFileSync("package-files.txt", "utf8"));
+    expect(checkTarball(tarball, manifest)).toEqual([]);
+    expect(
+      checkTarball(tarball, { ...manifest, paths: [...manifest.paths, "extra.txt"] }),
+    ).toContain("manifest path not packed: extra.txt");
+    expect(
+      checkTarball(tarball, { ...manifest, ceilings: { packedSize: 1, unpackedSize: 1 } }).some(
+        (error) => error.includes("exceeds ceiling"),
+      ),
+    ).toBe(true);
   });
 
   test("npm pack excludes Python bytecode caches", () => {
