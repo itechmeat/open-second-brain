@@ -12,14 +12,31 @@
  *  - every higher rung: the ids of the lower rung's items produced since
  *    its own last item, with the unfinished ones in `after`.
  *
- * The operation's answer schema and `currentInput` are real. Its `apply`
- * refuses: no executor exists in this version, so no answer can be
- * accepted, and writing a rollup page from a model's text belongs to the
- * executors change.
+ * The operation's answer is text only the launched agent writes (change
+ * `dream-launched-agent`, design D6): `apply` writes the note at the
+ * payload's target path, with its author
+ * in the frontmatter (`written_by`, `written_by_model`, `written_by_item`:
+ * flat keys, since a frontmatter value cannot be a map), and a second
+ * apply that finds the same content writes nothing. The target lies under
+ * `Brain/rollups/`, which the free-form note creation path refuses. A
+ * store-served brain writes it through the lane page store; a legacy brain
+ * writes its legacy file.
  */
 
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { assertNoteVaultForWrite } from "../../vault-adapter/index.ts";
+import { formatFrontmatter, parseFrontmatterText } from "../../vault.ts";
 import type { StorePartition } from "../../store/constants.ts";
 import { readPreferences } from "../../store/read/preferences.ts";
+import {
+  lanePagesInStore,
+  laneVaultRoot,
+  readLanePage,
+  writeLanePage,
+} from "../../store/lane-pages.ts";
 import { parseBrainYaml } from "../yaml-parse.ts";
 import type { RollupLadderPlan } from "../rollup-ladder.ts";
 import { DREAM_WORK_EVIDENCE_MAX } from "./constants.ts";
@@ -41,22 +58,78 @@ const ANSWER_SCHEMA = Object.freeze({
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
+/** The longest rollup note accepted, in characters. */
+export const ROLLUP_NOTE_MAX_CHARS = 64_000;
+
 function validate(answer: { readonly value?: unknown; readonly text?: string }): string | null {
   if (typeof answer.text !== "string" || answer.text.trim() === "") {
     return "a rollup summary is a text answer";
   }
+  if (answer.text.length > ROLLUP_NOTE_MAX_CHARS) {
+    return `the note is longer than ${ROLLUP_NOTE_MAX_CHARS} characters`;
+  }
   const match = FRONTMATTER.exec(answer.text);
   if (match === null) return "the note must open with a YAML frontmatter block";
-  if (/^\s*[^:\n]+:\s*\[[^\]\n]*$/m.test(match[1]!)) {
+  if (/^\s*[^:\n]+:\s*\[[^\]\n]*$/m.test(match[1]!))
     return "the frontmatter must contain valid YAML";
-  }
   try {
     const parsed = parseBrainYaml(match[1]!);
     if (!Object.hasOwn(parsed, "kind")) return "the frontmatter must carry a `kind` key";
   } catch {
     return "the frontmatter must contain valid YAML";
   }
+  if (answer.text.slice(match[0].length).trim() === "") return "the note has no body";
   return null;
+}
+
+/** Write the accepted note with its author; nothing when the same note is there. */
+function apply(
+  item: DreamWorkItem,
+  answer: { readonly text?: string; readonly agent: string; readonly model: string },
+  context: DreamWorkContext,
+): string[] {
+  const target = item.body.payload["target_path"];
+  if (typeof target !== "string" || target === "")
+    throw new Error("rollup-summary: no target path");
+  const invalid = validate(answer);
+  if (invalid !== null) throw new Error(`rollup-summary: ${invalid}`);
+  const [frontmatter, body] = parseFrontmatterText(answer.text!);
+  const authored = {
+    ...frontmatter,
+    written_by: answer.agent,
+    written_by_model: answer.model,
+    written_by_item: item.id,
+  };
+  const fields = item.partition === "private" ? { ...authored, visibility: "private" } : authored;
+  if (target.split("/").includes("..") || !target.startsWith("Brain/rollups/")) {
+    throw new Error("rollup-summary: the target path is not under Brain/rollups/");
+  }
+  const vault = laneVaultRoot(context.vault);
+  const abs = join(vault, target);
+  const inStore = lanePagesInStore(vault, context.configPath);
+  if (inStore) {
+    const existing = readLanePage(vault, abs, context.configPath);
+    if (existing?.frontmatter["written_by_item"] === item.id) return [target];
+  } else if (context.vault === null) {
+    throw new Error("rollup-summary: no vault to write the note in");
+  }
+  if (existsSync(abs)) {
+    if (!inStore) {
+      const [existing] = parseFrontmatterText(readFileSync(abs, "utf8"));
+      if (existing["written_by_item"] === item.id) return [target];
+    }
+  }
+  if (inStore) {
+    writeLanePage(vault, abs, fields, body, {
+      overwrite: true,
+      ...(context.configPath !== undefined ? { configPath: context.configPath } : {}),
+    });
+  } else {
+    assertNoteVaultForWrite(context.vault, "rollup notes");
+    mkdirSync(dirname(abs), { recursive: true });
+    atomicWriteFileSync(abs, formatFrontmatter(fields, body));
+  }
+  return [target];
 }
 
 /** The fact ids the store holds now, and which of them are private. */
@@ -104,14 +177,10 @@ function currentInput(item: DreamWorkItem, context: DreamWorkContext) {
 registerDreamWorkOperation({
   name: ROLLUP_SUMMARY_OPERATION,
   closedPredecessor: "release",
+  text: true,
   validate,
   currentInput,
-  apply: () => {
-    throw new Error(
-      "rollup-summary: no executor in this version applies a rollup answer; " +
-        "the item stays accepted until one exists",
-    );
-  },
+  apply,
 });
 
 export interface RollupWorkInput {

@@ -18,8 +18,10 @@
  *    held (`touched`) and no routing question waits for are grouped by
  *    shared subject words; a group of at least `minRecords` records from
  *    at least `minSessions` sessions is asked about (`asks.groups`) and
- *    becomes a topic only with an approval, titled by its most frequent
- *    words, its goal drafted from its first record. Records with no
+ *    becomes a topic only with an approval and a wording (the title and
+ *    goal the launched agent wrote, `asks.wordings` while it waits; the
+ *    title drafted from its most frequent words is only part of the
+ *    approval question). Records with no
  *    project never make a topic on their own; a personal topic is made on
  *    request.
  *  - **Propose.** Two active topics of one scope whose heads share half
@@ -46,8 +48,6 @@ const MIN_ROUTE_SHARE = 0.2;
 const MERGE_JACCARD = 0.5;
 /** Words in a drafted title. */
 const TITLE_WORDS = 3;
-/** Longest drafted goal, in characters. */
-const GOAL_MAX = 200;
 
 export interface PlanSettings {
   readonly minRecords: number;
@@ -73,6 +73,8 @@ export interface PlannedCreate {
   readonly sessions: number;
   /** Set when the model was asked about this group and let it through (`topic_new`): the create record carries it. */
   readonly verdict?: TopicVerdictBody;
+  /** Who wrote the title and goal (the launched agent's wording answer). */
+  readonly author?: { readonly agent: string; readonly model: string; readonly item: string };
 }
 
 export interface MergeProposal {
@@ -138,13 +140,17 @@ export interface PlanAsks {
     readonly topics: ReadonlyArray<string>;
   }>;
   /** Qualifying groups that wait for an approval or a veto. */
-  readonly groups: ReadonlyArray<{
-    readonly key: string;
-    readonly members: ReadonlyArray<string>;
-    readonly title: string;
-    readonly scope: string;
-    readonly private: boolean;
-  }>;
+  readonly groups: ReadonlyArray<PlanAskedGroup>;
+  /** Approved groups that wait for the wording of their topic (`topic-wording`). */
+  readonly wordings: ReadonlyArray<PlanAskedGroup>;
+}
+
+export interface PlanAskedGroup {
+  readonly key: string;
+  readonly members: ReadonlyArray<string>;
+  readonly title: string;
+  readonly scope: string;
+  readonly private: boolean;
 }
 
 export interface TopicPlan extends TopicReview {
@@ -370,11 +376,6 @@ function clampUnits(text: string, max: number): string {
   return text.slice(0, end);
 }
 
-function draftGoal(group: Group): string {
-  const text = group.members[0]!.text.replaceAll(/\s+/g, " ").trim();
-  return [...text].length <= GOAL_MAX ? text : `${[...text].slice(0, GOAL_MAX - 3).join("")}...`;
-}
-
 const byRecordOrder = (a: TopicCandidate, b: TopicCandidate): number =>
   a.at - b.at || compareCodeUnits(a.id, b.id);
 
@@ -531,13 +532,8 @@ export function planTopics(
     .map((topic) => ({ topic }));
   const routes: PlannedRoute[] = [];
   const askedRoutes: Array<{ record: string; topics: string[] }> = [];
-  const askedGroups: Array<{
-    key: string;
-    members: string[];
-    title: string;
-    scope: string;
-    private: boolean;
-  }> = [];
+  const askedGroups: PlanAskedGroup[] = [];
+  const awaitingWording: PlanAskedGroup[] = [];
   const free: TopicCandidate[] = [];
   const heldBack = new Map<string, number>();
   for (const candidate of ordered) {
@@ -627,15 +623,31 @@ export function planTopics(
         });
         continue;
       }
+      // The title and goal are the launched agent's (change
+      // `dream-launched-agent`, design D6): an approved group with no
+      // wording yet waits; no rule names it.
+      const wording = verdicts?.wordings.get(key);
+      if (wording === undefined) {
+        asked += 1;
+        awaitingWording.push({
+          key,
+          members: group.members.map((m) => m.id),
+          title: draftTitle(group),
+          scope: `${TOPIC_PROJECT_SCOPE_PREFIX}${project}`,
+          private: group.members.some((m) => m.private),
+        });
+        continue;
+      }
       createdHere += 1;
       creates.push({
-        title: draftTitle(group),
-        goal: draftGoal(group),
+        title: wording.title,
+        goal: wording.goal,
         scope: `${TOPIC_PROJECT_SCOPE_PREFIX}${project}`,
         private: group.members.some((m) => m.private),
         members: group.members.map((m) => m.id),
         sessions: new Set(group.members.map((m) => m.session)).size,
         verdict: verdictEntry.verdict,
+        author: { agent: wording.agent, model: wording.model, item: wording.item },
       });
     }
     if (createdHere === 0) {
@@ -668,6 +680,6 @@ export function planTopics(
     ),
     merges: applySameVerdicts(fold, [...review.merges], verdicts?.sameTopics),
     quiet: review.quiet,
-    asks: { routes: askedRoutes, groups: askedGroups },
+    asks: { routes: askedRoutes, groups: askedGroups, wordings: awaitingWording },
   };
 }

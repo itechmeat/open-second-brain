@@ -25,6 +25,13 @@ set -uo pipefail
 
 warn() { printf 'o2b-hook: %s\n' "$1" >&2; }
 
+# A dream session (the worker's launched agent) runs no hook at all: the
+# marker is the variable `insideDreamSession` reads
+# (src/core/brain/dream-queue/dream-session.ts). It grants nothing.
+if [[ -n ${OPEN_SECOND_BRAIN_DREAM_RUN:-} ]]; then
+  exit 0
+fi
+
 HOOK_NAME=${1:-}
 if [[ -z $HOOK_NAME ]]; then
   warn "missing hook name; skipping"

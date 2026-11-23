@@ -30,7 +30,7 @@ import { writeVerdictRecords } from "../../../src/core/topics/verdict-writes.ts"
 import { emptyTopicVerdicts, type TopicVerdictBody } from "../../../src/core/topics/verdicts.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 import { closedFixture, T0, type ClosedFixture } from "./fixtures/closed-fixture.ts";
-import { ask, plan } from "./fixtures/closed-run.ts";
+import { ask, plan, planAndWord } from "./fixtures/closed-run.ts";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -223,7 +223,7 @@ describe("the closed questions on the planner's topic rules", () => {
           merges: [],
           quiet: [],
           shortfalls: [],
-          asks: { routes: [], groups: [] },
+          asks: { routes: [], groups: [], wordings: [] },
         },
         candidatesById: new Map(),
         verdicts,
@@ -327,7 +327,10 @@ describe("side texts and private records against a hosted provider", () => {
     const state = fake.requests[0]!.state as { title: string };
     expect(state.title).not.toBe("");
     expect(JSON.stringify(fake.requests).toLowerCase()).not.toContain("zephyrquill");
-    plan(f);
+    planAndWord(f, {
+      title: "Public API deprecation windows",
+      goal: "Plan the deprecation steps.",
+    });
     const stored = readPartition(join(f.m.root("dev-a"), "private"))
       .concat(readPartition(join(f.m.root("dev-a"), "shared")))
       .flatMap((s) => s.records)

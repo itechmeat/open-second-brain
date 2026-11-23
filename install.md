@@ -123,6 +123,23 @@ verification as `ok`, the runtime has been restarted, and
 `o2b install --check` reports the target is healthy. Vault initialization,
 vault-specific doctor checks, and vault event checks do not apply.
 
+## The dream agent (optional)
+
+Dream's text work (rollup summaries, the wording of new topics) and the
+closed questions no decision model answers are done by your own agent in
+a short session that sees only the dream queue. Set the command that
+starts it on each machine that owns dream, then verify it with a real
+short call:
+
+```bash
+o2b dream agent set '["/path/to/agent", "--your-flags", "{prompt}", "--mcp-config", "{mcp_config}"]'
+o2b dream agent check
+```
+
+The command is a JSON array (nothing is split or quoted). Only a
+verified command is used. See [docs/dream.md](docs/dream.md) for the
+placeholders, what a session may and may not do, and drafts.
+
 ## Uninstall
 
 For MCP-aware runtimes:

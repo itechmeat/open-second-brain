@@ -1329,6 +1329,32 @@ one-line description, group), then with `names: [...]` for the full
 input/output schemas of exactly the tools you need - unknown names are
 reported per-name without failing the batch.
 
+### The dream executor profile
+
+`o2b mcp --tool-profile dream-executor` is the server of a dream session:
+the short session the dream worker starts with the user's own agent to
+answer work of the dream queue (see [dream.md](dream.md)). It is exact:
+
+1. `tools/list` holds three tools and nothing else, not even
+   `second_brain_capabilities`: `dream_work_take {}` (one ready item with
+   its question, payload, bounded evidence and answer shape, or
+   `{ item: null, reason }`), `dream_work_answer { id, generation, value |
+   text, model, confidence? }` (the queue's answer rules; the agent
+   recorded is the worker's name for the command it started, the model is
+   what the session states) and `dream_work_finish {}` (releases every
+   lease the session still holds).
+2. `resources/list`, `resources/templates/list` and `prompts/list` answer
+   empty lists, `resources/read` is refused, and `initialize` advertises
+   tools only, with the session's fixed task as its instructions.
+3. It starts only for a live run: the worker writes a device-local run
+   record and hands the session's server the run id
+   (`OPEN_SECOND_BRAIN_DREAM_RUN`) and a token
+   (`OPEN_SECOND_BRAIN_DREAM_TOKEN`). Without a matching, unexpired run of
+   the current dream owner the server exits `2`, and every call is checked
+   again: a refused call writes nothing.
+4. It is not a value of `mcp_tool_profile` and not an install profile:
+   that key names it as an unknown profile and `o2b mcp` refuses to start.
+
 ## Skill surface (since v0.37.0)
 
 `list_skills` returns the agent skills shipped in the plugin's

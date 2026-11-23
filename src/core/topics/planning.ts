@@ -38,6 +38,7 @@
  * nothing twice.
  */
 
+import { TOPIC_WORDING_OPERATION, wordingInputHash } from "./wording-operation.ts";
 import { join } from "node:path";
 
 import { readDeviceId, resolveAgentName } from "../config.ts";
@@ -103,6 +104,7 @@ import {
   isClosedOperation,
   NO_STANDING,
   STANDING_MARK,
+  wordingGroups,
   THRESHOLD_NAME,
   standingAsVerdicts,
   standingVerdicts,
@@ -553,8 +555,17 @@ function planUnderLock(
         generation: d.generation,
         lease_token: d.lease_token,
         receipt: d.receipt,
-        effects: d.mark !== undefined ? [d.mark] : (written.get(d.key) ?? []),
+        effects:
+          d.mark === STANDING_MARK.approved
+            ? (written.get(d.key) ?? [d.mark])
+            : d.mark !== undefined
+              ? [d.mark]
+              : (written.get(d.key) ?? []),
       })),
+      // A wording is applied with the create of its topic, never before.
+      ...answers.wordings
+        .filter((w) => written.has(w.key))
+        .map((w) => ({ ...w, effects: written.get(w.key)! })),
       ...answers.abstained.map((entry) => ({ ...entry, effects: [ABSTAINED] })),
     ];
     try {
@@ -604,7 +615,10 @@ function planUnderLock(
     invalid,
     invalidCreates,
     ...verdictCounts,
-    applied: (answers?.decided.length ?? 0) + (answers?.abstained.length ?? 0),
+    applied:
+      (answers?.decided.length ?? 0) +
+      (answers?.abstained.length ?? 0) +
+      (answers?.wordings.filter((wording) => written.has(wording.key)).length ?? 0),
     abstained: answers?.abstained.length ?? 0,
     stale: answers?.stale.length ?? 0,
     judgment: queue === null ? "unbound" : "here",
@@ -617,6 +631,7 @@ function planUnderLock(
         title: plannedTopic.title,
         scope: plannedTopic.scope,
         goal: plannedTopic.goal,
+        ...(plannedTopic.author !== undefined ? { written_by: { ...plannedTopic.author } } : {}),
       };
       // Checked as the fold checks it: a create the fold would reject (a
       // scope too long for a record) is never written, nor are its assigns,
@@ -711,6 +726,14 @@ interface AcceptedAnswers {
     readonly lease_token: string;
     readonly receipt: string;
   }>;
+  /** Wording items: marked applied only with the create their topic got. */
+  readonly wordings: ReadonlyArray<{
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly receipt: string;
+    readonly key: string;
+  }>;
   readonly stale: ReadonlyArray<string>;
 }
 
@@ -743,10 +766,42 @@ function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): Ac
     lease_token: string;
     receipt: string;
   }> = [];
+  const wordings: Array<{
+    item: string;
+    generation: number;
+    lease_token: string;
+    receipt: string;
+    key: string;
+  }> = [];
   const stale: string[] = [];
   for (const id of work.order) {
     const item = work.items.get(id)!;
     const op = item.body.operation;
+    if (op === TOPIC_WORDING_OPERATION && item.state === "accepted" && item.answer !== null) {
+      // The launched agent's wording (change `dream-launched-agent`, design
+      // D6): applied when planning creates the group's topic, and only then.
+      const entry = wordingGroups(question).find((g) => g.group.key === item.body.subject);
+      if (entry === undefined || wordingInputHash(entry.members) !== item.body.input_hash) {
+        stale.push(id);
+        continue;
+      }
+      const value = item.answer.value as Record<string, unknown>;
+      const accepted = {
+        item: id,
+        generation: item.answer.generation,
+        lease_token: item.answer.lease_token,
+        receipt: item.answer.receipt,
+      };
+      v.wordings.set(item.body.subject, {
+        title: String(value["title"]).trim(),
+        goal: String(value["goal"]).trim(),
+        agent: item.answer.agent,
+        model: item.answer.model,
+        item: id,
+      });
+      wordings.push({ ...accepted, key: `topic-new:${item.body.subject}` });
+      continue;
+    }
     if (item.state !== "accepted" || item.answer === null || !isClosedOperation(op)) continue;
     const current = closedQuestion(question, op, item.body.subject);
     if (current === null || closedInputHash(current) !== item.body.input_hash) {
@@ -789,7 +844,13 @@ function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): Ac
         if (p === null) break;
         const veto = p < threshold;
         v.vetoes.set(subject, { verdict: verdictOfAnswer(use, author, p), veto });
-        decided.push({ ...accepted, key, ...(veto ? { mark: STANDING_MARK.veto } : {}) });
+        // An approval whose topic is not created this pass (its wording
+        // waits) stands as `approved`.
+        decided.push({
+          ...accepted,
+          key,
+          mark: veto ? STANDING_MARK.veto : STANDING_MARK.approved,
+        });
         continue;
       }
       case "topic-same": {
@@ -849,7 +910,7 @@ function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): Ac
     }
     abstained.push(accepted);
   }
-  return { verdicts: v as unknown as TopicVerdicts, decided, abstained, stale };
+  return { verdicts: v as unknown as TopicVerdicts, decided, wordings, abstained, stale };
 }
 
 /** The standing verdicts with the accepted ones over them. */
@@ -864,6 +925,7 @@ function mergeVerdicts(
     routes: new Map([...standing.routes, ...accepted.routes]),
     kinds: accepted.kinds,
     vetoes: new Map([...standing.vetoes, ...accepted.vetoes]),
+    wordings: accepted.wordings,
     sameTopics: [
       ...standing.sameTopics.filter((e) => !answered.has(pairKey(e))),
       ...accepted.sameTopics,

@@ -144,6 +144,10 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/recompile.ts": LABEL,
   "src/core/brain/report-snapshot.ts": LANE,
   "src/core/brain/rollup-ladder.ts": LABEL,
+  "src/core/brain/dream-queue/rollup-work.ts":
+    "the rollup summary's apply writes the note the dream agent wrote at the rollup ladder's " +
+    "Brain/rollups/ target through the lane page store on a store-served brain, and as a file " +
+    "only on a legacy-tree brain",
   "src/core/brain/schema-mutate.ts": LABEL,
   "src/core/brain/schema-report.ts": LABEL,
   "src/core/brain/session-lifecycle.ts": LABEL,

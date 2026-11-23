@@ -997,6 +997,38 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "compressor reads that file and `snapshot.ts` publishes the archive. No vault page " +
       "is written and no Markdown parser reads the stream.",
   },
+  "src/core/brain/dream-queue/run-record.ts": {
+    categories: [C.machineArtifact, C.appendOnlyLedger, C.metadataOnly, C.retentionDelete],
+    calls: ["appendFileSync", "chmodSync", "rmSync", "writeFileSync"],
+    reason:
+      "writes a dream run's record (mode 0600) and appends its call log in the store's " +
+      "device-local state directory, and removes both when the run ends or expired; never " +
+      "synced, never in a vault, and no Markdown parser reads them.",
+  },
+  "src/core/brain/dream-queue/agent-executor.ts": {
+    categories: [C.machineArtifact, C.lifecycleMove, C.retentionDelete],
+    calls: ["renameSync", "rmSync", "writeFileSync"],
+    reason:
+      "writes the one-server MCP config file of a dream session in the store's device-local " +
+      "state directory, removes it when the session ends and renames the session's output log " +
+      "to the last-session log there; never synced, never in a vault.",
+  },
+  "src/core/brain/dream-queue/agent-verified.ts": {
+    categories: [C.machineArtifact],
+    calls: ["writeFileSync"],
+    reason:
+      "records the dream agent commands this machine verified and its last run as JSON under " +
+      "the machine's state directory; never synced, never in a vault, and no Markdown parser " +
+      "reads it.",
+  },
+  "src/core/brain/dream-queue/agent-check.ts": {
+    categories: [C.machineArtifact, C.retentionDelete],
+    calls: ["rmSync", "writeFileSync"],
+    reason:
+      "writes the config file of a throwaway store one dream agent check creates under the " +
+      "machine's state directory and removes that store and its device state by their exact " +
+      "paths when the check ends; nothing the user wrote is in them.",
+  },
   "src/core/brain/dream-owner/owner.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
@@ -1445,8 +1477,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 85 -> 84: `src/core/search/store/lifecycle.ts` moves the index's database set through `src/core/sqlite-file-set.ts` (fs-atomic retries) instead of calling `fs` itself.
  * 84 -> 85: `src/core/search/store/lifecycle.ts` removes the park record a swap writes beside the search index once a live index is back in place.
  * 85 -> 86: `src/core/brain/dream-owner/owner.ts` notes the dream owner claim this device has caught up on, in device-local state.
+ * 86 -> 90: the dream agent's run record, session files, verifications and check store (change dream-launched-agent), all device-local.
  */
-const DIRECT_WRITE_ROWS = 86;
+const DIRECT_WRITE_ROWS = 90;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1713,8 +1746,13 @@ const DIRECT_WRITE_ROWS = 86;
  * swap leaves beside the search index with the shared atomic writer.
  * 118 -> 119: the dream digest delivery ledger writes device-local state.
  * 119 -> 120: the discipline verdict cache writes device-local state.
+ * 120 -> 121: `src/core/brain/dream-queue/rollup-work.ts` writes the rollup
+ * summary note the dream agent wrote with the shared atomic writer.
+ * 121 -> 122: `src/core/brain/dream-queue/run-record.ts` rewrites a dream
+ * run's record (its lease tokens) with the shared atomic writer, in the
+ * store's device-local state directory.
  */
-const SHARED_HELPER_ROWS = 120;
+const SHARED_HELPER_ROWS = 122;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1846,8 +1884,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 84 -> 83: the search index's crash restore moves its database set through `sqlite-file-set.ts` (fs-atomic retries, no direct `fs` call).
  * 83 -> 84: the removal of the park record a swap writes beside the search index (machine state, no note).
  * 84 -> 85: the dream owner's claim-seen file (device-local machine state, no note).
+ * 85 -> 89: the dream agent's device-local run, session, verification and check files (no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 85;
+const UNSTAMPED_DIRECT_ROWS = 89;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1999,8 +2038,13 @@ const UNSTAMPED_DIRECT_ROWS = 85;
  * through the shared atomic writer, machine state and no note.
  * 114 -> 115: the dream digest delivery ledger is device-local state.
  * 115 -> 116: the discipline verdict cache is device-local state.
+ * 116 -> 117: the rollup summary note the dream agent wrote, under
+ * `Brain/rollups/`, through the shared atomic writer (change
+ * dream-launched-agent); its author is in its frontmatter.
+ * 117 -> 118: a dream run's record, rewritten through the shared atomic
+ * writer in device-local state, machine state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 116;
+const UNSTAMPED_SHARED_ROWS = 118;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

@@ -15,7 +15,7 @@ import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { TOPIC_CREATE_KIND } from "../../../src/core/topics/constants.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 import { closedFixture, type ClosedFixture } from "./fixtures/closed-fixture.ts";
-import { ask, plan } from "./fixtures/closed-run.ts";
+import { ask, plan, planAndWord } from "./fixtures/closed-run.ts";
 
 let f: ClosedFixture;
 
@@ -89,7 +89,7 @@ describe("topic_new on the queue", () => {
     cluster();
     f.tune("topic_new", { veto_below: 0.3 });
     await ask(f, "topic_new:enforce", fresh(0.9, { model: "approve-model-4" }));
-    const report = plan(f);
+    const report = planAndWord(f);
     expect(report.status).toBe("planned");
     expect(creates()).toHaveLength(1);
     expect(creates()[0]!["verdict"]).toEqual({
@@ -148,7 +148,7 @@ describe("veto_below from the thresholds store", () => {
     cluster();
     f.tune("topic_new", { veto_below: 0.05 });
     await ask(f, "topic_new:enforce", fresh(0.1));
-    plan(f);
+    planAndWord(f);
     // The built-in 0.3 would veto at 0.1; the stored 0.05 decides.
     expect(creates()).toHaveLength(1);
   });

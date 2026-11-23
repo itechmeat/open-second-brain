@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readdirSync,
   renameSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -19,7 +20,13 @@ import { basename, dirname, join } from "node:path";
 
 import { isFileAlreadyExists } from "../../../src/core/fs-atomic.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
+import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { openStore } from "../../../src/core/store/store-open.ts";
+import { initStore } from "../../../src/core/store/store-init.ts";
+import { DEVICE_SWITCHED_KIND } from "../../../src/core/store/store-only.ts";
+import { storePreferenceIdIsPrivate } from "../../../src/core/store/store-privacy.ts";
+import { ROLLUP_SUMMARY_OPERATION } from "../../../src/core/brain/dream-queue/rollup-work.ts";
+import { dreamWorkOperation } from "../../../src/core/brain/dream-queue/operations.ts";
 import { evaluateStaleness, MATERIALIZE_FRESHNESS } from "../../../src/core/brain/staleness.ts";
 import {
   laneEntryClockMs,
@@ -36,6 +43,7 @@ import {
   writeLanePage,
   writeLaneText,
 } from "../../../src/core/store/lane-pages.ts";
+import { replacedShared } from "../../../src/core/store/lane-entry-store.ts";
 import { foldLaneEntries } from "../../../src/core/store/lane-records.ts";
 import { formatFrontmatter } from "../../../src/core/vault.ts";
 import { VaultAdapterRequiredError } from "../../../src/core/vault-adapter/index.ts";
@@ -53,6 +61,115 @@ afterEach(() => {
 });
 
 describe.each(LANE_MODES)("lane pages (%s)", (mode) => {
+  test.skipIf(mode !== "store")(
+    "a config-selected store decides rollup privacy and shared tombstones",
+    () => {
+      lane = makeLaneEnv("store");
+      const { vault, env } = lane;
+      const page = join(vault, "Brain", "rollups", "rollup-month-selected.md");
+      const store = openStore({ root: env.storeRoot, device: "dev-a" });
+      appendRecord(store, {
+        partition: "shared",
+        stream: "events",
+        kind: "preference-set",
+        agent: "test",
+        body: {
+          authority: "agent",
+          preference: "pref-selected",
+          fields: { principle: "selected", status: "confirmed" },
+        },
+      });
+      writeLanePage(vault, page, { kind: "rollup" }, "Old summary.\n");
+
+      const selectedRoot = join(env.parent, "selected-store");
+      const selectedConfig = join(env.parent, "selected-config.yaml");
+      writeFileSync(
+        env.configPath,
+        `vault: ${JSON.stringify(vault)}\nstore_root: ${JSON.stringify(env.storeRoot)}\n`,
+      );
+      writeFileSync(
+        selectedConfig,
+        `vault: ${JSON.stringify(vault)}\nstore_root: ${JSON.stringify(selectedRoot)}\n`,
+      );
+      delete process.env[STORE_ROOT_ENV];
+      initStore({ root: selectedRoot, partitions: ["shared", "private"] });
+      const selected = openStore({ root: selectedRoot, device: "dev-a" });
+      appendRecord(selected, {
+        partition: "shared",
+        stream: "settings",
+        kind: DEVICE_SWITCHED_KIND,
+        agent: "test",
+        body: { authority: "human", device: "dev-a" },
+      });
+      appendRecord(selected, {
+        partition: "private",
+        stream: "events",
+        kind: "preference-set",
+        agent: "test",
+        body: {
+          authority: "agent",
+          preference: "pref-selected",
+          fields: { principle: "selected", status: "confirmed" },
+        },
+      });
+      expect(storePreferenceIdIsPrivate("pref-selected")).toBe(false);
+      expect(storePreferenceIdIsPrivate("pref-selected", selectedConfig)).toBe(true);
+      writeLanePage(vault, page, { kind: "rollup" }, "Selected old summary.\n", {
+        configPath: selectedConfig,
+      });
+
+      expect(replacedShared(vault, page, selectedConfig)[0]?.located?.partition).toBe("shared");
+      writeLanePage(vault, page, { kind: "rollup" }, "See [[pref-selected]].\n", {
+        overwrite: true,
+        configPath: selectedConfig,
+      });
+
+      expect(laneEntryInPrivate(vault, page, selectedConfig)).toBe(true);
+      expect(readLanePage(vault, page, selectedConfig)?.body).toContain("See [[pref-selected]]");
+    },
+  );
+
+  test("rollup answers on store-served brains stay in lane records", () => {
+    lane = makeLaneEnv(mode);
+    const before = lane.vaultHash();
+    const target = "Brain/rollups/rollup-month-test.md";
+    const item = {
+      id: "work-test",
+      partition: "private",
+      body: { payload: { target_path: target } },
+    } as never;
+    const apply = dreamWorkOperation(ROLLUP_SUMMARY_OPERATION)!.apply!;
+    const written = apply(
+      item,
+      {
+        record: "rec",
+        generation: 1,
+        lease_token: "x",
+        receipt: "r",
+        text: "---\nkind: rollup\n---\nPrivate summary.\n",
+        agent: "agent",
+        model: "model",
+      },
+      {
+        store: openStore({ root: lane.env.storeRoot, device: "dev-a" }),
+        vault: mode === "no-vault" ? null : lane.vault,
+        now: Date.now(),
+      },
+    );
+    expect(written).toEqual([target]);
+    if (mode === "legacy") {
+      const note = readFileSync(join(lane.env.vault, target), "utf8");
+      expect(note).toContain("visibility: private");
+      expect(lane.laneRecords()).toHaveLength(0);
+      return;
+    }
+    expect(readLanePage(lane.vault, join(lane.vault, target))?.body).toContain("Private summary.");
+    expect(lane.laneRecords("private")).toHaveLength(1);
+    expect(lane.laneRecords("shared")).toHaveLength(0);
+    expect(existsSync(join(lane.env.vault, target))).toBe(false);
+    expect(lane.vaultHash()).toBe(before);
+  });
+
   test("write, read, list, move and remove a page", () => {
     lane = makeLaneEnv(mode);
     const { vault } = lane;

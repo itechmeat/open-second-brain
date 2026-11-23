@@ -29,6 +29,8 @@ const DEPENDENCY_TREE = "src/core/maintenance/dependency-tree.ts";
 
 /** Every self-spawn site, with what it starts. */
 const SITES: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/dream-queue/agent-executor.ts":
+    "the dream agent session's MCP server (`o2b mcp --tool-profile dream-executor`), started by the agent",
   "src/core/maintenance/ensure-current.ts":
     "the automatic store migration worker, the self-heal upgrade and the self-heal reindex",
   "src/core/search/freshen.ts": "freshen on read (a background incremental index run)",

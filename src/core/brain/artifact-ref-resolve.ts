@@ -37,14 +37,21 @@ export interface ArtifactRefScope {
 }
 
 /** A scope for `vault` that works each answer out once, on first use. */
-export function artifactRefScope(vault: string, fromStore?: boolean): ArtifactRefScope {
+export function artifactRefScope(
+  vault: string,
+  fromStore?: boolean,
+  configPath?: string,
+): ArtifactRefScope {
   let store = fromStore;
   let dirs: BrainDirs | undefined;
   let entities: { readonly value: StoreEntities | null } | undefined;
   return {
-    fromStore: () => (store ??= memoryFromStore(vault)),
+    fromStore: () => (store ??= memoryFromStore(vault, configPath)),
     dirs: () => (dirs ??= brainDirs(vault)),
-    entities: () => (entities ??= { value: memoryEntities({ vault }) }).value,
+    entities: () =>
+      (entities ??= {
+        value: memoryEntities({ vault, ...(configPath !== undefined ? { configPath } : {}) }),
+      }).value,
   };
 }
 

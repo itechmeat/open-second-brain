@@ -214,12 +214,38 @@ describe("planTopics with verdicts", () => {
     });
     expect(changed.creates).toEqual([]);
     expect(changed.asks.groups.map((g) => g.key)).toEqual([topicGroupKey(members)]);
-    // Approval: the create carries the model verdict.
-    const approved = planWith({
+    // Approval with no wording: the group waits for the launched agent's
+    // title and goal (change `dream-launched-agent`).
+    const approvedOnly = planWith({
       ...emptyTopicVerdicts(),
       vetoes: new Map([[topicGroupKey(members), { verdict: verdictOf("topic_new"), veto: false }]]),
     });
+    expect(approvedOnly.creates).toEqual([]);
+    expect(approvedOnly.asks.wordings.map((g) => g.key)).toEqual([topicGroupKey(members)]);
+    // Approval and wording: the create carries the model verdict, the
+    // agent's title and goal and their author.
+    const approved = planWith({
+      ...emptyTopicVerdicts(),
+      vetoes: new Map([[topicGroupKey(members), { verdict: verdictOf("topic_new"), veto: false }]]),
+      wordings: new Map([
+        [
+          topicGroupKey(members),
+          {
+            title: "Alley garden",
+            goal: "Keep the beds watered.",
+            agent: "claude",
+            model: "m-1",
+            item: "i1",
+          },
+        ],
+      ]),
+    });
     expect(approved.creates).toHaveLength(1);
+    expect(approved.creates[0]!).toMatchObject({
+      title: "Alley garden",
+      goal: "Keep the beds watered.",
+      author: { agent: "claude", model: "m-1", item: "i1" },
+    });
     expect(approved.creates[0]!.verdict?.use).toBe("topic_new");
     expect(approved.creates[0]!.verdict?.model).toBe("test-model-1");
   });

@@ -17,7 +17,9 @@ import {
   produceWorkBatch,
   readDreamWork,
   type DreamQueue,
+  type ProduceSpec,
 } from "../brain/dream-queue/queue.ts";
+import { wordingProduceSpec } from "./wording-operation.ts";
 import {
   CLOSED_OPERATIONS,
   closedProduceSpec,
@@ -25,6 +27,7 @@ import {
   type ClosedOperation,
   type ClosedQuestion,
   type TopicQuestionState,
+  wordingGroups,
 } from "./decide-operations.ts";
 
 /** Items written per batch: the deadline is checked between batches. */
@@ -56,6 +59,10 @@ export function produceTopicQuestions(
   state: TopicQuestionState,
   options: { readonly until: number; readonly clock: () => number },
 ): ProduceTopicQuestionsResult {
+  // Each qualifying group's wording item rides beside its `topic-new` item
+  // (change `dream-launched-agent`, design D6): same occurrence, so both
+  // land in one batch.
+  const wordings = new Map(wordingGroups(state).map((g) => [g.group.key, wordingProduceSpec(g)]));
   const questions = closedQuestions(state).toSorted(byOccurrence);
   const snapshot = readDreamWork(queue.store);
   if (snapshot.unreadable.length > 0) {
@@ -65,6 +72,13 @@ export function produceTopicQuestions(
   const pending = questions.filter(
     (question) => !queued.has(dreamWorkItemBody(closedProduceSpec(question)).id),
   );
+  const specsOf = (q: ClosedQuestion): ProduceSpec[] => {
+    const spec = closedProduceSpec(q);
+    if (q.operation !== "topic-new") return [spec];
+    const wording = wordings.get(q.subject);
+    wordings.delete(q.subject);
+    return wording === undefined ? [spec] : [spec, wording];
+  };
   const asked = Object.fromEntries(CLOSED_OPERATIONS.map((op) => [op, 0])) as Record<
     ClosedOperation,
     number
@@ -75,14 +89,37 @@ export function produceTopicQuestions(
   while (done < pending.length) {
     if (options.clock() >= options.until) break;
     const chunk = pending.slice(done, done + PRODUCE_CHUNK);
-    const result = produceWorkBatch(queue, chunk.map(closedProduceSpec));
+    const specs: Array<{ spec: ProduceSpec; operation: ClosedOperation | null }> = chunk.flatMap(
+      (q) =>
+        specsOf(q).map((spec) => ({
+          spec,
+          operation: spec.operation === q.operation ? q.operation : null,
+        })),
+    );
+    // Approved groups whose wording waits (no `topic-new` question any more).
+    if (done + chunk.length >= pending.length) {
+      for (const spec of wordings.values()) specs.push({ spec, operation: null });
+      wordings.clear();
+    }
+    const result = produceWorkBatch(
+      queue,
+      specs.map((s) => s.spec),
+    );
     result.items.forEach((item, i) => {
+      const operation = specs[i]!.operation;
       if (item.created) {
         produced += 1;
-        asked[chunk[i]!.operation] += 1;
+        if (operation !== null) asked[operation] += 1;
       } else existing += 1;
     });
     done += chunk.length;
+  }
+  if (pending.length === 0 && wordings.size > 0 && options.clock() < options.until) {
+    const result = produceWorkBatch(queue, [...wordings.values()]);
+    for (const item of result.items) {
+      if (item.created) produced += 1;
+      else existing += 1;
+    }
   }
   return { produced, existing, left: pending.length - done, asked };
 }

@@ -83,10 +83,11 @@ function namesAPage(ref: string): boolean {
 function preferenceIdIsPrivate(
   vault: string | null,
   id: string,
-  fromStore: boolean = vault === null || judgesFromStore(vault),
+  fromStore: boolean,
   scope?: ArtifactRefScope,
+  configPath?: string,
 ): boolean {
-  if (fromStore || vault === null) return storePreferenceIdIsPrivate(id);
+  if (fromStore || vault === null) return storePreferenceIdIsPrivate(id, configPath);
   let paths: string[];
   try {
     const slug = stripBrainIdPrefix(id);
@@ -137,29 +138,49 @@ export function logRefsNamePrivatePage(
   vault: string | null,
   refs: ReadonlyArray<string | undefined>,
   guessed?: string,
+  configPath?: string,
 ): boolean {
   if (judgingOff) return false;
   if (batch === null) {
-    return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+    return refsNamePrivatePage(
+      vault,
+      refs,
+      guessed,
+      vault === null || judgesFromStore(vault, configPath),
+      undefined,
+      configPath,
+    );
   }
-  const fromStore = batchFromStore(batch, vault);
-  return refsNamePrivatePage(vault, refs, guessed, fromStore, batchScope(batch, vault, fromStore));
+  const fromStore = batchFromStore(batch, vault, configPath);
+  return refsNamePrivatePage(
+    vault,
+    refs,
+    guessed,
+    fromStore,
+    batchScope(batch, vault, fromStore, configPath),
+    configPath,
+  );
 }
 
 /** What one batch of many rows ({@link withPrivacyBatch}) works out once per vault. */
 interface PrivacyBatch {
-  readonly fromStore: Map<string | null, boolean>;
+  readonly fromStore: Map<string, boolean>;
   readonly scopes: Map<string, ArtifactRefScope>;
-  readonly judges: Map<string | null, RowPrivacyJudge>;
+  readonly judges: Map<string, RowPrivacyJudge>;
 }
 
 let batch: PrivacyBatch | null = null;
 
-function batchFromStore(b: PrivacyBatch, vault: string | null): boolean {
-  let fromStore = b.fromStore.get(vault);
+function privacyContextKey(vault: string | null, configPath?: string): string {
+  return JSON.stringify([vault, configPath]);
+}
+
+function batchFromStore(b: PrivacyBatch, vault: string | null, configPath?: string): boolean {
+  const key = privacyContextKey(vault, configPath);
+  let fromStore = b.fromStore.get(key);
   if (fromStore === undefined) {
-    fromStore = vault === null || judgesFromStore(vault);
-    b.fromStore.set(vault, fromStore);
+    fromStore = vault === null || judgesFromStore(vault, configPath);
+    b.fromStore.set(key, fromStore);
   }
   return fromStore;
 }
@@ -168,12 +189,14 @@ function batchScope(
   b: PrivacyBatch,
   vault: string | null,
   fromStore: boolean,
+  configPath?: string,
 ): ArtifactRefScope | undefined {
   if (vault === null) return undefined;
-  let scope = b.scopes.get(vault);
+  const key = privacyContextKey(vault, configPath);
+  let scope = b.scopes.get(key);
   if (scope === undefined) {
-    scope = artifactRefScope(vault, fromStore);
-    b.scopes.set(vault, scope);
+    scope = artifactRefScope(vault, fromStore, configPath);
+    b.scopes.set(key, scope);
   }
   return scope;
 }
@@ -248,6 +271,7 @@ function refsNamePrivatePage(
   guessed: string | undefined,
   fromStore: boolean,
   scope?: ArtifactRefScope,
+  configPath?: string,
 ): boolean {
   // Only the guess itself is spared the missing-page rule: the same id
   // written into the event's body is a reference it carries, judged like
@@ -260,18 +284,22 @@ function refsNamePrivatePage(
     // On a store-only machine a path to a preference page is the
     // preference too: the fold judges it, never the legacy page.
     const id = extractId(ref) ?? (fromStore ? preferenceIdOfPath(ref) : undefined);
-    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore, scope)) {
+    if (
+      id !== undefined &&
+      !isGuess &&
+      preferenceIdIsPrivate(vault, id, fromStore, scope, configPath)
+    ) {
       return true;
     }
     if (fromStore) {
       // The folds, not the legacy pages, say what a preference or a signal is.
       const signal = signalIdOf(ref);
       if (signal !== undefined) {
-        if (storeSignalIdIsPrivate(signal)) return true;
+        if (storeSignalIdIsPrivate(signal, configPath)) return true;
         continue;
       }
       if (id !== undefined) {
-        if (isGuess && storePreferenceIdIsKnownPrivate(id)) return true;
+        if (isGuess && storePreferenceIdIsKnownPrivate(id, configPath)) return true;
         continue;
       }
     }
@@ -279,7 +307,11 @@ function refsNamePrivatePage(
       if (namesAPage(ref)) return true;
       continue;
     }
-    const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore));
+    const rel = resolveArtifactRef(
+      vault,
+      ref,
+      scope ?? artifactRefScope(vault, fromStore, configPath),
+    );
     if (rel === null) continue;
     // A path outside the vault names no page anyone may be shown. `resolve`,
     // not `join`: a relative path stays under the vault either way, and an
@@ -296,7 +328,11 @@ function refsNamePrivatePage(
  * (`brain/truth/store.ts`): the wikilink body or the string as given,
  * tried as is and then with `.md`, inside the vault only.
  */
-export function claimSourceIsPrivate(vault: string | null, source: string): boolean {
+export function claimSourceIsPrivate(
+  vault: string | null,
+  source: string,
+  configPath?: string,
+): boolean {
   if (judgingOff) return false;
   const trimmed = source.trim();
   const anchored = ANCHORED_WIKILINK_RE.exec(trimmed);
@@ -304,12 +340,14 @@ export function claimSourceIsPrivate(vault: string | null, source: string): bool
   if (target === "") return false;
   const pageRef = anchored !== null || target.endsWith(PAGE_EXTENSION);
   const fromStore =
-    batch === null ? vault === null || judgesFromStore(vault) : batchFromStore(batch, vault);
+    batch === null
+      ? vault === null || judgesFromStore(vault, configPath)
+      : batchFromStore(batch, vault, configPath);
   const id = extractId(target) ?? (fromStore ? preferenceIdOfPath(target) : undefined);
-  if (id !== undefined) return preferenceIdIsPrivate(vault, id, fromStore);
+  if (id !== undefined) return preferenceIdIsPrivate(vault, id, fromStore, undefined, configPath);
   if (fromStore) {
     const signal = signalIdOf(target);
-    if (signal !== undefined) return storeSignalIdIsPrivate(signal);
+    if (signal !== undefined) return storeSignalIdIsPrivate(signal, configPath);
   }
   if (vault === null) return pageRef;
   const candidates = target.endsWith(PAGE_EXTENSION) ? [target] : [target, target + PAGE_EXTENSION];
@@ -338,11 +376,17 @@ export function claimSourceIsPrivate(vault: string | null, source: string): bool
  * its wikilinks names a private page (judged as a log event's references
  * are, {@link logRefsNamePrivatePage}).
  */
-export function pinnedTextIsPrivate(vault: string | null, text: string): boolean {
+export function pinnedTextIsPrivate(
+  vault: string | null,
+  text: string,
+  configPath?: string,
+): boolean {
   if (textCarriesPrivateRegion(text)) return true;
   return logRefsNamePrivatePage(
     vault,
     extractWikilinks(text).map((target) => `[[${target}]]`),
+    undefined,
+    configPath,
   );
 }
 
@@ -368,18 +412,26 @@ export function rowNamesPrivatePage(
   vault: string | null,
   row: unknown,
   opaque: ReadonlySet<string> = new Set(),
+  configPath?: string,
 ): boolean {
   if (judgingOff) return false;
-  if (batch === null) return rowPrivacyJudge(vault)(row, opaque);
-  let judge = batch.judges.get(vault);
+  if (batch === null) return rowPrivacyJudge(vault, configPath)(row, opaque);
+  const key = privacyContextKey(vault, configPath);
+  let judge = batch.judges.get(key);
   if (judge === undefined) {
-    const fromStore = batchFromStore(batch, vault);
+    const fromStore = batchFromStore(batch, vault, configPath);
     // A store-only machine judges a reference by the store's folds, which
     // the operation itself may be writing to: each row is judged afresh.
     // A legacy machine judges by the pages on disk, which a migration
     // only reads: each distinct reference is judged once.
-    judge = makeRowJudge(vault, fromStore, batchScope(batch, vault, fromStore), !fromStore);
-    batch.judges.set(vault, judge);
+    judge = makeRowJudge(
+      vault,
+      fromStore,
+      batchScope(batch, vault, fromStore, configPath),
+      !fromStore,
+      configPath,
+    );
+    batch.judges.set(key, judge);
   }
   return judge(row, opaque);
 }
@@ -397,8 +449,8 @@ export type RowPrivacyJudge = (row: unknown, opaque?: ReadonlySet<string>) => bo
  * re-read from disk each time, cost milliseconds per record. A judge lives for one operation only, so
  * the verdicts it remembers are those of the moment the operation ran.
  */
-export function rowPrivacyJudge(vault: string | null): RowPrivacyJudge {
-  return makeRowJudge(vault, undefined, undefined, true);
+export function rowPrivacyJudge(vault: string | null, configPath?: string): RowPrivacyJudge {
+  return makeRowJudge(vault, undefined, undefined, true, configPath);
 }
 
 /**
@@ -410,6 +462,7 @@ function makeRowJudge(
   knownFromStore: boolean | undefined,
   knownScope: ArtifactRefScope | undefined,
   remember: boolean,
+  configPath?: string,
 ): RowPrivacyJudge {
   let fromStore: boolean | undefined = knownFromStore;
   let scope: ArtifactRefScope | undefined = knownScope;
@@ -417,9 +470,9 @@ function makeRowJudge(
   const refIsPrivate = (ref: string): boolean => {
     let verdict = verdicts.get(ref);
     if (verdict === undefined) {
-      fromStore ??= vault === null || judgesFromStore(vault);
-      if (vault !== null) scope ??= artifactRefScope(vault, fromStore);
-      verdict = refsNamePrivatePage(vault, [ref], undefined, fromStore, scope);
+      fromStore ??= vault === null || judgesFromStore(vault, configPath);
+      if (vault !== null) scope ??= artifactRefScope(vault, fromStore, configPath);
+      verdict = refsNamePrivatePage(vault, [ref], undefined, fromStore, scope, configPath);
       if (remember) verdicts.set(ref, verdict);
     }
     return verdict;

@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7007377 bytes
-# Maximum unpacked size: 23795366 bytes
+# Maximum packed size: 7044819 bytes
+# Maximum unpacked size: 23932980 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -285,6 +285,7 @@ src/cli/cron-recipe.ts
 src/cli/decision-model.ts
 src/cli/deps-bootstrap.ts
 src/cli/discipline.ts
+src/cli/dream/agent.ts
 src/cli/dream/owner.ts
 src/cli/dream/queue.ts
 src/cli/help-render.ts
@@ -557,14 +558,21 @@ src/core/brain/dream-plan-cross-topic.ts
 src/core/brain/dream-plan-retires.ts
 src/core/brain/dream-plan-topics.ts
 src/core/brain/dream-plan.ts
+src/core/brain/dream-queue/agent-check.ts
+src/core/brain/dream-queue/agent-config.ts
+src/core/brain/dream-queue/agent-executor.ts
+src/core/brain/dream-queue/agent-presets.ts
+src/core/brain/dream-queue/agent-verified.ts
 src/core/brain/dream-queue/constants.ts
 src/core/brain/dream-queue/decision-executor.ts
+src/core/brain/dream-queue/dream-session.ts
 src/core/brain/dream-queue/fold.ts
 src/core/brain/dream-queue/operations.ts
 src/core/brain/dream-queue/pass.ts
 src/core/brain/dream-queue/queue.ts
 src/core/brain/dream-queue/records.ts
 src/core/brain/dream-queue/rollup-work.ts
+src/core/brain/dream-queue/run-record.ts
 src/core/brain/dream-queue/status-view.ts
 src/core/brain/dream-refresh.ts
 src/core/brain/dream-replay/admission.ts
@@ -993,6 +1001,7 @@ src/core/brain/sessions/checkpoint.ts
 src/core/brain/sessions/claude.ts
 src/core/brain/sessions/codex.ts
 src/core/brain/sessions/discover.ts
+src/core/brain/sessions/dream-transcript.ts
 src/core/brain/sessions/grok.ts
 src/core/brain/sessions/hermes.ts
 src/core/brain/sessions/import.ts
@@ -1274,6 +1283,7 @@ src/core/partner/codegraph-report.ts
 src/core/partner/codegraph.ts
 src/core/path-safety.ts
 src/core/platform-dirs.ts
+src/core/process/run-program.ts
 src/core/project-manifests.ts
 src/core/reconciliation-report.ts
 src/core/record-path.ts
@@ -1641,6 +1651,7 @@ src/core/topics/settings.ts
 src/core/topics/undo-fold.ts
 src/core/topics/verdict-writes.ts
 src/core/topics/verdicts.ts
+src/core/topics/wording-operation.ts
 src/core/topics/write.ts
 src/core/trust.ts
 src/core/types.ts
@@ -1767,6 +1778,7 @@ src/mcp/capabilities.ts
 src/mcp/coerce.ts
 src/mcp/decision-answerable.ts
 src/mcp/drain.ts
+src/mcp/dream-executor.ts
 src/mcp/error-redaction.ts
 src/mcp/frozen-refusal.ts
 src/mcp/http.ts

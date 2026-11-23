@@ -20,6 +20,7 @@
  */
 
 import { readDeviceId, resolveAgentName } from "../config.ts";
+import { runAgentExecutor } from "../brain/dream-queue/agent-executor.ts";
 import { runDecisionExecutor } from "../brain/dream-queue/decision-executor.ts";
 import { assertDreamOwner } from "../brain/dream-owner/gate.ts";
 import { dreamQueueOn } from "../brain/dream-queue/queue.ts";
@@ -87,6 +88,7 @@ export async function prepareClosedQuestions(
     if (gate.status !== "owner") return undefined;
     if (readDeviceId(options.configPath) === null) return undefined;
     const clock = options.now ?? Date.now;
+    const startedAt = Date.now();
     const budget = Math.min(
       dreamModelBudgetMs(vault),
       options.deadlineMs ?? Number.POSITIVE_INFINITY,
@@ -110,11 +112,25 @@ export async function prepareClosedQuestions(
       ...(options.env !== undefined ? { env: options.env } : {}),
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
     });
+    // The launched agent (change `dream-launched-agent`, design D4): what
+    // only an agent may answer, under its own budget, clamped to what the
+    // caller has left.
+    const agent = await runAgentExecutor(queue, gate.owner, {
+      ...configOpt,
+      ...(options.env !== undefined ? { env: options.env } : {}),
+      ...(options.deadlineMs !== undefined
+        ? { callerRemainingMs: options.deadlineMs - (Date.now() - startedAt) }
+        : {}),
+    });
     return {
       produced: produced.produced,
       left: produced.left,
       asked: executed.status === "ran" ? executed.asked : {},
       answered: executed.status === "ran" ? executed.answered : 0,
+      agent:
+        agent.status === "ran"
+          ? { status: "ran", answered: agent.answered }
+          : { status: "skipped", reason: agent.reason, answered: 0 },
     };
   } catch {
     return undefined;

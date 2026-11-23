@@ -136,10 +136,10 @@ function laneFingerprintOf(store: StoreInspection): string {
  * switched machine whose store cannot be opened, empty with that reason
  * in `unreadable`).
  */
-export function laneStoreFold(): LaneFolded {
+export function laneStoreFold(configPath?: string): LaneFolded {
   let store: StoreInspection | null;
   try {
-    store = protectionStore(undefined, { needShared: true });
+    store = protectionStore(configPath, { needShared: true });
   } catch (err) {
     if (!(err instanceof StoreUnavailableError)) throw err;
     // A switched machine whose store cannot be opened sees no shard at

@@ -13,6 +13,7 @@ import { isAuthority } from "../../store/fold.ts";
 import {
   DREAM_WORK_ANSWER_KIND,
   DREAM_WORK_APPLIED_KIND,
+  DREAM_WORK_APPROVE_KIND,
   DREAM_WORK_ATTEMPT_KIND,
   DREAM_WORK_CLOSED_KIND,
   DREAM_WORK_ITEM_KIND,
@@ -281,6 +282,10 @@ export function dreamWorkBodyRejection(kind: string, body: Record<string, unknow
       if (!isAuthority(body["authority"]) || body["authority"] !== "human") {
         return "a retry is made by a person (authority human)";
       }
+      return null;
+    case DREAM_WORK_APPROVE_KIND:
+      if (!nonEmpty(body["item"])) return "missing item";
+      if (body["authority"] !== "human") return "an approval is made by a person (authority human)";
       return null;
     default:
       return `not a dream work kind: ${kind}`;

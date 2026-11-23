@@ -70,6 +70,18 @@ const GUARD_RE =
  * be wrong, never because asserting was inconvenient.
  */
 const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/dream-queue/agent-check.ts":
+    "writes no vault file. The dream agent check writes a throwaway store and its config " +
+    "under the machine's device state directory and removes them by their exact paths.",
+  "src/core/brain/dream-queue/agent-executor.ts":
+    "writes no vault file. It writes the run's MCP config file and keeps the session's output " +
+    "in the store's device-local state directory, never synced and never in a vault.",
+  "src/core/brain/dream-queue/agent-verified.ts":
+    "writes no vault file. The verified commands and the last run of the dream agent are " +
+    "machine state under the device state directory, never synced and never in a vault.",
+  "src/core/brain/dream-queue/run-record.ts":
+    "writes no vault file. A dream run's record and call log live in the store's device-local " +
+    "state directory, mode 0600, never synced and never in a vault.",
   "src/core/brain/dream-owner/owner.ts":
     "writes no vault file. Its one direct write is the dream owner's claim-seen note " +
     "in the store's device-local state directory, never synced and never in a vault; " +
@@ -202,6 +214,10 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/digest-brief.ts": "writes only outside the vault (device-local delivery ledger)",
   "src/core/brain/doctor/discipline-check.ts":
     "writes only outside the vault (device-local daily verdict cache)",
+  "src/core/brain/dream-queue/agent-check.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-queue/agent-executor.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-queue/agent-verified.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-queue/run-record.ts": "writes only outside the vault (device state)",
   "src/core/brain/init.ts": ASKS_THE_GATE,
   "src/core/brain/gitignore-guard.ts":
     "called by the bootstrap, after `bootstrapBrain` asked the gate for the vault",

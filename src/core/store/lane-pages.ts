@@ -120,11 +120,16 @@ export function assertLaneWrite(vault: string): void {
 }
 
 /** `routeWrite` for a lane path; a path outside `Brain/` is written as a file. */
-function routeLaneWrite(vault: string, path: string, spec: Parameters<typeof routeWrite>[0]): void {
+function routeLaneWrite(
+  vault: string,
+  path: string,
+  spec: Parameters<typeof routeWrite>[0],
+  configPath?: string,
+): void {
   // A path outside `Brain/` is no lane entry in either mode: a file, never
   // dual-written as a record (it has no place in the lane path rule).
   if (!insideBrain(vault, path)) {
-    guardUserVaultWrite(vault, path);
+    guardUserVaultWrite(vault, path, configPath);
     spec.legacy();
     return;
   }
@@ -141,8 +146,8 @@ function routeLaneWrite(vault: string, path: string, spec: Parameters<typeof rou
  * state) has no vault to guard. An unswitched machine guards with
  * `assertLaneWrite` as before.
  */
-function guardUserVaultWrite(vault: string, path: string): void {
-  if (!lanePagesInStore(vault)) return;
+function guardUserVaultWrite(vault: string, path: string, configPath?: string): void {
+  if (!lanePagesInStore(vault, configPath)) return;
   const rel = relative(vault, path);
   if (rel.startsWith("..") || isAbsolute(rel)) return;
   assertNoteVaultForWrite(
@@ -151,8 +156,11 @@ function guardUserVaultWrite(vault: string, path: string): void {
   );
 }
 
-function context(vault: string): DualWriteContext {
-  return existsSync(vault) ? { vault } : {};
+function context(vault: string, configPath?: string): DualWriteContext {
+  return {
+    ...(existsSync(vault) ? { vault } : {}),
+    ...(configPath !== undefined ? { configPath } : {}),
+  };
 }
 
 // ----- Reads --------------------------------------------------------------------
@@ -182,9 +190,9 @@ export function lanePageExists(vault: string, path: string): boolean {
 }
 
 /** The page at `path`, or null when there is none. Throws on a legacy page that cannot be read. */
-export function readLanePage(vault: string, path: string): LanePage | null {
-  if (heldInStore(vault, path)) {
-    const value = storeEntry(vault, path);
+export function readLanePage(vault: string, path: string, configPath?: string): LanePage | null {
+  if (heldInStore(vault, path, configPath)) {
+    const value = storeEntry(vault, path, configPath);
     return value === null ? null : { path, frontmatter: fieldsCopy(value), body: value.text };
   }
   if (!existsSync(path)) return null;
@@ -420,6 +428,8 @@ export function writeLanePage(
   frontmatter: FrontmatterMap,
   body: string,
   opts: WriteFrontmatterAtomicOptions & {
+    /** The machine config selecting the store for this write. */
+    readonly configPath?: string;
     /**
      * The store record's authority, for a rewrite that keeps the standing
      * of the record it replaces; the lane's own when absent. The legacy
@@ -432,32 +442,45 @@ export function writeLanePage(
   // An overwrite with what the entry already holds writes nothing, as the
   // legacy writer skips a byte-identical file: a page re-rendered on every
   // run must not grow the shards or move the entry's clock.
-  if (opts.overwrite === true && heldInStore(vault, path)) {
-    if (sameEntry(storeEntry(vault, path), frontmatter, body)) return false;
+  if (opts.overwrite === true && heldInStore(vault, path, opts.configPath)) {
+    if (sameEntry(storeEntry(vault, path, opts.configPath), frontmatter, body)) return false;
   }
-  const replaced = opts.overwrite === true && legacyPagePrivate(vault, path);
-  withCreateLock(vault, path, opts.overwrite !== true, opts.existsErrorKind, () =>
-    routeLaneWrite(vault, path, {
-      legacy: () => {
-        mkdirSync(dirname(path), { recursive: true });
-        const { authority: _authority, ...fileOpts } = opts;
-        written = writeFrontmatterAtomic(path, frontmatter, body, fileOpts);
-      },
-      store: () => [
-        ...replacedShared(vault, path),
-        entryRecord(
-          vault,
-          path,
-          frontmatter,
-          body,
-          replaced || storedEntryPrivate(vault, path) || isPrivateEntry(vault, frontmatter, body),
-          "judged",
-          undefined,
-          opts.authority,
-        ),
-      ],
-      context: context(vault),
-    }),
+  const replaced = opts.overwrite === true && legacyPagePrivate(vault, path, opts.configPath);
+  withCreateLock(
+    vault,
+    path,
+    opts.overwrite !== true,
+    opts.existsErrorKind,
+    () =>
+      routeLaneWrite(
+        vault,
+        path,
+        {
+          legacy: () => {
+            mkdirSync(dirname(path), { recursive: true });
+            const { authority: _authority, configPath: _configPath, ...fileOpts } = opts;
+            written = writeFrontmatterAtomic(path, frontmatter, body, fileOpts);
+          },
+          store: () => [
+            ...replacedShared(vault, path, opts.configPath),
+            entryRecord(
+              vault,
+              path,
+              frontmatter,
+              body,
+              replaced ||
+                storedEntryPrivate(vault, path, opts.configPath) ||
+                isPrivateEntry(vault, frontmatter, body, undefined, opts.configPath),
+              "judged",
+              undefined,
+              opts.authority,
+            ),
+          ],
+          context: context(vault, opts.configPath),
+        },
+        opts.configPath,
+      ),
+    opts.configPath,
   );
   return written;
 }
@@ -523,15 +546,16 @@ function withCreateLock(
   createOnce: boolean,
   existsKind: string | undefined,
   fn: () => void,
+  configPath?: string,
 ): void {
-  if (!createOnce || !heldInStore(vault, path)) {
+  if (!createOnce || !heldInStore(vault, path, configPath)) {
     fn();
     return;
   }
   withLocalLock(laneLockTarget(path, "create\u0000"), () => {
     // Checked outside the store write, so the refusal reaches the caller as
     // the same `FileAlreadyExistsError` (EEXIST) the unswitched path throws.
-    if (storeEntry(vault, path) !== null) {
+    if (storeEntry(vault, path, configPath) !== null) {
       throw new FileAlreadyExistsError(path, {
         ...(existsKind !== undefined ? { kind: existsKind } : {}),
         displayPath: brainRelOf(vault, path),

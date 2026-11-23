@@ -13,6 +13,7 @@ import { stageDream, validateDreamBundle } from "../../../../src/core/brain/drea
 import { assertDreamOwner } from "../../../../src/core/brain/dream-owner/gate.ts";
 import { claimDreamOwner } from "../../../../src/core/brain/dream-owner/owner.ts";
 import { appendRecord } from "../../../../src/core/store/appender.ts";
+import { LANE_ENTRY_KIND } from "../../../../src/core/store/lane-records.ts";
 import {
   DREAM_WORK_CLOSED_KIND,
   DREAM_WORK_EVIDENCE_MAX,
@@ -261,6 +262,56 @@ describe("produceRollupWork", () => {
     };
   }
   const queue = () => dreamQueueOn(store(), { vault, writer: "o2b", configPath });
+
+  test("rollup apply writes through the queue's explicit machine config", () => {
+    const otherRoot = join(tmp, "other-store");
+    const otherConfig = join(tmp, "other-config.yaml");
+    initStore({ root: otherRoot });
+    writeFileSync(otherConfig, `vault: ${vault}\nstore_root: ${otherRoot}\ndevice_id: dev-a\n`);
+    const otherStore = openStore({ root: otherRoot, device: "dev-a" });
+    appendRecord(otherStore, {
+      partition: "shared",
+      stream: "settings",
+      kind: "device-switched",
+      agent: "o2b",
+      body: { authority: "human", device: "dev-a" },
+    });
+    const previousStoreRoot = process.env[STORE_ROOT_ENV];
+    delete process.env[STORE_ROOT_ENV];
+    try {
+      const apply = dreamWorkOperation(ROLLUP_SUMMARY_OPERATION)!.apply!;
+      apply(
+        {
+          id: "work-test",
+          partition: "private",
+          body: { payload: { target_path: "Brain/rollups/explicit-config.md" } },
+        } as never,
+        {
+          record: "rec",
+          generation: 1,
+          lease_token: "lease",
+          receipt: "receipt",
+          text: "---\nkind: rollup\n---\nExplicit store.\n",
+          agent: "agent",
+          model: "model",
+        },
+        { store: otherStore, vault, now: Date.now(), configPath: otherConfig },
+      );
+      expect(
+        readStreamRecords(otherRoot, "private", { stream: "events" }).records.filter(
+          (record) => record.kind === LANE_ENTRY_KIND,
+        ),
+      ).toHaveLength(1);
+      expect(
+        readStreamRecords(storeRoot, "private", { stream: "events" }).records.filter(
+          (record) => record.kind === LANE_ENTRY_KIND,
+        ),
+      ).toHaveLength(0);
+    } finally {
+      if (previousStoreRoot === undefined) delete process.env[STORE_ROOT_ENV];
+      else process.env[STORE_ROOT_ENV] = previousStoreRoot;
+    }
+  });
 
   test("rollup answers reject malformed YAML and frontmatter without a mapping kind", () => {
     const validate = dreamWorkOperation(ROLLUP_SUMMARY_OPERATION)!.validate;

@@ -2589,7 +2589,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days", SETTING_DREAM_APPLY_DRAFTS = "dream.apply_drafts", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2641,7 +2641,8 @@ var init_constants = __esm(() => {
     SETTING_TOPIC_MIN_RECORDS,
     SETTING_TOPIC_MIN_SESSIONS,
     SETTING_TOPIC_QUIET_DAYS,
-    SETTING_SILENT_DEVICE_DAYS
+    SETTING_SILENT_DEVICE_DAYS,
+    SETTING_DREAM_APPLY_DRAFTS
   ]);
   STATE_DIGEST_FOLDS = Object.freeze([
     "preferences",
@@ -2780,6 +2781,7 @@ __export(exports_config, {
   resolveTriggerCooldownDays: () => resolveTriggerCooldownDays,
   resolveVault: () => resolveVault,
   resolveWikiLinkFormat: () => resolveWikiLinkFormat,
+  setConfigJsonValue: () => setConfigJsonValue,
   setConfigValue: () => setConfigValue,
   validateTimezoneName: () => validateTimezoneName,
   vaultStoreReference: () => vaultStoreReference
@@ -2883,8 +2885,31 @@ function setConfigValue(key, value, path) {
   const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join(`
 `) + `
 `;
-  atomicWriteFileSync(resolved, body);
+  atomicWriteText(resolved, body, { mode: configWriteMode(resolved, discovery.exists) });
   return resolved;
+}
+function setConfigJsonValue(key, value, path) {
+  const text = JSON.stringify(value);
+  if (/[\r\n]/.test(text)) {
+    throw new Error(`config value for ${JSON.stringify(key)} must fit on one line`);
+  }
+  const resolved = path ?? defaultConfigPath();
+  const discovery = discoverConfig(resolved);
+  const data = { ...discovery.data, [key]: text };
+  const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join(`
+`) + `
+`;
+  atomicWriteText(resolved, body, { mode: configWriteMode(resolved, discovery.exists) });
+  return resolved;
+}
+function configWriteMode(path, exists) {
+  if (!exists)
+    return 384;
+  const stat = statConfigPath(path);
+  if (stat === undefined || !stat.isFile()) {
+    throw new ConfigReadError(path, "path changed while preparing a write");
+  }
+  return stat.mode & 4095;
 }
 function validateTimezoneName(name) {
   try {
@@ -5772,6 +5797,11 @@ var init_fold_settings = __esm(() => {
       valid: silenceDays,
       expected: `an integer from 0 (off) to ${SILENT_DEVICE_DAYS_MAX}`,
       fallback: 30
+    },
+    [SETTING_DREAM_APPLY_DRAFTS]: {
+      valid: (value) => value === "auto" || value === "review",
+      expected: "auto or review",
+      fallback: "auto"
     }
   });
 });
@@ -9655,14 +9685,16 @@ var init_memory_ids = __esm(() => {
 // src/core/brain/artifact-ref-resolve.ts
 import { isAbsolute as isAbsolute4, join as join26 } from "node:path";
 import { existsSync as existsSync9, statSync as statSync15 } from "node:fs";
-function artifactRefScope(vault, fromStore) {
+function artifactRefScope(vault, fromStore, configPath) {
   let store = fromStore;
   let dirs;
   let entities;
   return {
-    fromStore: () => store ??= memoryFromStore(vault),
+    fromStore: () => store ??= memoryFromStore(vault, configPath),
     dirs: () => dirs ??= brainDirs(vault),
-    entities: () => (entities ??= { value: memoryEntities({ vault }) }).value
+    entities: () => (entities ??= {
+      value: memoryEntities({ vault, ...configPath !== undefined ? { configPath } : {} })
+    }).value
   };
 }
 function unbracket(ref) {
@@ -9792,9 +9824,9 @@ function namesAPage(ref) {
   const trimmed = ref.trim();
   return ANCHORED_WIKILINK_RE.test(trimmed) || trimmed.endsWith(PAGE_EXTENSION);
 }
-function preferenceIdIsPrivate(vault, id, fromStore = vault === null || judgesFromStore(vault), scope) {
+function preferenceIdIsPrivate(vault, id, fromStore, scope, configPath) {
   if (fromStore || vault === null)
-    return storePreferenceIdIsPrivate(id);
+    return storePreferenceIdIsPrivate(id, configPath);
   let paths;
   try {
     const slug = stripBrainIdPrefix(id);
@@ -9817,34 +9849,39 @@ function preferenceIdOfPath(ref) {
     return;
   return extractId(target.slice(slash + 1));
 }
-function logRefsNamePrivatePage(vault, refs, guessed) {
+function logRefsNamePrivatePage(vault, refs, guessed, configPath) {
   if (judgingOff)
     return false;
   if (batch === null) {
-    return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault));
+    return refsNamePrivatePage(vault, refs, guessed, vault === null || judgesFromStore(vault, configPath), undefined, configPath);
   }
-  const fromStore = batchFromStore(batch, vault);
-  return refsNamePrivatePage(vault, refs, guessed, fromStore, batchScope(batch, vault, fromStore));
+  const fromStore = batchFromStore(batch, vault, configPath);
+  return refsNamePrivatePage(vault, refs, guessed, fromStore, batchScope(batch, vault, fromStore, configPath), configPath);
 }
-function batchFromStore(b, vault) {
-  let fromStore = b.fromStore.get(vault);
+function privacyContextKey(vault, configPath) {
+  return JSON.stringify([vault, configPath]);
+}
+function batchFromStore(b, vault, configPath) {
+  const key = privacyContextKey(vault, configPath);
+  let fromStore = b.fromStore.get(key);
   if (fromStore === undefined) {
-    fromStore = vault === null || judgesFromStore(vault);
-    b.fromStore.set(vault, fromStore);
+    fromStore = vault === null || judgesFromStore(vault, configPath);
+    b.fromStore.set(key, fromStore);
   }
   return fromStore;
 }
-function batchScope(b, vault, fromStore) {
+function batchScope(b, vault, fromStore, configPath) {
   if (vault === null)
     return;
-  let scope = b.scopes.get(vault);
+  const key = privacyContextKey(vault, configPath);
+  let scope = b.scopes.get(key);
   if (scope === undefined) {
-    scope = artifactRefScope(vault, fromStore);
-    b.scopes.set(vault, scope);
+    scope = artifactRefScope(vault, fromStore, configPath);
+    b.scopes.set(key, scope);
   }
   return scope;
 }
-function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
+function refsNamePrivatePage(vault, refs, guessed, fromStore, scope, configPath) {
   let guessSpared = guessed === undefined;
   for (const ref of refs) {
     if (ref === undefined || ref === "")
@@ -9853,18 +9890,18 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
     if (isGuess)
       guessSpared = true;
     const id = extractId(ref) ?? (fromStore ? preferenceIdOfPath(ref) : undefined);
-    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore, scope)) {
+    if (id !== undefined && !isGuess && preferenceIdIsPrivate(vault, id, fromStore, scope, configPath)) {
       return true;
     }
     if (fromStore) {
       const signal = signalIdOf(ref);
       if (signal !== undefined) {
-        if (storeSignalIdIsPrivate(signal))
+        if (storeSignalIdIsPrivate(signal, configPath))
           return true;
         continue;
       }
       if (id !== undefined) {
-        if (isGuess && storePreferenceIdIsKnownPrivate(id))
+        if (isGuess && storePreferenceIdIsKnownPrivate(id, configPath))
           return true;
         continue;
       }
@@ -9874,7 +9911,7 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope) {
         return true;
       continue;
     }
-    const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore));
+    const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore, configPath));
     if (rel === null)
       continue;
     const abs = resolve16(vault, rel);
