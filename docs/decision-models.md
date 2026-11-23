@@ -70,7 +70,10 @@ the day's spend reaches it ("Accounting"). A vault opts out with
   vault opt-out. A failed request is recorded in the accounting record and
   is otherwise silent: the output is the deterministic one. Inactive paths
   (a use set to `off`, a missing key, the vault opt-out, an invalid config)
-  send no request and write no record at all.
+  send no request and write no record at all. The seven closed questions of
+  dream are the exception: they have no deterministic result, and a question
+  with no accepted answer waits (see "Without a model: the closed questions
+  wait").
 - **Decisions never write to the vault.** They filter or reorder what is
   returned. Only an accounting record (identifiers and numbers, never text) is
   persisted. The topic uses in `enforce` do write to the brain store -
@@ -145,7 +148,8 @@ Modes:
 
 - `off`: no state is built and nothing is sent.
 - `shadow`: the request **is sent** and recorded, and the deterministic result
-  is returned unchanged. Shadow mode sends data.
+  is returned unchanged. Shadow mode sends data. For a closed question of
+  dream the item keeps waiting and is not asked again for the same input.
 - `enforce`: the use applies the answer within its own limits.
 
 Presets (the hosted and `compatible` ones speak `POST <base>/v1/systemone`
@@ -353,13 +357,13 @@ store records are covered in "Decisions never write to the vault" above.
 | `tension` | `brain_tension verify`, `o2b brain tension verify` | advisory | adds a verdict; a confident `compatible` or `unrelated` is listed last | the field is absent | [dedup and tension](decision-models/dedup-tension.md) |
 | `labels` | `brain_labels suggest`, `o2b brain label --suggest` | advisory | returns a suggestion per dimension; never assigns | `available: false` with the reason | [labels](decision-models/labels.md) |
 | `recall_inject` | the prompt-time recall-inject hook | context | drops notes that would not help, or withholds the brief; never adds material | today's brief | [recall-inject hook filter](decision-models/recall-inject.md) |
-| `topic_route` | the dream-time decide pass, applied in the topic planner | context | routes an unassigned record to the topic the model chose (an `assign` with `authority: "model"`); `none` leaves the record free | the word-overlap route | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `event_kind` | the dream-time decide pass, applied under the planning lock | context | derives one item record from a held record (decision, open question or log entry) | no page item | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `human_readable` | the dream-time decide pass, read by the weekly history | context | hides a note from the weekly history page through a `history-verdict` record | every note is shown | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `topic_new` | the dream-time decide pass, applied in the topic planner | context | vetoes the creation of a qualifying group for one pass; an approval rides the create record | the group is created | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `topic_same` | the dream-time decide pass, shown in the dream report | advisory | adds merge proposals with confidence, or annotates a Jaccard proposal; never merges | the Jaccard proposals alone | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `question_resolved` | the dream-time decide pass, applied under the planning lock | advisory | proposes a question-resolved record ("looks answered") | no proposal | [topics and agent context](decision-models/topics-and-agent-context.md) |
-| `milestone_done` | the dream-time decide pass, applied under the planning lock | advisory | proposes a milestone-done record ("looks done, confirm") | no proposal | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `topic_route` | the dream work queue, applied by topic planning | context | routes an unassigned record to the topic the model chose (an `assign` with `authority: "model"`); `none` leaves the record free | the record stays unassigned and its item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `event_kind` | the dream work queue, applied by topic planning | context | derives one item record from a held record (decision, open question or log entry) | no page item; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `human_readable` | the dream work queue, applied by topic planning, read by the weekly history | context | hides a note from the weekly history page through a `history-verdict` record, or stores it as kept | every note is shown; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `topic_new` | the dream work queue, applied by topic planning | context | approves the creation of a qualifying group (the approval rides the create record) or vetoes it while the group keeps its members | the group is not created; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `topic_same` | the dream work queue, shown in the dream report and the topic review | advisory | adds merge proposals with confidence, or annotates a Jaccard proposal; never merges | the Jaccard proposals alone; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `question_resolved` | the dream work queue, applied by topic planning | advisory | proposes a question-resolved record ("looks answered") | no proposal; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
+| `milestone_done` | the dream work queue, applied by topic planning | advisory | proposes a milestone-done record ("looks done, confirm") | no proposal; the item waits | [topics and agent context](decision-models/topics-and-agent-context.md) |
 | `head_select` | the SessionStart digest | context | reorders the topic heads by relevance and leaves the ones below the threshold out | recency and scope order | [topics and agent context](decision-models/topics-and-agent-context.md) |
 | `neighbour_relevant` | the neighbour-updates hook before a turn | context | injects the neighbour records the model marks relevant, at most five lines | the deterministic gate | [topics and agent context](decision-models/topics-and-agent-context.md) |
 
@@ -373,6 +377,48 @@ Moving a use to `enforce` needs evidence from that use's report: a gain
 against the deterministic baseline without a regression, and for
 `extract_prefilter` zero regret. The `decision-model-setup` skill walks an
 agent through setup, shadow measurement and turning a use off.
+
+
+## Without a model: the closed questions wait
+
+Dream asks seven closed questions (`topic_route`, `topic_new`,
+`topic_same`, `event_kind`, `question_resolved`, `milestone_done`,
+`human_readable`). Each is an item of the dream work queue, one per
+subject, produced by every live pass on the dream owner's device, oldest
+first, with no age limit and no limit per pass; the eligibility
+thresholds are unchanged. No fixed rule answers in place of a model: a
+record is routed only by a `topic_route` answer, a group becomes a topic
+only on a `topic_new` approval, and so on. Until its item is answered the
+subject stays as it is.
+
+The decision model chain is the executor of these items. Before a live
+pass it takes ready items in queue order and asks one item per request,
+within `dream.model_budget_ms` (default 20 000 ms, production first); the
+chain's privacy and egress checks, its daily cost gate and its fallback
+between entries apply unchanged. Per use:
+
+- `off`: the items are not taken; they wait for another executor.
+- `shadow`: each item is asked once for its input and the answer is
+  recorded for tuning; the item keeps waiting and nothing is applied.
+- `enforce`: the answer is accepted and topic planning applies it through
+  the writes listed above, once, with the answering provider and model
+  named. An answer below its use's threshold (or a choice with no
+  confidence, or `none` or routine where that means nothing) finishes the
+  item as abstained: nothing is written and the subject is asked again
+  only when its input changes. `topic_new` and `human_readable` always
+  decide and never abstain.
+
+An item built from private evidence is private as a whole. A hosted chain
+may receive it when the use is allowed by `decision_model_private_uses`;
+when the egress check refuses it, the item is released without a failed
+attempt and waits for a local executor. A timeout or another failure is a
+failed attempt with backoff. `o2b dream queue`, `o2b dream owner` and doctor
+(`dream-questions-waiting`, `dream-queue-no-executor`) show per question
+how many items wait, the age of the oldest, and why: `no-model`,
+`shadow`, `needs-local-executor`, `retry-at` or `not-reached`, each with
+the action that changes it. A brain with no decision model in force
+routes no record and creates no topic until one is configured, and a
+brain with no dream owner bound decides no closed question.
 
 ## Vault opt-out
 

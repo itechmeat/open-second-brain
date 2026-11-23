@@ -28,6 +28,8 @@ export const FIXTURE_EFFECT_KIND = "fixture-effect";
 export interface FixtureOperations {
   /** Subject -> the input it holds now (`null`: the subject is gone). */
   readonly inputs: Map<string, unknown>;
+  /** Subjects whose latest input read is temporarily incomplete. */
+  readonly unavailable: Set<string>;
   /** How many times `apply` ran, and how many effect records it wrote. */
   readonly calls: { apply: number; writes: number };
   /** Remove both operations from the registry. */
@@ -45,12 +47,16 @@ export function registerFixtureOperations(
   closedPredecessor: "cancel" | "release" = "cancel",
 ): FixtureOperations {
   const inputs = new Map<string, unknown>();
+  const unavailable = new Set<string>();
   const calls = { apply: 0, writes: 0 };
   const base = (name: string, validate: DreamWorkOperation["validate"]): DreamWorkOperation => ({
     name,
     closedPredecessor,
     validate,
     currentInput: (item) => {
+      if (unavailable.has(item.body.subject)) {
+        return { unavailable: true, input_hash: item.body.input_hash };
+      }
       if (!inputs.has(item.body.subject)) return { input_hash: item.body.input_hash };
       const now = inputs.get(item.body.subject);
       return now === null ? null : { input_hash: dreamWorkInputHash(now), payload: { now } };
@@ -85,6 +91,7 @@ export function registerFixtureOperations(
   ];
   return {
     inputs,
+    unavailable,
     calls,
     unregister: () => {
       for (const remove of removals) remove();

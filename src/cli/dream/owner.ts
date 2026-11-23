@@ -39,6 +39,7 @@ import {
   describeQueueStatus,
   queueStatus,
   queueSummaryJson,
+  waitingByOperation,
 } from "../../core/brain/dream-queue/status-view.ts";
 
 const USAGE = [
@@ -132,10 +133,15 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
   if (!here && !release) {
     const status = dreamOwnerStatus(vault, { ...configOpt, look: true });
     const queue = queueStatus(vault, configOpt);
+    const waiting = waitingByOperation(queue, configOpt);
     if (json)
-      writeJson({ ok: true, ...dreamOwnerStatusJson(status), queue: queueSummaryJson(queue) });
+      writeJson({
+        ok: true,
+        ...dreamOwnerStatusJson(status),
+        queue: queueSummaryJson(queue, waiting),
+      });
     else {
-      const lines = [...describeDreamOwnerStatus(status), ...describeQueueStatus(queue)];
+      const lines = [...describeDreamOwnerStatus(status), ...describeQueueStatus(queue, waiting)];
       process.stdout.write(`${lines.join("\n")}\n`);
     }
     return DREAM_EXIT.ok;

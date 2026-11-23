@@ -81,7 +81,7 @@ function candidates(a: Machine): TopicCandidate[] {
   return topicCandidates(records, privateIds).filter((c) => c.text.startsWith("Shard"));
 }
 
-/** The topics a first planning pass creates, with the shipped thresholds. */
+/** The topics a first planning pass creates or asks to create, with the shipped thresholds. */
 function created(found: ReadonlyArray<TopicCandidate>): number {
   const settings = foldSettings([]);
   const plan = planTopics(
@@ -94,7 +94,9 @@ function created(found: ReadonlyArray<TopicCandidate>): number {
     },
     Date.UTC(2026, 10, 18),
   );
-  return plan.creates.length;
+  // A qualifying group becomes a topic on a `topic_new` approval (change
+  // dream-closed-questions): with none yet, the plan asks about it.
+  return plan.creates.length + plan.asks.groups.length;
 }
 
 function migrated(a: Machine): StoreRecord[] {

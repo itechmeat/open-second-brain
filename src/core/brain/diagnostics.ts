@@ -242,6 +242,12 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        code: "dream-questions-waiting",
+        issueClass: "closed questions of dream wait for an answer",
+        nextCommand: "o2b dream queue",
+        autoRepairable: false,
+      },
+      {
         code: "dream-queue-rejected",
         issueClass: "the dream work queue holds records that break its rules",
         nextCommand: "o2b dream queue",

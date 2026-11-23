@@ -18,6 +18,7 @@ import {
   applyAccepted,
   dreamQueueOn,
   produceWork,
+  produceWorkBatch,
   queueStatusAt,
   takeWork,
   type ProduceSpec,
@@ -170,6 +171,24 @@ describe("partitions", () => {
       expect.not.stringContaining("rung:fact"),
     ]);
     expect(takeWork(qb, { run: "r1" })).toEqual({ item: null, reason: "empty" });
+  });
+
+  test("batch production keeps barriers from queued and earlier batch private work", () => {
+    const a = m.open("dev-a");
+    claimDreamOwner(a, "claude", human);
+    claimSettled(a, readDreamOwner(a, now));
+    const q = dreamQueueOn(a, { vault: null, writer: "o2b", now });
+    produceWork(q, spec("queued-private", ["private"], ["record:r1"]));
+    const batch = produceWorkBatch(q, [
+      spec("batch-private", ["private"], ["record:r2"]),
+      spec("shared-queued-resource", ["shared"], ["record:r1"]),
+      spec("shared-batch-resource", ["shared"], ["record:r2"]),
+    ]);
+    const records = readStreamRecords(a.root, "shared", { stream: "dream-work" }).records;
+    const shared = new Map(records.map((record) => [record.body["subject"], record.body]));
+    expect(shared.get("shared-queued-resource")?.["private_resource_barriers"]).toHaveLength(1);
+    expect(shared.get("shared-batch-resource")?.["private_resource_barriers"]).toHaveLength(1);
+    expect(batch.items.map((item) => item.created)).toEqual([true, true, true]);
   });
 });
 

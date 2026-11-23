@@ -11,7 +11,12 @@
 
 import type { StoreHandle } from "../../store/store-open.ts";
 import type { DreamOwner } from "../dream-owner/fold.ts";
-import type { DreamOptions, DreamRunSummary, DreamWarning } from "../dream-types.ts";
+import type {
+  ClosedQuestionsRun,
+  DreamOptions,
+  DreamRunSummary,
+  DreamWarning,
+} from "../dream-types.ts";
 import type { RollupLadderPlan } from "../rollup-ladder.ts";
 import { applyAccepted, dreamQueueForPass, readDreamWork, type DreamQueue } from "./queue.ts";
 import { produceRollupWork } from "./rollup-work.ts";
@@ -20,6 +25,10 @@ export interface DreamQueuePass {
   readonly queue: DreamQueue;
   produced: number;
   applied: number;
+  /** Closed-question answers topic planning applied that decided nothing. */
+  abstained: number;
+  /** What the front door produced and asked before the pass (`decide-auto.ts`). */
+  readonly front?: ClosedQuestionsRun;
   readonly warnings: DreamWarning[];
 }
 
@@ -34,6 +43,7 @@ export function openQueuePass(
   owner: DreamOwner,
   opts: DreamOptions,
 ): DreamQueuePass {
+  const front = opts.closedQuestions;
   const writer = opts.agentName?.trim() || "o2b";
   return {
     queue: dreamQueueForPass(store, owner, {
@@ -43,6 +53,8 @@ export function openQueuePass(
     }),
     produced: 0,
     applied: 0,
+    abstained: 0,
+    ...(front !== undefined ? { front } : {}),
     warnings: [],
   };
 }
@@ -107,9 +119,16 @@ export function withModelWork(summary: DreamRunSummary, pass: DreamQueuePass): D
   } catch (err) {
     pass.warnings.push({ code: "dream-queue-read-failed", message: message(err) });
   }
+  const front = pass.front;
   return {
     ...summary,
     warnings: [...summary.warnings, ...pass.warnings],
-    model_work: { produced: pass.produced, waiting, applied: pass.applied },
+    model_work: {
+      produced: pass.produced + (front?.produced ?? 0),
+      waiting,
+      applied: pass.applied,
+      abstained: pass.abstained,
+      ...(front !== undefined ? { asked: front.asked } : {}),
+    },
   };
 }

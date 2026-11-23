@@ -1,27 +1,22 @@
 /**
- * The decide pass on the topic rules the planner holds (design D20):
+ * The closed questions on the topic rules the planner holds (design D20;
+ * change `dream-closed-questions`, design D3.7, D4.3):
  *
  *  - a proposal for an item a merged topic shows is written under the
  *    item's owner, so the fold finds it;
  *  - a private item, or a private head field of a shared topic, never
- *    reaches a hosted provider;
- *  - the history window follows the date the run is for;
+ *    reaches a hosted provider: the item built from it is private and
+ *    waits for a local executor;
+ *  - a note of any age is asked about, whatever date the run is for;
  *  - a verdict write that fails part way still counts what landed.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
-import {
-  decisionThresholdsPath,
-  resetThresholdsStoreCache,
-  writeThresholdEntry,
-} from "../../../src/core/decision-model/thresholds.ts";
-import { newUlid } from "../../../src/core/store/ulid.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
-import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import {
   TOPIC_ASSIGN_KIND,
   TOPIC_CREATE_KIND,
@@ -30,47 +25,23 @@ import {
   TOPIC_QUESTION_KIND,
   TOPIC_RENAME_KIND,
 } from "../../../src/core/topics/constants.ts";
-import { decideTopicPlan } from "../../../src/core/topics/decide.ts";
-import { runTopicPlanning } from "../../../src/core/topics/planning.ts";
 import { foldTopics } from "../../../src/core/topics/fold.ts";
 import { writeVerdictRecords } from "../../../src/core/topics/verdict-writes.ts";
 import { emptyTopicVerdicts, type TopicVerdictBody } from "../../../src/core/topics/verdicts.ts";
-import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
-import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
-import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
-import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
+import { closedFixture, T0, type ClosedFixture } from "./fixtures/closed-fixture.ts";
+import { ask, plan } from "./fixtures/closed-run.ts";
 
-const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-let clock = T0;
-const now = () => (clock += 1000);
 
-let m: Machines;
-let a: StoreHandle;
-let tmp: string;
-let vault: string;
-let configPath: string;
+let f: ClosedFixture;
 
 beforeEach(() => {
-  clock = T0;
-  m = makeMachines(["dev-a"], "o2b-decide-owner-");
-  a = m.open("dev-a");
-  claimViewWriter(a, { agent: "dream", now });
-  claimSettled(a, readViewWriter(a, now));
-  tmp = mkdtempSync(join(m.parent, "cfg-"));
-  vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain"), { recursive: true });
-  process.env["VAULT_DIR"] = vault;
-  configPath = join(tmp, "config.yaml");
-  writeFileSync(configPath, "");
-  resetThresholdsStoreCache();
+  f = closedFixture();
 });
 
 afterEach(() => {
-  delete process.env["VAULT_DIR"];
-  resetThresholdsStoreCache();
-  m.cleanup();
+  f.cleanup();
 });
 
 function topicRecord(
@@ -79,9 +50,8 @@ function topicRecord(
   body: Record<string, unknown>,
   partition: "shared" | "private" = "shared",
 ): string {
-  clock += 1000;
   return appendRecord(
-    a,
+    f.a,
     {
       partition,
       stream: "topics",
@@ -90,107 +60,45 @@ function topicRecord(
       topic,
       body: { authority: "agent", ...body },
     },
-    { now },
+    { now: f.now },
   ).record.id;
-}
-
-function seedTopic(title: string): string {
-  clock += 1000;
-  const topic = newUlid(clock);
-  topicRecord(TOPIC_CREATE_KIND, topic, { title, scope: "project:o2b" });
-  return topic;
-}
-
-let seq = 0;
-function signal(text: string, partition: "shared" | "private" = "shared", session = "s1"): string {
-  clock += 1000;
-  seq += 1;
-  return appendRecord(
-    a,
-    {
-      partition,
-      stream: "events",
-      kind: "signal",
-      agent: "agent-1",
-      body: {
-        id: `sig-2026-12-01-p${seq}`,
-        path: `Brain/inbox/p${seq}.md`,
-        staged: false,
-        frontmatter: { principle: text, project: "o2b", session },
-        raw: null,
-        raw_shape: "bare",
-      },
-    },
-    { now },
-  ).record.id;
-}
-
-function note(text: string, ms: number): string {
-  clock += 1000;
-  return appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "log",
-      kind: "log-event",
-      agent: "seed",
-      body: { timestamp: new Date(ms).toISOString(), event_type: "note", body: { text } },
-    },
-    { now: () => ms },
-  ).record.id;
-}
-
-function envFor(uses: string): Record<string, string | undefined> {
-  return {
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-    // A hosted provider: private text may not go there.
-    OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_USES: uses,
-    O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-    OPEN_SECOND_BRAIN_CONFIG: configPath,
-  };
 }
 
 function sharedRecords() {
-  return readPartition(join(m.root("dev-a"), "shared")).flatMap((s) => s.records);
+  return readPartition(join(f.m.root("dev-a"), "shared")).flatMap((s) => s.records);
 }
 
-describe("the decide pass on the planner's topic rules", () => {
+/** The release reasons of the private items of `operation`. */
+function refused(operation: string): Array<string | undefined> {
+  return f
+    .items(operation)
+    .filter((i) => i.partition === "private")
+    .map((i) => i.last_release?.reason);
+}
+
+describe("the closed questions on the planner's topic rules", () => {
   test("a completion of a merged topic's milestone is written under the item's owner", async () => {
-    const owner = seedTopic("Shard compaction keeps monthly shard files small");
+    const owner = f.seedTopic("Shard compaction keeps monthly shard files small");
     const milestone = "m-window";
     topicRecord(TOPIC_MILESTONE_KIND, owner, {
       item: milestone,
       text: "Ship the first compaction window",
     });
-    const home = seedTopic("Shard compaction rollout on every machine");
+    const home = f.seedTopic("Shard compaction rollout on every machine");
     topicRecord(TOPIC_MERGE_KIND, owner, { into: home });
     for (const text of [
       "Shard compaction window shipped and the rollup ledger closed",
       "Shard compaction window verified on every machine",
     ]) {
-      topicRecord(TOPIC_ASSIGN_KIND, home, { record: signal(text) });
+      topicRecord(TOPIC_ASSIGN_KIND, home, { record: f.signal(text) });
     }
-    writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "milestone_done", {
-      values: { done_min: 0.8 },
-      source: "set",
-    });
-    resetThresholdsStoreCache();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("done_") ? 0.9 : undefined),
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("milestone_done:enforce"),
-      now,
-    });
-    expect(verdicts.completions).toEqual([
-      expect.objectContaining({ topic: home, milestone }) as never,
-    ]);
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    f.tune("milestone_done", { done_min: 0.8 });
+    await ask(
+      f,
+      "milestone_done:enforce",
+      new FakeDecisionProvider({ answer: (id) => (id.startsWith("done_") ? 0.9 : undefined) }),
+    );
+    const report = plan(f);
     expect(report.status === "planned" ? report.completions : -1).toBe(1);
     const written = sharedRecords().filter((r) => r.kind === "milestone-done");
     expect(written.map((r) => r.topic)).toEqual([owner]);
@@ -205,42 +113,35 @@ describe("the decide pass on the planner's topic rules", () => {
   test("a completion judged on private evidence lands in private", async () => {
     // Private records of milestone_done may leave here, so the private
     // evidence is sent: the proposal derived from it must not be shared.
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
     topicRecord(TOPIC_MILESTONE_KIND, topic, {
       item: "m-window",
       text: "Ship the first compaction window",
     });
     topicRecord(TOPIC_ASSIGN_KIND, topic, {
-      record: signal("Shard compaction window shipped, said the acquisition memo", "private"),
+      record: f.signal("Shard compaction window shipped, said the acquisition memo", {
+        partition: "private",
+      }),
     });
-    writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "milestone_done", {
-      values: { done_min: 0.8 },
-      source: "set",
-    });
-    resetThresholdsStoreCache();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("done_") ? 0.95 : undefined),
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: {
-        ...envFor("milestone_done:enforce"),
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PRIVATE_USES: "milestone_done",
-      },
-      now,
-    });
-    expect(verdicts.completions).toHaveLength(1);
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    f.tune("milestone_done", { done_min: 0.8 });
+    await ask(
+      f,
+      "milestone_done:enforce",
+      new FakeDecisionProvider({ answer: (id) => (id.startsWith("done_") ? 0.95 : undefined) }),
+      { OPEN_SECOND_BRAIN_DECISION_MODEL_PRIVATE_USES: "milestone_done" },
+    );
+    expect(f.items("milestone-done")[0]!.partition).toBe("private");
+    const report = plan(f);
     expect(report.status === "planned" ? report.completions : -1).toBe(1);
     expect(sharedRecords().filter((r) => r.kind === "milestone-done")).toEqual([]);
-    const privateDone = readPartition(join(m.root("dev-a"), "private"))
+    const privateDone = readPartition(join(f.m.root("dev-a"), "private"))
       .flatMap((s) => s.records)
       .filter((r) => r.kind === "milestone-done");
     expect(privateDone).toHaveLength(1);
   });
 
   test("a private milestone of a shared topic is never sent to a hosted provider", async () => {
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
     topicRecord(
       TOPIC_MILESTONE_KIND,
       topic,
@@ -248,15 +149,16 @@ describe("the decide pass on the planner's topic rules", () => {
       "private",
     );
     topicRecord(TOPIC_ASSIGN_KIND, topic, {
-      record: signal("Shard compaction window shipped and the rollup ledger closed"),
+      record: f.signal("Shard compaction window shipped and the rollup ledger closed"),
     });
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("milestone_done:shadow"), now });
+    await ask(f, "milestone_done:shadow", fake);
     expect(fake.requests).toEqual([]);
+    expect(refused("milestone-done")).toEqual(["egress-refused"]);
   });
 
   test("a private rename of a shared topic never reaches a hosted provider", async () => {
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
     topicRecord(
       TOPIC_RENAME_KIND,
       topic,
@@ -268,32 +170,24 @@ describe("the decide pass on the planner's topic rules", () => {
       text: "Which compaction window ships first",
     });
     topicRecord(TOPIC_ASSIGN_KIND, topic, {
-      record: signal("Shard compaction window decided: the nightly one ships first"),
+      record: f.signal("Shard compaction window decided: the nightly one ships first"),
     });
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("question_resolved:shadow"), now });
-    expect(fake.requests).toHaveLength(1);
-    const sent = JSON.stringify(fake.requests[0]!.state);
-    expect(sent).toContain("Which compaction window ships first");
-    expect(sent).not.toContain("Halcyon");
+    await ask(f, "question_resolved:shadow", fake);
+    expect(JSON.stringify(fake.requests)).not.toContain("Halcyon");
+    // The item's input carries the private title: it waits for a local executor.
+    expect(fake.requests).toEqual([]);
+    expect(refused("question-resolved")).toEqual(["egress-refused"]);
   });
 
-  test("the history window follows the date the run is for", async () => {
-    note("Routine heartbeat of the nightly compaction job", T0 - 20 * WEEK_MS);
-    const asked = (): string[] =>
-      fake.requests.flatMap((r) =>
-        Object.values((r.state as { records: Record<string, string> }).records),
-      );
+  test("a note of any age is asked about, whatever date the run is for", async () => {
+    f.note("Routine heartbeat of the nightly compaction job", T0 - 20 * WEEK_MS);
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("human_readable:shadow"), now });
-    expect(asked()).toEqual([]);
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("human_readable:shadow"),
-      now,
-      runAt: new Date(T0 - 19 * WEEK_MS),
-    });
-    expect(asked().join(" ")).toContain("Routine heartbeat");
+    await ask(f, "human_readable:shadow", fake);
+    const asked = fake.requests.flatMap((r) =>
+      Object.values((r.state as { records: Record<string, string> }).records),
+    );
+    expect(asked.join(" ")).toContain("Routine heartbeat");
   });
 
   test("a verdict write that fails part way still counts what landed", () => {
@@ -322,7 +216,15 @@ describe("the decide pass on the planner's topic rules", () => {
           return "rec-1";
         },
         fold: foldTopics([]),
-        plan: { routes: [], creates: [], splits: [], merges: [], quiet: [], shortfalls: [] },
+        plan: {
+          routes: [],
+          creates: [],
+          splits: [],
+          merges: [],
+          quiet: [],
+          shortfalls: [],
+          asks: { routes: [], groups: [] },
+        },
         candidatesById: new Map(),
         verdicts,
         counts,
@@ -336,7 +238,7 @@ describe("the decide pass on the planner's topic rules", () => {
 describe("side texts and private records against a hosted provider", () => {
   test("a <private> region in a shared topic title, question or milestone never reaches it", async () => {
     // A legacy or foreign writer's shared records that carry a region.
-    const topic = seedTopic(
+    const topic = f.seedTopic(
       "Shard compaction <private>HALCYON-TITLE</private> keeps shard files small",
     );
     topicRecord(TOPIC_QUESTION_KIND, topic, {
@@ -348,98 +250,88 @@ describe("side texts and private records against a hosted provider", () => {
       text: "Ship the <private>HALCYON-MILESTONE</private> compaction window",
     });
     topicRecord(TOPIC_ASSIGN_KIND, topic, {
-      record: signal("Shard compaction window shipped and the question settled"),
+      record: f.signal("Shard compaction window shipped and the question settled"),
     });
-    signal("Shard compaction keeps shard files small after the window");
+    f.signal("Shard compaction keeps shard files small after the window");
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor(
-        "topic_route:shadow,event_kind:shadow,question_resolved:shadow,milestone_done:shadow",
-      ),
-      now,
-    });
-    const uses = new Set(fake.requests.map((r) => r.use));
-    expect(uses).toEqual(
-      new Set(["topic_route", "event_kind", "question_resolved", "milestone_done"]),
+    await ask(
+      f,
+      "topic_route:shadow,event_kind:shadow,question_resolved:shadow,milestone_done:shadow",
+      fake,
     );
-    const sent = JSON.stringify(fake.requests);
-    expect(sent).not.toContain("HALCYON");
-    expect(sent).toContain("Shard compaction");
+    // Every item whose input carries a region is private: nothing of it is sent.
+    expect(JSON.stringify(fake.requests)).not.toContain("HALCYON");
+    const operations = ["topic-route", "event-kind", "question-resolved", "milestone-done"];
+    const items = operations.flatMap((op) => f.items(op));
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      if (item.partition === "private") expect(item.last_release?.reason).toBe("egress-refused");
+    }
   });
 
   test("a private record is never sent for event_kind or question_resolved, nor named in a call record", async () => {
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
     topicRecord(TOPIC_QUESTION_KIND, topic, {
       item: "q-window",
       text: "Which compaction window ships first",
     });
-    const secret = signal("PRIVATE-TEXT the compaction window is the acquisition date", "private");
+    const secret = f.signal("PRIVATE-TEXT the compaction window is the acquisition date", {
+      partition: "private",
+    });
     topicRecord(TOPIC_ASSIGN_KIND, topic, { record: secret });
     topicRecord(TOPIC_ASSIGN_KIND, topic, {
-      record: signal("Shard compaction window answered: the first one ships"),
+      record: f.signal("Shard compaction window answered: the first one ships"),
     });
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("event_kind:shadow,question_resolved:shadow"),
-      now,
-    });
+    await ask(f, "event_kind:shadow,question_resolved:shadow", fake);
     expect(fake.requests.length).toBeGreaterThan(0);
     expect(JSON.stringify(fake.requests)).not.toContain("PRIVATE-TEXT");
-    const ids = listDecisionModelCalls(vault).flatMap(
-      (c) => (c.payload["record_ids"] as string[] | undefined) ?? [],
-    );
-    // Skipped before the per-pass cap: not even a withheld entry.
-    expect(ids).not.toContain(secret);
-    expect(ids).not.toContain("(withheld)");
-    expect(ids.length).toBeGreaterThan(0);
+    const calls = listDecisionModelCalls(f.vault);
+    expect(calls.length).toBeGreaterThan(0);
+    // A call record names the item and the operation, never the private record.
+    expect(JSON.stringify(calls)).not.toContain(secret);
   });
 
-  test("a drafted title is withheld when a group member beyond the shown ones is private", async () => {
+  test("a group with a private member beyond the shown ones waits for a local executor", async () => {
     // Eleven members: the ten oldest are shown, the newest is private and
     // its words count toward the drafted title all the same.
     for (let i = 0; i < 10; i++) {
-      signal(`Deprecation windows for the public API, step ${i}`, "shared", `s${i % 2}`);
+      f.signal(`Deprecation windows for the public API, step ${i}`, { session: `s${i % 2}` });
     }
-    signal("PRIVATE-TEXT deprecation windows for the public API", "private", "s1");
+    f.signal("PRIVATE-TEXT deprecation windows for the public API", {
+      partition: "private",
+      session: "s1",
+    });
     const fake = new FakeDecisionProvider({});
-    await decideTopicPlan(a, { provider: fake, env: envFor("topic_new:shadow"), now });
-    expect(fake.requests).toHaveLength(1);
-    expect(JSON.stringify(fake.requests)).not.toContain("PRIVATE-TEXT");
-    const state = fake.requests[0]!.state as { title: string; groups: Record<string, string> };
-    expect(Object.keys(state.groups)).toHaveLength(10);
-    expect(state.title).toBe("");
+    await ask(f, "topic_new:shadow", fake);
+    expect(fake.requests).toEqual([]);
+    expect(refused("topic-new")).toEqual(["egress-refused"]);
   });
 
   test("a word only inside a <private> region never reaches a drafted title, goal or the provider", async () => {
     // Private records of topic_new may go to the hosted provider here, so
     // the drafted title is sent; the region's word must not be in it.
     for (let i = 0; i < 5; i++) {
-      signal(
-        `<private>Zephyrquill</private> deprecation windows for the public API, step ${i}`,
-        "shared",
-        `s${i % 2}`,
-      );
+      f.signal(`<private>Zephyrquill</private> deprecation windows for the public API, step ${i}`, {
+        session: `s${i % 2}`,
+      });
     }
-    const fake = new FakeDecisionProvider({});
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: {
-        ...envFor("topic_new:shadow"),
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PRIVATE_USES: "topic_new",
-      },
-      now,
+    f.tune("topic_new", { veto_below: 0.3 });
+    const fake = new FakeDecisionProvider({
+      answer: (id) => (id.startsWith("new_") ? 0.9 : undefined),
+    });
+    await ask(f, "topic_new:enforce", fake, {
+      OPEN_SECOND_BRAIN_DECISION_MODEL_PRIVATE_USES: "topic_new",
     });
     expect(fake.requests).toHaveLength(1);
     const state = fake.requests[0]!.state as { title: string };
     expect(state.title).not.toBe("");
     expect(JSON.stringify(fake.requests).toLowerCase()).not.toContain("zephyrquill");
-    runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
-    const stored = readPartition(join(m.root("dev-a"), "private"))
-      .concat(readPartition(join(m.root("dev-a"), "shared")))
+    plan(f);
+    const stored = readPartition(join(f.m.root("dev-a"), "private"))
+      .concat(readPartition(join(f.m.root("dev-a"), "shared")))
       .flatMap((s) => s.records)
-      .filter((r) => r.kind === TOPIC_CREATE_KIND);
+      .filter((r) => r.kind === TOPIC_CREATE_KIND && r.agent !== "seed");
     expect(stored).toHaveLength(1);
     const body = JSON.stringify(stored[0]!.body).toLowerCase();
     expect(body).not.toContain("zephyrquill");

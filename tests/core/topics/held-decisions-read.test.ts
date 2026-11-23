@@ -10,7 +10,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { writeVaultPointer } from "../../../src/core/brain/portability/pointer.ts";
 import { withPrivateWithheld } from "../../../src/core/store/caller-reach.ts";
 import { runTopicAction } from "../../../src/core/topics/actions.ts";
@@ -51,7 +51,7 @@ async function topicWithDecision(chosen: string): Promise<{ a: Machine; topic: s
   });
   await callTool(two, "brain_note", { text: `${SUBJECT} 2`, agent: "agent-two" });
   await callTool(two, "brain_note", { text: `${SUBJECT} 3`, agent: "agent-two" });
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error("not planned");
   expect(report.created[0]!.members).toBe(5);
   return { a, topic: report.created[0]!.topic };
@@ -95,7 +95,7 @@ test("a decision with a private region is neither derived nor listed below local
     review_date: "2027-01-01",
     agent: "agent-one",
   });
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   const local = show(topic, false);
   expect((local["topic"] as Record<string, unknown>)["held_records"]).toBe(6);
   expect(decisionItems(local)).toHaveLength(2);

@@ -14,6 +14,7 @@ import { sharedSettingsOf } from "./settings.ts";
 import { configuredStore } from "../store/read/store-entities.ts";
 import { reviewTopics, type TopicReview } from "./plan.ts";
 import { readTopicsOf } from "./read.ts";
+import { standingMergeHints } from "./decide-operations.ts";
 import type { TopicFold } from "./fold.ts";
 import { plainText } from "../view/pages.ts";
 
@@ -26,11 +27,15 @@ export interface TopicReviewRead {
 export function readTopicReview(nowMs: number, configPath?: string): TopicReviewRead | null {
   const store = configuredStore(configPath);
   if (store === null || !store.partitions.has("shared")) return null;
-  const { fold, unreadable } = readTopicsOf(store);
+  const read = readTopicsOf(store);
+  const { fold, unreadable } = read;
   // A fold over a partial read may miss topics: nothing is asked from it.
   if (unreadable.length > 0) return null;
   const quietDays = settingValue(sharedSettingsOf(store), SETTING_TOPIC_QUIET_DAYS) as number;
-  return { review: reviewTopics(fold, nowMs, quietDays), fold };
+  // The merge hints that stand in the dream work queue (`topic-same`).
+  const hints = standingMergeHints(store.root, read.partitions);
+  if (hints === null) return null;
+  return { review: reviewTopics(fold, nowMs, quietDays, hints), fold };
 }
 
 /** The `## Topics` section of a digest or brief; empty when there is nothing to ask. */
@@ -43,8 +48,12 @@ export function renderTopicReview(read: TopicReviewRead | null): string {
   const lines = ["## Topics", ""];
   for (const merge of review.merges) {
     const [a, b] = merge.topics;
+    const judged =
+      merge.judged === undefined
+        ? ""
+        : ` A decision model judged them ${merge.judged === "same" ? "the same subject" : "different subjects"}.`;
     lines.push(
-      `- These topics look like one: "${title(a)}" and "${title(b)}". To merge them: ` +
+      `- These topics look like one: "${title(a)}" and "${title(b)}".${judged} To merge them: ` +
         `\`o2b topic merge ${b} --into ${a}\`.`,
     );
   }

@@ -56,8 +56,8 @@ import {
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import {
-  prepareTopicVerdicts,
-  type PrepareTopicVerdictsOptions,
+  prepareClosedQuestions,
+  type PrepareClosedQuestionsOptions,
 } from "../../../core/topics/decide-auto.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
@@ -582,24 +582,26 @@ async function brainDream(argv: string[]): Promise<number> {
         })
       : undefined;
   const sink = observation?.sink ?? steps;
-  // The model verdicts are decided before the pass (design D10, D20):
-  // only a live pass decides; a dry run gets the deterministic result.
+  // The closed questions are produced and asked before the pass
+  // (change `dream-closed-questions`, design D1): only a live pass does
+  // it; a dry run produces nothing and asks nothing.
   const dryRun = Boolean(flags["dry-run"]);
   // The same config and run date the pass below plans with.
-  const decideOptions: PrepareTopicVerdictsOptions = {
+  const decideOptions: PrepareClosedQuestionsOptions = {
     ...(config !== undefined ? { configPath: config } : {}),
     ...(now !== null ? { runAt: now } : {}),
+    ...(agent ? { agent } : {}),
   };
-  // The owner gate runs before the verdicts, so no model is asked for a
-  // pass that will be refused; `dream()` asks again for its own callers.
+  // The owner gate runs first, so no model is asked for a pass that will
+  // be refused; `dream()` asks again for its own callers.
   if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
-  const topicVerdicts = dryRun ? undefined : await prepareTopicVerdicts(decideOptions);
+  const closedQuestions = dryRun ? undefined : await prepareClosedQuestions(vault, decideOptions);
   let summary;
   try {
     summary = dream(vault, {
       ...(now !== null ? { now } : {}),
       dryRun,
-      ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
+      ...(closedQuestions !== undefined ? { closedQuestions } : {}),
       ...(agent ? { agentName: agent } : {}),
       safeguard: guard(),
       ...(sink !== undefined ? { onProgress: sink } : {}),
@@ -649,10 +651,17 @@ async function brainDream(argv: string[]): Promise<number> {
   if (summary.view !== undefined) ok(`view: ${summary.view.summary}`);
   const work = summary.model_work;
   if (work !== undefined) {
+    const asked = Object.values(work.asked ?? {}).reduce((n, k) => n + k, 0);
     ok(
-      `model_work: ${work.produced} produced, ${work.waiting} waiting, ${work.applied} applied` +
-        (work.waiting > 0 ? " (nothing answers queued work in this version)" : ""),
+      `model_work: ${work.produced} produced, ${asked} asked, ${work.waiting} waiting, ` +
+        `${work.applied} applied, ${work.abstained} abstained` +
+        (work.waiting > 0 ? " (the dream work queue says why they wait)" : ""),
     );
+  }
+  if (summary.judgment === "elsewhere") {
+    ok("judgment: topic judgment runs on the dream owner's device");
+  } else if (summary.judgment === "unbound") {
+    ok("judgment: no dream owner is bound, so no closed question is decided");
   }
   return 0;
 }

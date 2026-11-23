@@ -1538,6 +1538,14 @@ export interface BrainDreamConfig {
    * raising this never drops anything silently.
    */
   readonly salience_threshold?: number;
+  /**
+   * The budget in milliseconds of a live pass's model work (change
+   * `dream-closed-questions`): producing the closed questions on the
+   * queue and answering them with the decision model, together. Absent:
+   * 20 000. A caller with its own deadline (the MCP tool, the
+   * maintenance lane) clamps it to that.
+   */
+  readonly model_budget_ms?: number;
 }
 
 /**

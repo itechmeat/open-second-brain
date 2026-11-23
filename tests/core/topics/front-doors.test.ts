@@ -1,10 +1,13 @@
 /**
- * The front doors of the decide pass (task 4.1.4 item 5, design D10,
- * D20): the CLI dream verb, the MCP dream tool and the maintenance
- * lane's dream task each decide before a live pass - the fake systemone
- * server on loopback is the provider, named by the machine config - and
- * a dry run or preview sends nothing. The provider is injected through
- * the config's base URL, the same way a real self-hosted provider is.
+ * The front doors of a live pass's model work (change
+ * `dream-closed-questions`, design D1, task 5.3): the CLI dream verb, the
+ * MCP dream tool and the maintenance lane's dream task each produce the
+ * closed questions and have the decision model answer them before a live
+ * pass on the dream owner's device - the fake systemone server on
+ * loopback is the provider, named by the machine config - and topic
+ * planning applies the answers; a dry run or preview produces nothing and
+ * sends nothing. The provider is injected through the config's base URL,
+ * the same way a real self-hosted provider is.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
@@ -25,6 +28,17 @@ import { buildLaneTasks } from "../../../src/core/brain/maintenance/lane-tasks.t
 import { LANE_TASK } from "../../../src/core/brain/maintenance/lane.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
+import {
+  claimDreamOwner,
+  claimSettled as claimOwnerSettled,
+  readDreamOwner,
+} from "../../../src/core/brain/dream-owner/owner.ts";
+import { readStreamRecords } from "../../../src/core/store/read/stream-read.ts";
+import {
+  DEVICE_SWITCHED_KIND,
+  MIGRATION_STREAM,
+  deviceSwitchedBody,
+} from "../../../src/core/store-migration/migration-records.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 import { TEST_DEVICE_ID } from "../../helpers/test-vault.ts";
 import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
@@ -79,7 +93,17 @@ afterEach(() => {
   resetThresholdsStoreCache();
 });
 
-/** One store with the writer role, a topic pair and one unassigned record. */
+/** Items of the dream work queue, any partition. */
+function workItems(): number {
+  return ["shared", "private"]
+    .flatMap((p) => readStreamRecords(storeRoot, p as "shared", { stream: "dream-work" }).records)
+    .filter((r) => r.kind === "dream-work-item").length;
+}
+
+/**
+ * One store-only brain whose dream owner and view writer is this device,
+ * a topic pair and one unassigned record.
+ */
 function seedStore(): { shardTopic: string; gardenTopic: string; record: string } {
   storeRoot = join(tmp, "store");
   writeFileSync(configPath, `vault: ${vault}\n`);
@@ -107,6 +131,20 @@ function seedStore(): { shardTopic: string; gardenTopic: string; record: string 
   claimSettled(
     handle,
     readViewWriter(handle, () => T0),
+  );
+  // This device is switched to the store: the brain is served from it,
+  // which is where the dream owner and its queue live.
+  appendRecord(handle, {
+    partition: "shared",
+    stream: MIGRATION_STREAM,
+    kind: DEVICE_SWITCHED_KIND,
+    agent: "seed",
+    body: deviceSwitchedBody(null, TEST_DEVICE_ID),
+  });
+  claimDreamOwner(handle, "claude", { writer: "o2b", authority: "human", now: () => T0 });
+  claimOwnerSettled(
+    handle,
+    readDreamOwner(handle, () => T0),
   );
   const shardTopic = newUlid(T0 + 1);
   appendRecord(
@@ -204,8 +242,8 @@ function assigns(): Array<{ topic: string; body: string }> {
     .map((r) => ({ topic: r.topic ?? "", body: JSON.stringify(r.body) }));
 }
 
-describe("the dream front doors decide before a live pass", () => {
-  test("the CLI dream verb decides and writes the model route; a dry run sends nothing", async () => {
+describe("the dream front doors ask before a live pass", () => {
+  test("the CLI dream verb asks and planning writes the model route; a dry run produces nothing", async () => {
     const { gardenTopic } = seedStore();
     scriptGardenRoute();
     // A dry run on the fresh store, its record still unassigned, sends nothing.
@@ -220,6 +258,7 @@ describe("the dream front doors decide before a live pass", () => {
     expect(dry.returncode).toBe(0);
     expect(server.requests.length).toBe(start);
     expect(assigns()).toEqual([]);
+    expect(workItems()).toBe(0);
     const live = await runCli(["brain", "dream", "--vault", vault, "--json"], {
       env: {
         OPEN_SECOND_BRAIN_CONFIG: configPath,
@@ -230,6 +269,15 @@ describe("the dream front doors decide before a live pass", () => {
     expect(live.returncode).toBe(0);
     expect(live.stderr).not.toContain("error:");
     expect(server.requests.length).toBeGreaterThan(start);
+    // The summary says what was asked, applied and abstained, and where judgment ran.
+    const summary = JSON.parse(live.stdout) as {
+      model_work: { produced: number; asked: Record<string, number>; abstained: number };
+      judgment: string;
+    };
+    expect(summary.model_work.produced).toBeGreaterThan(0);
+    expect(summary.model_work.asked["topic-route"]).toBe(1);
+    expect(summary.model_work.abstained).toBe(0);
+    expect(summary.judgment).toBe("here");
     const written = assigns();
     expect(written).toHaveLength(1);
     expect(written[0]!.topic).toBe(gardenTopic);
@@ -245,7 +293,30 @@ describe("the dream front doors decide before a live pass", () => {
     });
   });
 
-  test("the MCP dream tool decides on a live run; a dry run sends nothing", async () => {
+  test("a live pass with no decision model produces the items and writes nothing for them", async () => {
+    seedStore();
+    // The same brain with no decision model in force.
+    writeFileSync(
+      configPath,
+      [`vault: ${vault}`, `store_root: ${storeRoot}`, `device_id: ${TEST_DEVICE_ID}`].join("\n"),
+    );
+    const start = server.requests.length;
+    const live = await runCli(["brain", "dream", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath, OPEN_SECOND_BRAIN_STORE_ROOT: storeRoot },
+    });
+    expect(live.returncode).toBe(0);
+    expect(server.requests.length).toBe(start);
+    const summary = JSON.parse(live.stdout) as {
+      model_work: { produced: number; waiting: number };
+    };
+    expect(summary.model_work.produced).toBeGreaterThan(0);
+    expect(summary.model_work.waiting).toBeGreaterThan(0);
+    // The record's routing question waits on the queue; nothing is routed.
+    expect(workItems()).toBeGreaterThan(0);
+    expect(assigns()).toEqual([]);
+  });
+
+  test("the MCP dream tool asks on a live run; a dry run produces nothing", async () => {
     const { gardenTopic } = seedStore();
     scriptGardenRoute();
     const server2 = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
@@ -270,6 +341,7 @@ describe("the dream front doors decide before a live pass", () => {
     });
     expect(server.requests.length).toBe(start);
     expect(assigns()).toEqual([]);
+    expect(workItems()).toBe(0);
     const run = (await server2.handleRequest({
       jsonrpc: JSONRPC_VERSION,
       id: 2,
@@ -283,7 +355,7 @@ describe("the dream front doors decide before a live pass", () => {
     expect(assigns()[0]!.topic).toBe(gardenTopic);
   });
 
-  test("the maintenance lane's dream task decides before its live pass", async () => {
+  test("the maintenance lane's dream task asks before its live pass", async () => {
     const { gardenTopic } = seedStore();
     scriptGardenRoute();
     // The process names another config with another store: the lane
@@ -316,7 +388,7 @@ describe("the dream front doors decide before a live pass", () => {
     expect(assigns()[0]!.topic).toBe(gardenTopic);
   });
 
-  test("the lane's dream task starts its one deadline before the decide pass", async () => {
+  test("the lane's dream task starts its one deadline before the model work", async () => {
     const { gardenTopic } = seedStore();
     scriptGardenRoute();
     // How many decision requests had arrived each time a dream deadline

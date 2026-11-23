@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6948305 bytes
-# Maximum unpacked size: 23591553 bytes
+# Maximum packed size: 6954125 bytes
+# Maximum unpacked size: 23605847 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -558,6 +558,7 @@ src/core/brain/dream-plan-retires.ts
 src/core/brain/dream-plan-topics.ts
 src/core/brain/dream-plan.ts
 src/core/brain/dream-queue/constants.ts
+src/core/brain/dream-queue/decision-executor.ts
 src/core/brain/dream-queue/fold.ts
 src/core/brain/dream-queue/operations.ts
 src/core/brain/dream-queue/pass.ts
@@ -1606,14 +1607,9 @@ src/core/text/nearest-name.ts
 src/core/topics/actions.ts
 src/core/topics/candidates.ts
 src/core/topics/constants.ts
-src/core/topics/decide-asked.ts
 src/core/topics/decide-auto.ts
-src/core/topics/decide-history.ts
-src/core/topics/decide-items.ts
-src/core/topics/decide-route.ts
-src/core/topics/decide-same.ts
-src/core/topics/decide-shared.ts
-src/core/topics/decide.ts
+src/core/topics/decide-operations.ts
+src/core/topics/decide-produce.ts
 src/core/topics/decision-titles.ts
 src/core/topics/fold.ts
 src/core/topics/held-decisions.ts

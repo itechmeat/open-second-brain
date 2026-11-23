@@ -6,8 +6,13 @@
  *    the reason of its last failure and the command that retries it.
  *  - `dream-queue-backlog` (warning): ready work older than the reporting
  *    threshold, with the count and the oldest age.
- *  - `dream-queue-no-executor` (advice, once): items wait and this
- *    version has nothing that answers them.
+ *  - `dream-queue-no-executor` (advice, per operation): items of an
+ *    operation wait and nothing on this machine answers them; for a
+ *    closed question it names the setting that does
+ *    (`decision_model_uses` with the use and `enforce`).
+ *  - `dream-questions-waiting` (advice, per closed question): how many
+ *    wait, the oldest age, and why, each reason with the action that
+ *    changes it (change `dream-closed-questions`, design D7).
  *  - `dream-queue-unknown-operation` (warning): items of an operation
  *    this build does not know (a newer release produced them).
  *  - `dream-queue-rejected` (warning): records the fold rejected, by kind.
@@ -18,7 +23,11 @@
  */
 
 import { DREAM_QUEUE_COMMAND, DREAM_WORK_BACKLOG_MS } from "../dream-queue/constants.ts";
-import { queueStatus } from "../dream-queue/status-view.ts";
+import {
+  describeWaitingGroup,
+  queueStatus,
+  waitingByOperation,
+} from "../dream-queue/status-view.ts";
 import type { DoctorFindings, StoreSideCheckContext, StoreSideDoctorCheck } from "./check.ts";
 
 export const DREAM_QUEUE_PARKED_CODE = "dream-queue-parked";
@@ -26,6 +35,7 @@ export const DREAM_QUEUE_BACKLOG_CODE = "dream-queue-backlog";
 export const DREAM_QUEUE_NO_EXECUTOR_CODE = "dream-queue-no-executor";
 export const DREAM_QUEUE_UNKNOWN_OPERATION_CODE = "dream-queue-unknown-operation";
 export const DREAM_QUEUE_REJECTED_CODE = "dream-queue-rejected";
+export const DREAM_QUESTIONS_WAITING_CODE = "dream-questions-waiting";
 
 export const dreamQueueCheck: StoreSideDoctorCheck = {
   failSoft: true,
@@ -55,15 +65,32 @@ export const dreamQueueCheck: StoreSideDoctorCheck = {
           `(more than ${DREAM_WORK_BACKLOG_MS / 3_600_000} h); list them with \`${DREAM_QUEUE_COMMAND}\``,
       });
     }
-    const open =
-      status.counts.waiting + status.counts.leased + status.counts.accepted + status.counts.parked;
-    if (open > 0 && !status.executor) {
-      out.uncertain.push({
-        code: DREAM_QUEUE_NO_EXECUTOR_CODE,
-        message:
-          `${open} dream work item(s) wait for a model, and this version has nothing that ` +
-          "answers them; they are kept, never decided by a fixed rule, and not counted as done",
-      });
+    const waiting = waitingByOperation(status, {
+      ...(ctx.configPath !== undefined ? { configPath: ctx.configPath } : {}),
+      now: ctx.now.getTime(),
+    });
+    for (const group of waiting) {
+      const unanswered = (group.reasons["no-model"] ?? 0) + (group.reasons["no-executor"] ?? 0);
+      if (unanswered > 0) {
+        out.uncertain.push({
+          code: DREAM_QUEUE_NO_EXECUTOR_CODE,
+          message:
+            group.use === null
+              ? `${unanswered} ${group.operation} dream work item(s) wait for a model, and this ` +
+                "version has nothing that answers them; they are kept, never decided by a fixed " +
+                "rule, and not counted as done"
+              : `${unanswered} ${group.operation} item(s) wait and no decision model answers ` +
+                `${group.use}: configure a decision model and set \`decision_model_uses\` to ` +
+                `include \`${group.use}:enforce\`; until then they are kept, never decided by a ` +
+                "fixed rule",
+        });
+      }
+      if (group.use !== null) {
+        out.uncertain.push({
+          code: DREAM_QUESTIONS_WAITING_CODE,
+          message: `closed questions: ${describeWaitingGroup(group)}`,
+        });
+      }
     }
     for (const operation of status.unknown_operations) {
       out.issues.push({

@@ -301,6 +301,7 @@ function dreamPass(
               progress.stop(progressReasonForError(error) ?? PROGRESS_REASON.failed);
             },
           },
+          queue,
         ),
       ),
       opts,

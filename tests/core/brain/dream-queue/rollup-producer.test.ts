@@ -170,13 +170,13 @@ describe("a live pass", () => {
     expect(queued[0]!.body.evidence).toEqual(["pref-a", "pref-b", "pref-c"]);
     expect(queued[0]!.body.resources).toEqual(["rung:fact"]);
     expect(queued[0]!.state).toBe("waiting");
-    expect(summary.model_work).toEqual({ produced: 1, waiting: 1, applied: 0 });
+    expect(summary.model_work).toEqual({ produced: 1, waiting: 1, applied: 0, abstained: 0 });
 
     // A second pass over the same state adds none.
     const again = dream(vault, { now: new Date(NOW.getTime() + 60_000), configPath });
     expect(again.rollups).toEqual([]);
     expect(items()).toHaveLength(1);
-    expect(again.model_work).toEqual({ produced: 0, waiting: 1, applied: 0 });
+    expect(again.model_work).toEqual({ produced: 0, waiting: 1, applied: 0, abstained: 0 });
 
     // The next firing's item holds only the new ids.
     for (const s of ["d", "e", "f"]) seed(s);
@@ -264,9 +264,10 @@ describe("produceRollupWork", () => {
 
   test("rollup answers reject malformed YAML and frontmatter without a mapping kind", () => {
     const validate = dreamWorkOperation(ROLLUP_SUMMARY_OPERATION)!.validate;
-    expect(validate({ text: "---\nkind: [\n---\nbody" })).not.toBeNull();
-    expect(validate({ text: "---\nhello\n---\nbody" })).not.toBeNull();
-    expect(validate({ text: "---\nkind: rollup\n---\nbody" })).toBeNull();
+    const item = { body: { payload: {} } } as Parameters<typeof validate>[1];
+    expect(validate({ text: "---\nkind: [\n---\nbody" }, item)).not.toBeNull();
+    expect(validate({ text: "---\nhello\n---\nbody" }, item)).not.toBeNull();
+    expect(validate({ text: "---\nkind: rollup\n---\nbody" }, item)).toBeNull();
   });
 
   test("more than the bound produces bounded follow-up items in the same pass", () => {
@@ -386,6 +387,7 @@ describe("produceRollupWork", () => {
       store: store(),
       vault,
       configPath,
+      now: NOW.getTime(),
     });
     expect(current).toEqual({
       input_hash: dreamWorkInputHash([successor.id]),

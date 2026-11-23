@@ -205,6 +205,12 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
         "Wilson-bound confidence, observed reuse) reaches it. Excluded facts",
         "are always named in the dream summary, never silently dropped.",
       ]),
+      example("model_budget_ms", 20000, [
+        "Unset by default, which gives a live pass 20000 ms to put its",
+        "closed questions on the dream work queue and have the decision",
+        "model answer them. Questions it does not reach wait for the next",
+        "pass; nothing is decided without an answer.",
+      ]),
     ],
   },
   {

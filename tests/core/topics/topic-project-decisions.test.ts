@@ -11,7 +11,7 @@ import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { removeStoreSignal } from "../../../src/core/brain/signal-state.ts";
 import { appendRecord } from "../../../src/core/store/appender.ts";
 import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
@@ -164,7 +164,7 @@ test("a topic made from a project's notes holds the project's decisions, each li
     events.every((e) => (e.body["body"] as Record<string, unknown>)["project"] === PROJECT),
   ).toBe(true);
 
-  const report = dream(p.a.vault).topics?.report;
+  const report = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error(`not planned: ${report?.status}`);
   expect(report.created).toHaveLength(1);
   const topic = report.created[0]!.topic;
@@ -186,14 +186,14 @@ test("a topic made from a project's notes holds the project's decisions, each li
 test("a decision recorded after the topic was made is routed to it by the next pass", async () => {
   const p = project();
   await notes(p);
-  const first = dream(p.a.vault).topics?.report;
+  const first = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (first?.status !== "planned") throw new Error(`not planned: ${first?.status}`);
   expect(first.created).toHaveLength(1);
   const topic = first.created[0]!.topic;
 
   await recordPageFormat(p);
   await resolveCadence(p);
-  const second = dream(p.a.vault).topics?.report;
+  const second = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (second?.status !== "planned") throw new Error(`not planned: ${second?.status}`);
   expect(second.created).toHaveLength(0);
   expect(second.routed.map((r) => r.record).toSorted()).toEqual(
@@ -208,7 +208,7 @@ test("a decision recorded after the topic was made is routed to it by the next p
 test("a decision of another project is never routed to this project's topic", async () => {
   const p = project();
   await notes(p);
-  const first = dream(p.a.vault).topics?.report;
+  const first = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (first?.status !== "planned") throw new Error(`not planned: ${first?.status}`);
   const other = join(fleet!.parent, "projects", "проект");
   mkdirSync(other, { recursive: true });
@@ -221,7 +221,7 @@ test("a decision of another project is never routed to this project's topic", as
     review_date: "2027-01-01",
     agent: "three",
   });
-  const second = dream(p.a.vault).topics?.report;
+  const second = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (second?.status !== "planned") throw new Error(`not planned: ${second?.status}`);
   expect(second.routed).toHaveLength(0);
 });

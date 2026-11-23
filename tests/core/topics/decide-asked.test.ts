@@ -1,131 +1,33 @@
 /**
- * The decide pass's device-local "asked" set (design D20): an answer that
- * writes nothing (here a routine `event_kind`) is remembered by use,
- * record, question version, answering model and mode, so the next pass
- * asks the records not yet asked instead of the same newest ones; and a
- * record dated in the future does not take the place of the present ones.
+ * What the device-local "asked" set did, the queue now holds (change
+ * `dream-closed-questions`, design D4, D5, D6): an answer that decides
+ * nothing (here a routine `event_kind`) finishes its item as abstained,
+ * so the next pass asks the records not yet asked; an answer accepted
+ * before a run fails is kept; a shadow answer is not asked again in
+ * shadow, and is asked again once the use is in enforce; a record dated
+ * in the future does not take the place of a present one. The asked file
+ * is neither read nor written.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
 
-import { appendRecord } from "../../../src/core/store/appender.ts";
-import {
-  decisionThresholdsPath,
-  resetThresholdsStoreCache,
-  writeThresholdEntry,
-} from "../../../src/core/decision-model/thresholds.ts";
-import { newUlid } from "../../../src/core/store/ulid.ts";
-import type { StoreHandle } from "../../../src/core/store/store-open.ts";
-import { TOPIC_ASSIGN_KIND, TOPIC_CREATE_KIND } from "../../../src/core/topics/constants.ts";
-import { decideTopicPlan } from "../../../src/core/topics/decide.ts";
-import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
-import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
-import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
+import { runDecisionExecutor } from "../../../src/core/brain/dream-queue/decision-executor.ts";
+import { readTopicQuestionState } from "../../../src/core/topics/decide-operations.ts";
+import { produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
+import { closedFixture, type ClosedFixture } from "./fixtures/closed-fixture.ts";
+import { ask, plan } from "./fixtures/closed-run.ts";
 
-const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
-let clock = T0;
-const now = () => (clock += 1000);
-/** The test clock moves a second per read: a pass budget that never ends here. */
-const LONG = 10_000_000;
-
-let m: Machines;
-let a: StoreHandle;
-let tmp: string;
-let configPath: string;
+let f: ClosedFixture;
 
 beforeEach(() => {
-  clock = T0;
-  m = makeMachines(["dev-a"], "o2b-decide-asked-");
-  a = m.open("dev-a");
-  claimViewWriter(a, { agent: "dream", now });
-  claimSettled(a, readViewWriter(a, now));
-  tmp = mkdtempSync(join(m.parent, "cfg-"));
-  const vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain"), { recursive: true });
-  process.env["VAULT_DIR"] = vault;
-  configPath = join(tmp, "config.yaml");
-  writeFileSync(configPath, "");
-  resetThresholdsStoreCache();
+  f = closedFixture();
 });
 
 afterEach(() => {
-  delete process.env["VAULT_DIR"];
-  resetThresholdsStoreCache();
-  m.cleanup();
+  f.cleanup();
 });
-
-let seq = 0;
-function signal(text: string): string {
-  clock += 1000;
-  seq += 1;
-  return appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "events",
-      kind: "signal",
-      agent: "agent-1",
-      body: {
-        id: `sig-2026-12-01-q${seq}`,
-        path: `Brain/inbox/q${seq}.md`,
-        staged: false,
-        frontmatter: { principle: text, project: "o2b", session: "s1" },
-        raw: null,
-        raw_shape: "bare",
-      },
-    },
-    { now },
-  ).record.id;
-}
-
-function seedTopic(title: string): string {
-  clock += 1000;
-  const topic = newUlid(clock);
-  appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "topics",
-      kind: TOPIC_CREATE_KIND,
-      agent: "seed",
-      topic,
-      body: { authority: "agent", title, scope: "project:o2b" },
-    },
-    { now },
-  );
-  return topic;
-}
-
-function holdRecord(topic: string, record: string): void {
-  appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "topics",
-      kind: TOPIC_ASSIGN_KIND,
-      agent: "seed",
-      topic,
-      body: { authority: "agent", record },
-    },
-    { now },
-  );
-}
-
-function envFor(mode: string): Record<string, string | undefined> {
-  return {
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_USES: `event_kind:${mode}`,
-    O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-    OPEN_SECOND_BRAIN_CONFIG: configPath,
-  };
-}
 
 /** A provider that answers `routine` to every kind question. */
 function routine(): FakeDecisionProvider {
@@ -145,101 +47,99 @@ function askedTexts(fake: FakeDecisionProvider): string[] {
   );
 }
 
-describe("the asked set", () => {
+/** Every file under `dir`, recursively (an absent directory has none). */
+function filesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => e.name);
+}
+
+describe("what the queue remembers", () => {
   test("two passes over more than 50 held records ask each record once", async () => {
-    writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "event_kind", {
-      values: { kind_min: 0.7 },
-      source: "set",
-    });
-    resetThresholdsStoreCache();
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
-    for (let i = 0; i < 60; i++) holdRecord(topic, signal(`routine heartbeat number ${i}`));
+    f.tune("event_kind", { kind_min: 0.7 });
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
+    for (let i = 0; i < 60; i++) f.holdRecord(topic, f.signal(`routine heartbeat number ${i}`));
     const first = routine();
-    await decideTopicPlan(a, { provider: first, env: envFor("enforce"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:enforce", first);
+    plan(f);
     const second = routine();
-    await decideTopicPlan(a, { provider: second, env: envFor("enforce"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:enforce", second);
     const texts = [...askedTexts(first), ...askedTexts(second)];
     expect(texts).toHaveLength(60);
     expect(new Set(texts).size).toBe(60);
     // A third pass has nothing left to ask.
     const third = routine();
-    await decideTopicPlan(a, { provider: third, env: envFor("enforce"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:enforce", third);
     expect(third.requests).toEqual([]);
-  });
+    // No device-local asked file is written.
+    expect(filesUnder(f.m.parent).filter((n) => n.includes("decide-asked"))).toEqual([]);
+  }, 30_000);
 
-  test("a pass that fails after answers arrived keeps them asked", async () => {
-    writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "event_kind", {
-      values: { kind_min: 0.7 },
-      source: "set",
+  test("a run that fails after an answer arrived keeps the answer", async () => {
+    f.tune("event_kind", { kind_min: 0.7 });
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
+    f.holdRecord(topic, f.signal("routine heartbeat"));
+    produceTopicQuestions(f.queue, readTopicQuestionState(f.a, f.still())!, {
+      until: Number.POSITIVE_INFINITY,
+      clock: f.still,
     });
-    resetThresholdsStoreCache();
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
-    holdRecord(topic, signal("routine heartbeat"));
     const first = routine();
-    // The pass fails at its first clock read after the answer arrived.
+    // The run fails at its first clock read after the answer arrived.
     const failing = (): number => {
-      if (first.requests.length > 0) throw new Error("the pass failed");
-      return now();
+      if (first.requests.length > 0) throw new Error("the run failed");
+      return f.still();
     };
     let failed = false;
     try {
-      await decideTopicPlan(a, {
+      await runDecisionExecutor(f.queue, {
+        until: Number.POSITIVE_INFINITY,
+        clock: failing,
+        configPath: f.configPath,
         provider: first,
-        env: envFor("enforce"),
-        now: failing,
-        deadlineMs: LONG,
+        env: f.env("event_kind:enforce"),
       });
     } catch {
       failed = true;
     }
     expect(failed).toBe(true);
     expect(askedTexts(first)).toHaveLength(1);
+    expect(f.items("event-kind")[0]!.state).toBe("accepted");
     const second = routine();
-    await decideTopicPlan(a, { provider: second, env: envFor("enforce"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:enforce", second);
     expect(second.requests).toEqual([]);
   });
 
   test("an answer given in shadow is asked again once the use is in enforce", async () => {
-    writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "event_kind", {
-      values: { kind_min: 0.7 },
-      source: "set",
-    });
-    resetThresholdsStoreCache();
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
-    holdRecord(topic, signal("routine heartbeat"));
+    f.tune("event_kind", { kind_min: 0.7 });
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
+    f.holdRecord(topic, f.signal("routine heartbeat"));
     const shadow = routine();
-    await decideTopicPlan(a, { provider: shadow, env: envFor("shadow"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:shadow", shadow);
     const shadowAgain = routine();
-    await decideTopicPlan(a, {
-      provider: shadowAgain,
-      env: envFor("shadow"),
-      now,
-      deadlineMs: LONG,
-    });
+    await ask(f, "event_kind:shadow", shadowAgain);
     expect(askedTexts(shadow)).toHaveLength(1);
     expect(shadowAgain.requests).toEqual([]);
+    expect(f.items("event-kind")[0]!.last_release?.reason).toBe("shadow");
     const enforce = routine();
-    await decideTopicPlan(a, { provider: enforce, env: envFor("enforce"), now, deadlineMs: LONG });
+    await ask(f, "event_kind:enforce", enforce);
     expect(askedTexts(enforce)).toHaveLength(1);
   });
 
   test("a record dated in the future does not take the place of a present one", async () => {
-    const topic = seedTopic("Shard compaction keeps monthly shard files small");
-    for (let i = 0; i < 50; i++) holdRecord(topic, signal(`present note number ${i}`));
-    const runAt = new Date(clock + 1000);
+    const topic = f.seedTopic("Shard compaction keeps monthly shard files small");
+    for (let i = 0; i < 50; i++) f.holdRecord(topic, f.signal(`present note number ${i}`));
+    const runAt = f.still() + 1000;
     // A device with a fast clock: its record claims a month from now.
-    clock += 30 * 24 * 60 * 60 * 1000;
-    holdRecord(topic, signal("FUTURE-DATED note"));
+    f.setClock(f.still() + 30 * 24 * 60 * 60 * 1000);
+    f.holdRecord(topic, f.signal("FUTURE-DATED note"));
+    f.setClock(runAt);
     const fake = routine();
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("shadow"),
-      now,
-      runAt,
-      deadlineMs: LONG,
-    });
+    await ask(f, "event_kind:shadow", fake);
     const texts = askedTexts(fake);
-    expect(texts).toHaveLength(50);
-    expect(texts.some((t) => t.includes("FUTURE-DATED"))).toBe(false);
-  });
+    // Oldest first, with no cap: every present record before the future-dated one.
+    expect(texts).toHaveLength(51);
+    expect(texts.slice(0, 50).some((t) => t.includes("FUTURE-DATED"))).toBe(false);
+    expect(texts[50]).toBe("FUTURE-DATED note");
+  }, 30_000);
 });

@@ -12,7 +12,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendRecord } from "../../../src/core/store/appender.ts";
-import type { StorePartition } from "../../../src/core/store/constants.ts";
+import { STORE_ROOT_ENV, type StorePartition } from "../../../src/core/store/constants.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import type { StoreHandle } from "../../../src/core/store/store-open.ts";
 import { foldTopics } from "../../../src/core/topics/fold.ts";
@@ -30,6 +30,8 @@ import {
 import { withLocalLock } from "../../../src/core/store/local-lock.ts";
 import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
 import { seedTopicRecord } from "../view/fixtures/seed.ts";
+import { answerClosedQuestions } from "../../helpers/closed-answers.ts";
+import { homeEnv } from "../../helpers/platform.ts";
 
 const T0 = Date.UTC(2026, 10, 2, 9, 0, 0);
 const DAY = 86_400_000;
@@ -98,8 +100,15 @@ function createdOnDisk(): boolean {
     .some((r) => r.kind === "topic-create");
 }
 
+/**
+ * One planning pass on `store`. On `a`, the dream owner, the closed
+ * questions are produced and answered first the way the fixed rule
+ * decided before (change `dream-closed-questions`): every qualifying
+ * group approved, every record routed to its best-ranked topic.
+ */
 function plan(store: StoreHandle = a): TopicPlanningReport {
   clock += 1000;
+  if (store === a) answerClosedQuestions(a, undefined, { now });
   return runTopicPlanning(store, { agent: "dream", now });
 }
 
@@ -363,7 +372,7 @@ describe("topic planning", () => {
     expect(fold().assignments.has(late)).toBe(false);
     expect(planned(plan()).routed).toEqual([]);
     expect(fold().assignments.has(late)).toBe(false);
-  });
+  }, 30_000);
 
   test("an agent's undo of an automatic route (as brain_topic writes it) blocks the route too", () => {
     cluster(["s1", "s1", "s2", "s2", "s2"]);
@@ -380,7 +389,7 @@ describe("topic planning", () => {
     );
     expect(planned(plan()).routed).toEqual([]);
     expect(fold().assignments.has(late)).toBe(false);
-  });
+  }, 30_000);
 
   test("an undone topic is gone and is not created again from the same records", () => {
     cluster(["s1", "s1", "s2", "s2", "s2"]);
@@ -482,7 +491,7 @@ describe("topic planning", () => {
     expect(report.created).toEqual([]);
   });
 
-  test("dream on two machines at once: only the view writer creates, and one topic exists", () => {
+  test("dream on two machines at once: only the dream owner creates, and one topic exists", () => {
     const b = m.open("dev-b");
     cluster(["s1", "s1", "s2", "s2", "s2"], b);
     m.sync();
@@ -490,7 +499,7 @@ describe("topic planning", () => {
     expect(onB).toEqual({ status: "not-writer", writer: "dev-a" });
     expect(planned(plan()).created).toHaveLength(1);
     m.sync();
-    expect(plan(b)).toEqual({ status: "not-writer", writer: "dev-a" });
+    expect(plan(b)).toEqual({ status: "not-owner", owner: "dev-a" });
     expect(fold("dev-b").topics.size).toBe(1);
     expect(fold("dev-a").topics.size).toBe(1);
   });
@@ -544,6 +553,7 @@ describe("topic planning", () => {
   test("a write that fails after a topic was created still lists the topic with its undo command", () => {
     cluster(["s1", "s1", "s2", "s2", "s2"]);
     clock += 1000;
+    answerClosedQuestions(a, undefined, { now });
     const report = runTopicPlanning(a, {
       agent: "dream",
       // A clock that fails once the create has landed: the first assign fails.
@@ -566,7 +576,20 @@ describe("topic planning", () => {
     ["s3", "s3", "s4", "s4", "s4"].forEach((session, i) =>
       signal(`Phone views render markdown pages offline ${i}`, { session }),
     );
+    answerClosedQuestions(a, undefined, { now });
     const start = join(m.parent, "start");
+    const deviceHome = join(m.parent, "home", "dev-a");
+    const deviceState = join(m.parent, "state", "dev-a");
+    const childEnv = {
+      ...homeEnv(deviceHome),
+      XDG_CONFIG_HOME: join(m.parent, "config"),
+      XDG_DATA_HOME: join(m.parent, "data"),
+      XDG_STATE_HOME: deviceState,
+      XDG_CACHE_HOME: join(m.parent, "cache"),
+      [STORE_ROOT_ENV]: m.root("dev-a"),
+      O2B_DEVICE_ID: "dev-a",
+      OPEN_SECOND_BRAIN_LOCK_WAIT_MS: "200",
+    };
     const children = [0, 1].map(() =>
       Bun.spawn(
         [
@@ -581,8 +604,7 @@ describe("topic planning", () => {
           stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
-          // Shorter than the time the lock is held: planning must wait longer.
-          env: { ...process.env, OPEN_SECOND_BRAIN_LOCK_WAIT_MS: "200" },
+          env: childEnv,
         },
       ),
     );

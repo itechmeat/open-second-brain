@@ -191,6 +191,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "dream-owner-elsewhere",
   "dream-owner-pending",
   "dream-owner-unbound",
+  "dream-questions-waiting",
   "dream-queue-backlog",
   "dream-queue-parked",
   "dream-queue-rejected",

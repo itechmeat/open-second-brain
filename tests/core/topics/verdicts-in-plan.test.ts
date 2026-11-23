@@ -1,11 +1,11 @@
 /**
- * Model verdicts refine the deterministic topic plan only where their
- * subject still matches the fold read under the planning lock (design
- * D10, D20). With `verdicts` absent, `planTopics` returns exactly the
- * deterministic plan; a verdict whose record is assigned meanwhile,
- * whose topic is merged, closed or of another scope, whose route is
- * blocked, or whose group has changed, is ignored and the deterministic
- * rule applies.
+ * Model verdicts decide the topic plan only where their subject still
+ * matches the fold read under the planning lock (design D10, D20; change
+ * `dream-closed-questions` D2). With `verdicts` absent, `planTopics`
+ * routes and creates nothing and lists the questions it waits on; a
+ * verdict whose record is assigned meanwhile, whose topic is merged,
+ * closed or of another scope, whose route is blocked, or whose group has
+ * changed, is ignored and the subject waits.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -32,6 +32,7 @@ import {
   type TopicVerdicts,
 } from "../../../src/core/topics/verdicts.ts";
 import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
+import { answerClosedQuestions } from "../../helpers/closed-answers.ts";
 import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
 import { seedTopicRecord } from "../view/fixtures/seed.ts";
 
@@ -107,11 +108,12 @@ function verdictOf(use: TopicVerdictBody["use"], confidence = 0.9): TopicVerdict
 }
 
 describe("planTopics with verdicts", () => {
-  test("with verdicts absent the plan equals the deterministic one, also with empty verdicts", () => {
+  test("with verdicts absent the plan routes nothing and asks, also with empty verdicts", () => {
     const topic = seedTopic("Shard compaction keeps monthly shard files small");
     const r1 = signal("Shard compaction thresholds were tuned today", "s1");
     const deterministic = planWith();
-    expect(deterministic.routes.map((r) => [r.record, r.topic])).toEqual([[r1, topic]]);
+    expect(deterministic.routes).toEqual([]);
+    expect(deterministic.asks.routes).toEqual([{ record: r1, topics: [topic] }]);
     expect(planWith(emptyTopicVerdicts())).toEqual(deterministic);
   });
 
@@ -146,7 +148,9 @@ describe("planTopics with verdicts", () => {
       ),
     });
     expect(none.routes).toEqual([]);
-    expect(none.creates.map((c) => [...c.members].toSorted())).toEqual([members]);
+    // Free for grouping: the group is asked about; it is created only on an approval.
+    expect(none.creates).toEqual([]);
+    expect(none.asks.groups.map((g) => [...g.members].toSorted())).toEqual([members.toSorted()]);
   });
 
   test("a verdict whose record is already assigned is ignored", () => {
@@ -208,7 +212,8 @@ describe("planTopics with verdicts", () => {
       ...emptyTopicVerdicts(),
       vetoes: new Map([[key, { verdict: verdictOf("topic_new", 0.2), veto: true }]]),
     });
-    expect(changed.creates).toHaveLength(1);
+    expect(changed.creates).toEqual([]);
+    expect(changed.asks.groups.map((g) => g.key)).toEqual([topicGroupKey(members)]);
     // Approval: the create carries the model verdict.
     const approved = planWith({
       ...emptyTopicVerdicts(),
@@ -227,39 +232,37 @@ describe("the planning write path stores verdicts", () => {
   });
 
   test("a model route writes an assign with authority model and the verdict", () => {
+    seedTopic("Shard compaction keeps monthly shard files small");
     const t2 = seedTopic("Garden watering schedule for the alley beds");
-    const r1 = signal("Shard compaction thresholds were tuned today", "s1");
-    const report = runTopicPlanning(a, {
-      agent: "dream",
-      now,
-      topicVerdicts: {
-        ...emptyTopicVerdicts(),
-        routes: new Map([
-          [r1, { topic: t2, privateInput: false, verdict: verdictOf("topic_route") }],
-        ]),
-      },
-    });
+    const r1 = signal("Shard compaction and garden watering schedules were tuned today", "s1");
+    // The model's answer: the garden topic, which the overlap rule ranks second.
+    answerClosedQuestions(
+      a,
+      (item) => (item.operation === "topic-route" ? { choice: t2, confidence: 0.9 } : null),
+      { now },
+    );
+    const report = runTopicPlanning(a, { agent: "dream", now });
     expect(report.status).toBe("planned");
     if (report.status !== "planned") return;
     expect(report.routed.map((r) => r.record)).toEqual([r1]);
     const records = readPartition(join(m.root("dev-a"), "shared")).flatMap((s) => s.records);
     const assign = records.find((r) => r.kind === TOPIC_ASSIGN_KIND && r.body["record"] === r1);
+    expect(assign?.topic).toBe(t2);
     expect(assign?.body["authority"]).toBe("model");
     const stored = assign?.body["verdict"] as TopicVerdictBody | undefined;
     expect(stored?.use).toBe("topic_route");
-    expect(stored?.model).toBe("test-model-1");
+    expect(stored?.model).toBe("test-model");
     expect(stored?.mode).toBe("enforce");
   });
 
-  test("a deterministic route writes no verdict field", () => {
+  test("with no answer no route is written", () => {
     const topic = seedTopic("Shard compaction keeps monthly shard files small");
     const r1 = signal("Shard compaction thresholds were tuned today", "s1");
     const report = runTopicPlanning(a, { agent: "dream", now });
     expect(report.status).toBe("planned");
     const records = readPartition(join(m.root("dev-a"), "shared")).flatMap((s) => s.records);
     const assign = records.find((r) => r.kind === TOPIC_ASSIGN_KIND && r.body["record"] === r1);
-    expect(assign?.body["authority"]).toBe("agent");
-    expect(assign?.body["verdict"]).toBeUndefined();
+    expect(assign).toBeUndefined();
     void topic;
   });
 });

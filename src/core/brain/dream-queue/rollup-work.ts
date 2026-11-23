@@ -158,7 +158,12 @@ export function produceRollupWork(
       factFresh = fresh;
       evidence = fresh.slice(0, DREAM_WORK_EVIDENCE_MAX);
       leftHere = fresh.length - evidence.length;
-      facts ??= factIndex(queue);
+      facts ??= factIndex({
+        store: queue.store,
+        vault: queue.vault,
+        now: (queue.now ?? Date.now)(),
+        ...(queue.configPath !== undefined ? { configPath: queue.configPath } : {}),
+      });
       const index = facts;
       // A fact the fold does not hold reads as private (design D5: the partition that leaks nothing).
       sourceById = new Map(

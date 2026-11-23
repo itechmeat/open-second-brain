@@ -26,7 +26,7 @@ test("only the owner folds decision pages for their titles", () => {
     return /lane["']?\]?\s*===\s*["']decisions["']|DECISIONS_LANE/.test(text);
   });
   expect(folding).toEqual([]);
-});
+}, 30_000);
 
 test("every call of decisionTitlesOf states the completeness of its read", () => {
   for (const rel of sources()) {

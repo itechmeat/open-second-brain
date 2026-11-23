@@ -11,6 +11,7 @@
  */
 
 import type { StoreHandle } from "../../store/store-open.ts";
+import type { StorePartition } from "../../store/constants.ts";
 import type { DreamWorkAnswer, DreamWorkItem, DreamWorkTraits } from "./fold.ts";
 
 /** Where an operation reads and writes. */
@@ -18,11 +19,17 @@ export interface DreamWorkContext {
   readonly store: StoreHandle;
   readonly vault: string | null;
   readonly configPath?: string;
+  /** The queue's clock reading the entry point runs at (ms). */
+  readonly now: number;
 }
 
 /** The item's input as the store holds it now. */
 export interface DreamWorkInput {
+  /** The source read is incomplete; leave the item unchanged and unleased. */
+  readonly unavailable?: true;
   readonly input_hash: string;
+  /** Partition to use if this replacement input is more private. */
+  readonly partition?: StorePartition;
   /** What the executor is shown for that input, when it differs from the item's. */
   readonly payload?: Readonly<Record<string, unknown>>;
   readonly evidence?: ReadonlyArray<string>;
@@ -30,8 +37,20 @@ export interface DreamWorkInput {
 
 export interface DreamWorkOperation extends DreamWorkTraits {
   readonly name: string;
-  /** Why the answer does not fit the answer schema, or `null` when it does. */
-  validate(answer: { readonly value?: unknown; readonly text?: string }): string | null;
+  /**
+   * `planning`: topic planning applies the answers under its own lock and
+   * marks the items applied (`markAppliedByPlanning`); `applyAccepted`
+   * leaves them alone. Absent: `applyAccepted` calls {@link apply}.
+   */
+  readonly appliedBy?: "planning";
+  /**
+   * Why the answer does not fit the answer schema, or `null` when it does.
+   * `item` is the item answered (its options live in its schema).
+   */
+  validate(
+    answer: { readonly value?: unknown; readonly text?: string },
+    item: DreamWorkItem,
+  ): string | null;
   /** The item's input reread from the store, or `null` when its subject is gone. */
   currentInput(item: DreamWorkItem, context: DreamWorkContext): DreamWorkInput | null;
   /**

@@ -11,7 +11,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { answerClosedQuestions, dreamAnswered } from "../../helpers/closed-answers.ts";
 import { writeVaultPointer } from "../../../src/core/brain/portability/pointer.ts";
 import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
 import { runTopicAction } from "../../../src/core/topics/actions.ts";
@@ -59,7 +59,7 @@ async function machineWithRecords(): Promise<Machine> {
 
 test("the page and show of a planned topic say how many records it holds and list them on request", async () => {
   const a = await machineWithRecords();
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   expect(report?.status).toBe("planned");
   if (report?.status !== "planned") return;
   expect(report.created).toHaveLength(1);
@@ -84,7 +84,7 @@ test("the page and show of a planned topic say how many records it holds and lis
 
 test("brain_topic show lists the held records when asked", async () => {
   const a = await machineWithRecords();
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error("not planned");
   const topic = report.created[0]!.topic;
   const result = (await callTool(serverIn(a, fleet!.parent), "brain_topic", {
@@ -113,6 +113,8 @@ test("the plain summary of o2b brain dream carries the topics line", async () =>
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
+  // The model's answers, as a live pass's front door would have them.
+  answerClosedQuestions(a.store());
   const run = await runCli(["brain", "dream", "--vault", a.vault], { env });
   expect(run.returncode, run.stderr).toBe(0);
   expect(run.stdout).toMatch(/^topics: 1 topic\(s\) created, 0 record\(s\) routed/m);
@@ -140,7 +142,7 @@ test("the held listing never shows a signal the product forgot", async () => {
       }),
     ),
   ]);
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error("not planned");
   expect(report.created[0]!.members).toBe(5);
   const topic = report.created[0]!.topic;
@@ -174,7 +176,7 @@ test.skipIf(CHMOD_CANNOT_DENY)(
   "below local reach the held listing names no shard it could not read, only how many",
   async () => {
     const a = await machineWithRecords();
-    const report = dream(a.vault).topics?.report;
+    const report = dreamAnswered(a.vault, a.store()).topics?.report;
     if (report?.status !== "planned") throw new Error("not planned");
     const topic = report.created[0]!.topic;
     // One log shard this machine cannot open.
@@ -227,7 +229,7 @@ async function topicWithSignals(): Promise<{
       }),
     ),
   ]);
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error("not planned");
   expect(report.created[0]!.members).toBe(5);
   const signal = (tag: string): string =>
@@ -356,7 +358,7 @@ test.skipIf(CHMOD_CANNOT_DENY)(
   "the plain o2b topic show --held warns about a shard it could not read, and a complete listing does not",
   async () => {
     const a = await machineWithRecords();
-    const report = dream(a.vault).topics?.report;
+    const report = dreamAnswered(a.vault, a.store()).topics?.report;
     if (report?.status !== "planned") throw new Error("not planned");
     const topic = report.created[0]!.topic;
     const env: Record<string, string> = {};
