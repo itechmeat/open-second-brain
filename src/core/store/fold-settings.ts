@@ -28,6 +28,7 @@ import {
   SETTING_ENTRY_KIND,
   SETTING_SET_KIND,
   SETTING_SILENT_DEVICE_DAYS,
+  SETTING_DREAM_APPLY_DRAFTS,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
   SETTING_TOPIC_QUIET_DAYS,
@@ -90,6 +91,11 @@ export const SETTING_RULES: Readonly<Record<SettingKey, SettingRule>> = Object.f
     valid: silenceDays,
     expected: `an integer from 0 (off) to ${SILENT_DEVICE_DAYS_MAX}`,
     fallback: 30,
+  },
+  [SETTING_DREAM_APPLY_DRAFTS]: {
+    valid: (value) => value === "auto" || value === "review",
+    expected: "auto or review",
+    fallback: "auto",
   },
 });
 

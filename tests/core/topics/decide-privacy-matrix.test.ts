@@ -45,7 +45,7 @@ import {
   TOPIC_RENAME_KIND,
 } from "../../../src/core/topics/constants.ts";
 import { runDecisionExecutor } from "../../../src/core/brain/dream-queue/decision-executor.ts";
-import { dreamQueueOn } from "../../../src/core/brain/dream-queue/queue.ts";
+import { answerWork, dreamQueueOn, takeWork } from "../../../src/core/brain/dream-queue/queue.ts";
 import { readTopicQuestionState } from "../../../src/core/topics/decide-operations.ts";
 import { produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
 import { bindTestDreamOwner } from "../../helpers/closed-answers.ts";
@@ -535,6 +535,24 @@ describe("the partition of every record a dream-time use writes", () => {
             env: envFor(kind, share),
           });
           runTopicPlanning(a, { agent: "dream", now: tick });
+          // An approved group waits for its wording: the launched agent
+          // words it (change `dream-launched-agent`) and the next pass creates it.
+          for (;;) {
+            const taken = takeWork(queue, {
+              run: "word",
+              filter: (item) => item.body.operation === "topic-wording",
+            });
+            if (taken.item === null) break;
+            answerWork(queue, {
+              item: taken.item.id,
+              generation: taken.item.generation,
+              lease_token: taken.item.lease_token,
+              value: { title: "Public API deprecation windows", goal: "Plan the deprecation." },
+              agent: "claude",
+              model: "agent-model-1",
+            });
+            runTopicPlanning(a, { agent: "dream", now: tick });
+          }
 
           // No shared record the pass wrote carries a private input's word.
           for (const record of written("shared")) {

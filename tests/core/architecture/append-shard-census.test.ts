@@ -71,6 +71,12 @@ const MIN_REASON_LENGTH = 80;
  * single shared file is still correct.
  */
 const APPEND_ALLOW_LIST: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/dream-queue/run-record.ts":
+    "a dream run's call log is one file per run, in the store's device-local state, never synced; " +
+    "only that run's own server appends to it",
+  "src/core/process/run-program.ts":
+    "a started program's output log is a file the caller names for one run, in this machine's " +
+    "device-local state, never in a vault or a store, so only that one program writes to it",
   "src/core/maintenance/o2b-command.ts":
     "a background child's error output log is opened for appending in this machine's " +
     "device-local state, never in a vault or a store, so only that one child writes to it",

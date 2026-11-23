@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -21,6 +21,7 @@ import {
   resolveTimezone,
   resolveVault,
   setConfigValue,
+  setConfigJsonValue,
   validateTimezoneName,
   vaultStoreReference,
   VAULT_STORE_REF_PREFIX,
@@ -28,6 +29,7 @@ import {
 import { redactConfigMapping } from "../../src/core/egress/guard.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -168,6 +170,27 @@ describe("discoverConfig", () => {
 });
 
 describe("setConfigValue", () => {
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "keeps an existing private config private and creates new configs owner-only",
+    () => {
+      const existing = join(tmp, "existing.yaml");
+      writeFileSync(existing, "installation_secret: old\n", { mode: 0o600 });
+      chmodSync(existing, 0o600);
+      setConfigValue("dream_agent_command", "claude", existing);
+      expect(statSync(existing).mode & 0o777).toBe(0o600);
+
+      const created = join(tmp, "created.yaml");
+      setConfigValue("installation_secret", "new-secret", created);
+      expect(statSync(created).mode & 0o077).toBe(0);
+
+      const json = join(tmp, "json.yaml");
+      writeFileSync(json, "dream_agent_command: old\n", { mode: 0o600 });
+      chmodSync(json, 0o600);
+      setConfigJsonValue("dream_agent_command", ["/opt/agent", "two words"], json);
+      expect(statSync(json).mode & 0o777).toBe(0o600);
+    },
+  );
+
   test("persists key value as quoted yaml line", () => {
     const p = join(tmp, "config.yaml");
     setConfigValue("vault", "/some/path", p);

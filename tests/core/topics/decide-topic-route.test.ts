@@ -17,7 +17,7 @@ import { appendRecord } from "../../../src/core/store/appender.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import { TOPIC_ASSIGN_KIND } from "../../../src/core/topics/constants.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
-import { answerClosedQuestions } from "../../helpers/closed-answers.ts";
+import { answerClosedQuestions, DRAFTED } from "../../helpers/closed-answers.ts";
 import { closedFixture, type ClosedFixture } from "./fixtures/closed-fixture.ts";
 import { ask, plan } from "./fixtures/closed-run.ts";
 
@@ -193,9 +193,16 @@ describe("topic_route on the queue", () => {
     expect(report.routed).toEqual([]);
     for (const item of f.items("topic-route")) expect(item.applied?.effects).toEqual(["none"]);
     // The records stay free: the group qualifies and, approved, the topic is created.
-    answerClosedQuestions(f.a, (item) => (item.operation === "topic-new" ? { p: 1 } : null), {
-      now: f.still,
-    });
+    answerClosedQuestions(
+      f.a,
+      (item) =>
+        item.operation === "topic-new"
+          ? { p: 1 }
+          : item.operation === "topic-wording"
+            ? { title: DRAFTED, goal: DRAFTED }
+            : null,
+      { now: f.still },
+    );
     const next = plan(f);
     expect(next.status === "planned" && next.created).toHaveLength(1);
     if (next.status !== "planned") return;

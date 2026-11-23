@@ -34,6 +34,7 @@ import { isStoreOnly } from "../../store/store-only.ts";
 import { heldPartitions, type StoreHandle } from "../../store/store-open.ts";
 import { resolveConfiguredStoreRoot } from "../../store/store-paths.ts";
 import { DREAM_OWNER_KINDS, type DreamOwner } from "../dream-owner/fold.ts";
+import { foldSettings, settingValue } from "../../store/fold-settings.ts";
 import { DREAM_OWNER_HERE_COMMAND } from "../dream-owner/constants.ts";
 import { assertDreamOwnerOn, recheckDreamOwner } from "../dream-owner/gate.ts";
 import { withDreamPassLock } from "../dream-owner/owner.ts";
@@ -51,6 +52,8 @@ import {
   DREAM_WORK_BACKOFF_MS,
   DREAM_WORK_CLOSED_KIND,
   DREAM_WORK_ITEM_KIND,
+  DREAM_WORK_APPROVE_KIND,
+  DREAM_APPLY_DRAFTS_SETTING,
   DREAM_WORK_LEASE_KIND,
   DREAM_WORK_LEASE_MS,
   DREAM_WORK_LOCK_BUDGET_MS,
@@ -146,6 +149,8 @@ export function dreamQueueForPass(
 interface Snapshot {
   readonly work: Array<{ partition: StorePartition; record: StoreRecord }>;
   readonly owner: StoreRecord[];
+  /** Setting records of `dream.apply_drafts`. */
+  readonly drafts: StoreRecord[];
   readonly unreadable: string[];
   readonly pending: string[];
   readonly partitions: ReadonlySet<StorePartition>;
@@ -155,6 +160,7 @@ interface Snapshot {
 function readRecordsAt(root: string, partitions: ReadonlySet<StorePartition>): Snapshot {
   const work: Snapshot["work"] = [];
   const owner: StoreRecord[] = [];
+  const drafts: StoreRecord[] = [];
   const unreadable: string[] = [];
   const pending: string[] = [];
   for (const partition of STORE_PARTITIONS) {
@@ -170,13 +176,14 @@ function readRecordsAt(root: string, partitions: ReadonlySet<StorePartition>): S
     const settings = readStreamRecords(root, "shared", { stream: "settings" });
     for (const record of settings.records) {
       if (DREAM_OWNER_KINDS.has(record.kind)) owner.push(record);
+      else if (record.body["key"] === DREAM_APPLY_DRAFTS_SETTING) drafts.push(record);
     }
     unreadable.push(...settings.unreadable.map((rel) => `shared/settings/${rel}`));
     for (const [kind, count] of settings.pendingKinds) {
       if (DREAM_OWNER_KINDS.has(kind) && count > 0) unreadable.push(`shared/${kind}:${count}`);
     }
   }
-  return { work, owner, unreadable: [...unreadable, ...pending], pending, partitions };
+  return { work, owner, drafts, unreadable: [...unreadable, ...pending], pending, partitions };
 }
 
 /**
@@ -197,12 +204,14 @@ function readSnapshot(store: StoreHandle, partitions: ReadonlySet<StorePartition
 }
 
 function foldSnapshot(snapshot: Snapshot, now: number): DreamWorkState {
+  const drafts = settingValue(foldSettings(snapshot.drafts), DREAM_APPLY_DRAFTS_SETTING);
   return foldDreamWork({
     work: snapshot.work,
     owner: snapshot.owner,
     now,
     operations: dreamWorkTraits,
     partitions: snapshot.partitions,
+    applyDrafts: drafts === "review" ? "review" : "auto",
   });
 }
 
@@ -982,6 +991,28 @@ export function releaseWork(
   });
 }
 
+/** Release every lease `run` still holds, under one lock; returns how many. */
+export function releaseRunWork(queue: DreamQueue, run: string): number {
+  return entry(queue, (step) => {
+    let released = 0;
+    const state = step.fold();
+    for (const id of state.order) {
+      const item = state.items.get(id)!;
+      if (item.state !== "leased" || item.lease === null || item.lease.run !== run) continue;
+      if (!step.store.partitions.has(item.partition)) continue;
+      step.attempt(
+        item,
+        item.lease.generation,
+        item.lease.lease_token,
+        "released",
+        "the session ended",
+      );
+      released += 1;
+    }
+    return released;
+  });
+}
+
 /**
  * End a lease with a failed attempt (an executor that could not answer:
  * a timeout, a refused request): the backoff and parking of design D1
@@ -1097,6 +1128,28 @@ export function retryWork(queue: DreamQueue, id: string): void {
   });
 }
 
+/** Approve a text answer held for review: the next pass applies it (a person's call). */
+export function approveWork(queue: DreamQueue, id: string): void {
+  entry(queue, (step) => {
+    const item = step.item(id);
+    if (item.state !== "awaiting-review") {
+      throw new DreamQueueItemError(`item ${id} is ${item.state}, not awaiting review`);
+    }
+    step.write(item.partition, DREAM_WORK_APPROVE_KIND, { item: item.id, authority: "human" });
+  });
+}
+
+/** Close a text answer held for review: nothing is written (a person's call). */
+export function rejectWork(queue: DreamQueue, id: string, reason: string): void {
+  entry(queue, (step) => {
+    const item = step.item(id);
+    if (item.state !== "awaiting-review") {
+      throw new DreamQueueItemError(`item ${id} is ${item.state}, not awaiting review`);
+    }
+    step.close(item, "cancelled", `rejected: ${reason}`, null, "human");
+  });
+}
+
 /** Close an item as cancelled (a person's call). */
 export function cancelWork(queue: DreamQueue, id: string, reason: string): void {
   entry(queue, (step) => {
@@ -1125,6 +1178,9 @@ export interface DreamQueueListing {
   readonly reason: string | null;
   /** The reason of the last release, while it was given for the item's current input. */
   readonly release: string | null;
+  /** The answer's text, its agent and model, for a text answer not applied yet. */
+  readonly text?: string;
+  readonly author?: { readonly agent: string; readonly model: string };
 }
 
 export interface DreamQueueParked {
@@ -1155,8 +1211,12 @@ export type DreamQueueStatus =
        * partition and lost it.
        */
       readonly private: "held" | "absent" | "unknown";
-      /** Whether this version has anything that answers items (it has not). */
-      readonly executor: false;
+      /**
+       * Per operation of the listed items: whether something on this machine
+       * answers it (filled by the status view, which reads the machine's
+       * settings; `false` from a bare read).
+       */
+      readonly executor: Readonly<Record<string, boolean>>;
       readonly items: ReadonlyArray<DreamQueueListing>;
     }
   | {
@@ -1242,6 +1302,13 @@ export function queueStatusAt(
         item.last_release !== null && item.last_release.input_hash === item.body.input_hash
           ? item.last_release.reason
           : null,
+      ...((item.state === "accepted" || item.state === "awaiting-review") &&
+      typeof item.answer?.text === "string"
+        ? {
+            text: item.answer.text,
+            author: { agent: item.answer.agent, model: item.answer.model },
+          }
+        : {}),
     });
   }
   const rejected: Record<string, number> = {};
@@ -1265,7 +1332,9 @@ export function queueStatusAt(
           : lost.includes("private")
             ? "unknown"
             : "absent",
-    executor: false,
+    executor: Object.fromEntries(
+      [...new Set(items.map((i) => i.operation))].map((op) => [op, false]),
+    ),
     items,
   };
 }

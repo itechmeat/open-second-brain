@@ -83,6 +83,7 @@ import {
 } from "./checkpoint.ts";
 import { readFirstLine } from "./read-lines.ts";
 import { detectAdapter, getAdapter } from "./registry.ts";
+import { isDreamSessionTranscript } from "./dream-transcript.ts";
 import { sessionFilesUnder } from "./session-files.ts";
 import {
   SessionImportError,
@@ -524,7 +525,11 @@ export async function importSession(
   // FIRST. An ignored file imports nothing; a stateless file is
   // scanned read-only (no signals, no recall records, no facts).
   const boundary = buildCaptureBoundary(vault);
-  const boundaryDecision = boundary.sessionDecision(opts.recallSessionId, absPath);
+  // A dream session's transcript (its first user message is the session
+  // line) is never captured, whatever the patterns say.
+  const boundaryDecision = (await isDreamSessionTranscript(absPath, adapter.id as SessionAdapterId))
+    ? ("ignore" as const)
+    : boundary.sessionDecision(opts.recallSessionId, absPath);
   const mayWrite = boundaryDecision === "capture";
   const emptyResult = (): ImportSessionResult =>
     Object.freeze({

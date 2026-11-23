@@ -8,6 +8,9 @@
  *  - `queue retry <id>`: offer a parked item again, its attempts counted
  *    from zero.
  *  - `queue cancel <id> --reason <text>`: close an item.
+ *  - `queue approve <id>`: apply a text answer held for review
+ *    (`dream.apply_drafts: review`) at the next pass.
+ *  - `queue reject <id> --reason <text>`: close such an item with the reason.
  *
  * Retry and cancel are a person's moves and pass the dream owner gate:
  * refused on a device that is not the owner.
@@ -17,8 +20,10 @@ import { resolveVault } from "../../core/config.ts";
 import { DreamNotOwnerError, openDreamOwnerStore } from "../../core/brain/dream-owner/gate.ts";
 import { DREAM_WORK_STATES } from "../../core/brain/dream-queue/constants.ts";
 import {
+  approveWork,
   cancelWork,
   DreamQueueItemError,
+  rejectWork,
   DreamQueueUnboundError,
   dreamQueueOn,
   retryWork,
@@ -35,6 +40,8 @@ export const DREAM_QUEUE_USAGE = [
   "usage: o2b dream queue [--state <state>] [--vault <path>] [--config <file>] [--json]",
   "       o2b dream queue retry <id> [--vault <path>] [--config <file>] [--json]",
   "       o2b dream queue cancel <id> --reason <text> [--vault <path>] [--config <file>] [--json]",
+  "       o2b dream queue approve <id> [--vault <path>] [--config <file>] [--json]",
+  "       o2b dream queue reject <id> --reason <text> [--vault <path>] [--config <file>] [--json]",
 ].join("\n");
 
 const EXIT = Object.freeze({ ok: 0, refused: 1 } as const);
@@ -59,16 +66,18 @@ export function cmdQueue(argv: ReadonlyArray<string>): number {
     if (flags["reason"] !== undefined) throw new CliError("--reason belongs to `queue cancel`");
     return list(vault, configPath, flags["state"] as string | undefined, json);
   }
-  if (verb !== "retry" && verb !== "cancel") throw new CliError(`unknown queue verb: ${verb}`);
+  if (verb !== "retry" && verb !== "cancel" && verb !== "approve" && verb !== "reject") {
+    throw new CliError(`unknown queue verb: ${verb}`);
+  }
   const id = positional[1];
   if (id === undefined) throw new CliError(`queue ${verb} needs an item id`);
   if (positional.length > 2) throw new CliError(`unexpected argument: ${positional[2]}`);
   const reason = (flags["reason"] as string | undefined)?.trim();
-  if (verb === "cancel" && (reason === undefined || reason === "")) {
-    throw new CliError("queue cancel needs --reason <text>");
+  if ((verb === "cancel" || verb === "reject") && (reason === undefined || reason === "")) {
+    throw new CliError(`queue ${verb} needs --reason <text>`);
   }
-  if (verb === "retry" && reason !== undefined)
-    throw new CliError("--reason belongs to `queue cancel`");
+  if ((verb === "retry" || verb === "approve") && reason !== undefined)
+    throw new CliError("--reason belongs to `queue cancel` and `queue reject`");
   return change(vault, configPath, verb, id, reason ?? "", json);
 }
 
@@ -102,6 +111,10 @@ function list(
         `${item.id}  ${item.state}${item.ready ? " (ready)" : ""}  ${item.operation}  ` +
           `${item.subject}  attempts ${item.attempts}${item.reason !== null ? `  ${item.reason}` : ""}`,
       );
+      if (item.text !== undefined) {
+        lines.push(`  by ${item.author!.agent} (${item.author!.model}):`);
+        for (const line of item.text.split("\n")) lines.push(`    ${line}`);
+      }
     }
   }
   process.stdout.write(`${lines.join("\n")}\n`);
@@ -117,7 +130,7 @@ function refuse(message: string, json: boolean, code?: string): number {
 function change(
   vault: string | null,
   configPath: string | undefined,
-  verb: "retry" | "cancel",
+  verb: "retry" | "cancel" | "approve" | "reject",
   id: string,
   reason: string,
   json: boolean,
@@ -133,6 +146,8 @@ function change(
   });
   try {
     if (verb === "retry") retryWork(queue, id);
+    else if (verb === "approve") approveWork(queue, id);
+    else if (verb === "reject") rejectWork(queue, id, reason);
     else cancelWork(queue, id, reason);
   } catch (err) {
     if (
@@ -148,12 +163,18 @@ function change(
     }
     throw err;
   }
-  if (json) writeJson({ ok: true, status: verb === "retry" ? "retried" : "cancelled", id });
+  const done = { retry: "retried", cancel: "cancelled", approve: "approved", reject: "rejected" }[
+    verb
+  ];
+  if (json) writeJson({ ok: true, status: done, id });
   else {
     process.stdout.write(
-      verb === "retry"
-        ? `Dream work ${id} is offered again.\n`
-        : `Dream work ${id} is cancelled.\n`,
+      {
+        retry: `Dream work ${id} is offered again.\n`,
+        cancel: `Dream work ${id} is cancelled.\n`,
+        approve: `Dream work ${id} is approved; the next dream pass applies it.\n`,
+        reject: `Dream work ${id} is rejected; nothing is written.\n`,
+      }[verb],
     );
   }
   return EXIT.ok;

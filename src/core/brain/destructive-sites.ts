@@ -210,6 +210,30 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "clears one aspect's exact-state file. Absence IS the cleared state, so the " +
         "removal is the state transition rather than a loss of one.",
     },
+    "src/core/brain/dream-queue/run-record.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes a dream run's record and call log in the store's device-local state when the " +
+        "run ends or expired. A run record is a credential for one session; its absence is the " +
+        "state 'no live run', and nothing in a vault or a store is touched.",
+    },
+    "src/core/brain/dream-queue/agent-executor.ts": {
+      calls: ["renameSync", "rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the MCP config file it wrote for one dream session and renames that session's " +
+        "output log to the last-session log, both in the store's device-local state; nothing " +
+        "in a vault or a store is touched.",
+    },
+    "src/core/brain/dream-queue/agent-check.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the throwaway store and its device state that one dream agent check created " +
+        "under the machine's device state directory, by their exact paths; nothing the user " +
+        "wrote is in them.",
+    },
     "src/core/brain/skill-accept-journal.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,

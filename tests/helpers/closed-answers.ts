@@ -9,7 +9,12 @@
  *  - {@link answerClosedQuestions}: produce every closed question of the
  *    store and answer each item `decide` returns a value for; the default
  *    approves every qualifying group and routes every record to the
- *    best-ranked topic, which is what the fixed rule did before.
+ *    best-ranked topic, which is what the fixed rule did before; and it
+ *    words every approved group's topic as the fixed rule worded it (the
+ *    title drafted from its most frequent words, the goal from its first
+ *    record), standing in for the launched agent (change
+ *    `dream-launched-agent`). An approval is marked as planning marks one
+ *    whose wording waits, so the wording item is offered at once.
  */
 import {
   claimDreamOwner,
@@ -19,13 +24,14 @@ import {
 import {
   answerWork,
   dreamQueueOn,
+  markAppliedByPlanning,
   releaseWork,
   takeWork,
   type TakenItem,
 } from "../../src/core/brain/dream-queue/queue.ts";
 import { dream } from "../../src/core/brain/dream.ts";
 import type { StoreHandle } from "../../src/core/store/store-open.ts";
-import { readTopicQuestionState } from "../../src/core/topics/decide-operations.ts";
+import { readTopicQuestionState, STANDING_MARK } from "../../src/core/topics/decide-operations.ts";
 import { produceTopicQuestions } from "../../src/core/topics/decide-produce.ts";
 
 /** The store's device holds the dream owner role, settled. */
@@ -39,9 +45,20 @@ export function bindTestDreamOwner(store: StoreHandle, now?: () => number): void
   claimSettled(store, readDreamOwner(store, now));
 }
 
-/** Approve every group and route every record to its first (best) option. */
+/** Stands for "the title and goal the fixed rule drafted" in a wording answer. */
+export const DRAFTED = "__drafted__";
+
+/** The goal the fixed rule drafted: the first record's text, at most 200 characters. */
+function draftedGoal(item: TakenItem): string {
+  const members = item.payload["members"] as Array<{ text: string }>;
+  const text = members[0]!.text.replaceAll(/\s+/g, " ").trim();
+  return [...text].length <= 200 ? text : `${[...text].slice(0, 197).join("")}...`;
+}
+
+/** Approve every group, word it as drafted, and route every record to its first (best) option. */
 export function approveTopics(item: TakenItem): Record<string, unknown> | null {
   if (item.operation === "topic-new") return { p: 1 };
+  if (item.operation === "topic-wording") return { title: DRAFTED, goal: DRAFTED };
   if (item.operation === "topic-route") {
     const options = item.answer_schema["options"] as string[];
     return { choice: options[0], confidence: 1 };
@@ -67,15 +84,31 @@ export function answerClosedQuestions(
   produceTopicQuestions(queue, state, { until: Number.POSITIVE_INFINITY, clock: now });
   let answered = 0;
   const skipped = new Set<string>();
+  /** Group key -> the title the fixed rule drafted (the `topic-new` question's input). */
+  const drafted = new Map<string, string>();
   for (;;) {
     const taken = takeWork(queue, { run: "test", filter: (item) => !skipped.has(item.id) });
     if (taken.item === null) return answered;
+
     const lease = {
       item: taken.item.id,
       generation: taken.item.generation,
       lease_token: taken.item.lease_token,
     };
-    const value = decide(taken.item);
+    if (taken.item.operation === "topic-new") {
+      drafted.set(taken.item.subject, String(taken.item.payload["title"]));
+    }
+    let value = decide(taken.item);
+    if (value !== null && taken.item.operation === "topic-wording") {
+      value = {
+        ...value,
+        ...(value["title"] === DRAFTED
+          ? { title: drafted.get(taken.item.subject) ?? "Untitled" }
+          : {}),
+        ...(value["goal"] === DRAFTED ? { goal: draftedGoal(taken.item) } : {}),
+      };
+    }
+
     if (value === null) {
       releaseWork(queue, lease);
       skipped.add(taken.item.id);
@@ -87,7 +120,21 @@ export function answerClosedQuestions(
       agent: "test",
       model: "test-model",
     });
-    if (result.status === "accepted") answered += 1;
+    if (result.status === "accepted") {
+      answered += 1;
+      // An approval stands as planning marks one whose wording waits.
+      if (taken.item.operation === "topic-new" && Number(value["p"]) >= 0.5) {
+        markAppliedByPlanning(queue, [
+          {
+            item: taken.item.id,
+            generation: taken.item.generation,
+            lease_token: taken.item.lease_token,
+            receipt: result.receipt,
+            effects: [STANDING_MARK.approved],
+          },
+        ]);
+      }
+    }
   }
 }
 

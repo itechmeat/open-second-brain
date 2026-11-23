@@ -1,3 +1,5 @@
+import { beginsWithDreamSessionLine, insideDreamSession } from "./dream-queue/dream-session.ts";
+import { isDreamSessionTranscript } from "./sessions/dream-transcript.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { recordOriginOf } from "./record-origin.ts";
 import { basename, join } from "node:path";
@@ -235,6 +237,27 @@ export async function captureSessionLifecycleEvent(
   // any extraction. Ignored sessions produce nothing but the audit
   // row; stateless sessions read but never write; suppressed message
   // text never reaches marker or fact extraction.
+  // A dream session records nothing (design D2 of `dream-launched-agent`):
+  // the marker of the process, or a session whose first user message is
+  // the session line. Nothing at all is written, not even the audit row.
+  if (
+    insideDreamSession(process.env) ||
+    beginsWithDreamSessionLine(normalized.promptText) ||
+    (await isDreamSessionTranscript(normalized.transcriptPath))
+  ) {
+    return {
+      event: normalized.event,
+      ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
+      signals_created: 0,
+      signals_deduped: 0,
+      tool_replays: 0,
+      malformed: normalized.malformed,
+      boundary_decision: "ignore",
+      suppressed_messages: 0,
+      facts_extracted: 0,
+      facts_deduped: 0,
+    };
+  }
   const boundary = buildCaptureBoundary(vault);
   const decision = boundary.sessionDecision(normalized.sessionId, normalized.transcriptPath);
   const mayWrite = decision === "capture";

@@ -48,6 +48,15 @@ import { decisionTitlesOfCatchUp } from "./decision-titles.ts";
 import { foldTopics, type TopicFold, type TopicState } from "./fold.ts";
 import { planTopics, topicPairsForSame, type PlanSettings, type TopicPlan } from "./plan.ts";
 import { judgedHistoryNotes } from "./verdict-writes.ts";
+import {
+  itemIdOf,
+  TOPIC_WORDING_OPERATION,
+  TOPIC_WORDING_PROMPT,
+  wordingInput,
+  wordingInputHash,
+  wordingRejection,
+  type WordingGroup,
+} from "./wording-operation.ts";
 import type { TopicVerdictBody, TopicVerdicts } from "./verdicts.ts";
 
 // ----- Names -------------------------------------------------------------
@@ -98,6 +107,8 @@ export const ABSTAINED = "abstained";
 /** Effect markers of decisions that write no record of their own (design D2). */
 export const STANDING_MARK = Object.freeze({
   veto: "veto",
+  /** An approved group that waits for its wording (change `dream-launched-agent`). */
+  approved: "approved",
   none: "none",
   same: "same",
   different: "different",
@@ -177,6 +188,8 @@ export interface StandingVerdicts {
   readonly none: ReadonlyMap<string, TopicVerdictBody>;
   /** Group keys a `topic-new` answer vetoed. */
   readonly vetoes: ReadonlyMap<string, TopicVerdictBody>;
+  /** Group keys a `topic-new` answer approved, whose topic waits for its wording. */
+  readonly approvals: ReadonlyMap<string, TopicVerdictBody>;
   /** Pair hints from `topic-same` answers, the newest per pair. */
   readonly same: TopicVerdicts["sameTopics"];
 }
@@ -184,6 +197,7 @@ export interface StandingVerdicts {
 export const NO_STANDING: StandingVerdicts = {
   none: new Map(),
   vetoes: new Map(),
+  approvals: new Map(),
   same: [],
 };
 
@@ -226,6 +240,7 @@ export function verdictOfAnswer(
 export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
   const none = new Map<string, TopicVerdictBody>();
   const vetoes = new Map<string, TopicVerdictBody>();
+  const approvals = new Map<string, TopicVerdictBody>();
   const same = new Map<string, TopicVerdicts["sameTopics"][number]>();
   for (const id of state.order) {
     const item = state.items.get(id)!;
@@ -239,9 +254,11 @@ export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
         none.set(item.body.subject, verdictOfAnswer("topic_route", value as never, conf(value)));
       } else if (mark !== ABSTAINED) none.delete(item.body.subject);
     } else if (op === "topic-new") {
-      if (mark === STANDING_MARK.veto) {
-        vetoes.set(item.body.subject, verdictOfAnswer("topic_new", value as never, conf(value)));
-      } else vetoes.delete(item.body.subject);
+      vetoes.delete(item.body.subject);
+      approvals.delete(item.body.subject);
+      const verdict = verdictOfAnswer("topic_new", value as never, conf(value));
+      if (mark === STANDING_MARK.veto) vetoes.set(item.body.subject, verdict);
+      else if (mark === STANDING_MARK.approved) approvals.set(item.body.subject, verdict);
     } else if (op === "topic-same") {
       if (mark !== STANDING_MARK.same && mark !== STANDING_MARK.different) continue;
       const [a, b] = item.body.subject.split("..") as [string, string];
@@ -256,7 +273,7 @@ export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
       });
     }
   }
-  return { none, vetoes, same: [...same.values()] };
+  return { none, vetoes, approvals, same: [...same.values()] };
 }
 
 function conf(value: Record<string, unknown>): number {
@@ -291,7 +308,11 @@ export function standingAsVerdicts(standing: StandingVerdicts): TopicVerdicts {
       ]),
     ),
     kinds: new Map(),
-    vetoes: new Map([...standing.vetoes].map(([key, verdict]) => [key, { verdict, veto: true }])),
+    vetoes: new Map<string, { readonly verdict: TopicVerdictBody; readonly veto: boolean }>([
+      ...[...standing.approvals].map(([key, verdict]) => [key, { verdict, veto: false }] as const),
+      ...[...standing.vetoes].map(([key, verdict]) => [key, { verdict, veto: true }] as const),
+    ]),
+    wordings: new Map(),
     sameTopics: standing.same,
     resolutions: new Map(),
     completions: [],
@@ -710,6 +731,52 @@ function currentInput(operation: ClosedOperation) {
     };
   };
 }
+
+// ----- The wording of a new topic ---------------------------------------------------
+
+/**
+ * The wording items the state asks for (change `dream-launched-agent`,
+ * design D6): one per qualifying group, those that still wait for an
+ * approval (after their `topic-new` item) and those approved and waiting
+ * for their wording.
+ */
+export function wordingGroups(state: TopicQuestionState): WordingGroup[] {
+  const asked = new Map(newQuestions(state).map((q) => [q.subject, q]));
+  return [...state.plan.asks.groups, ...state.plan.asks.wordings].map((group) => {
+    const members = group.members.map((id) => state.byId.get(id)!).filter((m) => m !== undefined);
+    const oldest = members.reduce((x, y) => (y.at < x.at ? y : x), members[0]!);
+    const question = asked.get(group.key);
+    return {
+      group,
+      members: members.map((m) => ({ id: m.id, text: m.text })),
+      occurrence: occurrenceOf(oldest.at, oldest.id),
+      after: question === undefined ? null : itemIdOf(closedProduceSpec(question)),
+    };
+  });
+}
+
+registerDreamWorkOperation({
+  name: TOPIC_WORDING_OPERATION,
+  closedPredecessor: "release",
+  appliedBy: "planning",
+  text: true,
+  validate: (answer) => wordingRejection(answer.value),
+  currentInput(item: DreamWorkItem, context: DreamWorkContext): DreamWorkInput | null {
+    const state = readTopicQuestionState(context.store, context.now);
+    if (state === null) return { input_hash: item.body.input_hash, partition: "private" };
+    const entry = wordingGroups(state).find((g) => g.group.key === item.body.subject);
+    if (entry === undefined) return null;
+    return {
+      input_hash: wordingInputHash(entry.members),
+      partition: entry.group.private ? "private" : "shared",
+      payload: { ...wordingInput(entry.members), prompt: TOPIC_WORDING_PROMPT },
+      evidence: entry.members.map((m) => m.id).slice(0, 200),
+    };
+  },
+  apply: () => {
+    throw new Error(`${TOPIC_WORDING_OPERATION}: topic planning applies this answer`);
+  },
+});
 
 for (const name of CLOSED_OPERATIONS) {
   registerDreamWorkOperation({

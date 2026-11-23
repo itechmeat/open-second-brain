@@ -640,8 +640,13 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   status: r,
   "store device list": r,
   "store device retire": o("store"),
+  "dream agent check": o("deviceState"),
+  "dream agent set": o("config"),
+  "dream agent show": r,
   "dream owner": o("store"),
+  "dream queue approve": o("store"),
   "dream queue cancel": o("store"),
+  "dream queue reject": o("store"),
   "dream queue retry": o("store"),
   "store init": o("store"),
   "store partition leave": o("store"),
@@ -891,6 +896,9 @@ export const WORKER_CENSUS: Readonly<Record<string, WorkerRow>> = Object.freeze(
   "automatic store migration worker log": { kind: "outside", reason: "deviceState" },
   "lost automatic migration worker record": { kind: "outside", reason: "deviceState" },
   "dependency bootstrap of a self-spawn": { kind: "outside", reason: "checkout" },
+  // The dream agent's session (change dream-launched-agent): it writes only
+  // through the dream-executor server, which writes the store's queue.
+  "dream agent session": { kind: "outside", reason: "store" },
 });
 
 /**
@@ -930,6 +938,12 @@ export const WORKER_SPAWN_SITES: Readonly<Record<string, SpawnSite>> = Object.fr
     starts: ["automatic store migration worker log", "dependency bootstrap of a self-spawn"],
   },
   "src/core/search/freshen.ts": { calls: 1, starts: ["freshen-on-read search index"] },
+  // Starts the dream agent's session in a process group of its own, awaited
+  // and ended at its deadline (change dream-launched-agent).
+  "src/core/process/run-program.ts": {
+    calls: 1,
+    starts: ["dream agent session"],
+  },
   "src/core/search/store/writer-lock.ts": {
     calls: 1,
     starts: ["search writer-lock heartbeat thread"],

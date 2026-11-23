@@ -219,12 +219,19 @@ export const SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days";
  * turns the rule off.
  */
 export const SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days";
+/**
+ * Whether text a model wrote for dream is applied by the next pass
+ * (`auto`, the default) or waits for a person (`review`): change
+ * `dream-launched-agent`, design D7.
+ */
+export const SETTING_DREAM_APPLY_DRAFTS = "dream.apply_drafts";
 export const SETTING_KEYS = Object.freeze([
   SETTING_VIEW_LANGUAGE,
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
   SETTING_TOPIC_QUIET_DAYS,
   SETTING_SILENT_DEVICE_DAYS,
+  SETTING_DREAM_APPLY_DRAFTS,
 ] as const);
 export type SettingKey = (typeof SETTING_KEYS)[number];
 

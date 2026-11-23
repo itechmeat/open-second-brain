@@ -22,6 +22,7 @@ import {
   replayStatus,
   replayStatusJson,
 } from "../../core/brain/dream-replay/status-view.ts";
+import { cmdAgent, DREAM_AGENT_USAGE } from "./agent.ts";
 import { ConfigReadError, resolveVault } from "../../core/config.ts";
 import {
   releaseDreamOwner,
@@ -41,7 +42,9 @@ import { CliError, parseFlags } from "../argparse.ts";
 import { sortedReplacer } from "../helpers.ts";
 import { cmdQueue, DREAM_QUEUE_USAGE } from "./queue.ts";
 import {
+  describeDreamAgent,
   describeQueueStatus,
+  dreamAgentStatus,
   queueStatus,
   queueSummaryJson,
   waitingByOperation,
@@ -52,6 +55,7 @@ const USAGE = [
   "       o2b dream owner --here [--agent <name>] [--force] [--vault <path>] [--config <file>] [--json]",
   "       o2b dream owner --release [--vault <path>] [--config <file>] [--json]",
   DREAM_QUEUE_USAGE.replace(/^usage: /, "       "),
+  DREAM_AGENT_USAGE.replace(/^usage: /, "       "),
 ].join("\n");
 
 const DREAM_EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
@@ -69,6 +73,8 @@ export async function handleDreamSubcommand(argv: ReadonlyArray<string>): Promis
         return cmdOwner(rest);
       case "queue":
         return cmdQueue(rest);
+      case "agent":
+        return await cmdAgent(rest);
       default:
         process.stderr.write(`error: unknown dream verb: ${verb}\n${USAGE}\n`);
         return DREAM_EXIT.usage;
@@ -146,12 +152,14 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
         ...dreamOwnerStatusJson(status),
         queue: queueSummaryJson(queue, waiting),
         replay: replayStatusJson(replay),
+        agent: dreamAgentStatus(configPath),
       });
     else {
       const lines = [
         ...describeDreamOwnerStatus(status),
         ...describeQueueStatus(queue, waiting),
         ...describeReplayStatus(replay),
+        ...describeDreamAgent(dreamAgentStatus(configPath)),
       ];
       process.stdout.write(`${lines.join("\n")}\n`);
     }

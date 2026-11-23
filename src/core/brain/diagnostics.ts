@@ -260,6 +260,31 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b dream queue",
         autoRepairable: false,
       },
+      // The launched agent (change dream-launched-agent, design D8).
+      {
+        code: "dream-agent-unset",
+        issueClass: "work waits that only the dream agent may do and none is set",
+        nextCommand: "o2b dream agent set",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-agent-unverified",
+        issueClass: "the dream agent command was never verified",
+        nextCommand: "o2b dream agent check",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-agent-failed",
+        issueClass: "the last dream agent run failed",
+        nextCommand: "o2b dream agent check",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-drafts-waiting",
+        issueClass: "text answers of the dream agent await review",
+        nextCommand: "o2b dream queue",
+        autoRepairable: false,
+      },
       {
         code: "dream-queue-rejected",
         issueClass: "the dream work queue holds records that break its rules",

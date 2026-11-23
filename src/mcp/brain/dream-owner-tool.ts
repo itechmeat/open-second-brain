@@ -29,6 +29,7 @@ import {
 } from "../../core/brain/dream-owner/status.ts";
 import {
   queueStatus,
+  dreamAgentStatus,
   queueSummaryJson,
   waitingByOperation,
 } from "../../core/brain/dream-queue/status-view.ts";
@@ -88,6 +89,7 @@ async function toolBrainDreamOwner(
           queue: queueStatus(vault, { ...configOpt, withholdPrivate: !local }),
         }),
       ),
+      agent: dreamAgentStatus(ctx.configPath ?? undefined),
     };
   }
 

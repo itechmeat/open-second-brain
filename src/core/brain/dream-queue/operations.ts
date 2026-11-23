@@ -44,6 +44,12 @@ export interface DreamWorkOperation extends DreamWorkTraits {
    */
   readonly appliedBy?: "planning";
   /**
+   * A text operation (change `dream-launched-agent`, design D7): its
+   * answer is text a model wrote, only the launched agent answers it, and
+   * `dream.apply_drafts: review` holds it until a person approves it.
+   */
+  readonly text?: boolean;
+  /**
    * Why the answer does not fit the answer schema, or `null` when it does.
    * `item` is the item answered (its options live in its schema).
    */
@@ -82,5 +88,20 @@ export function dreamWorkOperation(name: string): DreamWorkOperation | undefined
 /** The traits the fold reads (`foldDreamWork` `operations`). */
 export function dreamWorkTraits(name: string): DreamWorkTraits | undefined {
   const operation = registry.get(name);
-  return operation === undefined ? undefined : { closedPredecessor: operation.closedPredecessor };
+  return operation === undefined
+    ? undefined
+    : {
+        closedPredecessor: operation.closedPredecessor,
+        ...(operation.text === true ? { text: true } : {}),
+      };
+}
+
+/** Whether `name` is a registered text operation. */
+export function isTextOperation(name: string): boolean {
+  return registry.get(name)?.text === true;
+}
+
+/** The names of every registered text operation. */
+export function textOperationNames(): string[] {
+  return [...registry.values()].filter((op) => op.text === true).map((op) => op.name);
 }

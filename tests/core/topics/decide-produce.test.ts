@@ -6,11 +6,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { produceWork } from "../../../src/core/brain/dream-queue/queue.ts";
+import { answerWork, produceWork, takeWork } from "../../../src/core/brain/dream-queue/queue.ts";
+import { dreamWorkResourceBarrier } from "../../../src/core/brain/dream-queue/records.ts";
 import { TOPIC_USE_QUESTION_VERSION } from "../../../src/core/decision-model/questions-topics.ts";
 import {
   closedProduceSpec,
   closedQuestion,
+  closedQuestions,
   readTopicQuestionState,
 } from "../../../src/core/topics/decide-operations.ts";
 import { PRODUCE_CHUNK, produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
@@ -69,6 +71,58 @@ describe("produceTopicQuestions", () => {
     const again = produce();
     expect(again.produced).toBe(0);
     expect(again.existing).toBe(2);
+  });
+
+  test("produces wording beside an already queued topic question without losing resource barriers", () => {
+    const members = [
+      f.signal("Alley garden beds watering notes from meeting 0", { session: "s1" }),
+      f.signal("Alley garden beds watering notes from meeting 1", { session: "s1" }),
+      f.signal("Alley garden beds watering notes from meeting 2", { session: "s2" }),
+      f.signal("Alley garden beds watering notes from meeting 3", { session: "s2" }),
+      f.signal("Alley garden beds watering notes from meeting 4", { session: "s2" }),
+    ];
+    const state = readTopicQuestionState(f.a, f.still())!;
+    const question = closedQuestions(state).find(
+      (candidate) => candidate.operation === "topic-new",
+    )!;
+    const resource = `record:${members[0]!}`;
+    produceWork(f.queue, {
+      operation: "private-prior",
+      subject: "private-prior",
+      occurrence: "0",
+      input: {},
+      prompt_version: "1",
+      schema_version: "1",
+      answer_schema: {},
+      after: [],
+      resources: [resource],
+      evidence: [],
+      payload: {},
+      sources: ["private"],
+    });
+    const { id: topicNew } = produceWork(f.queue, closedProduceSpec(question));
+    const taken = takeWork(f.queue, { run: "answer", filter: (item) => item.id === topicNew });
+    expect(taken.item).not.toBeNull();
+    const answer = answerWork(f.queue, {
+      item: topicNew,
+      generation: taken.item!.generation,
+      lease_token: taken.item!.lease_token,
+      value: { p: 1, provider: "test", model: "test-model" },
+      agent: "test",
+      model: "test-model",
+    });
+    expect(answer.status).toBe("accepted");
+
+    const result = produce();
+
+    expect(result.produced).toBe(1);
+    expect(f.items("topic-new")).toHaveLength(1);
+    expect(f.items("topic-wording")).toHaveLength(1);
+    expect(f.items("topic-wording")[0]!.body.private_resource_barriers).toContain(
+      dreamWorkResourceBarrier(resource),
+    );
+    expect(produce().produced).toBe(0);
+    expect(f.items("topic-wording")).toHaveLength(1);
   });
 
   test("an item of an older question version does not stand for the current one", () => {

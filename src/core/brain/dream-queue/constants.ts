@@ -25,6 +25,11 @@ export const DREAM_WORK_APPLIED_KIND = "dream-work-applied";
 export const DREAM_WORK_CLOSED_KIND = "dream-work-closed";
 /** A person asked for a parked item to be offered again. */
 export const DREAM_WORK_RETRY_KIND = "dream-work-retry";
+/**
+ * A person approved a text answer held for review (change
+ * `dream-launched-agent`, design D7: `dream.apply_drafts: review`).
+ */
+export const DREAM_WORK_APPROVE_KIND = "dream-work-approve";
 
 /** Every record kind of the queue; FORMAT.md documents each. */
 export const DREAM_WORK_RECORD_KINDS = Object.freeze([
@@ -35,6 +40,7 @@ export const DREAM_WORK_RECORD_KINDS = Object.freeze([
   DREAM_WORK_APPLIED_KIND,
   DREAM_WORK_CLOSED_KIND,
   DREAM_WORK_RETRY_KIND,
+  DREAM_WORK_APPROVE_KIND,
 ] as const);
 
 /** The states an item folds to. */
@@ -42,6 +48,7 @@ export const DREAM_WORK_STATES = Object.freeze([
   "waiting",
   "leased",
   "accepted",
+  "awaiting-review",
   "finished",
   "parked",
   "closed",
@@ -73,6 +80,9 @@ export const DREAM_QUEUE_LOCK = "queue";
 
 /** The verb that lists the queue. */
 export const DREAM_QUEUE_COMMAND = "o2b dream queue";
+/** The shared setting that holds text answers for review (`auto` or `review`). */
+export { SETTING_DREAM_APPLY_DRAFTS as DREAM_APPLY_DRAFTS_SETTING } from "../../store/constants.ts";
+
 /** The verb that offers a parked item again. */
 export const DREAM_QUEUE_RETRY_COMMAND = "o2b dream queue retry";
 

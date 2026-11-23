@@ -8,6 +8,7 @@
  * statement, not a registry — keeps the control flow obvious.
  */
 
+import { DREAM_EXECUTOR_PROFILE, serveDreamExecutor } from "../mcp/dream-executor.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -1019,6 +1020,17 @@ async function cmdMcp(argv: string[]): Promise<number> {
     "disable-tool": { type: "string-array" },
     "max-tools": { type: "string" },
   });
+
+  // The server of a dream session (change `dream-launched-agent`): an exact
+  // profile reachable only by this flag, never by the config key, and
+  // only for a live run the dream worker made.
+  if (flags["tool-profile"] === DREAM_EXECUTOR_PROFILE) {
+    return await serveDreamExecutor({
+      env: process.env,
+      configPath: (flags["config"] as string | undefined) ?? defaultConfigPath(),
+      vault: normalizeFlagString(flags["vault"] as string | undefined) ?? null,
+    });
+  }
 
   // `--writer-only` is an alias for `--scope writer`. The two flags
   // are mutually consistent; if the user passes both, `--writer-only`

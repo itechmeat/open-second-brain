@@ -33,7 +33,7 @@ import {
 } from "../../../src/core/brain/dream-owner/owner.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
 import { closedFixture, type ClosedFixture } from "./fixtures/closed-fixture.ts";
-import { ask, plan } from "./fixtures/closed-run.ts";
+import { ask, plan, word } from "./fixtures/closed-run.ts";
 
 let f: ClosedFixture;
 
@@ -132,17 +132,27 @@ describe("accepted answers become today's writes", () => {
       "topic_new:enforce",
       fake((id) => (id.startsWith("new_") ? 0.9 : undefined)),
     );
+    // The approval stands until the launched agent words the topic.
+    const approved = plan(f);
+    expect(approved.status === "planned" && approved.created).toEqual([]);
+    expect(f.items("topic-new")[0]!.applied?.effects).toEqual(["approved"]);
+    expect(word(f, { title: "Alley garden beds", goal: "Keep the beds watered." })).toBe(1);
     const report = plan(f);
     expect(report.status === "planned" && report.created).toHaveLength(1);
     const creates = records(TOPIC_CREATE_KIND);
     expect(creates).toHaveLength(1);
     expect(creates[0]!.body["verdict"]).toMatchObject({ use: "topic_new", confidence: 0.9 });
+    expect(creates[0]!.body).toMatchObject({
+      title: "Alley garden beds",
+      goal: "Keep the beds watered.",
+      written_by: { agent: "claude", model: "agent-model-1" },
+    });
     expect(
       records(TOPIC_ASSIGN_KIND)
         .map((r) => r.body["record"])
         .toSorted(),
     ).toEqual(members.toSorted());
-    expect(f.items("topic-new")[0]!.applied?.effects).toEqual([creates[0]!.id]);
+    expect(f.items("topic-wording")[0]!.applied?.effects).toEqual([creates[0]!.id]);
   });
 
   test("kinds, resolutions, completions and history verdicts are written as before", async () => {

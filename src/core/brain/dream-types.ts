@@ -311,6 +311,12 @@ export interface ClosedQuestionsRun {
   readonly asked: Readonly<Record<string, number>>;
   /** Items answered in enforce. */
   readonly answered: number;
+  /** The launched agent's part (change `dream-launched-agent`): whether a session ran, or why not. */
+  readonly agent?: {
+    readonly status: "ran" | "skipped";
+    readonly reason?: string;
+    readonly answered: number;
+  };
 }
 
 export interface DreamOptions {

@@ -15,7 +15,11 @@
  */
 
 import { SETTING_RULES } from "../../store/fold-settings.ts";
-import { SETTING_SILENT_DEVICE_DAYS, SETTING_VIEW_LANGUAGE } from "../../store/constants.ts";
+import {
+  SETTING_DREAM_APPLY_DRAFTS,
+  SETTING_SILENT_DEVICE_DAYS,
+  SETTING_VIEW_LANGUAGE,
+} from "../../store/constants.ts";
 import {
   parsePermissionsDocumentText,
   PERMISSIONS_DOCUMENT_SETTING,
@@ -114,6 +118,15 @@ export const STORE_NATIVE_SETTINGS: Readonly<Record<string, StoreNativeSetting>>
   // retired, so the legacy tree may leave the vault (change
   // stale-device-retirement). Operator-only: lowering it lets a removal
   // pass that the owner did not mean.
+  // Whether model-written text for dream waits for a person (change
+  // dream-launched-agent, design D7).
+  [SETTING_DREAM_APPLY_DRAFTS]: {
+    invalid: (value: unknown) =>
+      value === "auto" || value === "review"
+        ? null
+        : `${SETTING_DREAM_APPLY_DRAFTS} must be auto or review`,
+    default: "auto",
+  },
   [SETTING_SILENT_DEVICE_DAYS]: {
     invalid: (value: unknown) =>
       SETTING_RULES[SETTING_SILENT_DEVICE_DAYS].valid(value)

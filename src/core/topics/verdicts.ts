@@ -107,6 +107,22 @@ export interface TopicVerdicts {
    * proposals, `different` annotates a Jaccard proposal and lists it
    * last.
    */
+  /**
+   * Group key to the wording of its topic (change `dream-launched-agent`,
+   * design D6): the title and goal the launched agent wrote, with its
+   * author and the item. A group is created only with an approval and a
+   * wording.
+   */
+  readonly wordings: ReadonlyMap<
+    string,
+    {
+      readonly title: string;
+      readonly goal: string;
+      readonly agent: string;
+      readonly model: string;
+      readonly item: string;
+    }
+  >;
   readonly sameTopics: ReadonlyArray<{
     readonly a: string;
     readonly b: string;
@@ -155,6 +171,7 @@ export function emptyTopicVerdicts(): TopicVerdicts {
     routes: new Map(),
     kinds: new Map(),
     vetoes: new Map(),
+    wordings: new Map(),
     sameTopics: [],
     resolutions: new Map(),
     completions: [],
