@@ -475,6 +475,24 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
  */
 export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "scripts/pack-manifest.ts",
+    "a maintainer and CI script: it unpacks a release tarball into a temp-rooted scratch " +
+      "directory to check its file list and removes that directory; it never runs on a user's " +
+      "machine as part of the product",
+  ],
+  [
+    "scripts/registry-smoke.ts",
+    "a release workflow script: it installs the published package into one temp-rooted scratch " +
+      "directory with a scratch home and removes it by its exact path; it is not part of the " +
+      "installed product's runtime",
+  ],
+  [
+    "scripts/scratch-environment.ts",
+    "it only BUILDS the environment that points a child process at a caller-supplied scratch " +
+      "root (home, XDG and Bun directories inside it) for the smoke script and the packed " +
+      "install tests; it writes nothing itself and names no real per-user location",
+  ],
+  [
     "src/core/install/payload.ts",
     "it computes the default config path only to COMPARE it with the configured one, so a host " +
       "registration carries an explicit config path exactly when the launched server would not " +

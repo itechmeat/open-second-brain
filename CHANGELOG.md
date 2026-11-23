@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The verified release workflow can publish its checked tarball to the registry with trusted publishing, skip repeats, and smoke-test the installed version. Registry installation is documented for maintainers and users.
 - Three cross-platform registry launchers provide `o2b`, `o2b-mcp` and `o2b-hook` with Bun on `PATH` as the prerequisite. `vault-log` is excluded because it dispatches to the nonexistent `append-event` command.
 - Added `o2b setup` to configure the machine and brain, connect one agent host, and verify the result. Registry installs register an absolute Bun launcher; doctor reports stale registrations, older registration versions, and multiple `o2b` providers on PATH.
 

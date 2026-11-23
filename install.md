@@ -18,6 +18,27 @@ discovery, identity (agent name + timezone), and the verification
 pattern that every install path ends with. On native Windows, read
 **`install/windows.md`** as well.
 
+## From the registry
+
+With Bun installed, install Open Second Brain and connect a host:
+
+```bash
+bun add -g open-second-brain
+o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes
+```
+
+On a fresh machine, setup requires a vault choice, agent name, and timezone;
+`--yes` supplies consent only. Replace the vault path and agent name with your
+own values. For a machine without a vault, use `--no-vault` instead:
+
+```bash
+o2b setup --target cursor --no-vault --agent-name "Your Name" --timezone UTC --apply --yes
+```
+
+Interactive `setup --apply` asks for consent; non-interactive runs require
+`--yes`.
+The clone and runtime marketplace paths below remain available.
+
 ## Quick install
 
 For these runtimes one `o2b install` command writes the integration
@@ -50,9 +71,10 @@ hooks into that pipeline instead of `o2b install --target`:
 | Codex                | `install/codex.md`        |
 | Claude Code          | `install/claudecode.md`   |
 
-## After installing from a registry
+## After setup
 
-Connect and verify one host with `o2b setup`:
+For a vault-backed host, setup can receive the vault, agent name and
+timezone explicitly:
 
 ```bash
 o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes
@@ -80,7 +102,7 @@ requires an explicit `yes` before any side effects.
 
 ## Verify
 
-After any install:
+For a vault-backed install, verify with:
 
 ```bash
 o2b doctor --vault /path/to/vault --repo .
@@ -93,6 +115,12 @@ target is ok or not installed, `3` if any target reports drift, and `5` if a
 target is configured but proved unreachable. The `5` is new in v1.46.0: that
 case used to exit `0`, so a script gating on the exit status treated a runtime
 it had proved unreachable as healthy. `docs/cli-reference.md` lists every code.
+
+For a `--no-vault` install, setup initializes the machine and brain store
+without a vault. It is complete when setup exits `0` and reports host
+verification as `ok`, the runtime has been restarted, and
+`o2b install --check` reports the target is healthy. Vault initialization,
+vault-specific doctor checks, and vault event checks do not apply.
 
 ## Uninstall
 
@@ -119,13 +147,22 @@ Universal:
 - [ ] plugin (or per-target managed block / symlink / printout)
       installed;
 - [ ] runtime restarted to pick up the change;
-- [ ] vault initialized (`o2b init` succeeded);
-- [ ] `o2b doctor` reports OK;
 - [ ] `o2b install --check` reports `ok` (or `installed` for `generic`)
       for the target;
+
+Vault-backed installs:
+
+- [ ] vault initialized (`o2b init` succeeded);
+- [ ] `o2b doctor` reports OK;
 - [ ] `AI Wiki/identity/agents.md` contains the chosen agent name;
 - [ ] a test event written without an explicit `agent` argument
       stamps `@<chosen-agent-name>` in `Daily/`, not `@agent`.
+
+For a brain-store install made with `--no-vault`, use this setup criterion
+instead of the vault-backed items above:
+
+- [ ] `o2b setup --target <host> --no-vault --apply --yes` exits `0` and
+      reports host verification as `ok`;
 
 MCP-driven runtimes only (Cursor, opencode, Grok Build, kiro,
 Copilot CLI, Gemini CLI, Claude Code, Codex, Hermes, ZCode; not `aider`,

@@ -205,3 +205,112 @@ jobs:
             --title "open-second-brain ${TAG}" \
             --generate-notes \
             "${prerelease_args[@]}"
+
+  publish:
+    name: Publish registry package
+    needs: verify
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: registry-publish-open-second-brain
+      cancel-in-progress: false
+    runs-on: ubuntu-26.04
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    env:
+      NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
+      NPM_VERSION: 11.14.1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Check Node version
+        run: node -e 'const [a,b,c] = process.versions.node.split(".").map(Number); if (a < 22 || (a === 22 && (b < 14 || (b === 14 && c < 0)))) throw new Error(`Node ${process.versions.node} is below 22.14.0`); console.log(process.versions.node)'
+
+      - name: Install pinned registry client
+        run: |
+          npm_prefix="$RUNNER_TEMP/npm-global"
+          npm install --global --prefix "$npm_prefix" "npm@$NPM_VERSION"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+          "$npm_prefix/bin/npm" --version
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compare release tag to package version
+        run: bun run scripts/publish-plan.ts --compare-only
+
+      - name: Pack checked tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          tarball="$RUNNER_TEMP/open-second-brain-$version.tgz"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP" >/dev/null
+          bun run scripts/pack-manifest.ts --tarball "$tarball"
+          echo "path=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to publish
+        id: plan
+        run: bun run scripts/publish-plan.ts
+
+      - name: Upload checked tarball
+        if: always() && steps.pack.outputs.path != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: open-second-brain-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.pack.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish checked tarball
+        if: steps.plan.outputs.action == 'publish'
+        env:
+          TARBALL: ${{ steps.pack.outputs.path }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: npm publish "$TARBALL" --tag "$TAG" --access public --ignore-scripts
+
+      - name: Report skipped publish
+        if: steps.plan.outputs.action != 'publish'
+        env:
+          REASON: ${{ steps.plan.outputs.reason }}
+        run: echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
+  publish-smoke:
+    name: Smoke test registry install
+    needs: publish
+    if: needs.publish.outputs.action == 'publish'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install and run published version
+        run: bun run scripts/registry-smoke.ts "open-second-brain@${{ needs.publish.outputs.version }}" "${{ needs.publish.outputs.version }}"
