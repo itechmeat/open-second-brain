@@ -144,7 +144,6 @@ describe("produceWork", () => {
       `console.log("answer=" + JSON.stringify({ state: item?.state }));\n`;
     const child = Bun.spawnSync([process.execPath, "-e", code], {
       env: {
-        ...process.env,
         ...homeEnv(join(m.parent, "home", "dev-a")),
         XDG_CONFIG_HOME: join(m.parent, "config"),
         XDG_DATA_HOME: join(m.parent, "data"),
@@ -635,6 +634,23 @@ describe("answerWork", () => {
     expect(refused).toHaveLength(1);
     expect(takeWork(q, { run: "r2" }).item?.id).toBe((res as { successor: string }).successor);
   });
+
+  test("an unavailable current input leaves the live lease for the executor to release", () => {
+    const { id } = produceWork(q, spec("temporarily-unreadable"));
+    const lease = takeWork(q, { run: "r1" }).item!;
+    ops.unavailable.add("temporarily-unreadable");
+    const res = answerWork(q, {
+      item: id,
+      generation: 1,
+      lease_token: lease.lease_token,
+      value: "yes",
+      agent: "a",
+      model: "m",
+    });
+    expect(res).toMatchObject({ status: "unavailable", reason: "current input is unavailable" });
+    expect(stateOf(id).state).toBe("leased");
+    expect(stateOf(id).attempts).toBe(0);
+  });
 });
 
 describe("applyAccepted", () => {
@@ -700,7 +716,7 @@ describe("applyAccepted", () => {
     });
     const folded = stateOf(id);
     const op = dreamWorkOperation(FIXTURE_CLOSED)!;
-    const context = { store: a, vault: null };
+    const context = { store: a, vault: null, now: Date.now() };
     const first = op.apply(folded, folded.answer!, context);
     const second = op.apply(folded, folded.answer!, context);
     expect(second).toEqual(first);

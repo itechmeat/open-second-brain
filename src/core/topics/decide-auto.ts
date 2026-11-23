@@ -1,27 +1,41 @@
 /**
- * The front door of the decide pass (design D10, D20): the asynchronous
- * callers of a live dream pass (the CLI dream verb, the MCP dream tool,
- * the maintenance lane's dream task) await this right before
- * `dream()` and hand the verdicts in as `DreamOptions.topicVerdicts`.
- * A synchronous dream caller, a dry run and a preview never call it and
- * get the deterministic result.
+ * The front door of a live dream pass's model work (change
+ * `dream-closed-questions`, design D1): the asynchronous callers of a
+ * live pass (the CLI dream verb, the MCP dream tool, the maintenance
+ * lane's dream task) await this right before `dream()`. On the dream
+ * owner's device of a brain served from the store it
  *
- * Fail-open: every error answers `undefined`, which the dream reads as
- * "no verdicts" - the deterministic plan. The pass itself never throws.
+ *  1. produces every closed question as a dream work item, whether or not
+ *     the pass will find anything else to change, and
+ *  2. lets the decision model executor answer what it may,
+ *
+ * both within the model budget (`dream.model_budget_ms`, default
+ * {@link DREAM_MODEL_BUDGET_MS}), production first. The answers take
+ * effect in topic planning, at the tail of the pass. A synchronous dream
+ * caller, a dry run and a preview never call it: they produce nothing
+ * and ask nothing.
+ *
+ * Fail-open: every error answers `undefined`, and the pass runs as it
+ * would with nothing produced.
  */
 
-import { readDeviceId } from "../config.ts";
-import { inspectStore, openStore, type StoreHandle } from "../store/store-open.ts";
-import { resolveConfiguredStoreRoot } from "../store/store-paths.ts";
+import { readDeviceId, resolveAgentName } from "../config.ts";
+import { runDecisionExecutor } from "../brain/dream-queue/decision-executor.ts";
+import { assertDreamOwner } from "../brain/dream-owner/gate.ts";
+import { dreamQueueOn } from "../brain/dream-queue/queue.ts";
+import type { ClosedQuestionsRun } from "../brain/dream-types.ts";
+import { loadBrainConfig } from "../brain/policy.ts";
 import type { DecisionProvider } from "../decision-model/contract.ts";
-import { decideTopicPlan } from "./decide.ts";
-import { DECIDE_PASS_BUDGET_MS, type DecideTopicPlanOptions } from "./decide-shared.ts";
-import type { TopicVerdicts } from "./verdicts.ts";
+import { readTopicQuestionState } from "./decide-operations.ts";
+import { produceTopicQuestions } from "./decide-produce.ts";
 
-export interface PrepareTopicVerdictsOptions {
+/** The model budget of a live pass when `dream.model_budget_ms` is unset. */
+export const DREAM_MODEL_BUDGET_MS = 20_000;
+
+export interface PrepareClosedQuestionsOptions {
   /** The machine config naming the store (absent: the process's own). */
   readonly configPath?: string;
-  /** Wall clock (default `Date.now`): the pass's budget runs on it. */
+  /** Wall clock (default `Date.now`): the budget runs on it. */
   readonly now?: () => number;
   /** The date the dream run is for (its `now`), when it has one. */
   readonly runAt?: Date;
@@ -29,60 +43,79 @@ export interface PrepareTopicVerdictsOptions {
   readonly provider?: DecisionProvider;
   /** Config environment override (tests). */
   readonly env?: Readonly<Record<string, string | undefined>>;
-  /** The pass's whole budget in ms. */
+  /** What is left of the caller's own deadline, in ms: the budget is clamped to it. */
   readonly deadlineMs?: number;
+  /** The agent the queue records name (default: the configured agent). */
+  readonly agent?: string;
 }
 
 /**
- * The pass's budget when the caller's whole call runs under one deadline
- * of `timeoutMs` (null: none) and `elapsedMs` of it are spent: what is
- * left, never more than {@link DECIDE_PASS_BUDGET_MS}, so the dream pass
- * after it keeps the rest. `undefined` leaves the pass its own budget.
+ * What is left of a caller's deadline of `timeoutMs` (null: none) after
+ * `elapsedMs`: the front door clamps its budget to it. `undefined` leaves
+ * the front door its own budget.
  */
 export function decideBudgetWithin(
   timeoutMs: number | null,
   elapsedMs: number,
 ): number | undefined {
   if (timeoutMs === null) return undefined;
-  return Math.max(0, Math.min(DECIDE_PASS_BUDGET_MS, timeoutMs - elapsedMs));
+  return Math.max(0, timeoutMs - elapsedMs);
+}
+
+/** The model budget of `vault`'s live passes, in ms. */
+export function dreamModelBudgetMs(vault: string | null): number {
+  try {
+    return loadBrainConfig(vault).dream.model_budget_ms ?? DREAM_MODEL_BUDGET_MS;
+  } catch {
+    return DREAM_MODEL_BUDGET_MS;
+  }
 }
 
 /**
- * The verdicts for the dream pass about to run, or `undefined` when
- * this machine uses no brain store, has no device id, the decide pass
- * decided nothing (all uses off, not the view writer, ...) or anything
- * threw. `undefined` means the deterministic plan.
+ * Produce the closed questions of the pass about to run and have the
+ * decision model answer them, on the dream owner's device. `undefined`
+ * when this device is not the owner's, the brain has no store, a shard
+ * could not be read, or anything threw.
  */
-export async function prepareTopicVerdicts(
-  options: PrepareTopicVerdictsOptions = {},
-): Promise<TopicVerdicts | undefined> {
+export async function prepareClosedQuestions(
+  vault: string | null,
+  options: PrepareClosedQuestionsOptions = {},
+): Promise<ClosedQuestionsRun | undefined> {
   try {
-    const { root } = resolveConfiguredStoreRoot(options.configPath);
-    if (inspectStore(root) === null) return undefined;
-    const device = readDeviceId(options.configPath);
-    if (device === null) return undefined;
-    const store: StoreHandle = openStore({ root, device });
-    const decideOptions: DecideTopicPlanOptions = {
-      ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
-      ...(options.now !== undefined ? { now: options.now } : {}),
-      ...(options.runAt !== undefined ? { runAt: options.runAt } : {}),
-      ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    const configOpt = options.configPath !== undefined ? { configPath: options.configPath } : {};
+    const gate = assertDreamOwner(vault, { live: true, ...configOpt });
+    if (gate.status !== "owner") return undefined;
+    if (readDeviceId(options.configPath) === null) return undefined;
+    const clock = options.now ?? Date.now;
+    const budget = Math.min(
+      dreamModelBudgetMs(vault),
+      options.deadlineMs ?? Number.POSITIVE_INFINITY,
+    );
+    const until = clock() + budget;
+    const queue = dreamQueueOn(gate.store, {
+      vault,
+      writer: options.agent ?? resolveAgentName(options.configPath),
+      ...configOpt,
+    });
+    const at = options.runAt?.getTime() ?? clock();
+    const state = readTopicQuestionState(gate.store, at);
+    if (state === null) return undefined;
+    // Production is unconditional (design D1): a quiet brain's backlog is
+    // never stuck behind a pass that finds nothing else to change.
+    const produced = produceTopicQuestions(queue, state, { until, clock });
+    const executed = await runDecisionExecutor(queue, {
+      until,
+      clock,
+      ...configOpt,
       ...(options.env !== undefined ? { env: options.env } : {}),
-      ...(options.deadlineMs !== undefined ? { deadlineMs: options.deadlineMs } : {}),
+      ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    });
+    return {
+      produced: produced.produced,
+      left: produced.left,
+      asked: executed.status === "ran" ? executed.asked : {},
+      answered: executed.status === "ran" ? executed.answered : 0,
     };
-    const verdicts = await decideTopicPlan(store, decideOptions);
-    // A pass that decided nothing stays undefined, so the dream reads
-    // exactly as without the feature.
-    const isEmpty =
-      verdicts.routes.size === 0 &&
-      verdicts.kinds.size === 0 &&
-      verdicts.vetoes.size === 0 &&
-      verdicts.sameTopics.length === 0 &&
-      verdicts.resolutions.size === 0 &&
-      verdicts.completions.length === 0 &&
-      verdicts.hidden.size === 0 &&
-      verdicts.kept.size === 0;
-    return isEmpty ? undefined : verdicts;
   } catch {
     return undefined;
   }

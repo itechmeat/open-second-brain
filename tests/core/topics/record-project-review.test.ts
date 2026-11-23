@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { buildAgentContextBlocks } from "../../../hooks/lib/agent-context-blocks.ts";
 import { createInjectionMeter, resolveInjectionLimits } from "../../../hooks/lib/active-context.ts";
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { TOPICS_WITHOUT_PROJECT_CODE } from "../../../src/core/brain/doctor/topic-plan-check.ts";
 import { withPrivateWithheld } from "../../../src/core/store/caller-reach.ts";
@@ -82,7 +82,7 @@ test("projects named in any script keep their own key from the record to the top
   }
 
   // Planned: one topic per project, scoped by the stamped key.
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   expect(report?.status).toBe("planned");
   const fold = readTopics().fold;
   const scopes = [...fold.topics.values()].map((t) => t.scope).toSorted();
@@ -169,7 +169,7 @@ test("below local reach the topic counts of status and doctor leave the private 
     ),
   );
   await callTool(s, "brain_note", { text: "Shared planning words", agent: "agent-one" });
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
 
   type Topics = { created: number; unassigned: number; without_project: number; advice: string };
   const local = (buildStoreStatusBlock({ vault: a.vault, configPath: null }) as { topics: Topics })
@@ -213,7 +213,7 @@ test("a shared record a private topic record assigns is unheld in the shared cou
   const topic = [...readTopics().fold.topics.values()][0]!;
   expect(topic.private).toBe(true);
   runTopicAction({ action: "assign", topic: topic.id, record: note.id });
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
 
   const outcome = readTopicPlanOutcome();
   expect(outcome).not.toBeNull();

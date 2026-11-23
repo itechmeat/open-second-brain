@@ -1,22 +1,35 @@
 /**
- * The topic-planning step of dream (design D9; task 3.4): only the view
- * writer runs it, under a device-local exclusive lock, so neither two
- * machines nor two processes on the writer create the same topic twice.
+ * The topic-planning step of dream (design D9; task 3.4): only one device
+ * runs it, under a device-local exclusive lock, so neither two machines
+ * nor two processes on one create the same topic twice. On a brain with a
+ * dream owner that device is the owner's (change `dream-closed-questions`,
+ * design D2): every planning write is a judged write, and planning is
+ * where the answers of the closed questions take effect. On a brain with
+ * no owner bound it is the view writer's, and with no answer to apply it
+ * creates and routes nothing.
  *
  * A pass:
  *
- *  1. reads the view writer records; any other machine stops here and its
- *     report names the writer (spec "Two machines run dream at once");
+ *  1. reads the dream owner (else the view writer) records; any other
+ *     machine stops here and its report names the device that plans
+ *     (spec "Two machines run dream at once");
  *  2. takes the planning lock, then reads every partition this machine
  *     holds (and stops when a shard could not be read in full: a plan
  *     over a partial read could make a topic that already exists, or
  *     when that read names another view writer, or the pass's deadline
  *     passed while it waited for the lock);
- *  3. plans (`plan.ts`) and appends, as `agent` records of its own agent:
- *     a `topic-create` per new topic with an `assign` per record, and an
- *     `assign` per route. A record lands in `private` when its topic is
+ *  3. reads the dream work queue's fold, builds the verdicts of the
+ *     accepted answers whose subject still matches this read and of the
+ *     standing ones (a veto, a `none` route, a merge hint), plans
+ *     (`plan.ts`) and appends, as `agent` records of its own agent: a
+ *     `topic-create` per approved group with an `assign` per record, and
+ *     an `assign` per answered route, then the item and proposal records
+ *     of the other answers. A record lands in `private` when its topic is
  *     private or the record it assigns is; a private one on a machine
- *     without that partition is skipped and reported.
+ *     without that partition is skipped and reported;
+ *  4. marks every answer it applied as applied, with the ids written (or
+ *     `abstained`, or the standing mark), and closes the answers whose
+ *     subject changed.
  *
  * Every create and route is listed in the report with the command that
  * undoes it, also when a later write of the pass fails; the undo is a human `undo` record every machine honours.
@@ -62,12 +75,42 @@ import {
   type QuietPrompt,
   type SplitProposal,
 } from "./plan.ts";
-import type { TopicVerdictBody, TopicVerdicts } from "./verdicts.ts";
+import {
+  emptyTopicVerdicts,
+  topicGroupKey,
+  type TopicVerdictBody,
+  type TopicVerdicts,
+} from "./verdicts.ts";
 import {
   judgedHistoryNotes,
   writeVerdictRecords,
   type VerdictWriteCounts,
 } from "./verdict-writes.ts";
+import { readDreamOwner } from "../brain/dream-owner/owner.ts";
+import type { DreamWorkState } from "../brain/dream-queue/fold.ts";
+import {
+  dreamQueueOn,
+  markAppliedByPlanning,
+  readDreamWork,
+  recheckAccepted,
+  type DreamQueue,
+} from "../brain/dream-queue/queue.ts";
+import { BUILTIN_USE_THRESHOLDS } from "../decision-model/questions.ts";
+import {
+  ABSTAINED,
+  closedInputHash,
+  closedQuestion,
+  isClosedOperation,
+  NO_STANDING,
+  STANDING_MARK,
+  THRESHOLD_NAME,
+  standingAsVerdicts,
+  standingVerdicts,
+  topicQuestionStateOf,
+  useOfOperation,
+  verdictOfAnswer,
+  type TopicQuestionState,
+} from "./decide-operations.ts";
 
 /** The command that undoes one automatic topic record. */
 export const TOPIC_UNDO_COMMAND = "o2b topic undo";
@@ -97,8 +140,13 @@ export interface RoutedRecord {
   readonly verdict?: TopicVerdictBody;
 }
 
+/** Where the closed questions are judged, as a pass reports it (design D2). */
+export type TopicJudgment = "here" | "elsewhere" | "unbound";
+
 export type TopicPlanningReport =
   | { readonly status: "no-writer" }
+  /** A brain with a dream owner: only the owner's device plans topics. */
+  | { readonly status: "not-owner"; readonly owner: string }
   | { readonly status: "not-writer"; readonly writer: string }
   | { readonly status: "released"; readonly to: string }
   | { readonly status: "waiting-for-claim" }
@@ -156,6 +204,14 @@ export type TopicPlanningReport =
       readonly hidden: number;
       /** `history-verdict` records that keep a note, from `human_readable` model verdicts. */
       readonly kept: number;
+      /** Accepted answers applied during this planning pass. */
+      readonly applied: number;
+      /** Answers applied that decided nothing (below their threshold). */
+      readonly abstained: number;
+      /** Answers not applied because their subject changed. */
+      readonly stale: number;
+      /** `here`: the owner's device judged; `unbound`: no owner, nothing decided. */
+      readonly judgment: TopicJudgment;
     };
 
 /**
@@ -178,16 +234,18 @@ export interface TopicPlanningError {
   readonly hidden: number;
   /** `history-verdict` records that keep a note, written before the failure. */
   readonly kept: number;
+  /** Accepted answers whose effects landed before this planning failure. */
+  readonly applied: number;
 }
 
 export interface TopicPlanningOptions {
   readonly agent: string;
   /**
-   * Model verdicts computed before the pass (design D10, D20): applied
-   * only where their subject still matches the fold read under the
-   * lock. Absent: the deterministic plan.
+   * The dream work queue of a live pass that holds the pass lock on the
+   * owner's device. Absent on the owner's device: the queue is opened
+   * here, through the owner gate.
    */
-  readonly topicVerdicts?: TopicVerdicts;
+  readonly queue?: DreamQueue;
   /** Wall clock (default `Date.now`). */
   readonly now?: () => number;
   /**
@@ -255,13 +313,45 @@ export function writerGate(store: StoreHandle, options: TopicPlanningOptions): W
   return { ok: true };
 }
 
+/**
+ * The gate of a planning pass: on a brain with a dream owner only the
+ * owner's device plans (with its queue); on a brain with none, the view
+ * writer plans, with no queue (design D2).
+ */
+function planningGate(
+  store: StoreHandle,
+  options: TopicPlanningOptions,
+):
+  | { readonly ok: true; readonly queue: DreamQueue | null }
+  | { readonly ok: false; readonly report: TopicPlanningReport } {
+  const owner = readDreamOwner(store, options.now).owner;
+  if (owner !== null) {
+    if (owner.device !== store.device) {
+      return { ok: false, report: { status: "not-owner", owner: owner.device } };
+    }
+    return {
+      ok: true,
+      queue:
+        options.queue ??
+        dreamQueueOn(store, {
+          vault: null,
+          writer: options.agent,
+          ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+          ...(options.now !== undefined ? { now: options.now } : {}),
+        }),
+    };
+  }
+  const gate = writerGate(store, options);
+  return gate.ok ? { ok: true, queue: null } : gate;
+}
+
 /** One planning pass on this machine. */
 export function runTopicPlanning(
   store: StoreHandle,
   options: TopicPlanningOptions,
 ): TopicPlanningReport {
   const clock = options.now ?? Date.now;
-  const before = writerGate(store, options);
+  const before = planningGate(store, options);
   if (!before.ok) return before.report;
   const wait = Math.max(resolveLockWaitBudgetMs(), PLAN_LOCK_WAIT_MS);
   return withLocalLock(
@@ -269,9 +359,9 @@ export function runTopicPlanning(
     () => {
       // Asked again under the lock: the role may have moved while this
       // pass waited, and no plan starts after a release.
-      const under = writerGate(store, options);
+      const under = planningGate(store, options);
       if (!under.ok) return under.report;
-      return planUnderLock(store, options, clock);
+      return planUnderLock(store, options, clock, under.queue);
     },
     wait,
   );
@@ -293,31 +383,52 @@ function planUnderLock(
   store: StoreHandle,
   options: TopicPlanningOptions,
   clock: () => number,
+  queue: DreamQueue | null,
 ): TopicPlanningReport {
   const fence = topicRecordIds(store);
   // Only what planning folds is kept (`isTopicPlanningInput`): a migrated
   // store's log is mostly events no topic is made of.
   const read = catchUpWhere(store, isTopicPlanningInput, options.now);
-  if (read.unreadable.length > 0) {
-    return { status: "incomplete-read", shards: read.unreadable.map((s) => s.path) };
+  const pending = [...(read.pendingKinds?.entries() ?? [])].flatMap(([partition, kinds]) =>
+    [...kinds].flatMap(([kind, count]) =>
+      count > 0 ? [`pending ${partition}/${kind}:${count}`] : [],
+    ),
+  );
+  if (read.unreadable.length > 0 || pending.length > 0) {
+    return {
+      status: "incomplete-read",
+      shards: [...read.unreadable.map((s) => s.path), ...pending],
+    };
   }
-  // The writer as this read reports it: a move that arrived after the gate
-  // above read the settings still stops the pass before it plans.
-  const writer = foldViewWriter(partitionRecords(read, "shared")).writer;
-  if (writer === null) return { status: "no-writer" };
-  if (writer !== store.device) return { status: "not-writer", writer };
-  const privateIds = new Set(partitionRecords(read, "private").map((r) => r.id));
-  const records = [...read.records.values()].flat();
-  const fold = foldTopics(records, { privateIds });
-  const shared = foldSettings(partitionRecords(read, "shared"));
-  // Decision page titles of this read: none when it missed a page version.
-  const candidates = topicCandidates(records, privateIds, decisionTitlesOfCatchUp(read));
-  const settings: PlanSettings = {
-    minRecords: settingValue(shared, SETTING_TOPIC_MIN_RECORDS) as number,
-    minSessions: settingValue(shared, SETTING_TOPIC_MIN_SESSIONS) as number,
-    quietDays: settingValue(shared, SETTING_TOPIC_QUIET_DAYS) as number,
+  if (queue === null) {
+    // The writer as this read reports it: a move that arrived after the gate
+    // above read the settings still stops the pass before it plans.
+    const writer = foldViewWriter(partitionRecords(read, "shared")).writer;
+    if (writer === null) return { status: "no-writer" };
+    if (writer !== store.device) return { status: "not-writer", writer };
+  }
+  // The queue's fold, read under the planning lock: the answers to apply
+  // and the verdicts that stand (design D2).
+  const work = queue === null ? null : readDreamWork(store, { now: clock() });
+  if (work !== null && work.unreadable.length > 0) {
+    return { status: "incomplete-read", shards: work.unreadable };
+  }
+  const question = topicQuestionStateOf(
+    read,
+    clock(),
+    work === null ? NO_STANDING : standingVerdicts(work),
+  );
+  const { fold, candidates, settings } = question;
+  const answers = work === null ? null : acceptedAnswers(work, question);
+  const verdicts = mergeVerdicts(standingAsVerdicts(question.standing), answers?.verdicts);
+  const plan = planTopics(fold, candidates, settings, clock(), verdicts);
+  /** Ids written per answered subject (`<operation>:<subject>`). */
+  const written = new Map<string, string[]>();
+  const wrote = (key: string, id: string): void => {
+    const list = written.get(key) ?? [];
+    list.push(id);
+    written.set(key, list);
   };
-  const plan = planTopics(fold, candidates, settings, clock(), options.topicVerdicts);
   // A lock taken over from a holder that looked stale (a paused process)
   // lets two passes plan at once: a pass whose topic records changed since
   // it read them writes nothing, and the next pass plans again.
@@ -412,6 +523,14 @@ function planUnderLock(
   const created: Array<Mutable<CreatedTopic>> = [];
   let createdShared = 0;
   const routed: RoutedRecord[] = [];
+  // The owner gate ran before the reads above; a forced takeover takes no
+  // lock, so the role is read again here, right before the first write.
+  if (queue !== null) {
+    const owner = readDreamOwner(store, options.now).owner;
+    if (owner === null || owner.device !== store.device) {
+      return { status: "not-owner", owner: owner?.device ?? "none" };
+    }
+  }
   try {
     writePlan();
   } catch (err) {
@@ -421,8 +540,36 @@ function planUnderLock(
       error: errorText(err),
       created,
       routed,
+      applied: 0,
       ...verdictCounts,
     };
+  }
+  if (queue !== null && answers !== null) {
+    // Every answer this pass applied is marked, in one queue entry: the
+    // ids written for it, its standing mark, or `abstained` (design D5).
+    const marks = [
+      ...answers.decided.map((d) => ({
+        item: d.item,
+        generation: d.generation,
+        lease_token: d.lease_token,
+        receipt: d.receipt,
+        effects: d.mark !== undefined ? [d.mark] : (written.get(d.key) ?? []),
+      })),
+      ...answers.abstained.map((entry) => ({ ...entry, effects: [ABSTAINED] })),
+    ];
+    try {
+      markAppliedByPlanning(queue, marks);
+      recheckAccepted(queue, answers.stale);
+    } catch (err) {
+      return {
+        status: "error",
+        error: errorText(err),
+        created,
+        routed,
+        applied: marks.length,
+        ...verdictCounts,
+      };
+    }
   }
   const unheld = candidates.filter(
     (c) => !fold.assignments.has(c.id) && (c.topic === null || fold.canonical(c.topic) === null),
@@ -457,6 +604,10 @@ function planUnderLock(
     invalid,
     invalidCreates,
     ...verdictCounts,
+    applied: (answers?.decided.length ?? 0) + (answers?.abstained.length ?? 0),
+    abstained: answers?.abstained.length ?? 0,
+    stale: answers?.stale.length ?? 0,
+    judgment: queue === null ? "unbound" : "here",
   };
 
   function writePlan(): void {
@@ -497,6 +648,7 @@ function planUnderLock(
         ...(plannedTopic.verdict !== undefined ? { verdict: plannedTopic.verdict } : {}),
       };
       created.push(entry);
+      wrote(`topic-new:${topicGroupKey(plannedTopic.members)}`, record);
       if (!plannedTopic.private) createdShared += 1;
       appendMany(
         plannedTopic.members.map((member) => ({
@@ -522,6 +674,7 @@ function planUnderLock(
       TOPIC_ASSIGN_KIND,
       (i, assign) => {
         routed.push({ ...plan.routes[i]!, assign, undo: undoOf(assign, options.configPath) });
+        wrote(`topic-route:${plan.routes[i]!.record}`, assign);
       },
     );
     // The item and proposal records the model verdicts decide (design
@@ -532,11 +685,194 @@ function planUnderLock(
       fold,
       plan,
       candidatesById: new Map(candidates.map((c) => [c.id, c])),
-      verdicts: options.topicVerdicts,
+      verdicts,
       counts: verdictCounts,
       judgedNotes: judgedHistoryNotes(partitionRecords(read, "shared")),
+      landed: (operation, subject, id) => wrote(`${operation}:${subject}`, id),
     });
   }
+}
+
+/** The verdicts of the accepted answers, and how each item ends. */
+interface AcceptedAnswers {
+  readonly verdicts: TopicVerdicts;
+  /** Answered items whose answer decides: their key (`<operation>:<subject>`) and standing mark. */
+  readonly decided: ReadonlyArray<{
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly receipt: string;
+    readonly key: string;
+    readonly mark?: string;
+  }>;
+  readonly abstained: ReadonlyArray<{
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly receipt: string;
+  }>;
+  readonly stale: ReadonlyArray<string>;
+}
+
+type MutableVerdicts = {
+  -readonly [K in keyof TopicVerdicts]: TopicVerdicts[K] extends ReadonlyMap<infer A, infer B>
+    ? Map<A, B>
+    : TopicVerdicts[K] extends ReadonlyArray<infer E>
+      ? E[]
+      : never;
+};
+
+/**
+ * The accepted answers of the closed questions as verdicts (design D2,
+ * D5): an answer whose subject no longer asks the same question is stale;
+ * one below its use's threshold abstains.
+ */
+function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): AcceptedAnswers {
+  const v = emptyTopicVerdicts() as unknown as MutableVerdicts;
+  const decided: Array<{
+    item: string;
+    generation: number;
+    lease_token: string;
+    receipt: string;
+    key: string;
+    mark?: string;
+  }> = [];
+  const abstained: Array<{
+    item: string;
+    generation: number;
+    lease_token: string;
+    receipt: string;
+  }> = [];
+  const stale: string[] = [];
+  for (const id of work.order) {
+    const item = work.items.get(id)!;
+    const op = item.body.operation;
+    if (item.state !== "accepted" || item.answer === null || !isClosedOperation(op)) continue;
+    const current = closedQuestion(question, op, item.body.subject);
+    if (current === null || closedInputHash(current) !== item.body.input_hash) {
+      stale.push(id);
+      continue;
+    }
+    const use = useOfOperation(op)!;
+    const value = item.answer.value as Record<string, unknown>;
+    const author = { provider: String(value["provider"]), model: String(value["model"]) };
+    const builtin = (BUILTIN_USE_THRESHOLDS[use] as Record<string, number>)[THRESHOLD_NAME[op]]!;
+    const threshold = typeof value["threshold"] === "number" ? value["threshold"] : builtin;
+    const choice = typeof value["choice"] === "string" ? value["choice"] : null;
+    const confidence = typeof value["confidence"] === "number" ? value["confidence"] : null;
+    const p = typeof value["p"] === "number" ? value["p"] : null;
+    const confident = confidence !== null && confidence >= threshold;
+    const subject = item.body.subject;
+    const key = `${op}:${subject}`;
+    const accepted = {
+      item: id,
+      generation: item.answer.generation,
+      lease_token: item.answer.lease_token,
+      receipt: item.answer.receipt,
+    };
+    const input = current.input as Record<string, unknown>;
+    switch (op) {
+      case "topic-route":
+        if (!confident || choice === null) break;
+        v.routes.set(subject, {
+          topic: choice === "none" ? null : choice,
+          privateInput: current.private,
+          verdict: verdictOfAnswer(use, author, confidence),
+        });
+        decided.push({
+          ...accepted,
+          key,
+          ...(choice === "none" ? { mark: STANDING_MARK.none } : {}),
+        });
+        continue;
+      case "topic-new": {
+        if (p === null) break;
+        const veto = p < threshold;
+        v.vetoes.set(subject, { verdict: verdictOfAnswer(use, author, p), veto });
+        decided.push({ ...accepted, key, ...(veto ? { mark: STANDING_MARK.veto } : {}) });
+        continue;
+      }
+      case "topic-same": {
+        if (!confident || choice === null) break;
+        const [a, b] = subject.split("..") as [string, string];
+        v.sameTopics.push({
+          a,
+          b,
+          option: choice,
+          verdict: verdictOfAnswer(use, author, confidence),
+        });
+        decided.push({ ...accepted, key, mark: choice });
+        continue;
+      }
+      case "event-kind":
+        if (!confident || choice === null || choice === "routine") break;
+        v.kinds.set(subject, {
+          kind: choice,
+          topic: String(input["topic"]),
+          privateInput: current.private,
+          verdict: verdictOfAnswer(use, author, confidence),
+        });
+        decided.push({ ...accepted, key });
+        continue;
+      case "question-resolved": {
+        if (!confident || choice === null || choice === "none") break;
+        const slash = choice.indexOf("/");
+        v.resolutions.set(subject, {
+          topic: String(input["topic"]),
+          owner: choice.slice(0, slash),
+          question: choice.slice(slash + 1),
+          privateInput: current.private,
+          verdict: verdictOfAnswer(use, author, confidence),
+        });
+        decided.push({ ...accepted, key });
+        continue;
+      }
+      case "milestone-done": {
+        if (p === null || p < threshold) break;
+        const slash = subject.indexOf("/");
+        v.completions.push({
+          topic: String(input["topic"]),
+          owner: subject.slice(0, slash),
+          milestone: subject.slice(slash + 1),
+          privateInput: current.private,
+          verdict: verdictOfAnswer(use, author, p),
+        });
+        decided.push({ ...accepted, key });
+        continue;
+      }
+      case "human-readable":
+        if (p === null) break;
+        if (p < threshold) v.hidden.set(subject, verdictOfAnswer(use, author, p));
+        else v.kept.set(subject, verdictOfAnswer(use, author, p));
+        decided.push({ ...accepted, key });
+        continue;
+    }
+    abstained.push(accepted);
+  }
+  return { verdicts: v as unknown as TopicVerdicts, decided, abstained, stale };
+}
+
+/** The standing verdicts with the accepted ones over them. */
+function mergeVerdicts(
+  standing: TopicVerdicts,
+  accepted: TopicVerdicts | undefined,
+): TopicVerdicts {
+  if (accepted === undefined) return standing;
+  const pairKey = (e: { a: string; b: string }): string => `${e.a}..${e.b}`;
+  const answered = new Set(accepted.sameTopics.map(pairKey));
+  return {
+    routes: new Map([...standing.routes, ...accepted.routes]),
+    kinds: accepted.kinds,
+    vetoes: new Map([...standing.vetoes, ...accepted.vetoes]),
+    sameTopics: [
+      ...standing.sameTopics.filter((e) => !answered.has(pairKey(e))),
+      ...accepted.sameTopics,
+    ],
+    resolutions: accepted.resolutions,
+    completions: accepted.completions,
+    hidden: accepted.hidden,
+    kept: accepted.kept,
+  };
 }
 
 function errorText(err: unknown): string {
@@ -552,12 +888,8 @@ export function runAutoTopicPlanning(
   options: {
     readonly configPath?: string;
     readonly now?: () => number;
-    /**
-     * Model verdicts computed before the pass (design D10, D20);
-     * `planTopics` applies them only where their subject still matches
-     * the fold read under the lock. Absent: the deterministic plan.
-     */
-    readonly topicVerdicts?: TopicVerdicts;
+    /** The dream work queue of the live pass on the owner's device. */
+    readonly queue?: DreamQueue;
     /**
      * Asked once the store is known to be in use, right before planning:
      * `false` plans nothing and answers `null` (a dream pass past its
@@ -576,7 +908,7 @@ export function runAutoTopicPlanning(
     const store = openStore({ root, device });
     const report = runTopicPlanning(store, {
       agent: resolveAgentName(options.configPath),
-      ...(options.topicVerdicts !== undefined ? { topicVerdicts: options.topicVerdicts } : {}),
+      ...(options.queue !== undefined ? { queue: options.queue } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
       ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
       ...(options.mayPlan !== undefined ? { mayPlan: options.mayPlan } : {}),
@@ -606,6 +938,7 @@ export function runAutoTopicPlanning(
       completions: 0,
       hidden: 0,
       kept: 0,
+      applied: 0,
     };
   }
 }
@@ -617,6 +950,8 @@ export function describeTopicPlanning(
   switch (report.status) {
     case "no-writer":
       return "no machine plans topics yet (no view writer)";
+    case "not-owner":
+      return `this machine plans no topics; topic judgment runs on the dream owner's device ${report.owner}`;
     case "not-writer":
       return `this machine plans no topics; the view writer is ${report.writer}`;
     case "incomplete-read":

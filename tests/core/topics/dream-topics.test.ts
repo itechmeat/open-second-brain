@@ -9,11 +9,13 @@ import { join } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
 import { withTopicPass } from "../../../src/core/brain/dream-tail.ts";
+import { dreamQueueOn } from "../../../src/core/brain/dream-queue/queue.ts";
+import { withModelWork } from "../../../src/core/brain/dream-queue/pass.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
 import * as appender from "../../../src/core/store/appender.ts";
 import { appendRecord, appendRecords } from "../../../src/core/store/appender.ts";
 import { STORE_ROOT_ENV } from "../../../src/core/store/constants.ts";
-import { emptyTopicVerdicts } from "../../../src/core/topics/verdicts.ts";
+import { answerClosedQuestions } from "../../helpers/closed-answers.ts";
 import {
   PROGRESS_KIND,
   PROGRESS_REASON,
@@ -73,6 +75,7 @@ describe("topic planning in a dream pass", () => {
     // The first pass after the claim only waits, in planning and in the
     // render; the second plans, and its render writes the page.
     expect(dream(vault).topics?.report.status).toBe("waiting-for-claim");
+    answerClosedQuestions(store);
     const first = dream(vault);
     const report = first.topics?.report;
     expect(report?.status).toBe("planned");
@@ -84,6 +87,21 @@ describe("topic planning in a dream pass", () => {
     expect(readdirSync(join(env.view, "topics"))).toHaveLength(1);
   });
 
+  test("planning-applied answers count in model_work", () => {
+    seedCluster(store);
+    answerClosedQuestions(store);
+    const stub = dream(vault, { dryRun: true });
+    const pass = {
+      queue: dreamQueueOn(store, { vault: null, writer: "test" }),
+      produced: 0,
+      applied: 0,
+      abstained: 0,
+      warnings: [],
+    };
+    const out = withTopicPass(stub, {}, undefined, pass);
+    expect(withModelWork(out, pass).model_work?.applied).toBe(1);
+  });
+
   test("the pass reports the change it made, and plans in the store its config names", () => {
     // The store is named by the config file only, not by the environment.
     delete process.env[STORE_ROOT_ENV];
@@ -91,6 +109,7 @@ describe("topic planning in a dream pass", () => {
     writeFileSync(config, `store_root: ${env.root}\n`);
     seedCluster(store);
     expect(dream(vault, { configPath: config }).topics?.report.status).toBe("waiting-for-claim");
+    answerClosedQuestions(store);
     const second = dream(vault, { configPath: config });
     expect(second.topics?.report.status).toBe("planned");
     expect(second.changed).toBe(true);
@@ -99,6 +118,7 @@ describe("topic planning in a dream pass", () => {
   test("the progress stream reports the topic and view steps before it finishes", () => {
     seedCluster(store);
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     const events: ProgressEvent[] = [];
     dream(vault, { onProgress: (e) => events.push(e) });
     const started = events.filter((e) => e.kind === PROGRESS_KIND.started).map((e) => e.stage);
@@ -111,6 +131,7 @@ describe("topic planning in a dream pass", () => {
   test("a deadline that passes at the topic step ends the stream stopped, not finished", () => {
     seedCluster(store);
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     const events: ProgressEvent[] = [];
     let inTopics = false;
     const guard = {
@@ -162,6 +183,7 @@ describe("topic planning in a dream pass", () => {
       { now: () => AUTO_NOW - 5_000 },
     );
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     let assignBatches = 0;
     const real = appender.appendRecords;
     const spy = spyOn(appender, "appendRecords").mockImplementation((s, inputs, opts) => {
@@ -187,6 +209,7 @@ describe("topic planning in a dream pass", () => {
   test("a pass whose deadline has passed plans no topic", () => {
     seedCluster(store);
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     const stub = dream(vault, { dryRun: true });
     const expired = {
       operation: "dream",
@@ -204,6 +227,7 @@ describe("topic planning in a dream pass", () => {
   test("a pass whose deadline passes while it waits for the planning lock writes no topic", () => {
     seedCluster(store);
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     const stub = dream(vault, { dryRun: true });
     let asked = 0;
     const expiring = {
@@ -224,30 +248,42 @@ describe("topic planning in a dream pass", () => {
   });
 
   test("a pass that writes only a model verdict reports the change", () => {
+    appendRecord(
+      store,
+      {
+        partition: "shared",
+        stream: "log",
+        kind: "log-event",
+        agent: "seed",
+        body: {
+          timestamp: new Date(AUTO_NOW - 5_000).toISOString(),
+          event_type: "note",
+          body: { text: "Compaction shipped this week" },
+        },
+      },
+      { now: () => AUTO_NOW - 5_000 },
+    );
     dream(vault); // the claim's wait
+    // The model answered the note's readability question: keep it.
+    const answered = answerClosedQuestions(store, (item) =>
+      item.operation === "human-readable" ? { p: 0.9 } : null,
+    );
     const stub = dream(vault, { dryRun: true });
     expect(stub.changed).not.toBe(true);
-    const verdict = {
-      use: "human_readable",
-      model: "m",
-      provider: "compatible",
-      version: 2,
-      mode: "enforce",
-      confidence: 0.9,
-    } as const;
     // A kept note's verdict is a write of its own: the note is settled.
-    const out = withTopicPass(stub, {
-      topicVerdicts: { ...emptyTopicVerdicts(), kept: new Map([["note-1", verdict]]) },
-    });
+    const out = withTopicPass(stub, {});
     expect(out.topics?.report.status).toBe("planned");
     const records = readPartition(join(env.root, "shared")).flatMap((s) => s.records);
-    expect(records.filter((r) => r.kind === "history-verdict")).toHaveLength(1);
+    // One verdict per note answered (the fixture's store holds notes of its own).
+    expect(answered).toBeGreaterThan(0);
+    expect(records.filter((r) => r.kind === "history-verdict")).toHaveLength(answered);
     expect(out.changed).toBe(true);
   });
 
   test("the pass plans on the run's own clock: a topic quiet by that date is offered", () => {
     seedCluster(store);
     dream(vault); // the claim's wait
+    answerClosedQuestions(store);
     const first = dream(vault).topics?.report;
     if (first?.status !== "planned") throw new Error(String(first?.status));
     const topic = first.created[0]!.topic;
@@ -264,6 +300,7 @@ describe("topic planning in a dream pass", () => {
     writeFileSync(config, `store_root: ${env.root}\n`);
     seedCluster(store);
     dream(vault, { configPath: config }); // the claim's wait
+    answerClosedQuestions(store);
     const report = dream(vault, { configPath: config }).topics?.report;
     if (report?.status !== "planned") throw new Error(String(report?.status));
     expect(report.created.map((c) => c.undo)).toEqual([

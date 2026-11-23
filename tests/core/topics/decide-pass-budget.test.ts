@@ -1,169 +1,78 @@
 /**
- * The decide pass shares its budget between the uses (design D10): a
- * slow provider and a long routing queue must not leave the later uses
- * (here `human_readable`, the last one) without a single request.
+ * The model budget of a pass (change `dream-closed-questions`, design
+ * D4; was the decide pass's per-use shares, design D10): the executor
+ * takes items in queue order, oldest first across every use, so a long
+ * queue of one use never starves an older item of another; no request is
+ * given more time than the budget has left; the executor stops starting
+ * requests when the budget is spent, and what it did not reach waits for
+ * the next pass.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
-import { appendRecord } from "../../../src/core/store/appender.ts";
-import { newUlid } from "../../../src/core/store/ulid.ts";
-import type { StoreHandle } from "../../../src/core/store/store-open.ts";
-import { TOPIC_CREATE_KIND } from "../../../src/core/topics/constants.ts";
-import { decideTopicPlan } from "../../../src/core/topics/decide.ts";
+import { runDecisionExecutor } from "../../../src/core/brain/dream-queue/decision-executor.ts";
 import { MIN_REQUEST_MS } from "../../../src/core/decision-model/request-floor.ts";
-import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
-import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
-import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
+import { readTopicQuestionState } from "../../../src/core/topics/decide-operations.ts";
+import { produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
 import { FakeDecisionProvider } from "../../helpers/fake-decision-provider.ts";
+import { closedFixture, T0, type ClosedFixture } from "./fixtures/closed-fixture.ts";
 
-const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
-let clock = T0;
-const now = () => (clock += 1000);
-
-let m: Machines;
-let a: StoreHandle;
-let tmp: string;
+let f: ClosedFixture;
 
 beforeEach(() => {
-  clock = T0;
-  m = makeMachines(["dev-a"], "o2b-decide-budget-");
-  a = m.open("dev-a");
-  claimViewWriter(a, { agent: "dream", now });
-  claimSettled(a, readViewWriter(a, now));
-  tmp = mkdtempSync(join(m.parent, "cfg-"));
-  const vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain"), { recursive: true });
-  process.env["VAULT_DIR"] = vault;
-  writeFileSync(join(tmp, "config.yaml"), "");
+  f = closedFixture();
 });
 
 afterEach(() => {
-  delete process.env["VAULT_DIR"];
-  m.cleanup();
+  f.cleanup();
 });
 
-function signal(text: string, i: number): void {
-  clock += 1000;
-  appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "events",
-      kind: "signal",
-      agent: "agent-1",
-      body: {
-        id: `sig-2026-12-01-b${i}`,
-        path: `Brain/inbox/b${i}.md`,
-        staged: false,
-        frontmatter: { principle: text, project: "o2b", session: "s1" },
-        raw: null,
-        raw_shape: "bare",
-      },
-    },
-    { now },
-  );
+function produce(): void {
+  produceTopicQuestions(f.queue, readTopicQuestionState(f.a, f.still())!, {
+    until: Number.POSITIVE_INFINITY,
+    clock: f.still,
+  });
 }
 
-describe("the decide pass budget", () => {
-  test("a long routing queue on a slow provider leaves the last use its share", async () => {
-    clock += 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "topics",
-        kind: TOPIC_CREATE_KIND,
-        agent: "seed",
-        topic: newUlid(clock),
-        body: {
-          authority: "agent",
-          title: "Shard compaction keeps monthly shard files small",
-          scope: "project:o2b",
-        },
-      },
-      { now },
-    );
-    for (let i = 0; i < 60; i++) signal(`Shard compaction note ${i} about monthly shard files`, i);
-    const ms = T0 - 2 * 24 * 60 * 60 * 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "log",
-        kind: "log-event",
-        agent: "seed",
-        body: {
-          timestamp: new Date(ms).toISOString(),
-          event_type: "note",
-          body: { text: "Refactor of the shard writer landed cleanly" },
-        },
-      },
-      { now: () => ms },
-    );
+/** Run the executor with `provider` until `until` on `clock`. */
+async function execute(
+  provider: FakeDecisionProvider,
+  uses: string,
+  until: number,
+  clock: () => number,
+  extraEnv: Record<string, string> = {},
+) {
+  return runDecisionExecutor(f.queue, {
+    until,
+    clock,
+    configPath: f.configPath,
+    provider,
+    env: { ...f.env(uses), ...extraEnv },
+  });
+}
+
+describe("the model budget of a pass", () => {
+  test("a long routing queue on a slow provider never starves an older item of another use", async () => {
+    // The note is older than every record: it comes first in the queue.
+    f.note("Refactor of the shard writer landed cleanly", T0 - 2 * 24 * 60 * 60 * 1000);
+    f.seedTopic("Shard compaction keeps monthly shard files small");
+    for (let i = 0; i < 60; i++) {
+      f.signal(`Shard compaction note ${i} about monthly shard files`, { session: `s${i}` });
+    }
+    produce();
     const fake = new FakeDecisionProvider({ latencyMs: 80 });
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: {
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_USES: "topic_route:shadow,human_readable:shadow",
-        O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-        OPEN_SECOND_BRAIN_CONFIG: join(tmp, "config.yaml"),
-      },
-      // The budget runs on the wall clock; record ages follow the run date.
-      runAt: new Date(T0),
-      // Seven uses share it: the first gets 400 ms, above the minimum
-      // request time.
-      deadlineMs: 2800,
-    });
+    await execute(fake, "topic_route:shadow,human_readable:shadow", Date.now() + 2800, Date.now);
     const uses = fake.requests.map((r) => r.use);
+    expect(uses[0]).toBe("human_readable");
     expect(uses).toContain("topic_route");
-    expect(uses).toContain("human_readable");
   });
 
-  test("no request is given more time than its use has left", async () => {
-    clock += 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "topics",
-        kind: TOPIC_CREATE_KIND,
-        agent: "seed",
-        topic: newUlid(clock),
-        body: {
-          authority: "agent",
-          title: "Shard compaction keeps monthly shard files small",
-          scope: "project:o2b",
-        },
-      },
-      { now },
-    );
+  test("no request is given more time than the budget has left", async () => {
+    f.seedTopic("Shard compaction keeps monthly shard files small");
     // A near twin, so topic_same has a pair to ask about.
-    clock += 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "topics",
-        kind: TOPIC_CREATE_KIND,
-        agent: "seed",
-        topic: newUlid(clock),
-        body: {
-          authority: "agent",
-          title: "Shard compaction keeps monthly shard files smaller",
-          scope: "project:o2b",
-        },
-      },
-      { now },
-    );
-    signal("Shard compaction note about monthly shard files", 0);
+    f.seedTopic("Shard compaction keeps monthly shard files smaller");
+    f.signal("Shard compaction note about monthly shard files");
+    produce();
     const timeouts: Array<{ use: string; ms: number }> = [];
     class Recording extends FakeDecisionProvider {
       override async decide(
@@ -174,147 +83,49 @@ describe("the decide pass budget", () => {
         return super.decide(req, opts);
       }
     }
-    // The first use's share (2000 / 7) stays above the minimum request time.
-    const deadlineMs = 2000;
-    await decideTopicPlan(a, {
-      provider: new Recording({}),
-      env: {
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_TIMEOUT_MS: "20000",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_USES: "topic_route:shadow,topic_same:shadow",
-        O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-        OPEN_SECOND_BRAIN_CONFIG: join(tmp, "config.yaml"),
-      },
-      runAt: new Date(T0),
-      deadlineMs,
-      // Does not advance on read: each use's share is exact.
-      now: () => clock,
-    });
-    // topic_route gets 2000 / 7 uses, rounded up; it spends nothing on
-    // this clock, so topic_same gets 2000 / 6. The runner measures its
-    // own budget on the wall clock from the call's start, so a request
-    // may get a few milliseconds less than its share, never more, and
-    // never less than the minimum request time.
-    expect(timeouts.map((t) => t.use)).toEqual(["topic_route", "topic_same"]);
-    const allowance = {
-      topic_route: Math.ceil(deadlineMs / 7),
-      topic_same: Math.ceil(deadlineMs / 6),
-    };
-    for (const { use, ms } of timeouts) {
+    const budgetMs = 2000;
+    // A clock that does not advance on read: what is left is exact.
+    await execute(
+      new Recording({}),
+      "topic_route:shadow,topic_same:shadow",
+      f.still() + budgetMs,
+      f.still,
+      { OPEN_SECOND_BRAIN_DECISION_MODEL_TIMEOUT_MS: "20000" },
+    );
+    expect(timeouts.map((t) => t.use).toSorted()).toEqual(["topic_route", "topic_same"]);
+    for (const { ms } of timeouts) {
       expect(ms).toBeGreaterThanOrEqual(MIN_REQUEST_MS);
-      expect(ms).toBeLessThanOrEqual(allowance[use as keyof typeof allowance]);
+      expect(ms).toBeLessThanOrEqual(budgetMs);
     }
   });
 
-  test("topic_same stops starting pair requests when its share is spent", async () => {
+  test("the executor stops starting requests when the budget is spent, and the rest wait", async () => {
     for (let i = 0; i < 8; i++) {
-      clock += 1000;
-      appendRecord(
-        a,
-        {
-          partition: "shared",
-          stream: "topics",
-          kind: TOPIC_CREATE_KIND,
-          agent: "seed",
-          topic: newUlid(clock),
-          body: {
-            authority: "agent",
-            title: `Shard compaction keeps monthly shard files small, part ${i}`,
-            description: `Notes on monthly shard compaction and shard file sizes, round ${i}.`,
-            scope: "project:o2b",
-          },
-        },
-        { now },
-      );
+      f.seedTopic(`Shard compaction keeps monthly shard files small, part ${i}`);
     }
-    const ms = T0 - 2 * 24 * 60 * 60 * 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "log",
-        kind: "log-event",
-        agent: "seed",
-        body: {
-          timestamp: new Date(ms).toISOString(),
-          event_type: "note",
-          body: { text: "Refactor of the shard writer landed cleanly" },
-        },
-      },
-      { now: () => ms },
-    );
+    produce();
+    const pairs = f.items("topic-same").length;
+    expect(pairs).toBeGreaterThan(5);
     const fake = new FakeDecisionProvider({ latencyMs: 150 });
-    await decideTopicPlan(a, {
-      provider: fake,
-      env: {
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_USES: "topic_same:shadow,human_readable:shadow",
-        // Small requests: the pairs need every one of the runner's requests.
-        OPEN_SECOND_BRAIN_DECISION_MODEL_MAX_STATE_TOKENS: "400",
-        O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-        OPEN_SECOND_BRAIN_CONFIG: join(tmp, "config.yaml"),
-      },
-      runAt: new Date(T0),
-      // topic_same's share (about 580 ms) fits a few 150 ms requests, not five.
-      deadlineMs: 3500,
-    });
-    const uses = fake.requests.map((r) => r.use);
-    expect(uses).toContain("topic_same");
-    expect(uses.filter((u) => u === "topic_same").length).toBeLessThan(5);
-    expect(uses).toContain("human_readable");
+    const result = await execute(fake, "topic_same:shadow", Date.now() + 600, Date.now);
+    expect(result.status === "ran" && result.stopped).toBe("deadline");
+    const asked = fake.requests.length;
+    expect(asked).toBeGreaterThan(0);
+    expect(asked).toBeLessThan(pairs);
+    // What was not reached is still ready for the next pass.
+    const waiting = f.items("topic-same").filter((i) => i.last_release === null);
+    expect(waiting).toHaveLength(pairs - asked);
   });
 
-  test("a use with less than the minimum request time left starts no request", async () => {
-    const ms = T0 - 2 * 24 * 60 * 60 * 1000;
-    appendRecord(
-      a,
-      {
-        partition: "shared",
-        stream: "log",
-        kind: "log-event",
-        agent: "seed",
-        body: {
-          timestamp: new Date(ms).toISOString(),
-          event_type: "note",
-          body: { text: "Refactor of the shard writer landed cleanly" },
-        },
-      },
-      { now: () => ms },
-    );
-    // A clock that does not advance on read: the only use asked has the
-    // whole pass budget left when it starts.
-    const still = (): number => T0;
-    const pass = async (deadlineMs: number): Promise<string[]> => {
+  test("with less than the minimum request time left no request starts", async () => {
+    f.note("Refactor of the shard writer landed cleanly", T0 - 2 * 24 * 60 * 60 * 1000);
+    produce();
+    const run = async (budgetMs: number): Promise<string[]> => {
       const fake = new FakeDecisionProvider({});
-      await decideTopicPlan(a, {
-        provider: fake,
-        env: {
-          OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-          OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-          OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-          OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-          OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-          OPEN_SECOND_BRAIN_DECISION_MODEL_USES: "human_readable:shadow",
-          O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-          OPEN_SECOND_BRAIN_CONFIG: join(tmp, "config.yaml"),
-        },
-        now: still,
-        deadlineMs,
-      });
+      await execute(fake, "human_readable:shadow", f.still() + budgetMs, f.still);
       return fake.requests.map((r) => r.use);
     };
-    expect(await pass(MIN_REQUEST_MS - 1)).toEqual([]);
-    // The runner counts its own wall time from the call's start (the
-    // preparation counts), so a share of exactly the minimum may come out
-    // a millisecond short; the exact boundary is `mayStartRequest`'s test.
-    expect(await pass(MIN_REQUEST_MS * 2)).toEqual(["human_readable"]);
+    expect(await run(MIN_REQUEST_MS - 1)).toEqual([]);
+    expect(await run(MIN_REQUEST_MS * 2)).toEqual(["human_readable"]);
   });
 });

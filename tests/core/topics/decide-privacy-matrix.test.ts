@@ -4,16 +4,17 @@
  * kind and each input that can be private (none, the topic, the subject
  * record or note, the item, one other input of the question, a
  * `<private>` region inside an otherwise shared input: the subject, or
- * a side text such as a topic title or a milestone; another subject of
- * the same batched request, or that subject's own topic: the request
- * carries it to every answer; a private head field the egress rule
- * withholds, which is no input), the written
- * record lands in `private` whenever any input it was derived from is
- * private, and no shared record the pass writes carries a word taken
- * from a private input. Each cell runs twice: once with private records
- * of the use allowed to leave the machine (they reach the model), once
- * against a hosted provider that may not see them. Fake provider, no
- * HTTP, a clock that does not advance on read.
+ * a side text such as a topic title or a milestone; another subject,
+ * or that subject's own topic, which now rides a request of its own; a
+ * private head field), the written record lands in `private` whenever
+ * any input it was derived from is private, and no shared record the
+ * pass writes carries a word taken from a private input. Each cell runs
+ * twice: once with private records of the use allowed to leave the
+ * machine (they reach the model), once against a hosted provider that
+ * may not see them, where an item with any private input waits for a
+ * local executor and decides nothing (change `dream-closed-questions`,
+ * design D3.7, D4.3). Fake provider, no HTTP, a clock that does not
+ * advance on read.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -43,7 +44,11 @@ import {
   TOPIC_QUESTION_KIND,
   TOPIC_RENAME_KIND,
 } from "../../../src/core/topics/constants.ts";
-import { decideTopicPlan } from "../../../src/core/topics/decide.ts";
+import { runDecisionExecutor } from "../../../src/core/brain/dream-queue/decision-executor.ts";
+import { dreamQueueOn } from "../../../src/core/brain/dream-queue/queue.ts";
+import { readTopicQuestionState } from "../../../src/core/topics/decide-operations.ts";
+import { produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
+import { bindTestDreamOwner } from "../../helpers/closed-answers.ts";
 import { runTopicPlanning } from "../../../src/core/topics/planning.ts";
 import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
 import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
@@ -86,6 +91,7 @@ beforeEach(() => {
   a = m.open("dev-a");
   claimViewWriter(a, { agent: "dream", now: tick });
   claimSettled(a, readViewWriter(a, tick));
+  bindTestDreamOwner(a, tick);
   const tmp = mkdtempSync(join(m.parent, "cfg-"));
   const vault = join(tmp, "vault");
   mkdirSync(join(vault, "Brain"), { recursive: true });
@@ -239,12 +245,6 @@ interface Kind {
   /** The stored record kind the use writes. */
   readonly writes: string;
   readonly variants: ReadonlyArray<Variant>;
-  /**
-   * Variants whose private input a hosted provider still gets (a region
-   * is stripped, the shared text around it is sent): the record is
-   * private there too.
-   */
-  readonly hostedSends?: ReadonlyArray<Variant>;
   /** Variants whose input is never read, so nothing is written. */
   readonly absent?: ReadonlyArray<Variant>;
   /**
@@ -253,9 +253,9 @@ interface Kind {
    */
   readonly cells?: Partial<Record<Variant, Record<Share, Partition[]>>>;
   /**
-   * The partitions of every decided record under a hosted provider, for
-   * the variants whose private input the egress rule withholds: the
-   * subject is not asked (`[]`), or it is asked without that input.
+   * The partitions of every decided record under a hosted provider: an
+   * item with any private input is private as a whole and waits for a
+   * local executor (`[]`; change `dream-closed-questions`, design D3.7).
    */
   readonly hosted?: Partial<Record<Variant, Partition[]>>;
   seed(variant: Variant): void;
@@ -268,9 +268,9 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "topic_route",
     threshold: { route_min: 0.5 },
     writes: TOPIC_ASSIGN_KIND,
-    // A private topic is no option and a private subject is not asked;
-    // withheld evidence leaves the shared subject to decide in shared.
-    hosted: { topic: [], subject: [], region: [], evidence: ["shared"] },
+    // An item with any private input (the topic, the subject, an option,
+    // a region, a private head field) waits for a local executor.
+    hosted: { topic: [], subject: [], region: [], evidence: [], "side-region": [] },
     variants: [
       "none",
       "topic",
@@ -282,11 +282,11 @@ const KINDS: ReadonlyArray<Kind> = [
       "mate-topic",
       "withheld-field",
     ],
-    hostedSends: ["side-region"],
+    // One request per item: another subject never rides this one's.
     cells: {
-      mate: { "may-leave": ["private", "private"], hosted: ["shared"] },
-      "mate-topic": { "may-leave": ["private", "private"], hosted: ["shared"] },
-      "withheld-field": { "may-leave": ["private"], hosted: ["shared"] },
+      mate: { "may-leave": ["shared", "private"], hosted: ["shared"] },
+      "mate-topic": { "may-leave": ["shared", "private"], hosted: ["shared"] },
+      "withheld-field": { "may-leave": ["private"], hosted: [] },
     },
     seed(variant) {
       const topic = holdingTopic(variant);
@@ -318,8 +318,8 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "event_kind",
     threshold: { kind_min: 0.5 },
     writes: TOPIC_DECISION_KIND,
-    // A note of a private topic still derives, into the private partition.
-    hosted: { topic: ["private"], subject: [], region: [], evidence: ["shared"] },
+    // An item with any private input waits for a local executor.
+    hosted: { topic: [], subject: [], region: [], evidence: [], "side-region": [] },
     variants: [
       "none",
       "topic",
@@ -331,12 +331,11 @@ const KINDS: ReadonlyArray<Kind> = [
       "mate-topic",
       "withheld-field",
     ],
-    hostedSends: ["side-region"],
+    // One request per item: another subject never rides this one's.
     cells: {
-      mate: { "may-leave": ["private", "private"], hosted: ["shared"] },
-      // The other subject's own topic is private: its item lands there.
-      "mate-topic": { "may-leave": ["private", "private"], hosted: ["shared", "private"] },
-      "withheld-field": { "may-leave": ["private"], hosted: ["shared"] },
+      mate: { "may-leave": ["shared", "private"], hosted: ["shared"] },
+      "mate-topic": { "may-leave": ["shared", "private"], hosted: ["shared"] },
+      "withheld-field": { "may-leave": ["private"], hosted: [] },
     },
     seed(variant) {
       const topic = holdingTopic(variant);
@@ -370,11 +369,10 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "question_resolved",
     threshold: { resolved_min: 0.5 },
     writes: "question-resolved",
-    hosted: { topic: [], subject: [], item: [], evidence: ["shared"] },
+    hosted: { topic: [], subject: [], item: [], evidence: [], region: [] },
     variants: ["none", "topic", "subject", "item", "evidence", "region", "withheld-field"],
-    hostedSends: ["region"],
     // One request per record: no other subject rides it.
-    cells: { "withheld-field": { "may-leave": ["private"], hosted: ["shared"] } },
+    cells: { "withheld-field": { "may-leave": ["private"], hosted: [] } },
     seed(variant) {
       const topic = holdingTopic(variant);
       if (variant === "withheld-field") privateField(topic.id, "title");
@@ -415,9 +413,8 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "milestone_done",
     threshold: { done_min: 0.5 },
     writes: "milestone-done",
-    hosted: { topic: [], item: [], evidence: [], region: [] },
+    hosted: { topic: [], item: [], evidence: [], region: [], "side-region": [] },
     variants: ["none", "topic", "item", "evidence", "region", "side-region"],
-    hostedSends: ["side-region"],
     seed(variant) {
       // A region in the milestone text here, not in the topic title.
       const topic = holdingTopic(variant === "side-region" ? "none" : variant);
@@ -463,9 +460,9 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "topic_new",
     threshold: { veto_below: 0.3 },
     writes: TOPIC_CREATE_KIND,
-    // A group that holds a private record (withheld from the request)
-    // creates its topic in the private partition.
-    hosted: { subject: ["private"], region: ["private"] },
+    // A group that holds a private record waits for a local executor:
+    // its item is private as a whole (change dream-closed-questions D3.7).
+    hosted: { subject: [], region: [] },
     variants: ["none", "subject", "region"],
     seed(variant) {
       const texts = [
@@ -526,12 +523,18 @@ describe("the partition of every record a dream-time use writes", () => {
           });
           resetThresholdsStoreCache();
           const fake = new FakeDecisionProvider({ answer: kind.answer, probability: 0.95 });
-          const verdicts = await decideTopicPlan(a, {
+          const queue = dreamQueueOn(a, { vault: null, writer: "dream", now: still });
+          produceTopicQuestions(queue, readTopicQuestionState(a, still())!, {
+            until: Number.POSITIVE_INFINITY,
+            clock: still,
+          });
+          await runDecisionExecutor(queue, {
+            until: Number.POSITIVE_INFINITY,
+            clock: still,
             provider: fake,
             env: envFor(kind, share),
-            now: still,
           });
-          runTopicPlanning(a, { agent: "dream", now: tick, topicVerdicts: verdicts });
+          runTopicPlanning(a, { agent: "dream", now: tick });
 
           // No shared record the pass wrote carries a private input's word.
           for (const record of written("shared")) {
@@ -554,11 +557,9 @@ describe("the partition of every record a dream-time use writes", () => {
             const expected: Partition[] | undefined =
               variant === "none"
                 ? ["shared"]
-                : kind.hostedSends?.includes(variant)
-                  ? ["private"]
-                  : kind.absent?.includes(variant)
-                    ? []
-                    : kind.hosted?.[variant];
+                : kind.absent?.includes(variant)
+                  ? []
+                  : kind.hosted?.[variant];
             expect(expected).toBeDefined();
             expect(decidedIn(kind)).toEqual(expected!);
             return;

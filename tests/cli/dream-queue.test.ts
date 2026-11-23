@@ -174,7 +174,13 @@ describe("doctor", () => {
     ]);
     const unknown = pick(out.warnings).find((f) => f.code === "dream-queue-unknown-operation")!;
     expect(unknown.message).toContain("from-a-newer-release");
-    expect(pick(out.uncertain).map((f) => f.code)).toEqual(["dream-queue-no-executor"]);
+    // One per operation whose items wait with nothing to answer them
+    // (change dream-closed-questions, design D7): the producer's
+    // operation and the newer release's.
+    expect(pick(out.uncertain).map((f) => f.code)).toEqual([
+      "dream-queue-no-executor",
+      "dream-queue-no-executor",
+    ]);
   });
 
   test("does not report backlog from an incomplete queue snapshot", async () => {

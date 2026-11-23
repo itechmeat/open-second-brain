@@ -23,7 +23,11 @@ import {
   dreamQueueOn,
   retryWork,
 } from "../../core/brain/dream-queue/queue.ts";
-import { describeQueueStatus, queueStatus } from "../../core/brain/dream-queue/status-view.ts";
+import {
+  describeQueueStatus,
+  queueStatus,
+  waitingByOperation,
+} from "../../core/brain/dream-queue/status-view.ts";
 import { CliError, parseFlags } from "../argparse.ts";
 import { sortedReplacer } from "../helpers.ts";
 
@@ -77,17 +81,20 @@ function list(
   if (state !== undefined && !(DREAM_WORK_STATES as ReadonlyArray<string>).includes(state)) {
     throw new CliError(`--state must be one of ${DREAM_WORK_STATES.join(", ")}`);
   }
-  const status = queueStatus(vault, configPath !== undefined ? { configPath } : {});
+  const configOpt = configPath !== undefined ? { configPath } : {};
+  const status = queueStatus(vault, configOpt);
+  const waiting = waitingByOperation(status, configOpt);
   if (json) {
     if (!status.available) writeJson(status);
     else
       writeJson({
         ...status,
+        waiting,
         items: status.items.filter((i) => state === undefined || i.state === state),
       });
     return EXIT.ok;
   }
-  const lines = describeQueueStatus(status);
+  const lines = describeQueueStatus(status, waiting);
   if (status.available) {
     for (const item of status.items) {
       if (state !== undefined && item.state !== state) continue;

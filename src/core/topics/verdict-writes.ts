@@ -14,7 +14,7 @@
  *    which leaves the milestone open.
  *
  * A verdict whose subject no longer matches the fold read under the
- * lock is ignored, the deterministic result standing; a history note
+ * lock is ignored and nothing is written for it; a history note
  * that already has a stored verdict gets no second one. Every record
  * lands in `private` when its subject record, its topic or the item it
  * proposes for is private (a completion or resolution counts for the
@@ -110,6 +110,8 @@ export function writeVerdictRecords(input: {
   readonly counts: VerdictWriteCounts;
   /** The notes a stored `history-verdict` already judges, read under the lock. */
   readonly judgedNotes: ReadonlySet<string>;
+  /** Hears each record written: the closed question's operation, its subject and the record id. */
+  readonly landed?: (operation: string, subject: string, id: string) => void;
 }): void {
   const { append, fold, plan, candidatesById, verdicts, counts } = input;
   if (verdicts === undefined) return;
@@ -141,7 +143,10 @@ export function writeVerdictRecords(input: {
       entry.topic,
       body,
     );
-    if (written !== null) counts.derived += 1;
+    if (written !== null) {
+      counts.derived += 1;
+      input.landed?.("event-kind", recordId, written);
+    }
   }
 
   // `question_resolved`: one proposal per record, when the question is
@@ -182,6 +187,7 @@ export function writeVerdictRecords(input: {
     if (written !== null) {
       counts.resolutions += 1;
       proposed.add(`${question.owner}:${question.id}`);
+      input.landed?.("question-resolved", recordId, written);
     }
   }
 
@@ -206,7 +212,10 @@ export function writeVerdictRecords(input: {
       milestone.owner,
       { authority: "model", milestone: entry.milestone, verdict: entry.verdict },
     );
-    if (written !== null) counts.completions += 1;
+    if (written !== null) {
+      counts.completions += 1;
+      input.landed?.("milestone-done", `${entry.owner}/${entry.milestone}`, written);
+    }
   }
 
   // `human_readable`: one `history-verdict` per judged note, on the
@@ -225,7 +234,10 @@ export function writeVerdictRecords(input: {
       null,
       "log",
     );
-    if (written !== null) counts.hidden += 1;
+    if (written !== null) {
+      counts.hidden += 1;
+      input.landed?.("human-readable", noteId, written);
+    }
   }
   for (const [noteId, verdict] of verdicts.kept) {
     if (input.judgedNotes.has(noteId)) continue;
@@ -237,6 +249,9 @@ export function writeVerdictRecords(input: {
       null,
       "log",
     );
-    if (written !== null) counts.kept += 1;
+    if (written !== null) {
+      counts.kept += 1;
+      input.landed?.("human-readable", noteId, written);
+    }
   }
 }

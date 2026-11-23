@@ -21,6 +21,7 @@ import { catchUpSettings } from "../../../src/core/view/catch-up.ts";
 import { claimSettled, claimViewWriter } from "../../../src/core/view/writer.ts";
 import { foldViewWriter } from "../../../src/core/view/writer-fold.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
+import { answerClosedQuestions } from "../../helpers/closed-answers.ts";
 import { makeFleet, type Fleet, type Machine } from "../store-migration/fixtures/fleet.ts";
 
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -132,6 +133,9 @@ function migrated(brainYaml?: string, pinned = 1, alternate = false): Machine {
   const store = a.store();
   claimViewWriter(store, { agent: "t" });
   claimSettled(store, foldViewWriter(catchUpSettings(store)!));
+  // The closed questions answered as the fixed rule decided before (change
+  // dream-closed-questions): the pass creates the topics its bounds cover.
+  answerClosedQuestions(store);
   return a;
 }
 

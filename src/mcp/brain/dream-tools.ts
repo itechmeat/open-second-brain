@@ -10,8 +10,8 @@ import { resolveAgentName, resolveNearDuplicateRetireSiblingsEnabled } from "../
 import { dream, type DreamGateOverrides } from "../../core/brain/dream.ts";
 import {
   decideBudgetWithin,
-  prepareTopicVerdicts,
-  type PrepareTopicVerdictsOptions,
+  prepareClosedQuestions,
+  type PrepareClosedQuestionsOptions,
 } from "../../core/topics/decide-auto.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import {
@@ -392,22 +392,23 @@ export async function toolBrainDream(
   // happen at all, and a client that saw the same five stages twice
   // would read the second pass as a restart. Progress describes the run
   // the caller asked for.
-  // The model verdicts are decided before the pass (design D10, D20):
-  // only a live pass decides; a dry run gets the deterministic result.
-  // The same config and run date the pass below plans with.
-  // The pass spends the call's one deadline too: it gets what is left,
-  // so the dream pass after it is not already out of time.
+  // The closed questions are produced and asked before the pass (change
+  // `dream-closed-questions`, design D1): only a live pass does it; a dry
+  // run produces nothing and asks nothing. The same config and run date
+  // the pass below plans with. The model work spends the call's one
+  // deadline too: its budget is clamped to what is left.
   const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, Date.now() - startedAt);
-  const decideOptions: PrepareTopicVerdictsOptions = {
+  const decideOptions: PrepareClosedQuestionsOptions = {
     ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     ...(nowDate ? { runAt: nowDate } : {}),
     ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+    ...(agent ? { agent } : {}),
   };
-  // The owner gate runs before the verdicts, so no model is asked for a
-  // pass that will be refused (`dream_not_owner`); `dream()` asks again.
+  // The owner gate runs first, so no model is asked for a pass that will
+  // be refused (`dream_not_owner`); `dream()` asks again.
   if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
-  const topicVerdicts =
-    dryRun || deadlineMs === 0 ? undefined : await prepareTopicVerdicts(decideOptions);
+  const closedQuestions =
+    dryRun || deadlineMs === 0 ? undefined : await prepareClosedQuestions(vault, decideOptions);
   const summary = dream(vault, {
     dryRun,
     safeguard,
@@ -415,7 +416,7 @@ export async function toolBrainDream(
     retireSiblingsEnabled,
     ...previewScope,
     ...(nowDate ? { now: nowDate } : {}),
-    ...(topicVerdicts !== undefined ? { topicVerdicts } : {}),
+    ...(closedQuestions !== undefined ? { closedQuestions } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),
     ...(onProgress ? { onProgress } : {}),
@@ -498,6 +499,7 @@ export async function toolBrainDream(
         })),
     },
     ...(summary.model_work !== undefined ? { model_work: { ...summary.model_work } } : {}),
+    ...(summary.judgment !== undefined ? { judgment: summary.judgment } : {}),
     snapshot_path: summary.snapshot_path ? toolPath(ctx, summary.snapshot_path) : null,
     log_path: summary.log_path ? toolPath(ctx, summary.log_path) : null,
   };

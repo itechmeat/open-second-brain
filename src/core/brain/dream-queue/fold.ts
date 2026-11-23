@@ -106,6 +106,8 @@ export interface DreamWorkItem {
   } | null;
   /** The reason of the last failed attempt. */
   readonly last_reason: string | null;
+  /** The reason of the last release, with the input it was given for. */
+  readonly last_release: { readonly reason: string; readonly input_hash: string } | null;
   /** Ids (after supersession) of what holds the item back. */
   readonly blocked_by: ReadonlyArray<string>;
   /** Predecessors (after supersession) that are not finished. */
@@ -156,6 +158,7 @@ interface Building {
   attempts: number;
   retry_at: string | null;
   last_reason: string | null;
+  last_release: { reason: string; input_hash: string } | null;
 }
 
 const DEFAULT_TRAITS: DreamWorkTraits = { closedPredecessor: "cancel" };
@@ -218,6 +221,7 @@ export function foldDreamWork(input: DreamWorkFoldInput): DreamWorkState {
         attempts: 0,
         retry_at: null,
         last_reason: null,
+        last_release: null,
       });
       continue;
     }
@@ -298,6 +302,11 @@ function applyRecord(item: Building, record: StoreRecord): string | null {
         item.attempts += 1;
         item.retry_at = body.retry_at;
         item.last_reason = body.reason;
+      } else {
+        item.last_release = {
+          reason: body.reason,
+          input_hash: body.input_hash ?? item.body.input_hash,
+        };
       }
       return null;
     }
@@ -480,6 +489,7 @@ function finish(
       applied: item.applied,
       closed: item.closed,
       last_reason: item.last_reason,
+      last_release: item.last_release,
       blocked_by: blocked,
       closed_predecessors: closedPredecessors,
       open_predecessors: openPredecessors,

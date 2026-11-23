@@ -12,7 +12,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { writeVaultPointer } from "../../../src/core/brain/portability/pointer.ts";
 import { runTopicAction } from "../../../src/core/topics/actions.ts";
 import type { TopicCandidate } from "../../../src/core/topics/candidates.ts";
@@ -83,7 +83,7 @@ async function fieldRecords(server: MCPServer): Promise<void> {
 }
 
 function planned(a: Machine): { summary: string; report: Record<string, unknown> } {
-  const topics = dream(a.vault).topics;
+  const topics = dreamAnswered(a.vault, a.store()).topics;
   if (topics?.report.status !== "planned") throw new Error(`not planned: ${topics?.report.status}`);
   return { summary: topics.summary, report: topics.report as unknown as Record<string, unknown> };
 }
@@ -100,6 +100,7 @@ test("twelve records of one session make no topic, and the pass says it lacks a 
       closest: { records: 12, sessions: 1, kinds: { note: 6, signal: 2, decision: 4 } },
       heldBack: 0,
       vetoed: 0,
+      asked: 0,
     },
   ]);
   expect(summary).toContain(
@@ -191,6 +192,7 @@ test("a group a decision model vetoed is named as vetoed", () => {
       closest: { records: 5, sessions: 2, kinds: { note: 5, signal: 0, decision: 0 } },
       heldBack: 0,
       vetoed: 1,
+      asked: 0,
     },
   ]);
 });
@@ -222,6 +224,10 @@ test("a planned topic whose record would be refused is named with the cause", ()
     completions: 0,
     hidden: 0,
     kept: 0,
+    applied: 0,
+    abstained: 0,
+    stale: 0,
+    judgment: "here",
   });
   expect(summary).toContain(
     `; 1 planned topic was not created because the topic record would be refused: project:${PROJECT} ` +

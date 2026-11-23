@@ -81,6 +81,8 @@ export interface DreamWorkAttemptBody {
   readonly outcome: DreamWorkAttemptOutcome;
   readonly reason: string;
   readonly retry_at: string | null;
+  /** A release with a reason: the input it was given for (the item's own). */
+  readonly input_hash?: string;
 }
 
 export interface DreamWorkAppliedBody {
@@ -246,6 +248,12 @@ export function dreamWorkBodyRejection(kind: string, body: Record<string, unknow
       if (typeof body["reason"] !== "string") return "missing reason";
       if (body["retry_at"] !== null && !isoTime(body["retry_at"])) {
         return "retry_at must be a time or null";
+      }
+      if (
+        body["input_hash"] !== undefined &&
+        (typeof body["input_hash"] !== "string" || !HEX64.test(body["input_hash"]))
+      ) {
+        return "input_hash must be a hash";
       }
       return null;
     case DREAM_WORK_APPLIED_KIND:

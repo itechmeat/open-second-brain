@@ -21,19 +21,26 @@ Shared mechanics:
 
 - **Where the dream-time uses run.** The seven dream-time uses
   (`topic_route`, `event_kind`, `human_readable`, `topic_new`, `topic_same`,
-  `question_resolved`, `milestone_done`) run in the decide pass on the view
-  writer, right before the synchronous dream pass. The verdicts ride into
-  the planning pass, which applies one only where its subject still matches
-  the fold it read under the planning lock. Every machine folds the stored
-  records, so one machine deciding keeps every machine's fold equal.
+  `question_resolved`, `milestone_done`) are closed questions on the dream
+  work queue: every live pass on the dream owner's device produces one item
+  per eligible subject, oldest first, with no age limit and no limit per
+  pass, and the decision model chain answers ready items one per request
+  before the synchronous dream pass, within `dream.model_budget_ms`. Topic
+  planning, on the same device, applies an accepted answer only where its
+  subject still matches the fold it read under the planning lock, and marks
+  the item applied with the records it wrote. A question with no accepted
+  answer waits: no fixed rule decides it (see [the main
+  page](../decision-models.md#without-a-model-the-closed-questions-wait)).
+  Every machine folds the stored records, so one machine deciding keeps
+  every machine's fold equal.
 - **Where the hook-time uses run.** `head_select` runs in the SessionStart
   digest; `neighbour_relevant` runs in the neighbour-updates hook before a
   turn. Both get `min(decision_model_hook_budget_ms, the hook's remaining
   budget)`, enforced again around the call, and the wait ends by half of
   the hook's time ceiling, so a provider that never answers leaves the
   hook time to show its deterministic result.
-- **Each question names its record.** A batched request carries one
-  question per record, and each names its own masked field: `route_<k>`,
+- **Each question names its record.** A request carries one item's
+  question, and it names its own field: `route_<k>`,
   `kind_<k>`, `history_<k>` and `matters_<k>` name `records.R<k>`,
   `relevant_<k>` names `topics.T<k>`, a `topic_same` pair names `pairs.A<i>`
   and `pairs.B<i>`. The stored `version` of the eight uses whose questions
@@ -113,7 +120,8 @@ Shared mechanics:
 
 ## topic_route
 
-- **When it runs:** in the decide pass, over every record no topic holds.
+- **When it runs:** as one queue item per record no topic holds that a
+  topic's head words fit.
 - **What it sends:** one `choice` question per record (`route_<k>`, naming
   `records.R<k>`), the
   options the record's scope's active topics - the deterministic best first,
@@ -121,26 +129,28 @@ Shared mechanics:
   state carries the records and the topic heads (title, description, goal,
   each clipped to 300 characters). Text clips at 900 characters per record.
 - **Threshold:** `route_min`, default `0.6`.
-- **Fallback:** the word-overlap route of the planner (at least two shared
-  subject words and a fifth of the record's words).
+- **Fallback:** none, no fixed rule answers; the record stays unassigned. The word-overlap
+  ranking of the planner (at least two shared subject words and a fifth of
+  the record's words) only builds the options.
 - **What `enforce` changes:** the chosen topic at or above the threshold
   becomes an `assign` with `authority: "model"` and the verdict; `none` at
-  or above it leaves the record free for grouping this pass. A blocked route
+  or above it leaves the record free for grouping, in later passes too;
+  below the threshold the item is abstained and nothing is written. A blocked route
   is never taken, whatever the model says.
 - **Where its verdict is stored:** on the `assign` record.
 
 ## event_kind
 
-- **When it runs:** in the decide pass, over every record a topic holds
-  (assigned earlier or routed in this pass) that has no derived item yet.
+- **When it runs:** as one queue item per record a topic holds that has no
+  derived item yet.
 - **What it sends:** one `choice` question per record (`kind_<k>`, naming
   `records.R<k>`); the
   options are `decision`, `open_question`, `correction`, `blocker`,
   `reframing`, `rejected`, `routine`; the state carries each record beside
   its topic's title.
 - **Threshold:** `kind_min`, default `0.7`.
-- **Fallback:** today's behaviour - a record that is not a topic event stays
-  routine (no page item).
+- **Fallback:** none, no fixed rule answers; no page item; the item waits. A routine answer or
+  one below the threshold abstains and writes nothing.
 - **What `enforce` changes:** a non-routine answer at or above the threshold
   derives one item record on the holding topic - `authority: "model"`, the
   `verdict`, `source: <record id>`, the item id equal to the record id (which
@@ -150,28 +160,27 @@ Shared mechanics:
 
 ## human_readable
 
-- **When it runs:** in the decide pass, over the `note` log events of
-  `shared` from the last eight ISO weeks that have no stored
-  `history-verdict`, newest first (a note dated after the run after every
-  present one).
+- **When it runs:** as one queue item per `note` log event of `shared` that
+  has no stored `history-verdict`, of any age, oldest first (a note dated
+  after the run after every present one).
 - **What it sends:** one `noul` question per note (`history_<k>`, naming
   `records.R<k>`): would the person want this note in their weekly history.
 - **Threshold:** `hide_below`, default `0.3`.
-- **Fallback:** today's history page - every note is shown.
+- **Fallback:** none, no fixed rule answers; every note is shown; the item waits. The question
+  never abstains.
 - **What `enforce` changes:** p(yes) below the threshold writes a
   `history-verdict` record (`authority: "model"`, `keep: false`) on the
   `log` stream of `shared`, and the weekly history page leaves that note
   out; at or above it the record says `keep: true`, the note stays on the
-  page and is never asked about again. When two passes judged the same
-  note (the CLI dream and `brain_dream` at once), the one that applies
-  first under the planning lock stands; the other writes nothing for it.
+  page and is never asked about again. A note is asked once: a second pass
+  finds its item answered and asks nothing.
   Decisions and confirmed rules are never asked about and never hidden.
 - **Where its verdict is stored:** on the `history-verdict` record.
 
 ## topic_new
 
-- **When it runs:** in the decide pass, over the groups the deterministic
-  plan would create (only groups that already qualify).
+- **When it runs:** as one queue item per group that qualifies by the
+  count and session thresholds, keyed by its members.
 - **What it sends:** one `noul` question per group (`new_<k>`), one group
   per request: do the records in `groups` describe one recurring subject
   that deserves its own topic; the state carries the drafted title and up
@@ -179,9 +188,11 @@ Shared mechanics:
   every member's words, so it is sent blank when any member of the group,
   shown or not, may not leave the machine.
 - **Threshold:** `veto_below`, default `0.3`.
-- **Fallback:** the count and session thresholds of the planner.
+- **Fallback:** none, no fixed rule answers; the group is not created; the item waits. The
+  question never abstains.
 - **What `enforce` changes:** p(yes) below the threshold vetoes the creation
-  for this pass only (the next pass asks again); at or above it the approval
+  while the group keeps its members (a changed group is asked again); at or
+  above it the approval
   rides the `topic-create` record as its `verdict` (the create keeps
   `authority: "agent"`). The model can never create a group that does not
   qualify.
@@ -189,33 +200,34 @@ Shared mechanics:
 
 ## topic_same
 
-- **When it runs:** in the decide pass, through the shared pair-verdict
-  runner, over pairs of active topics of one scope whose head tokens share
-  at least 0.2 Jaccard, at most 20 pairs.
+- **When it runs:** as one queue item per pair of active topics of one
+  scope whose head tokens share at least 0.2 Jaccard.
 - **What it sends:** one `choice` question per pair (`same` / `different`,
   naming `pairs.A<i>` and `pairs.B<i>`), the two topic heads clipped to 300
   characters each.
 - **Threshold:** `same_min`, default `0.7`.
-- **Fallback:** the Jaccard merge proposals of the planner (0.5 Jaccard).
+- **Fallback:** the Jaccard merge proposals of the planner (0.5 Jaccard), which are
+  proposals only; the item waits.
 - **What `enforce` changes:** only an answer whose chain entry held
-  `enforce` acts. No batch of pairs starts once the use's share of the pass
-  budget is spent. `same` at or above the threshold adds the pair
+  `enforce` acts. `same` at or above the threshold adds the pair
   to the dream report's merge proposals with its confidence; `different` at
   or above it lists a Jaccard proposal last with its verdict, never removes
   it. Nothing is ever merged.
-- **Where its verdict is stored:** in the `decision_model_call` record only
-  (the dream report is a report, not a record).
+- **Where its verdict is stored:** on the answered queue item; the dream
+  report and the topic review read the hint from the queue in every later
+  pass.
 
 ## question_resolved
 
-- **When it runs:** in the decide pass, over records held by a topic that
-  has open questions, the record newer than the question.
+- **When it runs:** as one queue item per record held by a topic that has
+  open questions, the record newer than the question.
 - **What it sends:** one `choice` question per record (`answers_<k>`, naming
   `records.R<k>`); the
   options are that topic's open questions without a pending proposal, plus
   `none`; the state carries the record beside the question texts.
 - **Threshold:** `resolved_min`, default `0.7`.
-- **Fallback:** none - no proposal.
+- **Fallback:** none, no fixed rule answers; no proposal; the item waits. `none` or an answer
+  below the threshold abstains.
 - **What `enforce` changes:** the chosen question at or above the threshold
   writes a `question-resolved` record with `authority: "model"` and the
   verdict; the fold shows it as "looks answered" and the question stays open
@@ -224,14 +236,16 @@ Shared mechanics:
 
 ## milestone_done
 
-- **When it runs:** in the decide pass, over the open milestones of topics
-  with held records newer than the milestone.
+- **When it runs:** as one queue item per open milestone of a topic with
+  held records newer than the milestone; a new held record changes its
+  input, so it is asked again.
 - **What it sends:** one `noul` question per milestone (`done_<k>`, naming
   `milestones.M<k>`); the
   state carries the milestone text and up to 5 of the newest held record
   texts.
 - **Threshold:** `done_min`, default `0.8`.
-- **Fallback:** none - no proposal.
+- **Fallback:** none, no fixed rule answers; no proposal; the item waits. An answer below the
+  threshold abstains.
 - **What `enforce` changes:** p(yes) at or above the threshold writes a
   `milestone-done` record with `authority: "model"` and the verdict, never
   with `evidence`; the page shows "looks done, confirm" and the milestone

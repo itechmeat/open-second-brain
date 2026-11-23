@@ -1,184 +1,112 @@
 /**
- * `topic_same` in the decide pass (task 4.1, design D10): `off` sends
- * nothing; `shadow` records without effect; `enforce` `same` adds the
- * pair to the report's merge proposals with its confidence, `different`
- * moves a Jaccard proposal last with its verdict and never removes it;
- * nothing is ever merged; on a failure today's proposals stand.
+ * `topic_same` as queue items, one per pair (change
+ * `dream-closed-questions`; was the decide pass, task 4.1, design D10):
+ * the Jaccard proposals are proposals only and stand whatever the model
+ * says; `off` and `shadow` add nothing and the items wait; an enforced
+ * `same` at or above `same_min` adds the model-only pairs with their
+ * verdict and a `different` lists the Jaccard proposal last with its
+ * verdict, never removed; nothing is ever merged. Below the threshold the
+ * item abstains, on a timeout it waits; the proposals stand either way.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { appendRecord } from "../../../src/core/store/appender.ts";
+import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
 import {
-  decisionThresholdsPath,
   resetThresholdsStoreCache,
   writeThresholdEntry,
+  decisionThresholdsPath,
 } from "../../../src/core/decision-model/thresholds.ts";
-import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
-import { newUlid } from "../../../src/core/store/ulid.ts";
+import { appendRecord } from "../../../src/core/store/appender.ts";
 import { readPartition } from "../../../src/core/store/state-digest.ts";
-import type { StoreHandle } from "../../../src/core/store/store-open.ts";
-import { TOPIC_CREATE_KIND, TOPIC_MERGE_KIND } from "../../../src/core/topics/constants.ts";
-import { decideTopicPlan } from "../../../src/core/topics/decide.ts";
+import { TOPIC_MERGE_KIND } from "../../../src/core/topics/constants.ts";
 import { foldTopics } from "../../../src/core/topics/fold.ts";
 import { topicPairsForSame } from "../../../src/core/topics/plan.ts";
-import { describeTopicPlanning, runTopicPlanning } from "../../../src/core/topics/planning.ts";
-import { claimSettled, claimViewWriter, readViewWriter } from "../../../src/core/view/writer.ts";
-import { makeMachines, type Machines } from "../view/fixtures/machines.ts";
-import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
+import {
+  describeTopicPlanning,
+  type TopicPlanningReport,
+} from "../../../src/core/topics/planning.ts";
 import { FakeDecisionProvider, startFakeSystemOne } from "../../helpers/fake-decision-provider.ts";
+import { closedFixture, type ClosedFixture } from "./fixtures/closed-fixture.ts";
+import { ask, plan } from "./fixtures/closed-run.ts";
 
-const T0 = Date.UTC(2026, 11, 1, 9, 0, 0);
-let clock = T0;
-const now = () => (clock += 1000);
-/** Does not advance on read: the decide pass's budget clock. */
-const still = (): number => clock;
-
-let m: Machines;
-let a: StoreHandle;
-let tmp: string;
-let vault: string;
-let configPath: string;
+let f: ClosedFixture;
 
 beforeEach(() => {
-  clock = T0;
-  m = makeMachines(["dev-a"], "o2b-decide-same-");
-  a = m.open("dev-a");
-  claimViewWriter(a, { agent: "dream", now });
-  claimSettled(a, readViewWriter(a, now));
-  tmp = mkdtempSync(join(m.parent, "cfg-"));
-  vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain"), { recursive: true });
-  process.env["VAULT_DIR"] = vault;
-  configPath = join(tmp, "config.yaml");
-  writeFileSync(configPath, "");
-  resetThresholdsStoreCache();
+  f = closedFixture();
 });
 
 afterEach(() => {
-  delete process.env["VAULT_DIR"];
-  resetThresholdsStoreCache();
-  m.cleanup();
+  f.cleanup();
 });
-
-function seedTopic(title: string): string {
-  clock += 1000;
-  const topic = newUlid(clock);
-  appendRecord(
-    a,
-    {
-      partition: "shared",
-      stream: "topics",
-      kind: TOPIC_CREATE_KIND,
-      agent: "seed",
-      topic,
-      body: { authority: "agent", title, scope: "project:o2b" },
-    },
-    { now },
-  );
-  return topic;
-}
 
 /** Two topics the Jaccard rule already proposes, and one only the model may add. */
 function seedPairAndBand(): { a: string; b: string; c: string } {
-  const first = seedTopic("Deprecation windows for the public API");
-  const second = seedTopic("Deprecation windows announced for the API");
-  const third = seedTopic("Deprecation windows roadmap and kickoff");
+  const first = f.seedTopic("Deprecation windows for the public API");
+  const second = f.seedTopic("Deprecation windows announced for the API");
+  const third = f.seedTopic("Deprecation windows roadmap and kickoff");
   return { a: first, b: second, c: third };
 }
 
-function envFor(mode: string): Record<string, string | undefined> {
-  return {
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED: "true",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: "compatible",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "https://decide.invalid/v1",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ID: "decide-model",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_ENV_KEY: "O2B_TEST_DECIDE_KEY",
-    OPEN_SECOND_BRAIN_DECISION_MODEL_USES: `topic_same:${mode}`,
-    O2B_TEST_DECIDE_KEY: FAKE_DECISION_KEY,
-    OPEN_SECOND_BRAIN_CONFIG: configPath,
-  };
-}
-
-function tuneForEnforce(value = 0.7): void {
-  writeThresholdEntry(decisionThresholdsPath(configPath), "decide-model", "topic_same", {
-    values: { same_min: value },
-    source: "set",
+function pair(choice: string, probability = 0.9, extra: { model?: string; fail?: "timeout" } = {}) {
+  return new FakeDecisionProvider({
+    answer: (id) => (id.startsWith("pair_") ? choice : undefined),
+    probability,
+    ...extra,
   });
-  resetThresholdsStoreCache();
 }
 
 function mergeRecords(): number {
-  return readPartition(join(m.root("dev-a"), "shared"))
+  return readPartition(join(f.m.root("dev-a"), "shared"))
     .flatMap((s) => s.records)
     .filter((r) => r.kind === "merge").length;
 }
 
-function mergePairsOf(report: ReturnType<typeof runTopicPlanning>): string[] {
+function mergePairsOf(report: TopicPlanningReport): string[] {
   if (report.status !== "planned") return [];
   return report.merges.map((proposal) =>
     [proposal.topics[0], proposal.topics[1]].toSorted().join("|"),
   );
 }
 
-describe("topic_same in the decide pass", () => {
+describe("topic_same on the queue", () => {
   test("off sends nothing and the report keeps the Jaccard proposals", async () => {
     const { a: ta, b: tb } = seedPairAndBand();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-      probability: 0.9,
-    });
-    const verdicts = await decideTopicPlan(a, { provider: fake, env: envFor("off"), now: still });
-    expect(verdicts.sameTopics).toEqual([]);
+    const fake = pair("same");
+    await ask(f, "topic_same:off", fake);
     expect(fake.requests).toEqual([]);
-    expect(listDecisionModelCalls(vault)).toEqual([]);
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    expect(listDecisionModelCalls(f.vault)).toEqual([]);
+    const report = plan(f);
     expect(mergePairsOf(report)).toEqual([[ta, tb].toSorted().join("|")]);
     expect(report.status === "planned" ? report.merges[0]!.verdict : null).toBeUndefined();
     expect(describeTopicPlanning(report as never)).not.toContain("decision model");
     expect(mergeRecords()).toBe(0);
   });
 
-  test("shadow asks about the pairs, records the call, and the proposals stand", async () => {
-    seedPairAndBand();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-      probability: 0.9,
-      model: "shadow-model-5",
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("shadow"),
-      now: still,
-    });
-    expect(verdicts.sameTopics).toEqual([]);
-    expect(fake.requests).toHaveLength(1);
-    expect(fake.requests[0]!.use).toBe("topic_same");
-    const calls = listDecisionModelCalls(vault);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.payload["mode"]).toBe("shadow");
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+  test("shadow asks about each pair, records the calls, and the proposals stand", async () => {
+    const { a: ta, b: tb } = seedPairAndBand();
+    const fake = pair("same", 0.9, { model: "shadow-model-5" });
+    await ask(f, "topic_same:shadow", fake);
+    const asked = f.items("topic-same").length;
+    expect(asked).toBeGreaterThan(0);
+    expect(fake.requests).toHaveLength(asked);
+    expect(fake.requests.every((r) => r.use === "topic_same")).toBe(true);
+    const calls = listDecisionModelCalls(f.vault);
+    expect(calls).toHaveLength(asked);
+    expect(calls.every((c) => c.payload["mode"] === "shadow")).toBe(true);
+    const report = plan(f);
+    expect(mergePairsOf(report)).toEqual([[ta, tb].toSorted().join("|")]);
     expect(mergeRecords()).toBe(0);
-    void report;
   });
 
   test("enforce same adds the model-only pairs with their confidence", async () => {
-    const { a: ta, c: tc } = seedPairAndBand();
-    tuneForEnforce();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-      probability: 0.9,
-      model: "same-model-1",
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("enforce"),
-      now: still,
-    });
-    expect(verdicts.sameTopics).toHaveLength(3);
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    seedPairAndBand();
+    f.tune("topic_same", { same_min: 0.7 });
+    await ask(f, "topic_same:enforce", pair("same", 0.9, { model: "same-model-1" }));
+    expect(f.items("topic-same")).toHaveLength(3);
+    const report = plan(f);
     expect(report.status).toBe("planned");
     if (report.status !== "planned") return;
     // The Jaccard proposal keeps its place; the model-only pairs join with verdicts.
@@ -192,27 +120,16 @@ describe("topic_same in the decide pass", () => {
     // No record of this pass carries a verdict, so the record note is absent.
     expect(line).not.toContain("decided by a decision model");
     expect(mergeRecords()).toBe(0);
-    void ta;
-    void tc;
   });
 
   test("a model-only pair whose topic was merged before planning is not proposed", async () => {
     const { b: tb, c: tc } = seedPairAndBand();
-    tuneForEnforce();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-      probability: 0.9,
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("enforce"),
-      now: still,
-    });
-    expect(verdicts.sameTopics).toHaveLength(3);
-    // Between the decide pass and planning, the third topic is merged away.
-    clock += 1000;
+    f.tune("topic_same", { same_min: 0.7 });
+    await ask(f, "topic_same:enforce", pair("same"));
+    expect(f.items("topic-same")).toHaveLength(3);
+    // Between the answers and planning, the third topic is merged away.
     appendRecord(
-      a,
+      f.a,
       {
         partition: "shared",
         stream: "topics",
@@ -221,27 +138,18 @@ describe("topic_same in the decide pass", () => {
         topic: tc,
         body: { authority: "human", into: tb },
       },
-      { now },
+      { now: f.now },
     );
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    const report = plan(f);
     expect(report.status).toBe("planned");
-    expect(mergePairsOf(report).some((pair) => pair.includes(tc))).toBe(false);
+    expect(mergePairsOf(report).some((p) => p.includes(tc))).toBe(false);
   });
 
   test("enforce different lists the Jaccard proposal last with the verdict, never removed", async () => {
     const { a: ta, b: tb } = seedPairAndBand();
-    tuneForEnforce();
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "different" : undefined),
-      probability: 0.9,
-      model: "diff-model-2",
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("enforce"),
-      now: still,
-    });
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: verdicts });
+    f.tune("topic_same", { same_min: 0.7 });
+    await ask(f, "topic_same:enforce", pair("different", 0.9, { model: "diff-model-2" }));
+    const report = plan(f);
     expect(report.status).toBe("planned");
     if (report.status !== "planned") return;
     const pairs = mergePairsOf(report);
@@ -257,27 +165,16 @@ describe("topic_same in the decide pass", () => {
 
   test("below the threshold and on a timeout today's proposals stand", async () => {
     const { a: ta, b: tb } = seedPairAndBand();
-    tuneForEnforce();
-    const low = await decideTopicPlan(a, {
-      provider: new FakeDecisionProvider({
-        answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-        probability: 0.5,
-      }),
-      env: envFor("enforce"),
-      now: still,
-    });
-    expect(low.sameTopics).toEqual([]);
-    const timedOut = await decideTopicPlan(a, {
-      provider: new FakeDecisionProvider({
-        answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-        probability: 0.9,
-        fail: "timeout",
-      }),
-      env: envFor("enforce"),
-      now: still,
-    });
-    expect(timedOut.sameTopics).toEqual([]);
-    const report = runTopicPlanning(a, { agent: "dream", now, topicVerdicts: low });
+    f.tune("topic_same", { same_min: 0.7 });
+    await ask(f, "topic_same:enforce", pair("same", 0.9, { fail: "timeout" }));
+    for (const item of f.items("topic-same")) expect(item.attempts).toBe(1);
+    expect(mergePairsOf(plan(f))).toEqual([[ta, tb].toSorted().join("|")]);
+    // After the retry time, answers below the threshold abstain.
+    const retry = Math.max(...f.items("topic-same").map((i) => Date.parse(i.retry_at!)));
+    f.setClock(retry + 1000);
+    await ask(f, "topic_same:enforce", pair("same", 0.5));
+    const report = plan(f);
+    expect(report.status === "planned" && report.abstained).toBe(3);
     expect(mergePairsOf(report)).toEqual([[ta, tb].toSorted().join("|")]);
     expect(mergeRecords()).toBe(0);
   });
@@ -285,10 +182,10 @@ describe("topic_same in the decide pass", () => {
 
 describe("the pairs topic_same is asked about", () => {
   test("the best-scoring pairs go first when more pairs qualify than one pass asks", () => {
-    seedTopic("Shard compaction garden watering beds");
-    const b = seedTopic("Shard compaction window monthly ledger");
-    const c = seedTopic("Shard compaction window monthly files");
-    const records = readPartition(join(m.root("dev-a"), "shared")).flatMap((sh) => sh.records);
+    f.seedTopic("Shard compaction garden watering beds");
+    const b = f.seedTopic("Shard compaction window monthly ledger");
+    const c = f.seedTopic("Shard compaction window monthly files");
+    const records = readPartition(join(f.m.root("dev-a"), "shared")).flatMap((sh) => sh.records);
     const pairs = topicPairsForSame(foldTopics(records), 0.1, 1);
     expect(pairs.map((p) => [p.a, p.b])).toEqual([[b, c]]);
   });
@@ -297,27 +194,22 @@ describe("the pairs topic_same is asked about", () => {
 describe("same_min from the thresholds store", () => {
   test("a stored same_min above the answer decides, not the built-in default", async () => {
     seedPairAndBand();
-    tuneForEnforce(0.95);
-    const fake = new FakeDecisionProvider({
-      answer: (id) => (id.startsWith("pair_") ? "same" : undefined),
-      probability: 0.9,
-    });
-    const verdicts = await decideTopicPlan(a, {
-      provider: fake,
-      env: envFor("enforce"),
-      now: still,
-    });
+    f.tune("topic_same", { same_min: 0.95 });
+    await ask(f, "topic_same:enforce", pair("same"));
     // The built-in 0.7 would accept 0.9; the stored 0.95 decides.
-    expect(verdicts.sameTopics).toEqual([]);
+    const report = plan(f);
+    expect(
+      report.status === "planned" && report.merges.filter((m) => m.verdict !== undefined),
+    ).toEqual([]);
   });
 });
 
 /** A dead first entry and a live fallback that answers `same` at 0.9. */
 async function chainPass(tuneFallback: boolean) {
   seedPairAndBand();
-  tuneForEnforce();
+  f.tune("topic_same", { same_min: 0.7 });
   if (tuneFallback) {
-    writeThresholdEntry(decisionThresholdsPath(configPath), "fallback-model", "topic_same", {
+    writeThresholdEntry(decisionThresholdsPath(f.configPath), "fallback-model", "topic_same", {
       values: { same_min: 0.7 },
       source: "set",
     });
@@ -340,8 +232,10 @@ async function chainPass(tuneFallback: boolean) {
   });
   // The per-entry keys of a chain are machine-config keys.
   writeFileSync(
-    configPath,
+    f.configPath,
     [
+      `store_root: ${f.m.root("dev-a")}`,
+      "device_id: dev-a",
       "decision_model_providers_typesafe_base_url: " + server.url,
       "decision_model_providers_typesafe_id: fallback-model",
       "decision_model_providers_typesafe_env_key: O2B_TEST_DECIDE_KEY",
@@ -349,19 +243,14 @@ async function chainPass(tuneFallback: boolean) {
     ].join("\n"),
   );
   try {
-    return await decideTopicPlan(a, {
-      env: {
-        ...envFor("enforce"),
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: undefined,
-        OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDERS: "compatible,typesafe",
-        OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "http://127.0.0.1:1",
-      },
-      configPath,
-      // The pass budget runs on this clock and caps each request's real
-      // timeout: the seeding clock jumps a second per read, which would
-      // spend the share in reads and give the fallback a 1 ms timeout.
-      now: () => clock,
+    await ask(f, "topic_same:enforce", undefined, {
+      OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDER: undefined,
+      OPEN_SECOND_BRAIN_DECISION_MODEL_PROVIDERS: "compatible,typesafe",
+      OPEN_SECOND_BRAIN_DECISION_MODEL_BASE_URL: "http://127.0.0.1:1",
     });
+    const report = plan(f);
+    if (report.status !== "planned") throw new Error(report.status);
+    return report.merges.filter((m) => m.verdict !== undefined);
   } finally {
     await server.close();
   }
@@ -369,13 +258,12 @@ async function chainPass(tuneFallback: boolean) {
 
 describe("topic_same through a chain whose fallback answers", () => {
   test("a fallback without tuned thresholds answers as shadow, so nothing acts", async () => {
-    const verdicts = await chainPass(false);
-    expect(verdicts.sameTopics).toEqual([]);
+    expect(await chainPass(false)).toEqual([]);
   });
 
   test("a fallback in enforce acts and the verdict names it as the provider", async () => {
-    const verdicts = await chainPass(true);
-    expect(verdicts.sameTopics.length).toBeGreaterThan(0);
-    expect(verdicts.sameTopics.every((e) => e.verdict.provider === "typesafe")).toBe(true);
+    const judged = await chainPass(true);
+    expect(judged.length).toBeGreaterThan(0);
+    expect(judged.every((m) => m.verdict!.provider === "typesafe")).toBe(true);
   });
 });

@@ -11,7 +11,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { TOPICS_WITHOUT_PROJECT_CODE } from "../../../src/core/brain/doctor/topic-plan-check.ts";
 import { buildStoreStatusBlock } from "../../../src/core/store/store-status.ts";
@@ -77,7 +77,7 @@ test("notes, signals and decisions written in a linked project carry it and form
   expect(written.filter((r) => r.project === "release-tool")).toHaveLength(5);
   expect(written.find((r) => r.text.endsWith("outside"))?.project).toBeUndefined();
 
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   expect(report?.status).toBe("planned");
   if (report?.status !== "planned") return;
   expect(report.created).toHaveLength(1);
@@ -129,7 +129,7 @@ test("status and doctor say why the last pass made no topic when no unassigned r
     ),
   );
   expect(readTopicPlanOutcome()).toBeNull();
-  const summary = dream(a.vault).topics?.summary;
+  const summary = dreamAnswered(a.vault, a.store()).topics?.summary;
   expect(summary).toContain("names a project");
 
   const block = buildStoreStatusBlock({ vault: a.vault, configPath: null }) as {

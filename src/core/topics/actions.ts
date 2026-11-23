@@ -40,6 +40,7 @@ import {
 } from "./constants.ts";
 import type { TopicFold, TopicState } from "./fold.ts";
 import { reviewTopics } from "./plan.ts";
+import { standingMergeHints } from "./decide-operations.ts";
 import { readTopics, type TopicRead } from "./read.ts";
 import { canonicalTopicScope } from "./records.ts";
 import {
@@ -631,10 +632,21 @@ export function runTopicAction(
           ...(privateWithheld() ? {} : { unreadable: read.unreadable }),
         };
       }
-      const review = reviewTopics(read.fold, now, quietDays(context.configPath));
+      const store = configuredStore(context.configPath);
+      const hints = store === null ? [] : standingMergeHints(store.root, read.partitions);
+      if (hints === null) {
+        return { action: "review", incomplete: true, merges: [], quiet: [] };
+      }
+      const review = reviewTopics(read.fold, now, quietDays(context.configPath), hints);
       return {
         action: "review",
-        merges: review.merges.map((m) => ({ topics: m.topics, score: m.score })),
+        merges: review.merges.map((m) => ({
+          topics: m.topics,
+          score: m.score,
+          ...(m.judged !== undefined && m.verdict !== undefined
+            ? { judged: m.judged, confidence: m.verdict.confidence, model: m.verdict.model }
+            : {}),
+        })),
         quiet: review.quiet,
       };
     }

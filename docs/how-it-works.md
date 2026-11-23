@@ -1139,6 +1139,37 @@ records still live in the legacy `Brain/` tree has no owner: the role is
 enforced once the brain moves to the store. The full multi-device
 walkthrough is in [`docs/cross-project-pointer.md`](./cross-project-pointer.md).
 
+### Closed questions and topic planning
+
+Dream asks seven closed questions: which topic a record belongs to,
+whether a group deserves a topic, whether two topics are one, what kind
+of event a held record is, whether a question was answered, whether a
+milestone is done, and whether a note belongs in the weekly history. Each
+is an item of the dream work queue (the `dream-work` stream), one per
+subject. Before a live pass on the owner's device the front door that the
+CLI verb, the MCP tool and the maintenance lane await produces an item
+for eligible subjects, oldest first, with no age limit or fixed per-pass
+cap; production stops at the pass deadline, so eligible subjects may remain
+without queue items until a later pass. The decision model chain then
+answers ready items, one per request, within
+`dream.model_budget_ms`. A dry run and a preview produce nothing and ask
+nothing.
+
+Topic planning runs at the tail of the pass on the dream owner's device
+(on a brain with no owner bound, on the view writer's, where it decides
+nothing). It reads the queue's fold under the planning lock and applies
+the accepted answers through the writes it has always made (routes,
+approved topics, derived items, proposals, history verdicts), with the
+answering provider and model as author, and marks each item applied with
+the records it wrote, or as abstained when the answer decided nothing. A
+veto, a `none` route and a same-topic hint stay on their finished items
+and hold in every later pass. No fixed rule answers in place of a model:
+with no answer a record stays unassigned and a qualifying group is not
+created. Another device plans nothing and its pass summary says that
+judgment runs elsewhere. Doctor and `o2b dream queue` say per question how
+many items wait and why. The device-local asked file of earlier versions
+is no longer read.
+
 ## Hygiene: sanitisation and lints
 
 Two cheap, deterministic layers keep the data clean.

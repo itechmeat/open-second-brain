@@ -215,6 +215,23 @@ export function readDreamWork(
   return { ...foldSnapshot(snapshot, options.now ?? Date.now()), unreadable: snapshot.unreadable };
 }
 
+/**
+ * The folded queue of the store at `root`, over `partitions`, read only:
+ * no gate, no writes, and the local clock is not raised (a reader with no
+ * store handle: the topic review).
+ */
+export function readDreamWorkAt(
+  root: string,
+  partitions: ReadonlySet<StorePartition>,
+  options: { readonly now?: number } = {},
+): DreamWorkState & { readonly unreadable: ReadonlyArray<string> } {
+  const snapshot = readRecordsAt(root, partitions);
+  return {
+    ...foldSnapshot(snapshot, options.now ?? Date.now()),
+    unreadable: snapshot.unreadable,
+  };
+}
+
 // ----- Writing ----------------------------------------------------------
 
 /** One entry point: gate, then the queue lock once, then `fn` over a fresh snapshot. */
@@ -296,6 +313,7 @@ class Step {
     return {
       store: this.#queue.store,
       vault: this.#queue.vault,
+      now: this.now,
       ...(this.#queue.configPath !== undefined ? { configPath: this.#queue.configPath } : {}),
     };
   }
@@ -368,6 +386,7 @@ class Step {
     outcome: DreamWorkAttemptOutcome,
     reason: string,
     retryAt: string | null = null,
+    inputHash?: string,
   ): void {
     this.write(item.partition, DREAM_WORK_ATTEMPT_KIND, {
       item: item.id,
@@ -376,6 +395,7 @@ class Step {
       outcome,
       reason,
       retry_at: retryAt,
+      ...(inputHash !== undefined ? { input_hash: inputHash } : {}),
     });
   }
 
@@ -395,11 +415,23 @@ class Step {
     });
   }
 
+  /** Ids this step wrote as items: known without folding again. */
+  readonly #produced = new Set<string>();
+
   /** Write `body` as an item unless the fold already holds it. */
   produce(body: DreamWorkItemBody, partition: StorePartition): boolean {
-    if (this.fold().items.has(body.id)) return false;
+    if (this.#produced.has(body.id)) return false;
+    // The fold of the snapshot as read: items this step writes are known by id.
+    if ((this.#state ?? this.#base()).items.has(body.id)) return false;
     this.write(partition, DREAM_WORK_ITEM_KIND, { ...body });
+    this.#produced.add(body.id);
     return true;
+  }
+
+  /** The fold of the snapshot as it was read, kept for producing. */
+  #baseState: DreamWorkState | null = null;
+  #base(): DreamWorkState {
+    return (this.#baseState ??= foldSnapshot(this.#snapshot, this.now));
   }
 
   /**
@@ -446,10 +478,12 @@ class Step {
   ):
     | { readonly status: "current" }
     | { readonly status: "cancelled" }
+    | { readonly status: "unavailable" }
     | { readonly status: "superseded"; readonly successor: string } {
     const operation = dreamWorkOperation(item.body.operation);
     if (operation === undefined) return { status: "current" };
     const input = operation.currentInput(item, this.context);
+    if (input?.unavailable === true) return { status: "unavailable" };
     if (input === null) {
       this.close(item, "cancelled", "subject gone", null, "agent");
       return { status: "cancelled" };
@@ -483,7 +517,9 @@ class Step {
         }
       }
     }
-    this.produce(successor, item.partition);
+    const partition =
+      item.partition === "private" || input.partition === "private" ? "private" : item.partition;
+    this.produce(successor, partition);
     this.close(item, "superseded", "the input changed", successor.id, "agent");
     return { status: "superseded", successor: successor.id };
   }
@@ -548,28 +584,79 @@ export function produceWork(
   const body = dreamWorkItemBody(spec);
   const partition = dreamWorkPartition(spec.sources);
   return entry(queue, (step) => {
-    const barriers =
-      partition === "shared"
-        ? step
-            .fold()
-            .order.map((id) => step.fold().items.get(id)!)
-            .filter(
-              (item) =>
-                item.partition === "private" &&
-                item.body.occurrence <= body.occurrence &&
-                item.state !== "finished" &&
-                item.state !== "closed" &&
-                item.body.resources.some((resource) => body.resources.includes(resource)),
-            )
-            .flatMap((item) =>
-              item.body.resources.filter((resource) => body.resources.includes(resource)),
-            )
-            .map(dreamWorkResourceBarrier)
-        : [];
+    const state = step.fold();
+    const prior: PrivateBarrierItem[] = state.order.map((id) => state.items.get(id)!);
+    const barriers = privateResourceBarriers(body, partition, prior);
     const itemBody = { ...body, private_resource_barriers: [...new Set(barriers)] };
     return { id: body.id, created: step.produce(itemBody, partition), partition };
   });
 }
+
+/**
+ * Record every piece of work in `specs` that is not already queued, under
+ * one gate, one lock and one read: producing a backlog item by item would
+ * read and fold the whole stream once per item. The results are aligned
+ * with `specs`, as {@link produceWork} would answer each.
+ */
+export function produceWorkBatch(
+  queue: DreamQueue,
+  specs: ReadonlyArray<ProduceSpec>,
+): {
+  readonly items: ReadonlyArray<{
+    readonly id: string;
+    readonly created: boolean;
+    readonly partition: StorePartition;
+  }>;
+} {
+  if (specs.length === 0) return { items: [] };
+  const bodies = specs.map((spec) => ({
+    body: dreamWorkItemBody(spec),
+    partition: dreamWorkPartition(spec.sources),
+  }));
+  return entry(queue, (step) => {
+    const state = step.fold();
+    const prior: PrivateBarrierItem[] = state.order.map((id) => state.items.get(id)!);
+    return {
+      items: bodies.map(({ body, partition }) => {
+        const barriers = privateResourceBarriers(body, partition, prior);
+        const created = step.produce({ ...body, private_resource_barriers: barriers }, partition);
+        if (partition === "private" && created) {
+          prior.push({ body, partition, state: "waiting" });
+        }
+        return { id: body.id, created, partition };
+      }),
+    };
+  });
+}
+
+function privateResourceBarriers(
+  body: DreamWorkItemBody,
+  partition: StorePartition,
+  items: ReadonlyArray<PrivateBarrierItem>,
+): string[] {
+  if (partition !== "shared") return [];
+  return [
+    ...new Set(
+      items
+        .filter(
+          (item) =>
+            item.partition === "private" &&
+            item.body.occurrence <= body.occurrence &&
+            item.state !== "finished" &&
+            item.state !== "closed" &&
+            item.body.resources.some((resource) => body.resources.includes(resource)),
+        )
+        .flatMap((item) =>
+          item.body.resources.filter((resource) => body.resources.includes(resource)),
+        )
+        .map(dreamWorkResourceBarrier),
+    ),
+  ];
+}
+
+type PrivateBarrierItem = Pick<DreamWorkItem, "partition" | "state"> & {
+  readonly body: Pick<DreamWorkItemBody, "occurrence" | "resources">;
+};
 
 /**
  * The items of `operation` the fold holds, in queue order: what a
@@ -605,18 +692,28 @@ export type TakeResult =
 /** Lease the first ready item this device may take. */
 export function takeWork(
   queue: DreamQueue,
-  options: { readonly run: string; readonly budgetMs?: number },
+  options: {
+    readonly run: string;
+    readonly budgetMs?: number;
+    /** Only items this admits are taken (an executor's operations). */
+    readonly filter?: (item: DreamWorkItem) => boolean;
+  },
 ): TakeResult {
   try {
-    return entry(queue, (step) => take(step, options.run), options.budgetMs);
+    return entry(queue, (step) => take(step, options.run, options.filter), options.budgetMs);
   } catch (err) {
     if (isLockContention(err)) return { item: null, reason: "busy" };
     throw err;
   }
 }
 
-function take(step: Step, run: string): TakeResult {
+function take(
+  step: Step,
+  run: string,
+  filter: ((item: DreamWorkItem) => boolean) | undefined,
+): TakeResult {
   step.settle();
+  const unavailable = new Set<string>();
   for (let guard = 0; guard < 10_000; guard++) {
     const state = step.fold();
     const now = step.now;
@@ -625,11 +722,18 @@ function take(step: Step, run: string): TakeResult {
       .find(
         (item) =>
           item.ready &&
+          !unavailable.has(item.id) &&
           takeEligible(item, step.store.partitions) &&
-          (item.retry_at === null || Date.parse(item.retry_at) <= now),
+          (item.retry_at === null || Date.parse(item.retry_at) <= now) &&
+          (filter === undefined || filter(item)),
       );
     if (next === undefined) return { item: null, reason: "empty" };
-    if (step.recheck(next).status !== "current") continue;
+    const checked = step.recheck(next);
+    if (checked.status === "unavailable") {
+      unavailable.add(next.id);
+      continue;
+    }
+    if (checked.status !== "current") continue;
     const generation = next.generation + 1;
     const lease_token = randomUUID();
     const expires = new Date(now + DREAM_WORK_LEASE_MS).toISOString();
@@ -696,6 +800,7 @@ export interface AnswerInput {
 
 export type AnswerResult =
   | { readonly status: "accepted"; readonly receipt: string }
+  | { readonly status: "unavailable"; readonly reason: string }
   | { readonly status: "refused"; readonly reason: string }
   | { readonly status: "failed"; readonly reason: string; readonly retry_at: string }
   | { readonly status: "superseded"; readonly successor: string }
@@ -751,16 +856,22 @@ function answer(step: Step, input: AnswerInput): AnswerResult {
     );
     return { status: "refused", reason: "a predecessor is no longer finished" };
   }
-  const invalid = operation.validate({
-    ...(input.value !== undefined ? { value: input.value } : {}),
-    ...(input.text !== undefined ? { text: input.text } : {}),
-  });
+  const invalid = operation.validate(
+    {
+      ...(input.value !== undefined ? { value: input.value } : {}),
+      ...(input.text !== undefined ? { text: input.text } : {}),
+    },
+    item,
+  );
   if (invalid !== null) {
     const retryAt = new Date(step.now + backoff(item.attempts)).toISOString();
     step.attempt(item, input.generation, input.lease_token, "failed", invalid, retryAt);
     return { status: "failed", reason: invalid, retry_at: retryAt };
   }
   const recheck = step.recheck(item);
+  if (recheck.status === "unavailable") {
+    return { status: "unavailable", reason: "current input is unavailable" };
+  }
   if (recheck.status !== "current") {
     // The item is closed now; the refused attempt records the answer.
     step.attempt(
@@ -812,6 +923,8 @@ export function applyAccepted(queue: DreamQueue): ApplyResult {
       if (!step.store.partitions.has(item.partition)) continue;
       const operation = dreamWorkOperation(item.body.operation);
       if (operation === undefined) continue;
+      // Topic planning applies these under its own lock.
+      if (operation.appliedBy === "planning") continue;
       try {
         const effects = operation.apply(item, item.answer, step.context);
         step.write(item.partition, DREAM_WORK_APPLIED_KIND, {
@@ -832,10 +945,19 @@ export function applyAccepted(queue: DreamQueue): ApplyResult {
 
 // ----- Release, retry, cancel --------------------------------------------
 
-/** Give a lease back with no wait. */
+/**
+ * Give a lease back with no wait. `reason` (an executor's: `shadow`,
+ * `egress-refused`) is kept by the fold with the item's input, so the
+ * executor can tell it already asked about that input.
+ */
 export function releaseWork(
   queue: DreamQueue,
-  input: { readonly item: string; readonly generation: number; readonly lease_token: string },
+  input: {
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly reason?: string;
+  },
 ): { readonly released: boolean } {
   return entry(queue, (step) => {
     const item = step.item(input.item);
@@ -847,9 +969,121 @@ export function releaseWork(
     ) {
       return { released: false };
     }
-    step.attempt(item, input.generation, input.lease_token, "released", "released by the worker");
+    step.attempt(
+      item,
+      input.generation,
+      input.lease_token,
+      "released",
+      input.reason ?? "released by the worker",
+      null,
+      input.reason !== undefined ? item.body.input_hash : undefined,
+    );
     return { released: true };
   });
+}
+
+/**
+ * End a lease with a failed attempt (an executor that could not answer:
+ * a timeout, a refused request): the backoff and parking of design D1
+ * apply.
+ */
+export function failWork(
+  queue: DreamQueue,
+  input: {
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly reason: string;
+  },
+): { readonly failed: boolean; readonly retry_at: string | null } {
+  return entry(queue, (step) => {
+    const item = step.item(input.item);
+    if (
+      item.state !== "leased" ||
+      item.lease?.generation !== input.generation ||
+      item.lease.lease_token !== input.lease_token ||
+      Date.parse(item.lease.expires_at) <= step.now
+    ) {
+      return { failed: false, retry_at: null };
+    }
+    const retryAt = new Date(step.now + backoff(item.attempts)).toISOString();
+    step.attempt(item, input.generation, input.lease_token, "failed", input.reason, retryAt);
+    return { failed: true, retry_at: retryAt };
+  });
+}
+
+/**
+ * Mark accepted items of an operation applied by planning as applied,
+ * with the ids of the records planning wrote for each (or a marker such
+ * as `abstained`), under one gate and one lock. An item that is not
+ * accepted is refused and left as it is.
+ */
+export function markAppliedByPlanning(
+  queue: DreamQueue,
+  entries: ReadonlyArray<{
+    readonly item: string;
+    readonly generation: number;
+    readonly lease_token: string;
+    readonly receipt: string;
+    readonly effects: ReadonlyArray<string>;
+  }>,
+): {
+  readonly applied: ReadonlyArray<string>;
+  readonly refused: ReadonlyArray<{ readonly item: string; readonly reason: string }>;
+} {
+  if (entries.length === 0) return { applied: [], refused: [] };
+  return entry(queue, (step) => {
+    const applied: string[] = [];
+    const refused: Array<{ item: string; reason: string }> = [];
+    const state = step.fold();
+    for (const { item: id, generation, lease_token, receipt, effects } of entries) {
+      const item = state.items.get(id);
+      if (item === undefined) {
+        refused.push({ item: id, reason: "no such item on this device" });
+        continue;
+      }
+      if (item.state !== "accepted" || item.answer === null) {
+        refused.push({ item: id, reason: `the item is ${item.state}, not accepted` });
+        continue;
+      }
+      if (
+        item.answer.generation !== generation ||
+        item.answer.lease_token !== lease_token ||
+        item.answer.receipt !== receipt
+      ) {
+        refused.push({ item: id, reason: "the accepted answer was replaced" });
+        continue;
+      }
+      step.write(item.partition, DREAM_WORK_APPLIED_KIND, {
+        item: item.id,
+        generation,
+        lease_token,
+        receipt,
+        effects: [...effects],
+      });
+      applied.push(item.id);
+    }
+    return { applied, refused };
+  });
+}
+
+/**
+ * Close accepted items whose subject changed before planning applied
+ * them: reread each item's input, cancel it when the subject is gone and
+ * supersede it when the input changed. An item still current is left.
+ */
+export function recheckAccepted(
+  queue: DreamQueue,
+  ids: ReadonlyArray<string>,
+): ReadonlyArray<{ readonly item: string; readonly status: string }> {
+  if (ids.length === 0) return [];
+  return entry(queue, (step) =>
+    ids.map((id) => {
+      const item = step.fold().items.get(id);
+      if (item === undefined || item.state !== "accepted") return { item: id, status: "skipped" };
+      return { item: id, status: step.recheck(item).status };
+    }),
+  );
 }
 
 /** Offer a parked item again, its attempts counted from zero (a person's call). */
@@ -889,6 +1123,8 @@ export interface DreamQueueListing {
   readonly retry_at: string | null;
   readonly age_ms: number;
   readonly reason: string | null;
+  /** The reason of the last release, while it was given for the item's current input. */
+  readonly release: string | null;
 }
 
 export interface DreamQueueParked {
@@ -1002,6 +1238,10 @@ export function queueStatusAt(
       retry_at: item.retry_at,
       age_ms: age,
       reason: item.closed?.note ?? item.last_reason,
+      release:
+        item.last_release !== null && item.last_release.input_hash === item.body.input_hash
+          ? item.last_release.reason
+          : null,
     });
   }
   const rejected: Record<string, number> = {};

@@ -14,7 +14,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { dream } from "../../../src/core/brain/dream.ts";
+import { dreamAnswered } from "../../helpers/closed-answers.ts";
 import { writeVaultPointer } from "../../../src/core/brain/portability/pointer.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import type { MCPServer } from "../../../src/mcp/server.ts";
@@ -130,8 +130,8 @@ async function decisionsInProject(names: ReadonlyArray<string> = ["dev-a"]): Pro
   return { a, dir, one, two, slug: String(recorded["slug"]) };
 }
 
-function createdTopic(vault: string): string {
-  const report = dream(vault).topics?.report;
+function createdTopic(machine: Machine): string {
+  const report = dreamAnswered(machine.vault, machine.store()).topics?.report;
   expect(report?.status).toBe("planned");
   if (report?.status !== "planned") throw new Error("not planned");
   expect(report.created).toHaveLength(1);
@@ -171,7 +171,7 @@ function decisionLines(page: string): string[] {
 
 test("a dream pass puts held decisions on the page and in show, a resolved one as resolved", async () => {
   const { a, slug, one } = await decisionsInProject();
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
 
   const shown = runTopicAction({ action: "show", topic });
   const page = String(shown["page"]);
@@ -194,13 +194,13 @@ test("a dream pass puts held decisions on the page and in show, a resolved one a
   // The second pass writes no topic record and leaves the page as it was.
   const before = topicRecords(a).length;
   const pageBefore = diskPage(topic);
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   expect(topicRecords(a).length).toBe(before);
   expect(diskPage(topic)).toBe(pageBefore);
 
   // An outcome backfilled later updates the item.
   await callTool(one, "brain_decision", { action: "outcome", slug, outcome: OUTCOME });
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   expect(decisionLines(diskPage(topic))).toEqual([
     `- ${CHOICE_ITEM} (resolved open decision)`,
     `- ${CHOSEN_ITEM} (outcome: ${OUTCOME})`,
@@ -210,7 +210,7 @@ test("a dream pass puts held decisions on the page and in show, a resolved one a
 
 test("undo of the assignment takes the item away, undo of the topic the whole page", async () => {
   const { a } = await decisionsInProject();
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
   const chosenEvent = a
     .records()
     .find(
@@ -223,7 +223,7 @@ test("undo of the assignment takes the item away, undo of the topic the whole pa
     (r) => r.kind === "assign" && r.body["record"] === chosenEvent.id,
   )!;
   runTopicAction({ action: "undo", record: assign.id });
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   expect(decisionLines(diskPage(topic))).toEqual([`- ${CHOICE_ITEM} (resolved open decision)`]);
   expect(decisionItems(runTopicAction({ action: "show", topic }))).toHaveLength(1);
 
@@ -234,7 +234,7 @@ test("undo of the assignment takes the item away, undo of the topic the whole pa
 
 test("a topic item for the same decision replaces the derived one, and a human item is never displaced", async () => {
   const { a } = await decisionsInProject();
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
   const chosenEvent = a
     .records()
     .find(
@@ -269,7 +269,7 @@ test("a topic item for the same decision replaces the derived one, and a human i
   const lines = decisionLines(page);
   expect(lines).toHaveLength(25);
   expect(lines.every((l) => l.startsWith("- User decision"))).toBe(true);
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   const archive = readFileSync(archiveOf(topic), "utf8");
   expect(archive).toContain(`- ${CHOICE_ITEM} (resolved open decision)`);
   expect(archive).toContain("- Steps in commit order");
@@ -288,7 +288,7 @@ function archiveOf(topic: string): string {
 
 test("a private decision is shown to a local caller only, never on the view or below local reach", async () => {
   const { a, one, dir } = await decisionsInProject();
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
   const secretChosen = `${SUBJECT} <private>codename aurora</private> behind a flag`;
   await callTool(one, "brain_decision", {
     action: "record",
@@ -306,7 +306,7 @@ test("a private decision is shown to a local caller only, never on the view or b
         r.body["event_type"] === "decision-record" &&
         String((r.body["body"] as Record<string, unknown>)["chosen"]).includes("behind a flag"),
     )!;
-  const report = dream(a.vault).topics?.report;
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
   if (report?.status !== "planned") throw new Error("not planned");
   expect(report.routed.map((r) => r.record)).toContain(event.id);
 
@@ -328,7 +328,7 @@ test("a private decision is shown to a local caller only, never on the view or b
 
 test("two devices: the other device's show carries the items, and neither writes anything for them", async () => {
   const { a } = await decisionsInProject(["dev-a", "dev-b"]);
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
   const written = topicRecords(a).length;
 
   fleet!.syncStore("dev-a", "dev-b");
@@ -343,7 +343,7 @@ test("two devices: the other device's show carries the items, and neither writes
   // Not the writer: planning and the render write nothing.
   const viewB = process.env[VIEW_TARGET_ENV]!;
   const pass = () => runViewPass(b.store(), { agent: "t", target: viewB, vault: b.vault });
-  expect(runTopicPlanning(b.store(), { agent: "t" }).status).toBe("not-writer");
+  expect(runTopicPlanning(b.store(), { agent: "t" }).status).toBe("not-owner");
   expect(pass().status).toBe("not-writer");
 
   // The role moves to dev-b; its passes derive the same items and write no topic record.
@@ -362,11 +362,11 @@ test("two devices: the other device's show carries the items, and neither writes
 
 test("the user's edit of a derived line on the page becomes the item, with no second one", async () => {
   const { a } = await decisionsInProject();
-  const topic = createdTopic(a.vault);
+  const topic = createdTopic(a);
   const path = pagePathOf(topic);
   const edited = "Release notes list the steps in commit order, newest last";
   writeFileSync(path, readFileSync(path, "utf8").replace(`- ${CHOSEN_ITEM}\n`, `- ${edited}\n`));
-  dream(a.vault);
+  dreamAnswered(a.vault, a.store());
   expect(decisionLines(diskPage(topic))).toEqual([
     `- ${CHOICE_ITEM} (resolved open decision)`,
     `- ${edited}`,

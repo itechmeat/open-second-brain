@@ -10,6 +10,7 @@ import { describeTopicPlanning, runAutoTopicPlanning } from "../topics/planning.
 import { describeAutoView, runAutoViewPass } from "../view/auto-render.ts";
 import { VIEW_DREAM_BUDGET_MS } from "../view/constants.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
+import type { DreamQueuePass } from "./dream-queue/pass.ts";
 
 /**
  * A progress stage a tail step reports as: `start` when the step is known
@@ -23,15 +24,19 @@ export interface TailStage {
 }
 
 /**
- * Plan topics before the render (design D9): on the view writer, route
- * unassigned records and create topics from recurring clusters; any other
- * machine plans nothing and its summary names the writer. Fail-open, and
- * absent when the brain store is not in use here or on a dry run.
+ * Plan topics before the render (design D9): on the dream owner's device
+ * (on a brain with no owner, the view writer's), apply the answers of the
+ * closed questions - routes, approved topics, derived items, proposals
+ * and history verdicts (change `dream-closed-questions`, design D2); any
+ * other machine plans nothing and its summary says where judgment runs.
+ * Fail-open, and absent when the brain store is not in use here or on a
+ * dry run.
  */
 export function withTopicPass(
   summary: DreamRunSummary,
   opts: DreamOptions,
   stage?: TailStage,
+  queue?: DreamQueuePass | null,
 ): DreamRunSummary {
   if (opts.dryRun === true) return summary;
   let started = false;
@@ -45,7 +50,7 @@ export function withTopicPass(
     // The run's own clock, when it has one: quiet topics and record times
     // follow the date the run is for.
     ...(runAt !== undefined ? { now: () => runAt.getTime() } : {}),
-    ...(opts.topicVerdicts !== undefined ? { topicVerdicts: opts.topicVerdicts } : {}),
+    ...(queue !== undefined && queue !== null ? { queue: queue.queue } : {}),
     // Asked once the store is known to be in use, before the read: the
     // stage opens there, so a machine without a store reports none.
     mayPlan: () => {
@@ -81,9 +86,26 @@ export function withTopicPass(
       report.hidden +
       report.kept >
       0;
+  const judgment =
+    report.status === "planned"
+      ? report.judgment
+      : report.status === "not-owner"
+        ? ("elsewhere" as const)
+        : undefined;
+  if (queue !== undefined && queue !== null && report.status === "planned") {
+    queue.abstained += report.abstained;
+  }
+  if (
+    queue !== undefined &&
+    queue !== null &&
+    (report.status === "planned" || report.status === "error")
+  ) {
+    queue.applied += report.applied;
+  }
   return {
     ...summary,
     ...(wrote ? { changed: true } : {}),
+    ...(judgment !== undefined ? { judgment } : {}),
     topics: { summary: describeTopicPlanning(report), report },
   };
 }

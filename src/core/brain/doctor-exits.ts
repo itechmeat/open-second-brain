@@ -56,8 +56,9 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
   {
     code: "dream-queue-no-executor",
     reason:
-      "queued dream work waits for an executor this version does not have; there is nothing to " +
-      "run until a release that answers it is installed, and the work is kept meanwhile",
+      "queued dream work waits for an executor: for a closed question the remedy is a setting " +
+      "(a decision model and its use in enforce), for other work a release that answers it; " +
+      "neither is one command, and the work is kept meanwhile",
   },
   {
     code: "dream-queue-unknown-operation",

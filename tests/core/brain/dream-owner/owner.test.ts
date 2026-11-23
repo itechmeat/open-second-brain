@@ -221,7 +221,6 @@ describe("dream owner role", () => {
       stdout: "pipe",
       stderr: "pipe",
       env: {
-        ...process.env,
         ...homeEnv(join(m.parent, "home", "dev-b")),
         XDG_CONFIG_HOME: join(m.parent, "config"),
         XDG_DATA_HOME: join(m.parent, "data"),

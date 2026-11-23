@@ -125,6 +125,8 @@ export interface RunDecisionOptions<C> {
    * recorded and the call degrades as `budget`.
    */
   readonly requestFloor?: boolean;
+  /** Called immediately before each provider request is sent. */
+  readonly onRequest?: () => void;
   /**
    * The caller's cancellation (the search's composite hybrid deadline).
    * Handed to the provider, whose transport stops the request when it
@@ -343,6 +345,7 @@ export async function runDecision<C>(
       let response: DecisionResponse;
       try {
         // eslint-disable-next-line no-await-in-loop -- the fallback is sequential by design: an attempt must settle before the next starts
+        opts.onRequest?.();
         response = await attempt.adapter.decide(
           { use, state: ready.state, questions: qs },
           {

@@ -112,7 +112,7 @@ function listing(): Map<string, string> {
 /** Run `fn` with the decide entry counted, and the count of model calls. */
 async function countingDecides(fn: () => Promise<void>): Promise<number> {
   let calls = 0;
-  const spy = spyOn(decideAuto, "prepareTopicVerdicts").mockImplementation(async () => {
+  const spy = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation(async () => {
     calls += 1;
     return undefined;
   });
@@ -270,8 +270,8 @@ describe("a device that is not the owner", () => {
 describe("the owner's lane task when the role moves during the verdicts", () => {
   test("the refused pass is a skip, not a failed task", async () => {
     process.env["O2B_DEVICE_ID"] = "dev-a";
-    const original = decideAuto.prepareTopicVerdicts;
-    const spy = spyOn(decideAuto, "prepareTopicVerdicts").mockImplementation(
+    const original = decideAuto.prepareClosedQuestions;
+    const spy = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation(
       (...args: Parameters<typeof original>) => {
         // Another device takes the role while the verdicts are decided.
         takeDreamOwner(openStore({ root: storeRoot, device: "dev-b" }), "codex", {

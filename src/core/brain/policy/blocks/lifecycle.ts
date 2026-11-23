@@ -32,7 +32,11 @@ import { DEFAULT_BRAIN_CONFIG } from "../defaults.ts";
 const RETIRE_OPTIONAL_KEYS = ["confirmed_evidence_min_threshold"] as const;
 
 /** Optional `dream:` sub-key with no default, for the same reason. */
-const DREAM_OPTIONAL_KEYS = ["salience_threshold", "archive_stale_signals"] as const;
+const DREAM_OPTIONAL_KEYS = [
+  "salience_threshold",
+  "archive_stale_signals",
+  "model_budget_ms",
+] as const;
 
 /** A boolean key; anything else is refused rather than coerced. */
 function requireBoolean(field: string, value: unknown, source: string | null): boolean {
@@ -87,6 +91,11 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
   if (dream.salience_threshold !== undefined) {
     requireUnitInterval("dream.salience_threshold", dream.salience_threshold, ctx.source);
   }
+  // The budget of a live pass's model work (change `dream-closed-questions`):
+  // producing the closed questions and answering them, together.
+  if (dream.model_budget_ms !== undefined) {
+    requirePositiveInteger("dream.model_budget_ms", dream.model_budget_ms, ctx.source);
+  }
   return {
     candidate_threshold: dream.candidate_threshold as number,
     unconfirmed_window_days: dream.unconfirmed_window_days as number,
@@ -113,6 +122,9 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
     // an explicit undefined.
     ...(dream.salience_threshold !== undefined
       ? { salience_threshold: dream.salience_threshold as number }
+      : {}),
+    ...(dream.model_budget_ms !== undefined
+      ? { model_budget_ms: dream.model_budget_ms as number }
       : {}),
   };
 }
