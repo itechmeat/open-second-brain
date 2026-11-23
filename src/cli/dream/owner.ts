@@ -17,12 +17,15 @@
  * `o2b brain dream` is unchanged; this group holds the role's own verbs.
  */
 
+import { forgetDreamOwnerCheck } from "../../core/brain/dream-trigger/forget.ts";
 import {
   describeReplayStatus,
   replayStatus,
   replayStatusJson,
 } from "../../core/brain/dream-replay/status-view.ts";
 import { cmdAgent, DREAM_AGENT_USAGE } from "./agent.ts";
+import { cmdRun, DREAM_RUN_USAGE } from "./run.ts";
+import { cmdStatus, DREAM_STATUS_USAGE } from "./status.ts";
 import { ConfigReadError, resolveVault } from "../../core/config.ts";
 import {
   releaseDreamOwner,
@@ -56,6 +59,8 @@ const USAGE = [
   "       o2b dream owner --release [--vault <path>] [--config <file>] [--json]",
   DREAM_QUEUE_USAGE.replace(/^usage: /, "       "),
   DREAM_AGENT_USAGE.replace(/^usage: /, "       "),
+  DREAM_RUN_USAGE.replace(/^usage: /, "       "),
+  DREAM_STATUS_USAGE.replace(/^usage: /, "       "),
 ].join("\n");
 
 const DREAM_EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
@@ -75,6 +80,10 @@ export async function handleDreamSubcommand(argv: ReadonlyArray<string>): Promis
         return cmdQueue(rest);
       case "agent":
         return await cmdAgent(rest);
+      case "run":
+        return await cmdRun(rest);
+      case "status":
+        return cmdStatus(rest);
       default:
         process.stderr.write(`error: unknown dream verb: ${verb}\n${USAGE}\n`);
         return DREAM_EXIT.usage;
@@ -193,6 +202,7 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
         reason: "not-owner",
       });
     }
+    forgetDreamOwnerCheck(configPath);
     if (json) writeJson({ ok: true, status: "released", device: store.device });
     else {
       process.stdout.write(
@@ -213,6 +223,8 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
     );
   }
   const result = takeDreamOwner(store, agent, { ...writer, force: flags["force"] === true });
+  // The day check of this machine looks at the role again today.
+  forgetDreamOwnerCheck(configPath);
   if (json) {
     writeJson({ ok: true, ...describeTake(result), device: store.device, agent });
   } else {

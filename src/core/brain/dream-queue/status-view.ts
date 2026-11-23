@@ -32,10 +32,7 @@ export function dreamAgentReady(
   configPath: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
 ): boolean {
-  const cfg = resolveDreamAgentConfig({ config: discoverConfig(configPath).data, env });
-  return [cfg.command, ...cfg.fallbacks].some(
-    (c) => c !== null && dreamAgentVerification(c) !== null,
-  );
+  return agentReach(configPath, env).ready;
 }
 
 export type { DreamQueueStatus };
@@ -93,12 +90,33 @@ export interface DreamWaitingGroup {
   readonly reasons: Readonly<Partial<Record<DreamWaitingReason, number>>>;
 }
 
+/** This machine's dream agent: whether one is verified, and whether it may take private work. */
+interface AgentReach {
+  readonly ready: boolean;
+  readonly privateAllowed: boolean;
+}
+
+function agentReach(
+  configPath: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+): AgentReach {
+  const cfg = resolveDreamAgentConfig({ config: discoverConfig(configPath).data, env });
+  return {
+    ready: [cfg.command, ...cfg.fallbacks].some(
+      (c) => c !== null && dreamAgentVerification(c) !== null,
+    ),
+    privateAllowed: cfg.privateAllowed,
+  };
+}
+
 function waitingReason(
   item: DreamQueueListing,
   cfg: ResolvedDecisionModelConfig,
   now: number,
-  agentReady: boolean,
+  agent: AgentReach,
 ): DreamWaitingReason {
+  // The agent never takes private work it is not allowed (agent-executor).
+  const agentReady = agent.ready && (agent.privateAllowed || item.partition !== "private");
   const use = useOfOperation(item.operation);
   if (use === null) {
     // A text operation: only the launched agent answers it.
@@ -123,33 +141,78 @@ function waitingReason(
   return "not-reached";
 }
 
+type WaitingOptions = {
+  readonly configPath?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly now?: number;
+};
+
+/** The reason of one waiting item under this machine's settings, resolved once. */
+function waitingReasons(options: WaitingOptions): (item: DreamQueueListing) => DreamWaitingReason {
+  const now = options.now ?? Date.now();
+  const env = options.env ?? process.env;
+  const cfg = resolveDecisionModelConfig({
+    env,
+    config: discoverConfig(options.configPath).data,
+    vault: resolveVault(options.configPath),
+  });
+  const agent = agentReach(options.configPath, env);
+  return (item) => waitingReason(item, cfg, now, agent);
+}
+
+/**
+ * The reasons a later pass on this machine still answers: the item was
+ * not reached, the cost gate lifts, a retry falls due. Every other
+ * reason waits for a change of settings (change `dream-session-trigger`,
+ * spec "Work that no executor on this machine can answer SHALL not keep
+ * the day open").
+ */
+const ANSWERABLE_REASONS: ReadonlySet<DreamWaitingReason> = new Set([
+  "not-reached",
+  "cost-gate",
+  "retry-at",
+]);
+
+/**
+ * The ready items of `status` split by operation into what this machine
+ * answers and what it does not, each item by its own waiting reason.
+ */
+export function readyByAnswerability(
+  status: DreamQueueStatus,
+  options: WaitingOptions = {},
+): {
+  readonly answerable: Readonly<Record<string, number>>;
+  readonly unanswerable: Readonly<Record<string, number>>;
+} {
+  const answerable: Record<string, number> = {};
+  const unanswerable: Record<string, number> = {};
+  if (!status.available) return { answerable, unanswerable };
+  const reasonOf = waitingReasons(options);
+  for (const item of status.items) {
+    if (!item.ready) continue;
+    const into = ANSWERABLE_REASONS.has(reasonOf(item)) ? answerable : unanswerable;
+    into[item.operation] = (into[item.operation] ?? 0) + 1;
+  }
+  return { answerable, unanswerable };
+}
+
 /**
  * The waiting items of `status` per operation, each with its reasons;
  * the decision model settings are this machine's (`configPath`, `env`).
  */
 export function waitingByOperation(
   status: DreamQueueStatus,
-  options: {
-    readonly configPath?: string;
-    readonly env?: Readonly<Record<string, string | undefined>>;
-    readonly now?: number;
-  } = {},
+  options: WaitingOptions = {},
 ): DreamWaitingGroup[] {
   if (!status.available) return [];
-  const now = options.now ?? Date.now();
-  const cfg = resolveDecisionModelConfig({
-    env: options.env ?? process.env,
-    config: discoverConfig(options.configPath).data,
-    vault: resolveVault(options.configPath),
-  });
-  const agentReady = dreamAgentReady(options.configPath, options.env ?? process.env);
+  const reasonOf = waitingReasons(options);
   const groups = new Map<
     string,
     { count: number; oldest: number; reasons: Partial<Record<DreamWaitingReason, number>> }
   >();
   for (const item of status.items) {
     if (item.state !== "waiting") continue;
-    const reason = waitingReason(item, cfg, now, agentReady);
+    const reason = reasonOf(item);
     const group = groups.get(item.operation) ?? { count: 0, oldest: 0, reasons: {} };
     group.count += 1;
     group.oldest = Math.max(group.oldest, item.age_ms);

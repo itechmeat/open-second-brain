@@ -425,7 +425,10 @@ export function resolveTimezone(configPath?: string): string | null {
  * `vault` field in plugin config → `null`. Caller decides whether to
  * error out or accept a positional path.
  */
-export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): string | null {
+export function resolveVault(
+  configPath?: string,
+  opts: { cwd?: string; discovery?: ConfigDiscovery } = {},
+): string | null {
   const env = process.env["VAULT_DIR"];
   if (env) return expandTilde(env);
   // Project pointer (Workspace Insight Suite, t_1375e69f): a pointer file
@@ -439,7 +442,8 @@ export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): 
   if (pointerVault !== null) return expandTilde(pointerVault);
   // Multi-vault profiles (v0.22.0): an active named profile overrides the
   // bare `vault` key. With no profiles registry the result is unchanged.
-  const discovery = discoverConfig(configPath);
+  // A caller that already read the config passes it, so it is not read twice.
+  const discovery = opts.discovery ?? discoverConfig(configPath);
   const profileVault = resolveActiveProfileVault(discovery.path);
   if (profileVault) return expandTilde(profileVault);
   const cfg = discovery.data["vault"];

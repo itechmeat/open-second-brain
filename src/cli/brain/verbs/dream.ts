@@ -51,6 +51,12 @@ import {
 import { assertDreamOwner, DreamNotOwnerError } from "../../../core/brain/dream-owner/gate.ts";
 import { DreamReplayBehindError } from "../../../core/brain/dream-replay/behind.ts";
 import {
+  holdDreamRunClaim,
+  recordDreamOutcome,
+  type RecordDreamOutcomeOptions,
+} from "../../../core/brain/dream-trigger/outcome.ts";
+import { isLockContention } from "../../../core/store/local-lock.ts";
+import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
@@ -609,27 +615,59 @@ async function brainDream(argv: string[]): Promise<number> {
   };
   // The owner gate runs first, so no model is asked for a pass that will
   // be refused; `dream()` asks again for its own callers.
+  // The wall clock the day record is kept on (change
+  // `dream-session-trigger`, design D4): the day a live pass closes is the
+  // day it started in.
+  const startedAt = new Date();
   if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
-  const closedQuestions = dryRun ? undefined : await prepareClosedQuestions(vault, decideOptions);
+  // The trigger's claim for the whole live run (front door, pass and
+  // outcome), so a session's day check does not start a second one; a
+  // claim another run holds refuses this run before its front door, as
+  // the pass lock refuses a second pass.
+  let releaseRunClaim = (): void => {};
+  if (!dryRun) {
+    try {
+      releaseRunClaim = holdDreamRunClaim(config);
+    } catch (exc) {
+      if (!isLockContention(exc)) throw exc;
+      return fail(`dream failed: ${describeErrorChain(exc)}`);
+    }
+  }
   let summary;
   try {
-    summary = dream(vault, {
-      ...(now !== null ? { now } : {}),
-      dryRun,
-      ...(closedQuestions !== undefined ? { closedQuestions } : {}),
-      ...(agent ? { agentName: agent } : {}),
-      safeguard: guard(),
-      ...(sink !== undefined ? { onProgress: sink } : {}),
-      ...(gates !== null ? { gates } : {}),
-      ...(config !== undefined ? { configPath: config } : {}),
-    });
-  } catch (exc) {
-    if (exc instanceof DreamNotOwnerError) throw exc;
-    if (exc instanceof SafeguardTimeoutError && asJson) {
-      okJson({ ok: false, timed_out: true, message: exc.message });
-      return 1;
+    const closedQuestions = dryRun ? undefined : await prepareClosedQuestions(vault, decideOptions);
+    const outcome = (result: RecordDreamOutcomeOptions["result"]): void => {
+      if (dryRun) return;
+      recordDreamOutcome(vault, {
+        ...(config !== undefined ? { configPath: config } : {}),
+        startedAt,
+        result,
+        by: "cli",
+      });
+    };
+    try {
+      summary = dream(vault, {
+        ...(now !== null ? { now } : {}),
+        dryRun,
+        ...(closedQuestions !== undefined ? { closedQuestions } : {}),
+        ...(agent ? { agentName: agent } : {}),
+        safeguard: guard(),
+        ...(sink !== undefined ? { onProgress: sink } : {}),
+        ...(gates !== null ? { gates } : {}),
+        ...(config !== undefined ? { configPath: config } : {}),
+      });
+    } catch (exc) {
+      outcome({ threw: exc });
+      if (exc instanceof DreamNotOwnerError) throw exc;
+      if (exc instanceof SafeguardTimeoutError && asJson) {
+        okJson({ ok: false, timed_out: true, message: exc.message });
+        return 1;
+      }
+      return fail(`dream failed: ${describeErrorChain(exc)}`);
     }
-    return fail(`dream failed: ${describeErrorChain(exc)}`);
+    outcome({ returned: true });
+  } finally {
+    releaseRunClaim();
   }
   for (const w of summary.warnings ?? []) {
     process.stderr.write(`warning: ${w.code}: ${w.message}\n`);

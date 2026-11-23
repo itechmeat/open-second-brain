@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7044819 bytes
-# Maximum unpacked size: 23932980 bytes
+# Maximum packed size: 7078656 bytes
+# Maximum unpacked size: 24047964 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -288,6 +288,8 @@ src/cli/discipline.ts
 src/cli/dream/agent.ts
 src/cli/dream/owner.ts
 src/cli/dream/queue.ts
+src/cli/dream/run.ts
+src/cli/dream/status.ts
 src/cli/help-render.ts
 src/cli/helpers.ts
 src/cli/install-cli-windows.ts
@@ -498,6 +500,7 @@ src/core/brain/doctor/discipline-check.ts
 src/core/brain/doctor/dream-owner-check.ts
 src/core/brain/doctor/dream-queue-check.ts
 src/core/brain/doctor/dream-replay-check.ts
+src/core/brain/doctor/dream-trigger-check.ts
 src/core/brain/doctor/embedding-sunset-check.ts
 src/core/brain/doctor/embeddings-health-check.ts
 src/core/brain/doctor/entity-alias-verdicts.ts
@@ -596,6 +599,16 @@ src/core/brain/dream-stage.ts
 src/core/brain/dream-step.ts
 src/core/brain/dream-summary.ts
 src/core/brain/dream-tail.ts
+src/core/brain/dream-trigger/auto.ts
+src/core/brain/dream-trigger/check.ts
+src/core/brain/dream-trigger/claim.ts
+src/core/brain/dream-trigger/constants.ts
+src/core/brain/dream-trigger/due.ts
+src/core/brain/dream-trigger/forget.ts
+src/core/brain/dream-trigger/line.ts
+src/core/brain/dream-trigger/outcome.ts
+src/core/brain/dream-trigger/record.ts
+src/core/brain/dream-trigger/status.ts
 src/core/brain/dream-types.ts
 src/core/brain/dream-workrun.ts
 src/core/brain/dream.ts

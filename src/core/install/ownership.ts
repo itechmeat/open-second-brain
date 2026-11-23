@@ -358,6 +358,25 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     sources: ["src/core/decision-model/eval/mark.ts", "src/core/platform-dirs.ts"],
   },
   {
+    id: "dream_trigger_records",
+    label: "dream day records",
+    location: WINDOWS
+      ? `(${describeBaseDir("state", "win32")})\\open-second-brain\\dream-trigger\\<key>.json`
+      : "${XDG_STATE_HOME:-~/.local/state}/open-second-brain/dream-trigger/<key>.json",
+    carries_memory: false,
+    created_by:
+      "a session start, an MCP server's first call of a day, or the end of a live dream pass on this machine",
+    removed_by:
+      "deleting the file yourself; the next session start reads the brain again and writes a new one",
+    note:
+      "One small record per configured store root (the key is a hash of that root): whether today's " +
+      "dream pass closed the day, the last run and its outcome, the retry time, and what this machine " +
+      "last read about the dream owner. A claim file beside it exists only while a dream worker the " +
+      "trigger started runs. It carries days, times, counts, device and agent names and the names of " +
+      "waiting work - never vault text.",
+    sources: ["src/core/brain/dream-trigger/record.ts"],
+  },
+  {
     id: "decision_model_thresholds",
     label: "decision-model thresholds",
     location: WINDOWS

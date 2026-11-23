@@ -1029,6 +1029,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "machine's state directory and removes that store and its device state by their exact " +
       "paths when the check ends; nothing the user wrote is in them.",
   },
+  "src/core/brain/dream-trigger/claim.ts": {
+    categories: [C.lockPrimitive, C.retentionDelete],
+    calls: ["unlinkSync", "writeSync"],
+    reason:
+      "the dream trigger's claim is an exclusive create (`wx`) of a small token record beside " +
+      "the dream day record in the machine's state directory, rewritten under its lock with " +
+      "the pid of the worker that proved it, removed under its lock by that worker or by the " +
+      "check that found it lost or abandoned; never synced, never in a vault, and no Markdown " +
+      "parser reads it.",
+  },
   "src/core/brain/dream-owner/owner.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
@@ -1478,8 +1488,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 84 -> 85: `src/core/search/store/lifecycle.ts` removes the park record a swap writes beside the search index once a live index is back in place.
  * 85 -> 86: `src/core/brain/dream-owner/owner.ts` notes the dream owner claim this device has caught up on, in device-local state.
  * 86 -> 90: the dream agent's run record, session files, verifications and check store (change dream-launched-agent), all device-local.
+ * 90 -> 91: `src/core/brain/dream-trigger/claim.ts` creates and removes the dream trigger's claim beside the day record, machine state.
  */
-const DIRECT_WRITE_ROWS = 90;
+const DIRECT_WRITE_ROWS = 91;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1751,8 +1762,14 @@ const DIRECT_WRITE_ROWS = 90;
  * 121 -> 122: `src/core/brain/dream-queue/run-record.ts` rewrites a dream
  * run's record (its lease tokens) with the shared atomic writer, in the
  * store's device-local state directory.
+ * 122 -> 123: `src/core/brain/dream-trigger/record.ts` writes the dream day
+ * record with the shared atomic writer, in the machine's state directory
+ * (change dream-session-trigger).
+ * 123 -> 124: `src/core/brain/dream-trigger/claim.ts` rewrites the dream
+ * trigger's claim with the worker's pid through the shared atomic writer,
+ * in the machine's state directory.
  */
-const SHARED_HELPER_ROWS = 122;
+const SHARED_HELPER_ROWS = 124;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1885,8 +1902,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 83 -> 84: the removal of the park record a swap writes beside the search index (machine state, no note).
  * 84 -> 85: the dream owner's claim-seen file (device-local machine state, no note).
  * 85 -> 89: the dream agent's device-local run, session, verification and check files (no note).
+ * 89 -> 90: the dream trigger's claim file beside the day record (machine state, no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 89;
+const UNSTAMPED_DIRECT_ROWS = 90;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -2043,8 +2061,12 @@ const UNSTAMPED_DIRECT_ROWS = 89;
  * dream-launched-agent); its author is in its frontmatter.
  * 117 -> 118: a dream run's record, rewritten through the shared atomic
  * writer in device-local state, machine state and no note.
+ * 118 -> 119: the dream day record, written through the shared atomic
+ * writer in the machine's state directory, machine state and no note.
+ * 119 -> 120: the dream trigger's claim, rewritten with the worker's pid
+ * through the shared atomic writer, machine state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 118;
+const UNSTAMPED_SHARED_ROWS = 120;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

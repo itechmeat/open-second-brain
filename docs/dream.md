@@ -26,6 +26,99 @@ owner`), the decision model first. A new topic needs two answers: the
 approval of its group and its wording. Until the wording exists the topic
 is not created.
 
+## How dream starts
+
+Nothing needs to be scheduled. The first session of a day on the dream
+owner's machine starts the day's pass by itself:
+
+1. **Where the check runs.** In the session start hook of the hosts that
+   have one (Claude Code, Codex, Grok), on every start, resume, clear and
+   compact; and in the MCP server at `initialize` and at the first tool
+   call of a new UTC day, which covers every other host and a server that
+   lives for days. A host that reaches Open Second Brain only through the
+   command line (`pi`) has no session entry: its passes come from another
+   agent on the same machine, or from `o2b dream run`.
+2. **What it costs.** On a closed day the check reads the machine config
+   the session already loaded and one small record under the device state
+   directory (`dream-trigger/<key>.json`), and returns. It opens no store,
+   starts no process and asks no model. The same holds before the retry
+   time, with automatic dream off, and on a machine that is not the owner.
+3. **What it starts.** When a pass is due on the owner's device, the check
+   makes a claim (a small file beside the record, created exclusively, so
+   two sessions at the same moment start one worker), and starts one
+   detached worker, `o2b dream run --claim <token>`. The session does not
+   wait. The worker runs the whole pass under the dream deadline, takes the
+   pass lock itself, records the outcome and gives the claim back. Its
+   error output goes to a small log in the store's device-local state
+   (`dream/worker.log`, one header per attempt).
+4. **A worker that died.** A claim older than the dream deadline plus two
+   minutes, whose worker holds no pass lock, is a lost worker: the next due
+   check removes it and records a failed attempt (doctor:
+   `dream-worker-lost`); a later session starts a new worker after the
+   retry time.
+
+### What closes a day
+
+A day (UTC, the day the pass started) is closed when a live pass ended
+with no window behind, no window open, no source with a gap, and no queued
+work that is ready, due and answerable by an executor this machine has
+(the decision model for its question, or a verified dream agent). Any
+other end leaves the day open and sets a retry time: one hour after the
+first failure, doubling, at most one day; three failures in a row wait
+four hours. Work that nothing on this machine can answer does not keep the
+day open: the day closes, and the next session on the owner's machine and
+doctor (`dream-work-unanswerable`) say what waits and what would answer
+it.
+
+Every live pass records the day the same way: `o2b dream run`, `o2b brain
+dream`, the MCP `brain_dream` tool and the maintenance lane. A pass started
+any other way therefore closes the day too, and the trigger never starts a
+pass on a day another pass closed, nor while one runs. Each of them holds
+the trigger's claim for its whole run, so two passes never overlap: a pass
+started while another runs is refused before it asks any model, with an
+error naming the running pass (`dream run claim busy`), as a second pass is
+refused by the pass lock.
+
+### Turning it off
+
+Automatic dream is the shared setting `dream.auto`, on by default:
+
+```
+o2b brain settings set dream.auto false
+```
+
+A brain with no dream owner is never started. On one machine only, the
+environment variable `OPEN_SECOND_BRAIN_DREAM_AUTO=false` keeps every
+session there from starting a pass. `o2b dream status` and doctor
+(`dream-auto-off`) say when it is off.
+
+### A scheduled job beside it
+
+A cron job or a scheduler task that runs `o2b brain dream` or the
+maintenance lane keeps working. It records the day, and it holds the
+trigger's claim, so the trigger and the job never run two passes at once:
+one that starts while the other runs is refused. Only the trigger skips a
+closed day: a session finds the day the job closed and starts nothing, but
+the job, run after the trigger's pass closed the day, still runs a pass
+(and asks the models for whatever work is ready). Such a job can be
+removed.
+
+### Other machines
+
+A machine that is not the dream owner says nothing about dream at session
+start, except one line, at most once a day, when the owner has covered no
+window for more than three days: the owner's device and agent, its last
+covered day, and the command that takes the role here (`o2b dream owner
+--here`).
+
+### The state of the day
+
+`o2b dream status` shows whether automatic dream is on, whether this device
+is the owner, today, whether the day is closed and why not, the last run
+with its outcome, and the retry time. Doctor reports `dream-day-open` when
+the day has stayed open for more than one day, with the reason and the
+retry time.
+
 ## Setting the agent
 
 The command is a machine setting, never shared between machines:

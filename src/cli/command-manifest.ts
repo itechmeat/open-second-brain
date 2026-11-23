@@ -1503,6 +1503,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
+        command(
+          "run",
+          "Run a whole live dream pass on the dream owner's device and record the day",
+          [
+            flag("claim", "string"),
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
+        command(
+          "status",
+          "Show the state of the dream day: automatic dream, the owner, the last run, the retry time",
+          [flag("vault", "string"), flag("config", "string"), flag("json", "boolean")],
+        ),
       ],
     ),
     command(

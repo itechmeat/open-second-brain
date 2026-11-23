@@ -190,3 +190,20 @@ export function acquireProcessLock(
     sleepSync(1 + Math.floor(Math.random() * Math.min(RETRY_SLEEP_MAX_MS, 5 + attempt * 10)));
   }
 }
+
+/**
+ * Whether the lock named by `lockTarget` is held now by a holder that may
+ * not be taken over: a live process, or one that cannot be checked and is
+ * younger than the age rule. Reads only; takes nothing. A holder record
+ * that cannot be read for another reason than its absence counts as held:
+ * unknown is not free.
+ */
+export function processLockHeld(lockTarget: string, now: () => number = Date.now): boolean {
+  let seen: HolderSeen;
+  try {
+    seen = readHolder(`${lockTarget}${HOLDER_SUFFIX}`);
+  } catch {
+    return true;
+  }
+  return !abandoned(seen, now());
+}

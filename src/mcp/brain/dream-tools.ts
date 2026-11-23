@@ -22,6 +22,11 @@ import {
 import { DreamStepNotRunnableError, runDreamStep } from "../../core/brain/dream-step.ts";
 import { assertDreamOwner } from "../../core/brain/dream-owner/gate.ts";
 import {
+  holdDreamRunClaim,
+  recordDreamOutcome,
+  type RecordDreamOutcomeOptions,
+} from "../../core/brain/dream-trigger/outcome.ts";
+import {
   applyDreamBundle,
   discardDreamBundle,
   DreamRetriageError,
@@ -406,22 +411,50 @@ export async function toolBrainDream(
   };
   // The owner gate runs first, so no model is asked for a pass that will
   // be refused (`dream_not_owner`); `dream()` asks again.
+  // The wall clock the day record is kept on (change
+  // `dream-session-trigger`, design D4).
+  const passStartedAt = new Date();
   if (!dryRun) assertDreamOwner(vault, { live: true, ...configOpt });
-  const closedQuestions =
-    dryRun || deadlineMs === 0 ? undefined : await prepareClosedQuestions(vault, decideOptions);
-  const summary = dream(vault, {
-    dryRun,
-    safeguard,
-    readable,
-    retireSiblingsEnabled,
-    ...previewScope,
-    ...(nowDate ? { now: nowDate } : {}),
-    ...(closedQuestions !== undefined ? { closedQuestions } : {}),
-    ...(agent ? { agentName: agent } : {}),
-    ...(gates !== undefined ? { gates } : {}),
-    ...(onProgress ? { onProgress } : {}),
-    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
-  });
+  // The trigger's claim for the whole live run (front door, pass and
+  // outcome), so a session's day check does not start a second one. A
+  // claim another run holds throws lock contention here, before the
+  // front door, as the pass lock refuses a second pass.
+  const releaseRunClaim = dryRun ? () => {} : holdDreamRunClaim(ctx.configPath ?? undefined);
+  let summary: ReturnType<typeof dream>;
+  try {
+    const closedQuestions =
+      dryRun || deadlineMs === 0 ? undefined : await prepareClosedQuestions(vault, decideOptions);
+    const outcome = (result: RecordDreamOutcomeOptions["result"]): void => {
+      if (dryRun) return;
+      recordDreamOutcome(vault, {
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+        startedAt: passStartedAt,
+        result,
+        by: "mcp",
+      });
+    };
+    try {
+      summary = dream(vault, {
+        dryRun,
+        safeguard,
+        readable,
+        retireSiblingsEnabled,
+        ...previewScope,
+        ...(nowDate ? { now: nowDate } : {}),
+        ...(closedQuestions !== undefined ? { closedQuestions } : {}),
+        ...(agent ? { agentName: agent } : {}),
+        ...(gates !== undefined ? { gates } : {}),
+        ...(onProgress ? { onProgress } : {}),
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+      });
+    } catch (exc) {
+      outcome({ threw: exc });
+      throw exc;
+    }
+    outcome({ returned: true });
+  } finally {
+    releaseRunClaim();
+  }
   const changeList = dreamChangeList(summary);
   // A retire-sibling pair names two preferences; it is kept only when the
   // caller may see both, each in both spellings (`ret-<slug>` after the

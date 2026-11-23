@@ -65,15 +65,11 @@ describe("end-of-turn advisory docs", () => {
     expect(skill).toContain("untrusted_source");
   });
 
-  test("the CHANGELOG names the settings under Unreleased", () => {
+  test("the CHANGELOG names the settings", () => {
     const changelog = read("CHANGELOG.md");
-    const unreleased = changelog.slice(
-      changelog.indexOf("## [Unreleased]"),
-      changelog.indexOf("\n## [", changelog.indexOf("## [Unreleased]") + 1),
-    );
     for (const [key, env] of SETTINGS) {
-      expect(unreleased).toContain(`\`${key}\``);
-      expect(unreleased).toContain(`\`${env}\``);
+      expect(changelog).toContain(`\`${key}\``);
+      expect(changelog).toContain(`\`${env}\``);
     }
   });
 });

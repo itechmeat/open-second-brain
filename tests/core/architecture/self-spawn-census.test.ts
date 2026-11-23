@@ -31,6 +31,8 @@ const DEPENDENCY_TREE = "src/core/maintenance/dependency-tree.ts";
 const SITES: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/dream-queue/agent-executor.ts":
     "the dream agent session's MCP server (`o2b mcp --tool-profile dream-executor`), started by the agent",
+  "src/core/brain/dream-trigger/due.ts":
+    "the dream worker (`o2b dream run --claim <token>`), started by the dream day check at a session start or an MCP server's first call of a day",
   "src/core/maintenance/ensure-current.ts":
     "the automatic store migration worker, the self-heal upgrade and the self-heal reindex",
   "src/core/search/freshen.ts": "freshen on read (a background incremental index run)",

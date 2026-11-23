@@ -6,9 +6,16 @@
 
 import {
   ConfigReadError,
+  discoverConfig,
   resolveAgentName,
   resolveMcpRouteMetricsEnabled,
 } from "../core/config.ts";
+import {
+  dreamDayCheck,
+  dreamDayRecordStamp,
+  dreamOwnerCheckForgotten,
+} from "../core/brain/dream-trigger/check.ts";
+import type { ConfigDiscovery } from "../core/types.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
 import { createRouteScope } from "../core/route-scope.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
@@ -237,6 +244,16 @@ export class MCPServer {
   readonly reach: TransportReach;
   /** Launch-time scope sources for the scoped standing rules. */
   private readonly ruleScope: RuleScopeSources;
+  /**
+   * The machine config read at construction (`null`: unreadable), kept for
+   * the dream day check so the closed-day path reads only its record.
+   */
+  private machineConfig: ConfigDiscovery | null;
+  /**
+   * This server's last dream day check: its UTC day and the version of the
+   * day record it left (`null`: none yet).
+   */
+  private dayChecked: { readonly day: string; readonly stamp: number | null } | null = null;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -253,6 +270,7 @@ export class MCPServer {
     this.tools = evaluated.tools;
     this.capabilityReport = evaluated.report;
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
+    this.machineConfig = loadMachineConfig(this.configPath ?? undefined);
     this.sendNotification = runtimeOpts.sendNotification;
     this.reach = resolvedTransportReach(runtimeOpts.reach);
     this.ruleScope = Object.freeze({
@@ -469,6 +487,13 @@ export class MCPServer {
     onProgress?: ProgressSink,
     identity?: RequestIdentity,
   ): Promise<unknown> {
+    // The first call of a new UTC day checks whether a dream pass is due
+    // (change `dream-session-trigger`): a long-lived server, and one whose
+    // host never sent `initialize`, still starts the day's pass, and a
+    // call after a verb on this machine took the dream owner role looks
+    // again. A date comparison and one `stat` of the day record on every
+    // other call; a tool call shows no note.
+    this.checkDreamDay(false);
     // Before the unknown-argument gate: a caller naming the visibility
     // boundary is told about the boundary, not offered a typo suggestion
     // for it - and the rule holds for an open schema, which that gate
@@ -656,6 +681,21 @@ export class MCPServer {
     // in place of the identity line, so the agent is told there is no
     // identity to log under rather than handed one.
     const identity = resolveIdentityOrReason(this.configPath ?? undefined);
+    // The dream day check at the session's start (change
+    // `dream-session-trigger`): hosts with no session start hook reach the
+    // product here. Its note names device and agent names, so it is shown
+    // at local reach only.
+    const dayNote = this.checkDreamDay(this.reach === TRANSPORT_REACH.local);
+    const instructions = buildInstructions({
+      agent: identity,
+      vault: this.vault,
+      configPath: this.configPath,
+      scope: this.scope,
+      // Computed in the constructor and held on the instance, so the
+      // handshake states what this runtime actually left callable
+      // without evaluating the window a second time.
+      capabilities: this.capabilityReport,
+    });
     return {
       protocolVersion: negotiated,
       capabilities: {
@@ -663,17 +703,37 @@ export class MCPServer {
         resources: { listChanged: false, subscribe: false },
       },
       serverInfo: { name: this.serverName, version: SERVER_VERSION },
-      instructions: buildInstructions({
-        agent: identity,
-        vault: this.vault,
-        configPath: this.configPath,
-        scope: this.scope,
-        // Computed in the constructor and held on the instance, so the
-        // handshake states what this runtime actually left callable
-        // without evaluating the window a second time.
-        capabilities: this.capabilityReport,
-      }),
+      instructions: dayNote === null ? instructions : `${instructions}\n\n${dayNote}`,
     };
+  }
+
+  /**
+   * Run the dream day check once per UTC day of this server: at
+   * `initialize` and at the first tool call of a new day. Returns the
+   * note to show when `notes` and one is due. Never throws.
+   */
+  private checkDreamDay(notes: boolean): string | null {
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.dayChecked?.day === today) {
+      // Checked today. Only a record written since (one `stat`) whose
+      // owner check a verb on this machine cleared (taking the role,
+      // setting `dream.auto`) is looked at again today.
+      const stamp = dreamDayRecordStamp(this.machineConfig);
+      if (stamp === this.dayChecked.stamp) return null;
+      if (!dreamOwnerCheckForgotten(this.machineConfig, today)) {
+        this.dayChecked = { day: today, stamp };
+        return null;
+      }
+    }
+    // A config that could not be read at the start is read again at the
+    // next check, so a repaired one is found without a restart.
+    if (this.machineConfig === null) {
+      this.machineConfig = loadMachineConfig(this.configPath ?? undefined);
+    }
+    // The vault this server serves, which may not be the configured one.
+    const note = dreamDayCheck(this.machineConfig, { notes, vault: this.servedVault().vault }).note;
+    this.dayChecked = { day: today, stamp: dreamDayRecordStamp(this.machineConfig) };
+    return notes && note !== undefined ? note : null;
   }
 
   private handleToolsList(): Record<string, unknown> {
@@ -822,6 +882,15 @@ export class MCPServer {
  * remains the escape hatch - it is read before the file is opened, so an
  * operator who wants the metrics on can have them on a broken config.
  */
+/** The machine config at `configPath`, or `null` when it cannot be read. */
+function loadMachineConfig(configPath: string | undefined): ConfigDiscovery | null {
+  try {
+    return discoverConfig(configPath);
+  } catch {
+    return null;
+  }
+}
+
 function routeMetricsGate(configPath: string | undefined): boolean {
   try {
     return resolveMcpRouteMetricsEnabled(configPath);

@@ -17,6 +17,7 @@
 import { SETTING_RULES } from "../../store/fold-settings.ts";
 import {
   SETTING_DREAM_APPLY_DRAFTS,
+  SETTING_DREAM_AUTO,
   SETTING_SILENT_DEVICE_DAYS,
   SETTING_VIEW_LANGUAGE,
 } from "../../store/constants.ts";
@@ -126,6 +127,13 @@ export const STORE_NATIVE_SETTINGS: Readonly<Record<string, StoreNativeSetting>>
         ? null
         : `${SETTING_DREAM_APPLY_DRAFTS} must be auto or review`,
     default: "auto",
+  },
+  // Whether a session on the dream owner's machine starts the day's pass
+  // (change dream-session-trigger, design D5).
+  [SETTING_DREAM_AUTO]: {
+    invalid: (value: unknown) =>
+      typeof value === "boolean" ? null : `${SETTING_DREAM_AUTO} must be true or false`,
+    default: true,
   },
   [SETTING_SILENT_DEVICE_DAYS]: {
     invalid: (value: unknown) =>
