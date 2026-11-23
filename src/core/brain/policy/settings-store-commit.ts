@@ -6,9 +6,11 @@
  * cohesion: this is the only part that builds and appends records.
  */
 
+import { forgetDreamOwnerCheck } from "../dream-trigger/forget.ts";
 import {
   AUTHORITY_FIELD,
   SETTING_ENTRY_KIND,
+  SETTING_DREAM_AUTO,
   SETTING_SET_KIND,
   SETTING_UNSET_KIND,
 } from "../../store/constants.ts";
@@ -104,5 +106,10 @@ export function storeCommit(
       },
     ),
   );
+  // `dream.auto` turned on or off here: the day check of this machine
+  // looks at it again today instead of trusting its first look.
+  if (changes.some((c) => c.target.key === SETTING_DREAM_AUTO)) {
+    forgetDreamOwnerCheck(ctx.configPath);
+  }
   return written.map((w) => w.record.id);
 }

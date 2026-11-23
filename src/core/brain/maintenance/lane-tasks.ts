@@ -18,6 +18,7 @@
 import { dream } from "../dream.ts";
 import { assertDreamOwner, DreamNotOwnerError } from "../dream-owner/gate.ts";
 import { decideBudgetWithin, prepareClosedQuestions } from "../../topics/decide-auto.ts";
+import { holdDreamRunClaim, recordDreamOutcome } from "../dream-trigger/outcome.ts";
 import {
   discoverBridges,
   readDismissedBridges,
@@ -128,30 +129,55 @@ export function buildLaneTasks(opts: LaneTaskBuildOptions): LaneTaskSet {
           if (exc instanceof DreamNotOwnerError) throw new MaintenanceTaskSkipped(exc.message);
           throw exc;
         }
+        // The wall clock the day record is kept on (change
+        // `dream-session-trigger`, design D4).
+        const startedAt = new Date();
+        const configOpt = opts.configPath !== undefined ? { configPath: opts.configPath } : {};
         const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, 0);
-        // The closed questions are produced and asked before the pass
-        // (change `dream-closed-questions`, design D1); the lane runs live
-        // passes only. The lane's config and run date, as the pass below
-        // plans with them.
-        const closedQuestions =
-          deadlineMs === 0
-            ? undefined
-            : await prepareClosedQuestions(vault, {
-                ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
-                runAt: now,
-                ...(deadlineMs !== undefined ? { deadlineMs } : {}),
-              });
+        // The trigger's claim for the whole live run (front door, pass and
+        // outcome), so a session's day check does not start a second one. A
+        // claim another run holds throws lock contention here, before the
+        // front door, as the pass lock refuses a second pass.
+        const releaseRunClaim = holdDreamRunClaim(opts.configPath);
         try {
-          dream(vault, {
-            now,
-            ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
-            ...(closedQuestions !== undefined ? { closedQuestions } : {}),
-            safeguard,
-            ...laneProgress,
+          // The closed questions are produced and asked before the pass
+          // (change `dream-closed-questions`, design D1); the lane runs live
+          // passes only. The lane's config and run date, as the pass below
+          // plans with them.
+          const closedQuestions =
+            deadlineMs === 0
+              ? undefined
+              : await prepareClosedQuestions(vault, {
+                  ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+                  runAt: now,
+                  ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+                });
+          try {
+            dream(vault, {
+              now,
+              ...configOpt,
+              ...(closedQuestions !== undefined ? { closedQuestions } : {}),
+              safeguard,
+              ...laneProgress,
+            });
+          } catch (exc) {
+            recordDreamOutcome(vault, {
+              ...configOpt,
+              startedAt,
+              result: { threw: exc },
+              by: "lane",
+            });
+            if (exc instanceof DreamNotOwnerError) throw new MaintenanceTaskSkipped(exc.message);
+            throw exc;
+          }
+          recordDreamOutcome(vault, {
+            ...configOpt,
+            startedAt,
+            result: { returned: true },
+            by: "lane",
           });
-        } catch (exc) {
-          if (exc instanceof DreamNotOwnerError) throw new MaintenanceTaskSkipped(exc.message);
-          throw exc;
+        } finally {
+          releaseRunClaim();
         }
       },
     },

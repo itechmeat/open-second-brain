@@ -210,6 +210,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "clears one aspect's exact-state file. Absence IS the cleared state, so the " +
         "removal is the state transition rather than a loss of one.",
     },
+    "src/core/brain/dream-trigger/claim.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the dream trigger's claim, a token file beside the day record in the machine's " +
+        "state directory, when its worker recorded the outcome or the check found the worker " +
+        "lost. Absence IS the state 'no worker claimed', and nothing in a vault or a store is " +
+        "touched.",
+    },
     "src/core/brain/dream-queue/run-record.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,

@@ -5,9 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-rc.1] - 2026-11-23
 
 ### Added
+- **Dream starts itself.** The first session of a day on the dream owner's machine starts the day's dream pass, with no scheduler and no resident process: the session start hook (Claude Code, Codex, Grok) and the MCP server (at `initialize` and at the first tool call of a new day) run one check that, on a closed day, reads one small device-local record and returns. When a pass is due it makes an exclusive claim and starts one detached worker, `o2b dream run --claim <token>`, that runs the whole pass and records the outcome; the session never waits. A day is closed only by a complete pass (nothing behind, no gap, no ready work this machine answers); otherwise the next attempt waits one hour, doubling, at most one day. Every live pass (`o2b dream run`, `o2b brain dream`, `brain_dream`, the maintenance lane) records the day the same way and holds the trigger's claim, so two passes never overlap: one started while another runs is refused, naming the running pass. The trigger skips a day another pass closed; a scheduled `o2b brain dream` run after the day closed still runs a pass. The shared setting `dream.auto` (default `true`) turns it off; `OPEN_SECOND_BRAIN_DREAM_AUTO=false` turns it off on one machine. A machine that is not the owner shows one line a day when the owner has covered nothing for three days. New: `o2b dream run`, `o2b dream status`, doctor codes `dream-auto-off`, `dream-day-open`, `dream-worker-lost` and `dream-work-unanswerable`. FORMAT.md documents the setting `dream.auto`.
 - The verified release workflow can publish its checked tarball to the registry with trusted publishing, skip repeats, and smoke-test the installed version. Registry installation is documented for maintainers and users.
 - Three cross-platform registry launchers provide `o2b`, `o2b-mcp` and `o2b-hook` with Bun on `PATH` as the prerequisite. `vault-log` is excluded because it dispatches to the nonexistent `append-event` command.
 - Added `o2b setup` to configure the machine and brain, connect one agent host, and verify the result. Registry installs register an absolute Bun launcher; doctor reports stale registrations, older registration versions, and multiple `o2b` providers on PATH.
@@ -9051,6 +9052,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[2.0.0-rc.1]: https://github.com/itechmeat/open-second-brain/compare/v1.98.0...v2.0.0-rc.1
 [1.98.0]: https://github.com/itechmeat/open-second-brain/compare/v1.97.0...v1.98.0
 [1.97.0]: https://github.com/itechmeat/open-second-brain/compare/v1.96.0...v1.97.0
 [1.96.0]: https://github.com/itechmeat/open-second-brain/compare/v1.95.0...v1.96.0

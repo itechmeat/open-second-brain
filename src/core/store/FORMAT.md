@@ -184,6 +184,7 @@ Settings every machine must agree on are records in the `settings` stream of the
 - `topics.quiet_days`: after how many days without a record an active topic is offered to the user for a status decision, a positive integer. Default 30.
 - `migration.silent_device_days`: after how many days without evidence of life a device of the migration cohort that has not switched counts as retired by silence, so the legacy tree may leave the vault without it; an integer from 0 to 3650, 0 turns the rule off. Default 30. Only the operator sets it.
 - `dream.apply_drafts`: when text a model wrote for dream is applied: `auto` (the next pass applies it) or `review` (it waits in the state `awaiting-review` until a person approves or rejects it). Default `auto`.
+- `dream.auto`: whether a session on the dream owner's machine starts the day's dream pass by itself: `true` or `false`. Default `true`. A brain with no dream owner is never started.
 
 Keys `brain.<block>.<field>` (and `brain.<key>` for a scalar) hold the settings of a vault's legacy `_brain.yaml` that every machine must agree on. The migration from the legacy layout writes only the values the user changed from the shipped default, with `authority` `human`; a value equal to its default is not written, and the key falls back to that default. Their values are the JSON the file held.
 

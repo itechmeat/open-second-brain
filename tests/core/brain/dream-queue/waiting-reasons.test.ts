@@ -8,6 +8,8 @@
  * and explains every waiting closed question (`dream-questions-waiting`).
  */
 
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { dreamQueueCheck } from "../../../../src/core/brain/doctor/dream-queue-check.ts";
@@ -22,6 +24,9 @@ import {
   describeQueueStatus,
   waitingByOperation,
 } from "../../../../src/core/brain/dream-queue/status-view.ts";
+import { dayCompletion, readQueueFacts } from "../../../../src/core/brain/dream-trigger/outcome.ts";
+import { resolveDreamAgentConfig } from "../../../../src/core/brain/dream-queue/agent-config.ts";
+import { recordDreamAgentVerification } from "../../../../src/core/brain/dream-queue/agent-verified.ts";
 import { FakeDecisionProvider } from "../../../helpers/fake-decision-provider.ts";
 import { closedFixture, type ClosedFixture } from "../../topics/fixtures/closed-fixture.ts";
 import { ask } from "../../topics/fixtures/closed-run.ts";
@@ -133,5 +138,69 @@ describe("doctor", () => {
     const waiting = out.uncertain.filter((u) => u.code === "dream-questions-waiting");
     expect(waiting).toHaveLength(1);
     expect(waiting[0]!.message).toContain("1 no-model");
+  });
+});
+
+/** The queue facts a pass would record, under the decision model `uses`. */
+function facts(uses: string, extra: Record<string, string> = {}) {
+  const saved = { ...process.env };
+  Object.assign(process.env, f.env(uses), extra);
+  try {
+    return readQueueFacts(null, f.configPath, f.still()).facts!;
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+}
+
+describe("what keeps the day of a pass open (change `dream-session-trigger`)", () => {
+  test("an item a use in shadow was asked about is not answerable here", async () => {
+    await ask(f, "topic_route:shadow", route());
+    const queue = facts("topic_route:shadow");
+    expect(queue.answerable).toEqual({});
+    expect(queue.unanswerable).toEqual({ "topic-route": 1 });
+    expect(dayCompletion(null, queue).complete).toBe(true);
+  });
+
+  test("private evidence the chain may not receive is not answerable here", async () => {
+    f.signal("Shard compaction thresholds were tuned again", { partition: "private" });
+    await ask(f, "topic_route:shadow", route());
+    const queue = facts("topic_route:enforce");
+    expect(queue.answerable["topic-route"]).toBeUndefined();
+    expect(queue.unanswerable["topic-route"]).toBeGreaterThan(0);
+  });
+
+  test("private work the verified agent may not take is not answerable here", async () => {
+    f.signal("Shard compaction thresholds were tuned again", { partition: "private" });
+    await ask(f, "topic_route:off", route());
+    const agent = {
+      XDG_STATE_HOME: join(f.vault, "..", "agent-state"),
+      OPEN_SECOND_BRAIN_DREAM_AGENT_COMMAND: JSON.stringify(["fake-agent"]),
+    };
+    const saved = process.env["XDG_STATE_HOME"];
+    process.env["XDG_STATE_HOME"] = agent.XDG_STATE_HOME;
+    try {
+      const { command } = resolveDreamAgentConfig({ config: {}, env: agent });
+      recordDreamAgentVerification(command!, { agent: "custom", model: "m", programVersion: null });
+    } finally {
+      if (saved === undefined) delete process.env["XDG_STATE_HOME"];
+      else process.env["XDG_STATE_HOME"] = saved;
+    }
+    const allowed = facts("topic_route:off", agent);
+    expect(allowed.answerable["topic-route"]).toBeGreaterThan(0);
+    const refused = facts("topic_route:off", {
+      ...agent,
+      OPEN_SECOND_BRAIN_DREAM_AGENT_PRIVATE: "off",
+    });
+    const privateItems = f.items("topic-route").filter((i) => i.partition === "private").length;
+    expect(privateItems).toBeGreaterThan(0);
+    expect(refused.unanswerable).toEqual({ "topic-route": privateItems });
+  });
+
+  test("an item not reached under an enforcing use keeps the day open", async () => {
+    await ask(f, "topic_route:off", route());
+    const queue = facts("topic_route:enforce");
+    expect(queue.answerable).toEqual({ "topic-route": 1 });
+    expect(dayCompletion(null, queue).complete).toBe(false);
   });
 });

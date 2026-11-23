@@ -18,6 +18,7 @@
  * made earlier does not block it.
  */
 
+import { forgetDreamOwnerCheck } from "../../core/brain/dream-trigger/forget.ts";
 import { replayStatus, replayStatusJson } from "../../core/brain/dream-replay/status-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { openDreamOwnerStore } from "../../core/brain/dream-owner/gate.ts";
@@ -117,6 +118,7 @@ async function toolBrainDreamOwner(
         { owner: result.owner },
       );
     }
+    forgetDreamOwnerCheck(ctx.configPath ?? undefined);
     return { operation, status: "released", device: store.device };
   }
 
@@ -131,6 +133,8 @@ async function toolBrainDreamOwner(
     );
   }
   const result = takeDreamOwner(store, agent, { ...writer, force: false });
+  // The day check of this machine looks at the role again today.
+  forgetDreamOwnerCheck(ctx.configPath ?? undefined);
   return {
     operation,
     status: result.status,

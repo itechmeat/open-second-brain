@@ -16,10 +16,11 @@
  * store, the one extra read a store-side hook needs before its own work.
  */
 
-import { resolveVault } from "../../src/core/config.ts";
+import { discoverConfig, resolveVault } from "../../src/core/config.ts";
 import { noVaultRoot } from "../../src/core/platform-dirs.ts";
 import { configuredStore } from "../../src/core/store/read/store-entities.ts";
 import type { UnreachableVault } from "../../src/core/store/store-only.ts";
+import type { ConfigDiscovery } from "../../src/core/types.ts";
 import { lookAtDirectory } from "../../src/core/vault-unexaminable.ts";
 
 type StoreOnlyModule = typeof import("../../src/core/store/store-only.ts");
@@ -34,17 +35,31 @@ export function resolveHookVault(): string | null {
   return configuredHookVault().vault;
 }
 
+/**
+ * The machine config, read once: the vault is resolved from it and the
+ * dream day check reads it (`null` when it cannot be read; the vault is
+ * then resolved as before, without it).
+ */
+function loadHookConfig(): ConfigDiscovery | null {
+  try {
+    return discoverConfig();
+  } catch {
+    return null;
+  }
+}
+
 function configuredHookVault(): ServedHookVault {
+  const config = loadHookConfig();
   let vault: string | null;
   try {
-    vault = resolveVault();
+    vault = config === null ? resolveVault() : resolveVault(config.path, { discovery: config });
   } catch {
-    return { vault: null, unreachable: null };
+    return { vault: null, unreachable: null, config };
   }
-  if (vault === null || vault.trim() === "") return { vault: null, unreachable: null };
+  if (vault === null || vault.trim() === "") return { vault: null, unreachable: null, config };
   // The common case costs one look and loads nothing more: a hook runs on
   // every tool call, and the store-only module pulls in the lock modules.
-  if (lookAtDirectory(vault) === "present") return { vault, unreachable: null };
+  if (lookAtDirectory(vault) === "present") return { vault, unreachable: null, config };
   try {
     const storeOnly = require("../../src/core/store/store-only.ts") as StoreOnlyModule;
     const served = storeOnly.servedVault(vault);
@@ -52,10 +67,11 @@ function configuredHookVault(): ServedHookVault {
     return {
       vault: served.vault,
       unreachable: served.unreachable,
+      config,
       ...(missing !== null ? { missing: { vault: missing.vault, notice: missing.notice } } : {}),
     };
   } catch {
-    return { vault, unreachable: null };
+    return { vault, unreachable: null, config };
   }
 }
 
@@ -63,6 +79,8 @@ function configuredHookVault(): ServedHookVault {
 interface ServedHookVault {
   readonly vault: string | null;
   readonly unreachable: UnreachableVault | null;
+  /** The machine config the vault was resolved from (`null`: unreadable). */
+  readonly config: ConfigDiscovery | null;
   /** The configured vault's folder is not there, on a machine that has not switched. */
   readonly missing?: { readonly vault: string; readonly notice: string };
 }
@@ -84,6 +102,8 @@ export interface HookTarget {
    * says so in its runtime notices.
    */
   readonly missing?: { readonly vault: string; readonly notice: string };
+  /** The machine config the target was resolved from (`null`: unreadable). */
+  readonly config: ConfigDiscovery | null;
 }
 
 /**
@@ -94,9 +114,9 @@ export interface HookTarget {
  * cannot be reached is served from the store, and the target names why.
  */
 export function resolveHookTarget(): HookTarget | null {
-  const { vault, unreachable, missing } = configuredHookVault();
+  const { vault, unreachable, missing, config } = configuredHookVault();
   if (vault !== null) {
-    return { vault, hasVault: true, ...(missing !== undefined ? { missing } : {}) };
+    return { vault, hasVault: true, config, ...(missing !== undefined ? { missing } : {}) };
   }
   try {
     if (configuredStore() === null) return null;
@@ -106,6 +126,7 @@ export function resolveHookTarget(): HookTarget | null {
   return {
     vault: noVaultRoot(),
     hasVault: false,
+    config,
     ...(unreachable !== null ? { unreachable } : {}),
   };
 }

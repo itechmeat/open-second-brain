@@ -8,6 +8,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveHookTarget, resolveHookVault } from "../../hooks/lib/hook-vault.ts";
+import { discoverConfig } from "../../src/core/config.ts";
 import { noVaultRoot } from "../../src/core/platform-dirs.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
 
@@ -40,12 +41,22 @@ describe("hook vault resolution", () => {
 describe("hook target", () => {
   test("a configured vault: the vault part of the hook runs", () => {
     env = makeStoreEnv("osb-hook-target-vault-");
-    expect(resolveHookTarget()).toEqual({ vault: env.vault, hasVault: true });
+    // The target carries the config it was resolved from: the dream day
+    // check reads it, so the config is read once.
+    expect(resolveHookTarget()).toEqual({
+      vault: env.vault,
+      hasVault: true,
+      config: discoverConfig(),
+    });
   });
 
   test("no vault but a brain store: the store-side part runs on the no-vault stand-in", () => {
     env = makeStoreEnv("osb-hook-target-store-", { legacyTree: false, configureVault: false });
-    expect(resolveHookTarget()).toEqual({ vault: noVaultRoot(), hasVault: false });
+    expect(resolveHookTarget()).toEqual({
+      vault: noVaultRoot(),
+      hasVault: false,
+      config: discoverConfig(),
+    });
   });
 
   test("neither a vault nor a store: null, the hook returns quietly", () => {

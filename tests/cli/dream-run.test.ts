@@ -1,0 +1,212 @@
+/**
+ * `o2b dream run` (change `dream-session-trigger`, design D3, spec "A due
+ * pass is started once, detached"): the one command that runs a whole
+ * live pass and records the day; as the worker, it runs only on the claim
+ * it was given, takes the pass lock itself and gives the claim back once
+ * the outcome is recorded. The last test starts one real detached worker
+ * through the day check, keeps its handle and awaits its exit.
+ */
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { dreamDayCheck } from "../../src/core/brain/dream-trigger/check.ts";
+import { dreamWorkerLogPath } from "../../src/core/brain/dream-trigger/due.ts";
+import { dreamTriggerClaimPath } from "../../src/core/brain/dream-trigger/record.ts";
+import * as ownerModule from "../../src/core/brain/dream-owner/owner.ts";
+import * as outcomeModule from "../../src/core/brain/dream-trigger/outcome.ts";
+import * as o2bCommand from "../../src/core/maintenance/o2b-command.ts";
+import { WORKER_LOG_ATTEMPT_PREFIX } from "../../src/core/store-migration/worker-log.ts";
+import * as decideAuto from "../../src/core/topics/decide-auto.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { homeEnv } from "../helpers/platform.ts";
+import { runCli } from "../helpers/run-cli.ts";
+import { makeTriggerFixture, type TriggerFixture } from "../core/brain/dream-trigger/fixture.ts";
+
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
+
+let f: TriggerFixture;
+
+beforeEach(() => {
+  f = makeTriggerFixture();
+});
+
+afterEach(() => {
+  f.cleanup();
+});
+
+function cli(args: string[]) {
+  return runCli(["dream", "run", ...args], { env: { OPEN_SECOND_BRAIN_CONFIG: f.configPath } });
+}
+
+function claimPath(): string {
+  return dreamTriggerClaimPath(f.recordPath);
+}
+
+function writeClaim(token: string): void {
+  writeFileSync(claimPath(), JSON.stringify({ token, at: Date.now(), pid: 1 }));
+}
+
+describe("o2b dream run", () => {
+  test("runs the front door and the pass, and records the day", async () => {
+    const original = decideAuto.prepareClosedQuestions;
+    const front = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation((...args) =>
+      original(...args),
+    );
+    let res;
+    let calls = 0;
+    try {
+      res = await cli([]);
+      calls = front.mock.calls.length;
+    } finally {
+      front.mockRestore();
+    }
+    expect(res.returncode).toBe(0);
+    expect(calls).toBe(1);
+    expect(res.stdout).toContain("run_id: ");
+    const r = f.record()!;
+    expect(r.last_run).toMatchObject({ by: "cli", outcome: "complete" });
+    expect(r.closed).toBe(true);
+    expect(res.stdout).toContain(`day: ${r.day} closed`);
+  });
+
+  test("--json is one document", async () => {
+    const res = await cli(["--json"]);
+    expect(res.returncode).toBe(0);
+    const doc = JSON.parse(res.stdout) as Record<string, unknown>;
+    expect(doc).toMatchObject({ ok: true, day: { closed: true, failures: 0 } });
+    expect(typeof doc["run_id"]).toBe("string");
+  });
+
+  test("is refused on a device that is not the owner, and records nothing", async () => {
+    process.env["O2B_DEVICE_ID"] = "dev-b";
+    const res = await cli(["--json"]);
+    expect(res.returncode).toBe(1);
+    expect(JSON.parse(res.stdout)).toMatchObject({ ok: false, code: "dream_not_owner" });
+    expect(existsSync(f.recordPath)).toBe(false);
+  });
+});
+
+describe("o2b dream run --claim", () => {
+  test("runs on its claim, takes the pass lock itself, and gives the claim back after the outcome", async () => {
+    writeClaim("tok1");
+    const original = ownerModule.withDreamPassLock;
+    const seen: Array<{ claim: boolean; worker: unknown }> = [];
+    const lock = spyOn(ownerModule, "withDreamPassLock").mockImplementation((...args) => {
+      // The claim stands for the whole pass and its outcome, with the
+      // worker's own pid written into it.
+      const claim = existsSync(claimPath());
+      const worker = claim ? JSON.parse(readFileSync(claimPath(), "utf8")).worker_pid : null;
+      seen.push({ claim, worker });
+      return original(...args);
+    });
+    let res;
+    try {
+      res = await cli(["--claim", "tok1"]);
+    } finally {
+      lock.mockRestore();
+    }
+    expect(res.returncode).toBe(0);
+    // The pass, then the outcome, each under the pass lock this run took.
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.every((s) => s.claim && s.worker === process.pid)).toBe(true);
+    expect(f.record()!.last_run).toMatchObject({ by: "worker", outcome: "complete" });
+    expect(existsSync(claimPath())).toBe(false);
+  });
+
+  test("a pass whose day could not be recorded keeps its claim and says so", async () => {
+    writeClaim("tok1");
+    const recording = spyOn(outcomeModule, "recordDreamOutcomeResult").mockImplementation(() => ({
+      kind: "failed",
+      message: "ENOSPC: no space left on device",
+    }));
+    let res;
+    try {
+      res = await cli(["--claim", "tok1"]);
+    } finally {
+      recording.mockRestore();
+    }
+    expect(res.returncode).toBe(0);
+    expect(res.stderr).toContain("could not be recorded: ENOSPC");
+    // Left for the next day check, which finds its worker gone and backs off.
+    const kept = JSON.parse(readFileSync(claimPath(), "utf8"));
+    expect(kept).toMatchObject({ token: "tok1", worker_pid: process.pid });
+  });
+
+  test("a token the claim does not hold runs nothing and leaves the claim", async () => {
+    writeClaim("tok1");
+    const front = spyOn(decideAuto, "prepareClosedQuestions");
+    let res;
+    let calls = -1;
+    try {
+      res = await cli(["--claim", "other", "--json"]);
+      calls = front.mock.calls.length;
+    } finally {
+      front.mockRestore();
+    }
+    expect(res.returncode).toBe(1);
+    expect(JSON.parse(res.stdout)).toMatchObject({ ok: false, reason: "claim-not-held" });
+    expect(calls).toBe(0);
+    expect(existsSync(f.recordPath)).toBe(false);
+    expect(JSON.parse(readFileSync(claimPath(), "utf8")).token).toBe("tok1");
+  });
+
+  test("no claim at all runs nothing", async () => {
+    const res = await cli(["--claim", "tok1"]);
+    expect(res.returncode).toBe(1);
+    expect(existsSync(f.recordPath)).toBe(false);
+  });
+
+  test("a device that is not the owner gives its claim back", async () => {
+    writeClaim("tok1");
+    process.env["O2B_DEVICE_ID"] = "dev-b";
+    const res = await cli(["--claim", "tok1"]);
+    expect(res.returncode).toBe(1);
+    expect(existsSync(claimPath())).toBe(false);
+    expect(existsSync(f.recordPath)).toBe(false);
+  });
+});
+
+describe("a real worker", () => {
+  test("the day check starts one detached worker that closes the day and logs one attempt", async () => {
+    const env = {
+      ...process.env,
+      ...homeEnv(join(f.tmp, "home")),
+      OPEN_SECOND_BRAIN_DREAM_AUTO: "true",
+    };
+    // The worker's handle is kept, so the test awaits its exit and, when
+    // a step fails, stops and awaits it before the fixture is removed.
+    const original = o2bCommand.spawnSelfDetached;
+    let worker: ReturnType<typeof Bun.spawn> | undefined;
+    const spawn = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation((argv, opts) => {
+      worker = original(argv, opts);
+      return worker;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      expect(dreamDayCheck(f.config(), { env }).started).toBe(true);
+      expect(worker).toBeDefined();
+      // The worker removes its claim after it recorded the outcome, then exits.
+      const exited = await Promise.race([
+        worker!.exited.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), CLI_SPAWN_BUDGET_MS - 5_000);
+        }),
+      ]);
+      expect(exited).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      spawn.mockRestore();
+      if (worker !== undefined) {
+        if (worker.exitCode === null) worker.kill();
+        await worker.exited;
+      }
+    }
+    expect(existsSync(claimPath())).toBe(false);
+    const r = f.record()!;
+    expect(r.last_run).toMatchObject({ by: "worker", outcome: "complete" });
+    expect(r.closed).toBe(true);
+    const log = readFileSync(dreamWorkerLogPath(f.store("dev-a")), "utf8");
+    expect(log.split("\n").filter((l) => l.startsWith(WORKER_LOG_ATTEMPT_PREFIX))).toHaveLength(1);
+  });
+});

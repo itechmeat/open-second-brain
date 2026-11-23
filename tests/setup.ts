@@ -160,6 +160,18 @@ if (process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] === undefined) {
   process.env["OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION"] = "false";
 }
 
+// The dream session trigger (change `dream-session-trigger`) starts a
+// detached `o2b dream run` worker at the first session of a day, at MCP
+// `initialize` and at the first tool call of a day, on a brain whose
+// dream owner is this device, which a fixture that creates a brain is. A
+// test suite must never leave background passes behind, so the default is
+// off here; the tests of the feature turn it on while they run. The name
+// is spelled out for the reason given above (`DREAM_AUTO_ENV` in
+// `src/core/brain/dream-trigger/constants.ts`).
+if (process.env["OPEN_SECOND_BRAIN_DREAM_AUTO"] === undefined) {
+  process.env["OPEN_SECOND_BRAIN_DREAM_AUTO"] = "false";
+}
+
 {
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
   realHomeGuard.attributeTo([root]);

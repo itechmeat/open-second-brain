@@ -112,6 +112,8 @@ import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { dreamDayCheck } from "../src/core/brain/dream-trigger/check.ts";
+import { DREAM_DAY_NOTICE_CODE } from "../src/core/brain/dream-trigger/constants.ts";
 import {
   fitHostContext,
   HOST_CONTEXT_CEILING_CHARS,
@@ -217,6 +219,21 @@ async function main(): Promise<void> {
       });
     }
 
+    // The dream day check (change `dream-session-trigger`, design D2): on
+    // every event of the session start matcher (start, resume, clear,
+    // compact), from the config the target was resolved from. On a closed
+    // day it reads one small record and returns; when a pass is due on the
+    // owner's device it starts a detached worker and returns at once. It
+    // never throws. Its note, when one is due, rides the runtime notices;
+    // a note that does not reach the session is marked not shown again
+    // (`unshowDayNote`), so a later session of the day shows it.
+    const dayCheck =
+      hookEventName === "SessionStart" ? dreamDayCheck(target.config, { notes: true }) : null;
+    const dayNote = dayCheck?.note ?? null;
+    const unshowDayNote = (delivered: string): void => {
+      if (dayNote !== null && !delivered.includes(dayNote)) dayCheck?.unshow?.();
+    };
+
     const limits = resolveInjectionLimits(vault);
     const meter = createInjectionMeter(limits.injectBudgetChars);
 
@@ -262,12 +279,20 @@ async function main(): Promise<void> {
     const startsEpoch = hookEventName === "SessionStart";
     const splits = startsEpoch && regroundSplitApplies(payload);
     const pendingDigest = startsEpoch ? pendingDreamDigest(vault) : null;
-    const candidateDigestBlock =
-      pendingDigest === null
-        ? ""
-        : renderRuntimeNotices([
-            { code: "dream-digest", severity: "info", message: pendingDigest.text },
-          ]);
+    const dayNotice =
+      dayNote === null
+        ? []
+        : [{ code: DREAM_DAY_NOTICE_CODE, severity: "info" as const, message: dayNote }];
+    const renderNotices = (withDigest: boolean): string => {
+      const notices = [
+        ...(withDigest && pendingDigest !== null
+          ? [{ code: "dream-digest", severity: "info" as const, message: pendingDigest.text }]
+          : []),
+        ...dayNotice,
+      ];
+      return notices.length === 0 ? "" : renderRuntimeNotices(notices);
+    };
+    const candidateDigestBlock = renderNotices(true);
     // The payload ends in one note for every lane the budgets cut
     // (src/core/agent-context/digest-cut-note.ts). Its room comes off the
     // ceiling before any lane is sized, so the lanes fill what is left
@@ -279,11 +304,18 @@ async function main(): Promise<void> {
     const measure = hostMeasureFor(detectHookRuntime(payload));
     const ceiling = HOST_CONTEXT_CEILING_CHARS - separated(DIGEST_CUT_NOTE_RESERVE);
     const hostRoom = splits ? null : Math.max(0, ceiling - separated(measure(standingBlock)));
-    const digestFits =
-      candidateDigestBlock.length > 0 &&
-      separated(measure(joinBlocks([standingBlock, candidateDigestBlock]))) <= ceiling &&
-      (hostRoom === null || separated(measure(candidateDigestBlock)) <= hostRoom);
-    const digestBlock = digestFits ? candidateDigestBlock : "";
+    const fits = (block: string): boolean =>
+      block.length > 0 &&
+      separated(measure(joinBlocks([standingBlock, block]))) <= ceiling &&
+      (hostRoom === null || separated(measure(block)) <= hostRoom);
+    // The digest and the day note share one notices block; a digest too
+    // long for the room left still lets the one-line note through.
+    const noteOnlyBlock = renderNotices(false);
+    const digestBlock = fits(candidateDigestBlock)
+      ? candidateDigestBlock
+      : fits(noteOnlyBlock)
+        ? noteOnlyBlock
+        : "";
     if (digestBlock.length > 0) {
       meter.sources.unshift({
         name: "runtime-notices",
@@ -394,6 +426,7 @@ async function main(): Promise<void> {
       meter,
     };
     if (context.length === 0) {
+      unshowDayNote("");
       // Nothing to emit, but the earlier context is gone all the same: the
       // epoch still clears the recall set and any stale re-delivery queue.
       if (startsEpoch) {
@@ -432,6 +465,7 @@ async function main(): Promise<void> {
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
+    unshowDayNote(delivery.parts[0]!);
     if (
       pendingDigest !== null &&
       digestBlock.length > 0 &&

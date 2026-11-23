@@ -82,6 +82,19 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/dream-queue/run-record.ts":
     "writes no vault file. A dream run's record and call log live in the store's device-local " +
     "state directory, mode 0600, never synced and never in a vault.",
+  "src/core/brain/dream-trigger/claim.ts":
+    "writes no vault file. The dream trigger's claim is a small token file beside the day " +
+    "record under the machine's state root, never synced and never in a vault.",
+  "src/core/brain/dream-trigger/due.ts":
+    "writes no vault file. It creates the folder of the dream worker's log in the store's " +
+    "device-local state directory and opens an attempt there, never synced and never in a vault.",
+  "src/core/brain/dream-trigger/outcome.ts":
+    "writes no vault file. It creates the folder of the dream trigger's claim under the " +
+    "machine's state root, where a whole live run holds the claim, never synced and never " +
+    "in a vault.",
+  "src/core/brain/dream-trigger/record.ts":
+    "writes no vault file. The dream day record is machine state under the state root, one " +
+    "small file per configured store root, never synced and never in a vault.",
   "src/core/brain/dream-owner/owner.ts":
     "writes no vault file. Its one direct write is the dream owner's claim-seen note " +
     "in the store's device-local state directory, never synced and never in a vault; " +
@@ -218,6 +231,10 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/dream-queue/agent-executor.ts": "writes only outside the vault (device state)",
   "src/core/brain/dream-queue/agent-verified.ts": "writes only outside the vault (device state)",
   "src/core/brain/dream-queue/run-record.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-trigger/claim.ts": "writes only outside the vault (machine state)",
+  "src/core/brain/dream-trigger/due.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-trigger/outcome.ts": "writes only outside the vault (machine state)",
+  "src/core/brain/dream-trigger/record.ts": "writes only outside the vault (machine state)",
   "src/core/brain/init.ts": ASKS_THE_GATE,
   "src/core/brain/gitignore-guard.ts":
     "called by the bootstrap, after `bootstrapBrain` asked the gate for the vault",
