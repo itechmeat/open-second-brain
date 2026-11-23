@@ -54,6 +54,10 @@ import type { ScaffoldStubErrorCode } from "../core/brain/notes/scaffold-stub.ts
 import { ScaffoldStubError } from "../core/brain/notes/scaffold-stub.ts";
 import { BrainParseError } from "../core/brain/parse-error.ts";
 import { DREAM_NOT_OWNER_CODE } from "../core/brain/dream-owner/constants.ts";
+import {
+  DREAM_REPLAY_BEHIND_CODE,
+  DreamReplayBehindError,
+} from "../core/brain/dream-replay/behind.ts";
 import { DreamNotOwnerError } from "../core/brain/dream-owner/gate.ts";
 import type { PinnedBatchErrorCode } from "../core/brain/pinned.ts";
 import { PinnedBatchError } from "../core/brain/pinned.ts";
@@ -379,6 +383,8 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...TOPIC_REFUSAL_CODES,
     // A live dream path refused on a device that is not the dream owner.
     DREAM_NOT_OWNER_CODE,
+    // A staged dream action refused while missed windows wait for a replay.
+    DREAM_REPLAY_BEHIND_CODE,
   ] as const),
 ]);
 
@@ -491,6 +497,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   // tells a damaged binding file from a swapped vault.
   carried(VaultBindingsUnreadableError),
   carried(DreamNotOwnerError),
+  carried(DreamReplayBehindError),
   fixed(CountGuardError, COUNT_GUARD_WIRE_CODE),
   fixed(VaultFrozenError, VAULT_FROZEN_REFUSAL),
   fixed(MigrationInProgressError, MIGRATION_IN_PROGRESS_REFUSAL),

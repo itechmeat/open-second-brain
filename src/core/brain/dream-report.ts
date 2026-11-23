@@ -22,6 +22,7 @@ import type { ReconcileOutcomes } from "./reconcile-outcomes.ts";
 import { writeRollupLedger, type RollupLadderPlan } from "./rollup-ladder.ts";
 import { isoSecond } from "./time.ts";
 import { renderPrefLink } from "./wikilink.ts";
+import { effectId } from "./dream-replay/ledgers.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
 /** Spacing between consecutive events so their log headings stay distinct. */
@@ -60,6 +61,35 @@ export interface DreamReportInput {
   /** The dream owner of a brain that has one (`dream-owner/`); absent on an unbound brain. */
   readonly owner?: { readonly device: string; readonly agent: string };
   readonly workrun: WorkrunHandle | null;
+  /**
+   * Where a replayed window keeps its ledgers (the brain store,
+   * `dream-replay/ledgers.ts`); absent, the two device-local files.
+   */
+  /**
+   * A replayed window (`dream-replay/`): every event carries the window and
+   * its effect id, and an event whose effect id the window already wrote
+   * (a resumed window) is not written again.
+   */
+  readonly audit?: {
+    readonly window: string;
+    readonly existing: ReadonlySet<string>;
+    /** Late applications in time for a trial already retired (design D5a). */
+    readonly reconciliations: ReadonlyArray<{
+      readonly rule: string;
+      readonly evidence_at: ReadonlyArray<string>;
+      readonly deadline: string;
+    }>;
+    readonly notCheckable: number;
+    /** Records a rebase took as seen at this window's admission. */
+    readonly rebasedSeen: number;
+    /** The first replay's archived signals that may have missed a promotion. */
+    readonly unrecoverable: number;
+  };
+  readonly ledgerSink?: (ledgers: {
+    readonly crossTopicLedger: CrossTopicLedger | null;
+    readonly rollupPlan: RollupLadderPlan;
+    readonly rollupProductionComplete: boolean;
+  }) => void;
 }
 
 /**
@@ -73,62 +103,95 @@ export function writeDreamLog(input: DreamReportInput): void {
   // The events are appended in batches (`appendLogEvents`), not one synced
   // write each: a first pass over a migrated history notes thousands of
   // signals. A batch lands before the workrun marker that claims it.
-  const events: BrainLogEntry[] = [];
+  const raw: BrainLogEntry[] = [];
+  const audit = input.audit;
+  // Each event's subject names its effect: the same event of the same
+  // window has the same id on every run (design D4.4).
+  const subjects: string[] = [];
+  const events = {
+    push(entry: BrainLogEntry, subject = ""): void {
+      raw.push(entry);
+      subjects.push(subject);
+    },
+  };
   const flush = (): void => {
-    appendLogEvents(vault, events);
-    events.length = 0;
+    if (audit === undefined) {
+      appendLogEvents(vault, raw);
+    } else {
+      const tagged: BrainLogEntry[] = [];
+      raw.forEach((entry, index) => {
+        const effect = effectId(audit.window, entry.eventType, subjects[index]!);
+        if (audit.existing.has(effect)) return;
+        tagged.push({ ...entry, body: { ...entry.body, window: audit.window, effect } });
+      });
+      appendLogEvents(vault, tagged);
+    }
+    raw.length = 0;
+    subjects.length = 0;
   };
 
   for (const corrupt of input.scan.corrupted) {
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter,
-      body: {
-        path: vaultRelativeOf(corrupt.path, vault),
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.skipCorruptedFrontmatter,
+        body: {
+          path: vaultRelativeOf(corrupt.path, vault),
+        },
       },
-    });
+      vaultRelativeOf(corrupt.path, vault),
+    );
   }
 
   for (const noted of plan.notedRedundant) {
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.notedRedundant,
-      body: {
-        preference: noted.preference,
-        signal: noted.signal,
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.notedRedundant,
+        body: {
+          preference: noted.preference,
+          signal: noted.signal,
+        },
       },
-    });
+      `${noted.preference}|${noted.signal}`,
+    );
   }
 
   // Reconcile phase (F3): one event per open question + per
   // auto-resolution. Persisted only on this changed path so a no-op
   // run stays byte-identical.
   for (const q of reconcile.openQuestions) {
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.reconcile,
-      body: {
-        topic: q.topic,
-        domain: q.domain,
-        reason: q.reason,
-        ...(q.scope ? { scope: q.scope } : {}),
-        positives: String(q.positive_count),
-        negatives: String(q.negative_count),
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: q.topic,
+          domain: q.domain,
+          reason: q.reason,
+          ...(q.scope ? { scope: q.scope } : {}),
+          positives: String(q.positive_count),
+          negatives: String(q.negative_count),
+        },
       },
-    });
+      `${q.topic}|${q.scope ?? ""}`,
+    );
   }
   for (const r of reconcile.autoResolved) {
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.reconcile,
-      body: {
-        topic: r.topic,
-        domain: r.domain,
-        resolution: "auto-resolved",
-        winner_sign: r.winner_sign,
-        margin_days: String(r.margin_days),
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: {
+          topic: r.topic,
+          domain: r.domain,
+          resolution: "auto-resolved",
+          winner_sign: r.winner_sign,
+          margin_days: String(r.margin_days),
+        },
       },
-    });
+      `${r.topic}|auto-resolved`,
+    );
   }
   // Reconcile's only durable artifact is the pair of event loops just
   // above: the classification itself is in-memory and vanishes with the
@@ -141,16 +204,19 @@ export function writeDreamLog(input: DreamReportInput): void {
   workrun?.checkpoint(WORKRUN_PHASE.reconcileComplete);
 
   for (const suppressed of plan.signalsSuppressed) {
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.signalSuppressed,
-      body: {
-        signal: suppressed.signal,
-        retired: suppressed.retired,
-        topic: suppressed.topic,
-        reason: suppressed.reason,
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.signalSuppressed,
+        body: {
+          signal: suppressed.signal,
+          retired: suppressed.retired,
+          topic: suppressed.topic,
+          reason: suppressed.reason,
+        },
       },
-    });
+      suppressed.signal,
+    );
   }
 
   for (const retain of plan.retainPinned) {
@@ -159,15 +225,18 @@ export function writeDreamLog(input: DreamReportInput): void {
     // attempted-but-blocked reason). We log it as a `retire` event
     // with a `blocked: pinned` payload field so the parser
     // round-trips cleanly and the doctor command can flag it.
-    events.push({
-      timestamp: nextStamp(),
-      eventType: BRAIN_LOG_EVENT_KIND.retire,
-      body: {
-        preference: retain.preference,
-        reason: retain.reason,
-        blocked: RETIRE_BLOCKED_PINNED,
+    events.push(
+      {
+        timestamp: nextStamp(),
+        eventType: BRAIN_LOG_EVENT_KIND.retire,
+        body: {
+          preference: retain.preference,
+          reason: retain.reason,
+          blocked: RETIRE_BLOCKED_PINNED,
+        },
       },
-    });
+      retain.preference,
+    );
   }
 
   events.push({
@@ -176,6 +245,15 @@ export function writeDreamLog(input: DreamReportInput): void {
     body: buildSummaryBody(input),
   });
   flush();
+
+  if (input.ledgerSink !== undefined) {
+    input.ledgerSink({
+      crossTopicLedger: input.crossTopicLedger,
+      rollupPlan: input.rollupPlan,
+      rollupProductionComplete: input.rollupProductionComplete !== false,
+    });
+    return;
+  }
 
   // S3: persist the advanced rollup-ladder counters only when a rung
   // fired. A below-threshold run never touches the ledger, so its
@@ -268,6 +346,22 @@ function buildSummaryBody(input: DreamReportInput): Record<string, string | Read
         `(applied: ${d.applied}, violated: ${d.violated})`,
       ].join(" "),
     );
+  }
+  if (input.audit !== undefined) {
+    // The window's late applications that came in time for a trial the
+    // daily passes had already retired: named, the rule stays retired.
+    if (input.audit.reconciliations.length > 0) {
+      body["reconciliations"] = input.audit.reconciliations.map(
+        (r) => `[[${r.rule}]] deadline ${r.deadline} <- applied ${r.evidence_at.join(", ")}`,
+      );
+    }
+    if (input.audit.notCheckable > 0) {
+      body["reconciliation_not_checkable"] = String(input.audit.notCheckable);
+    }
+    if (input.audit.rebasedSeen > 0) body["rebased_seen"] = String(input.audit.rebasedSeen);
+    if (input.audit.unrecoverable > 0) {
+      body["unrecoverable_archived"] = String(input.audit.unrecoverable);
+    }
   }
   if (input.isNonPrimary) {
     // Audit-trail row matching the structured warning. Stored

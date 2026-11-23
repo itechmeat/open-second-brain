@@ -17,6 +17,11 @@
  * `o2b brain dream` is unchanged; this group holds the role's own verbs.
  */
 
+import {
+  describeReplayStatus,
+  replayStatus,
+  replayStatusJson,
+} from "../../core/brain/dream-replay/status-view.ts";
 import { ConfigReadError, resolveVault } from "../../core/config.ts";
 import {
   releaseDreamOwner,
@@ -134,14 +139,20 @@ function cmdOwner(argv: ReadonlyArray<string>): number {
     const status = dreamOwnerStatus(vault, { ...configOpt, look: true });
     const queue = queueStatus(vault, configOpt);
     const waiting = waitingByOperation(queue, configOpt);
+    const replay = replayStatus(vault, { ...configOpt, queue });
     if (json)
       writeJson({
         ok: true,
         ...dreamOwnerStatusJson(status),
         queue: queueSummaryJson(queue, waiting),
+        replay: replayStatusJson(replay),
       });
     else {
-      const lines = [...describeDreamOwnerStatus(status), ...describeQueueStatus(queue, waiting)];
+      const lines = [
+        ...describeDreamOwnerStatus(status),
+        ...describeQueueStatus(queue, waiting),
+        ...describeReplayStatus(replay),
+      ];
       process.stdout.write(`${lines.join("\n")}\n`);
     }
     return DREAM_EXIT.ok;

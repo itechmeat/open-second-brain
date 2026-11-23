@@ -24,6 +24,7 @@ import { storeCheck } from "./store-check.ts";
 import { viewWriterCheck } from "./view-writer-check.ts";
 import { dreamOwnerCheck } from "./dream-owner-check.ts";
 import { dreamQueueCheck } from "./dream-queue-check.ts";
+import { dreamReplayCheck } from "./dream-replay-check.ts";
 import { topicPlanCheck } from "./topic-plan-check.ts";
 import { disciplineDoctorCheck, legacyDisciplineJobsCheck } from "./discipline-check.ts";
 
@@ -33,6 +34,7 @@ export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.fre
   viewWriterCheck,
   dreamOwnerCheck,
   dreamQueueCheck,
+  dreamReplayCheck,
   deviceStateCheck,
   adoptConflictsCheck,
   laneIdMisfiledCheck,

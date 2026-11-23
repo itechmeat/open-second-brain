@@ -128,6 +128,13 @@ export interface ReadShardOptions {
    * folder below it.
    */
   readonly partitionRoot?: string;
+  /**
+   * A byte limit: nothing at or after it is read, as if the shard ended
+   * there (a boundary a caller recorded, `read/shards-from.ts`). A line
+   * that ends exactly at the limit is read; one that crosses it is not.
+   * A shard shorter than the limit is read to its end.
+   */
+  readonly until?: number;
 }
 
 const NEWLINE = 0x0a;
@@ -399,7 +406,8 @@ export function scanShard(
     };
   }
   try {
-    const size = fstatSync(fd).size;
+    const fileSize = fstatSync(fd).size;
+    const size = options.until === undefined ? fileSize : Math.min(fileSize, options.until);
     if (start > size) {
       diagnostics.push({
         kind: "offset-past-end",

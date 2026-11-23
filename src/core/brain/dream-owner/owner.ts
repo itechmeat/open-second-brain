@@ -24,6 +24,7 @@
  *    forced claim reaches it.
  */
 
+import { lastCoveredWindow } from "../dream-replay/transfer.ts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -317,7 +318,9 @@ export function releaseDreamOwner(
       appendSetting(
         store,
         DREAM_OWNER_RELEASED_KIND,
-        { request: null, device: store.device, to: null },
+        // The last window this device covered, for the next owner (dream
+        // replay design D8).
+        { request: null, device: store.device, to: null, covered: lastCoveredWindow(store.root) },
         options,
       );
       return { status: "released" };
@@ -351,7 +354,12 @@ export function releaseIfRequested(
         appendSetting(
           store,
           DREAM_OWNER_RELEASED_KIND,
-          { request: pending.id, device: store.device, to: pending.device },
+          {
+            request: pending.id,
+            device: store.device,
+            to: pending.device,
+            covered: lastCoveredWindow(store.root),
+          },
           options,
         );
         return pending.device;

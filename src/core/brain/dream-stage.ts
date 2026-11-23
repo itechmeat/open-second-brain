@@ -40,6 +40,7 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
 import { dream, type DreamOptions, type DreamRunSummary } from "./dream.ts";
+import { assertNoWindowsBehind } from "./dream-replay/behind.ts";
 import {
   assertDreamOwner,
   recheckDreamOwner,
@@ -401,6 +402,9 @@ function renderReport(
  */
 export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBundle {
   const gate = assertStagedOwner(vault, opts.configPath);
+  // The staged plan is today's: refused while a live pass would replay
+  // missed windows first (dream replay design D1).
+  assertNoWindowsBehind(vault, opts.now, opts.configPath);
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const summary = dream(vault, {
@@ -543,6 +547,7 @@ export function validateDreamBundle(
   runId: string,
   opts: DreamStageOptions,
 ): DreamStageValidation {
+  assertNoWindowsBehind(vault, opts.now, opts.configPath);
   if (!isValidRunId(runId)) {
     return Object.freeze({
       valid: false,
@@ -600,6 +605,7 @@ export function applyDreamBundle(
   opts: DreamStageOptions,
 ): DreamStageApplyOutcome {
   const gate = assertStagedOwner(vault, opts.configPath);
+  assertNoWindowsBehind(vault, opts.now, opts.configPath);
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
   const validation = validateDreamBundle(vault, runId, opts);
@@ -777,6 +783,7 @@ export function retriageDreamBundle(
   opts: DreamStageOptions,
 ): DreamRetriageOutcome {
   const gate = assertStagedOwner(vault, opts.configPath);
+  assertNoWindowsBehind(vault, opts.now, opts.configPath);
   return withStagedOwnerLock(gate, () => {
     if (!isValidRunId(runId)) {
       throw new DreamRetriageError(runId, "that is not an id this staging surface issues");

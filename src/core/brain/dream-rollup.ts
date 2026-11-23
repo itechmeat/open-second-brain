@@ -11,6 +11,7 @@ import {
   readRollupLedger,
   resolveRollupThresholds,
   type RollupLadderPlan,
+  type RollupLedger,
 } from "./rollup-ladder.ts";
 import type { BrainConfig } from "./types.ts";
 
@@ -20,10 +21,12 @@ export function buildRollupPlan(
   factCount: number,
   runId: string,
   linkCandidates: () => LinkCandidateManifest,
+  /** The ledger to plan against; absent, this device's ledger file (a replayed window passes the store's). */
+  ledger?: RollupLedger | null,
 ): RollupLadderPlan {
   return planRollupLadder({
     factCount,
-    ledger: readRollupLedger(vault),
+    ledger: ledger === undefined ? readRollupLedger(vault) : ledger,
     thresholds: resolveRollupThresholds(cfg),
     runId,
     linkCandidates,

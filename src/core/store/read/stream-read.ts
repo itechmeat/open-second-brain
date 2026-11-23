@@ -104,6 +104,15 @@ export interface StreamReadOptions {
    * a shard it stopped keeps the tail it had.
    */
   readonly checkpoint?: () => void;
+  /**
+   * A boundary: a byte limit per shard, keyed by the shard's
+   * partition-relative path (`read/shards-from.ts` `untilOf`). A shard is
+   * read only up to its limit, and a shard the map does not name is not
+   * read at all, so the read sees nothing beyond the boundary. A read with
+   * a boundary neither uses nor updates `tails`: a kept tail holds the
+   * records up to the shard's end.
+   */
+  readonly until?: ReadonlyMap<string, number>;
 }
 
 /** A checkpoint's throw on its way out of a shard scan. */
@@ -185,9 +194,10 @@ const PREFIX_CHUNK_BYTES = 1 << 20;
  * `hash` extended with bytes `from` to `to` of the file at `path`, or
  * null when the file holds fewer or is refused. Opened through the guarded
  * opener (`safe-fs.ts`): a link or a FIFO swapped in under the name after
- * the caller's lstat is refused, never followed or blocked on.
+ * the caller's lstat is refused, never followed or blocked on. Also the
+ * digest of a recorded shard prefix (`read/shards-from.ts`).
  */
-function hashRange(
+export function hashRange(
   path: string,
   partitionRoot: string,
   hash: Hash,
@@ -269,10 +279,16 @@ function scanKeeping(
   offset: number,
   keep: ((record: StoreRecord) => boolean) | undefined,
   checkpoint?: () => void,
+  until?: number,
 ): ShardPass {
   const records: ReadRecord[] = [];
   let anyPending = 0;
-  const scan = scanShard(path, { partitionRoot, ...(offset > 0 ? { offset } : {}) }, (r) => {
+  const options = {
+    partitionRoot,
+    ...(offset > 0 ? { offset } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
+  const scan = scanShard(path, options, (r) => {
     if (checkpoint !== undefined) {
       try {
         checkpoint();
@@ -462,12 +478,14 @@ export function readStreamRecords(
   for (const shard of shards) {
     if (options.device !== undefined && shard.device !== options.device) continue;
     if (options.month !== undefined && !options.month(monthOf(shard.rel))) continue;
+    const until = options.until?.get(shard.rel);
+    if (options.until !== undefined && until === undefined) continue;
     options.checkpoint?.();
     let read: ShardPass;
     try {
       read =
-        options.tails === undefined
-          ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint)
+        options.tails === undefined || until !== undefined
+          ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint, until)
           : readShardWithTails(
               shard.path,
               shard.rel,
@@ -505,7 +523,12 @@ export function readStreamRecords(
     }
   }
   // A shard no longer listed (compacted away, removed) keeps nothing.
-  if (options.tails !== undefined && options.device === undefined && options.month === undefined) {
+  if (
+    options.tails !== undefined &&
+    options.device === undefined &&
+    options.month === undefined &&
+    options.until === undefined
+  ) {
     const listed = new Set(shards.map((shard) => shard.rel));
     for (const rel of options.tails.keys()) if (!listed.has(rel)) options.tails.delete(rel);
   }

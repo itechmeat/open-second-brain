@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6955208 bytes
-# Maximum unpacked size: 23609915 bytes
+# Maximum packed size: 7007377 bytes
+# Maximum unpacked size: 23795366 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -496,6 +496,7 @@ src/core/brain/doctor/device-state-check.ts
 src/core/brain/doctor/discipline-check.ts
 src/core/brain/doctor/dream-owner-check.ts
 src/core/brain/doctor/dream-queue-check.ts
+src/core/brain/doctor/dream-replay-check.ts
 src/core/brain/doctor/embedding-sunset-check.ts
 src/core/brain/doctor/embeddings-health-check.ts
 src/core/brain/doctor/entity-alias-verdicts.ts
@@ -566,6 +567,19 @@ src/core/brain/dream-queue/records.ts
 src/core/brain/dream-queue/rollup-work.ts
 src/core/brain/dream-queue/status-view.ts
 src/core/brain/dream-refresh.ts
+src/core/brain/dream-replay/admission.ts
+src/core/brain/dream-replay/behind.ts
+src/core/brain/dream-replay/bootstrap.ts
+src/core/brain/dream-replay/fold.ts
+src/core/brain/dream-replay/ledgers.ts
+src/core/brain/dream-replay/loop.ts
+src/core/brain/dream-replay/pass.ts
+src/core/brain/dream-replay/plan.ts
+src/core/brain/dream-replay/privacy.ts
+src/core/brain/dream-replay/reconcile.ts
+src/core/brain/dream-replay/records.ts
+src/core/brain/dream-replay/status-view.ts
+src/core/brain/dream-replay/transfer.ts
 src/core/brain/dream-replay/window.ts
 src/core/brain/dream-report.ts
 src/core/brain/dream-rollup.ts
@@ -1569,9 +1583,12 @@ src/core/store/read/pinned.ts
 src/core/store/read/preferences.ts
 src/core/store/read/protection-store.ts
 src/core/store/read/read-context.ts
+src/core/store/read/read-view.ts
+src/core/store/read/shards-from.ts
 src/core/store/read/signals.ts
 src/core/store/read/store-entities.ts
 src/core/store/read/stream-read.ts
+src/core/store/read/viewed-read.ts
 src/core/store/reader.ts
 src/core/store/reference-privacy.ts
 src/core/store/removal-backlog.ts

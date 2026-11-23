@@ -195,6 +195,8 @@ export function preferenceEvidenceRecord(input: {
   readonly private: boolean;
   /** The evidence record this one copies (a merge moving a drop's evidence to the keep). */
   readonly mergedFrom?: string;
+  /** When the rule was applied (ISO 8601); absent on records written before the dream replay. */
+  readonly at?: string;
 }): DualWriteRecord {
   return {
     stream: "events",
@@ -205,6 +207,7 @@ export function preferenceEvidenceRecord(input: {
       preference: input.id,
       result: input.result,
       artifact: input.artifact,
+      ...(input.at !== undefined ? { at: input.at } : {}),
       ...(input.mergedFrom !== undefined ? { [MERGED_FROM_FIELD]: input.mergedFrom } : {}),
     },
   };

@@ -150,6 +150,11 @@ const LOG_READERS: Readonly<Record<string, LogReaderRow>> = Object.freeze(
       "window-owned evidence reads and the direct retire snapshot (dream-window-context)",
     ),
     ...rows(
+      ["core/brain/dream-replay/loop.ts", "core/brain/dream-replay/bootstrap.ts"],
+      "computation",
+      "the dream replay: a window's own audit events (its effect ids) and the last audited pass of the first replay (dream-replay)",
+    ),
+    ...rows(
       [
         "core/brain/governance/forget-plan.ts",
         "core/brain/profile-doc.ts",

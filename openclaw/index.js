@@ -2599,7 +2599,8 @@ var init_constants = __esm(() => {
     "topics",
     "settings",
     "digests",
-    "dream-work"
+    "dream-work",
+    "dream-replay"
   ]);
   ENVELOPE_FIELDS = Object.freeze([
     "v",
@@ -6360,7 +6361,8 @@ function scanShard(path, options, onRecord) {
     };
   }
   try {
-    const size = fstatSync6(fd).size;
+    const fileSize = fstatSync6(fd).size;
+    const size = options.until === undefined ? fileSize : Math.min(fileSize, options.until);
     if (start > size) {
       diagnostics.push({
         kind: "offset-past-end",
@@ -6999,10 +7001,15 @@ function sameStamp(a, b) {
 function appendStampOf(stat) {
   return { size: Number(stat.size), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
 }
-function scanKeeping(path, partitionRoot, offset, keep, checkpoint) {
+function scanKeeping(path, partitionRoot, offset, keep, checkpoint, until) {
   const records = [];
   let anyPending = 0;
-  const scan = scanShard(path, { partitionRoot, ...offset > 0 ? { offset } : {} }, (r) => {
+  const options = {
+    partitionRoot,
+    ...offset > 0 ? { offset } : {},
+    ...until !== undefined ? { until } : {}
+  };
+  const scan = scanShard(path, options, (r) => {
     if (checkpoint !== undefined) {
       try {
         checkpoint();
@@ -7134,10 +7141,13 @@ function readStreamRecords(root, partition, ref, options = {}) {
       continue;
     if (options.month !== undefined && !options.month(monthOf2(shard.rel)))
       continue;
+    const until = options.until?.get(shard.rel);
+    if (options.until !== undefined && until === undefined)
+      continue;
     options.checkpoint?.();
     let read;
     try {
-      read = options.tails === undefined ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep, options.checkpoint);
+      read = options.tails === undefined || until !== undefined ? scanKeeping(shard.path, partitionRoot, 0, options.keep, options.checkpoint, until) : readShardWithTails(shard.path, shard.rel, partitionRoot, options.tails, options.keep, options.checkpoint);
     } catch (err) {
       if (err instanceof StreamReadInterrupted)
         throw err.cause;
@@ -7166,7 +7176,7 @@ function readStreamRecords(root, partition, ref, options = {}) {
       }
     }
   }
-  if (options.tails !== undefined && options.device === undefined && options.month === undefined) {
+  if (options.tails !== undefined && options.device === undefined && options.month === undefined && options.until === undefined) {
     const listed = new Set(shards.map((shard) => shard.rel));
     for (const rel of options.tails.keys())
       if (!listed.has(rel))
@@ -9131,6 +9141,126 @@ var init_caller_reach = __esm(() => {
   storage = new AsyncLocalStorage2;
 });
 
+// src/core/store/read/read-view.ts
+function activeStoreReadView() {
+  return active;
+}
+function isInputRecord(record) {
+  if (record.kind === SIGNAL_KIND || record.kind === PREFERENCE_EVIDENCE_KIND)
+    return true;
+  return record.kind === LOG_EVENT_KIND && record.body["event_type"] === APPLY_EVIDENCE_EVENT;
+}
+function eventTimeOf(record) {
+  if (record.kind === SIGNAL_KIND) {
+    const frontmatter = record.body["frontmatter"];
+    const created = frontmatter !== null && typeof frontmatter === "object" ? frontmatter["created_at"] : undefined;
+    return typeof created === "string" && Number.isFinite(Date.parse(created)) ? created : null;
+  }
+  if (record.kind === LOG_EVENT_KIND) {
+    const timestamp = record.body["timestamp"];
+    return typeof timestamp === "string" && Number.isFinite(Date.parse(timestamp)) ? timestamp : null;
+  }
+  if (record.kind === PREFERENCE_EVIDENCE_KIND) {
+    const at = record.body[EVIDENCE_AT_FIELD];
+    if (typeof at === "string" && Number.isFinite(Date.parse(at)))
+      return at;
+    const clock = parseHlc(record.hlc);
+    return clock === null ? null : new Date(clock.physical).toISOString();
+  }
+  return null;
+}
+function effectiveTimeOf(view, record) {
+  return view.effective.get(record.id) ?? eventTimeOf(record);
+}
+function visibleInView(view, record) {
+  const at = effectiveTimeOf(view, record);
+  return at === null || Date.parse(at) <= view.instant.getTime();
+}
+function boundaryOf(view, partition, stream) {
+  const out = new Map;
+  for (const p of view.boundary) {
+    if (p.partition === partition && p.stream === stream)
+      out.set(p.shard, p.offset);
+  }
+  return out;
+}
+var APPLY_EVIDENCE_EVENT = "apply-evidence", EVIDENCE_AT_FIELD = "at", active = null;
+var init_read_view = __esm(() => {
+  init_constants();
+  init_hlc();
+});
+
+// src/core/store/read/viewed-read.ts
+function belowOnce(key, token, read) {
+  if (key === undefined)
+    return read();
+  if (belowCache?.token !== token)
+    belowCache = { token, reads: new Map };
+  const cached = belowCache.reads.get(key);
+  if (cached !== undefined)
+    return cached;
+  const fresh = read();
+  if (fresh.unreadable.length === 0 && !fresh.skippedPending)
+    belowCache.reads.set(key, fresh);
+  return fresh;
+}
+function readStreamViewed(root, partition, ref, view, options = {}) {
+  const keep = options.keep ?? (() => true);
+  const folder = ref.ledger !== undefined ? `${ref.stream}/${ref.ledger}` : ref.stream;
+  const below = belowOnce(options.cacheKey === undefined ? undefined : `${root}
+${partition}
+${folder}
+${options.cacheKey}`, view.token, () => readStreamRecords(root, partition, ref, {
+    until: boundaryOf(view, partition, folder),
+    keep: (record) => keep(record) && (!isInputRecord(record) || visibleInView(view, record)),
+    ...options.month !== undefined ? { month: options.month } : {},
+    ...options.checkpoint !== undefined ? { checkpoint: options.checkpoint } : {}
+  }));
+  const records = [...below.records];
+  const unreadable = [...below.unreadable];
+  const seen = new Set(below.records.map((record) => record.id));
+  const partitionRoot = partitionDir(root, partition);
+  const offsets = boundaryOf(view, partition, folder);
+  let shards;
+  try {
+    shards = listShards(partitionRoot, ref);
+  } catch {
+    shards = [];
+    unreadable.push(folder);
+  }
+  for (const shard of shards) {
+    if (options.month !== undefined && !options.month(monthOfShard(shard.rel)))
+      continue;
+    const offset = offsets.get(shard.rel) ?? 0;
+    try {
+      const scan = scanShard(shard.path, { partitionRoot, ...offset > 0 ? { offset } : {} }, (r) => {
+        if (r.bodyState === "pending")
+          return;
+        if (!keep(r.record) || isInputRecord(r.record) || seen.has(r.record.id))
+          return;
+        seen.add(r.record.id);
+        records.push(r.record);
+      });
+      if (shardScanGap(scan) !== null)
+        unreadable.push(shard.rel);
+    } catch {
+      unreadable.push(shard.rel);
+    }
+  }
+  return { ...below, records, unreadable: [...new Set(unreadable)] };
+}
+function monthOfShard(rel) {
+  return rel.slice(rel.lastIndexOf("/") + 1).slice(0, 7);
+}
+var belowCache = null;
+var init_viewed_read = __esm(() => {
+  init_read_view();
+  init_reader();
+  init_shard_list();
+  init_store_paths();
+  init_stream_read();
+});
+
 // src/core/store/read/store-entities.ts
 import { lstatSync as lstatSync8, statSync as statSync14 } from "node:fs";
 function sharedCountersOf(history, privateIds) {
@@ -9199,7 +9329,7 @@ function signalIsPrivate(record, partition) {
   const frontmatter = record.body["frontmatter"];
   return typeof frontmatter === "object" && frontmatter !== null && !Array.isArray(frontmatter) && isPrivateFrontmatter(frontmatter);
 }
-function build(store, checkpoint) {
+function build(store, checkpoint, until, view) {
   const all = [];
   const unreadable = [];
   const pinned = new Map;
@@ -9207,8 +9337,12 @@ function build(store, checkpoint) {
   const pendingBlobs = [];
   let pendingSignalLifecycle = 0;
   for (const partition of store.partitions) {
-    const read = readStreamRecords(store.root, partition, EVENTS, {
-      tails: tailsOf(store, partition),
+    const read = view !== undefined ? readStreamViewed(store.root, partition, EVENTS, view, {
+      keep: isEntityRecord,
+      cacheKey: "entities",
+      ...checkpoint !== undefined ? { checkpoint } : {}
+    }) : readStreamRecords(store.root, partition, EVENTS, {
+      ...until === undefined ? { tails: tailsOf(store, partition) } : { until: until.get(partition) ?? new Map },
       keep: isEntityRecord,
       ...checkpoint !== undefined ? { checkpoint } : {}
     });
@@ -9260,10 +9394,28 @@ function build(store, checkpoint) {
     unreadable,
     skippedPending,
     pendingBlobs,
-    pendingSignalLifecycle
+    pendingSignalLifecycle,
+    ...view !== undefined ? { signalTimes: signalTimesOf(signalFold.signals, view) } : {}
   };
 }
+function signalTimesOf(signals, view) {
+  const out = new Map;
+  for (const [id, entry] of signals) {
+    const first = entry.history.find((record) => record.kind === SIGNAL_KIND);
+    if (first === undefined)
+      continue;
+    const at = effectiveTimeOf(view, first);
+    if (at !== null && at !== eventTimeOf(first))
+      out.set(id, at);
+  }
+  return out;
+}
 function readEntitiesOf(store, options = {}) {
+  if (options.until !== undefined)
+    return build(store, options.checkpoint, options.until);
+  const view = activeStoreReadView();
+  if (view !== null)
+    return viewedEntities(store, view, options.checkpoint);
   const cached = cache.get(store.root);
   const cachedLines = cached === undefined ? null : pendingBlobStampLines(store.root, cached.entities.pendingBlobs);
   const shardStamp = fingerprintOf(store);
@@ -9280,6 +9432,19 @@ ${blobLines}`, entities });
     cache.delete(store.root);
   return entities;
 }
+function viewedEntities(store, view, checkpoint) {
+  const key = `${view.token}
+${fingerprintOf(store)}`;
+  const cached = viewedCache.get(store.root);
+  if (cached !== undefined && cached.key === key)
+    return cached.entities;
+  const entities = build(store, checkpoint, undefined, view);
+  if (entities.unreadable.length === 0 && !entities.skippedPending) {
+    viewedCache.set(store.root, { key, entities });
+  } else
+    viewedCache.delete(store.root);
+  return entities;
+}
 function configuredStore(configPath) {
   try {
     return inspectStore(resolveConfiguredStoreRoot(configPath).root);
@@ -9287,11 +9452,11 @@ function configuredStore(configPath) {
     return null;
   }
 }
-function readStoreEntities(configPath) {
+function readStoreEntities(configPath, options = {}) {
   const store = configuredStore(configPath);
-  return store === null ? null : readEntitiesOf(store);
+  return store === null ? null : readEntitiesOf(store, options);
 }
-var cache, tailsByRoot, EVENTS, ENTITY_KINDS;
+var cache, tailsByRoot, EVENTS, ENTITY_KINDS, viewedCache;
 var init_store_entities = __esm(() => {
   init_fs_identity();
   init_constants();
@@ -9304,6 +9469,8 @@ var init_store_entities = __esm(() => {
   init_store_open();
   init_store_paths();
   init_stream_read();
+  init_read_view();
+  init_viewed_read();
   init_own_appends();
   init_shard_quarantine();
   cache = new Map;
@@ -9319,6 +9486,7 @@ var init_store_entities = __esm(() => {
     PINNED_SET_KIND,
     PINNED_CLEAR_KIND
   ]);
+  viewedCache = new Map;
 });
 
 // src/core/store/store-privacy.ts

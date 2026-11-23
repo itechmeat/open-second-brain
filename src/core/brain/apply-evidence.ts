@@ -473,6 +473,9 @@ function appendOnce(
         artifact: body["artifact"]!,
         agent: body["agent"]!,
         private: privacy(),
+        // When the rule was applied: the dream replay judges an
+        // application by it (`store/read/read-view.ts`).
+        at: timestamp,
       }),
     context: { vault },
   });

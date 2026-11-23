@@ -241,6 +241,19 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b dream queue",
         autoRepairable: false,
       },
+      // The dream replay (change dream-replay, design D10).
+      {
+        code: "dream-replay-gap",
+        issueClass: "a dream window waits for a source that cannot be read completely",
+        nextCommand: "o2b dream owner",
+        autoRepairable: false,
+      },
+      {
+        code: "dream-replay-rebased",
+        issueClass: "a dream window was admitted after shards were replaced or rewritten",
+        nextCommand: "o2b dream owner",
+        autoRepairable: false,
+      },
       {
         code: "dream-questions-waiting",
         issueClass: "closed questions of dream wait for an answer",

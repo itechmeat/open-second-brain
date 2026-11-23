@@ -22,6 +22,7 @@
  * recompute counters.
  */
 
+import { eventTimeOf } from "../store/read/read-view.ts";
 import { join } from "node:path";
 
 import { PREFERENCE_EVIDENCE_KIND, type EvidenceResult } from "../store/constants.ts";
@@ -331,6 +332,8 @@ export function mergePreferences(
                 agent: opts.agentName ?? "merge",
                 private: isPrivate(record),
                 mergedFrom: record.id,
+                // The copy keeps when the rule was applied.
+                ...(eventTimeOf(record) !== null ? { at: eventTimeOf(record)! } : {}),
               }),
             ),
           { vault },

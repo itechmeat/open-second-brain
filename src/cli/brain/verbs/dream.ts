@@ -49,6 +49,7 @@ import {
   type DreamRetriageEntry,
 } from "../../../core/brain/dream-stage.ts";
 import { assertDreamOwner, DreamNotOwnerError } from "../../../core/brain/dream-owner/gate.ts";
+import { DreamReplayBehindError } from "../../../core/brain/dream-replay/behind.ts";
 import {
   createSafeguard,
   OPERATION,
@@ -147,6 +148,20 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     // The dream owner gate (design D2): a live path on a device that is
     // not the owner exits 1 with one `error:` line naming the owner and
     // the transfer command, and wrote nothing.
+    if (exc instanceof DreamReplayBehindError) {
+      // A staged action while missed windows wait for a live replay.
+      if (argv.includes("--json")) {
+        okJson({
+          ok: false,
+          code: exc.code,
+          days: exc.days,
+          ...(exc.open !== null ? { open: exc.open } : {}),
+          message: exc.message,
+        });
+        return 1;
+      }
+      return fail(exc.message);
+    }
     if (!(exc instanceof DreamNotOwnerError)) throw exc;
     if (argv.includes("--json")) {
       okJson({
@@ -503,7 +518,7 @@ async function brainDream(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (exc) {
-    if (exc instanceof DreamNotOwnerError) throw exc;
+    if (exc instanceof DreamNotOwnerError || exc instanceof DreamReplayBehindError) throw exc;
     // A bundle this verb understood and declined is a refusal, not an
     // operational failure: exit 2, with the bare reason beside the
     // sentence so a machine caller can branch on it.

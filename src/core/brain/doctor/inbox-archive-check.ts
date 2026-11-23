@@ -28,6 +28,19 @@ import { scanInboxForArchive } from "../dream-scan.ts";
 import { archiveEnabled, selectArchivableSignals } from "../signal-archive.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
+import { daysBehind, readConfiguredReplay } from "../dream-replay/behind.ts";
+import { windowBounds } from "../dream-replay/records.ts";
+
+/** The instant the next dream window is judged at: the end of the first day behind, or now. */
+function nextWindowInstant(vault: string, now: Date, configPath?: string): Date {
+  let behind: string[] = [];
+  try {
+    behind = daysBehind(readConfiguredReplay(vault, configPath), now);
+  } catch {
+    behind = [];
+  }
+  return behind.length > 0 ? new Date(windowBounds(behind[0]!).to) : now;
+}
 
 /** Inbox signals that left the contradiction window unconsumed. */
 export const INBOX_ARCHIVABLE_CODE = "inbox-archivable";
@@ -39,11 +52,13 @@ export const inboxArchivableCheck: DoctorCheck = {
     if (cfg === undefined || !archiveEnabled(cfg)) return;
     const windowDays = cfg.dream.contradiction_window_days;
     const scan = scanInboxForArchive(ctx.vault);
+    // On a brain the replay serves, the next pass judges the next window
+    // first (dream replay design D10), so the count is that window's.
     const archivable = selectArchivableSignals(
       scan.signals,
       scan.archivedNames,
       windowDays,
-      ctx.now,
+      nextWindowInstant(ctx.vault, ctx.now, ctx.configPath),
       new Date(),
     ).archivable.length;
     if (archivable === 0) return;

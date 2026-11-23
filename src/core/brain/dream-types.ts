@@ -177,6 +177,20 @@ export interface DreamRunSummary {
    */
   readonly judgment?: "here" | "elsewhere" | "unbound";
   /**
+   * The windows of a live pass on a brain served from the store (change
+   * `dream-replay`): how many this pass evaluated and covered, the newest
+   * covered day after it, how many are still behind, and the window it
+   * stopped at (a gap, the budget). Absent on every other pass.
+   */
+  readonly windows?: {
+    readonly evaluated: number;
+    readonly covered: string | null;
+    readonly behind: number;
+    readonly open: string | null;
+    /** The pass ran no window: the release that made this device the owner has not synced. */
+    readonly outcome?: "waiting-for-sync";
+  };
+  /**
    * Sub-operations the dream pass attempted but could not fully
    * verify. Empty on every clean run; populated by future
    * uncertainty-surfacing paths (v0.10.16).

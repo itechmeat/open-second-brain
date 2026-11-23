@@ -126,6 +126,8 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
       most_applied: data.most_applied,
       connection_health: data.connection_health,
       actions: data.actions,
+      // Present only when a replayed pass wrote audit events in the interval.
+      ...(data.replay.windows > 0 ? { replay: data.replay } : {}),
       ...(data.collect_errors.length > 0
         ? {
             collect_errors: data.collect_errors.map((e) => ({
@@ -356,6 +358,19 @@ function renderMarkdown(
       lines.push(
         `- ${renderPrefLink({ id: item.id, principle: item.principle, format: linkOutputFormat })} — ${item.description}${topic}`,
       );
+    }
+    lines.push("");
+  }
+  if (data.replay.windows > 0) {
+    // The interval the passes really covered, window by window (dream replay).
+    lines.push("## Dream windows", "");
+    lines.push(
+      data.replay.windows === 1
+        ? `- covered ${data.replay.first_window}`
+        : `- covered ${data.replay.windows} windows, ${data.replay.first_window} to ${data.replay.last_window}`,
+    );
+    for (const row of data.replay.reconciliations) {
+      lines.push(`- reconciliation: ${row} (the rule stays retired)`);
     }
     lines.push("");
   }
