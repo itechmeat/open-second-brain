@@ -59,7 +59,6 @@ the machine and the brain, then runs the same install and verifies it
 | OpenClaw           | Native plugin, no MCP                                                    | [`install/openclaw.md`](../install/openclaw.md)       |
 | opencode           | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](../install/opencode.md)       |
 | Grok Build         | `o2b install --target grok --apply`: MCP servers and hooks               | [`install/grok.md`](../install/grok.md)               |
-| Cursor             | `o2b install --target cursor --apply`                                    | [`install/cursor.md`](../install/cursor.md)           |
 | kiro               | `o2b install --target kiro --apply`                                      | [`install/kiro.md`](../install/kiro.md)               |
 | GitHub Copilot CLI | `o2b install --target copilot-cli --apply`                               | [`install/copilot-cli.md`](../install/copilot-cli.md) |
 | Gemini CLI         | `o2b install --target gemini-cli --apply`                                | [`install/gemini-cli.md`](../install/gemini-cli.md)   |

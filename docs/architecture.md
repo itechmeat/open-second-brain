@@ -18,7 +18,7 @@ The diagram of how each client reaches the core:
 flowchart LR
     subgraph Clients["Agent clients"]
         Plug["Plugins: Claude Code, Codex,<br/>Hermes, opencode, Grok Build"]
-        Mcp["MCP config: Cursor, kiro, Copilot CLI,<br/>Gemini CLI, ZCode, any MCP host"]
+        Mcp["MCP config: kiro, Copilot CLI,<br/>Gemini CLI, ZCode, any MCP host"]
         Claw["OpenClaw<br/>in-process plugin"]
         Cliu["Aider, Pi<br/>CLI and context file"]
     end
@@ -332,7 +332,7 @@ As of v0.10.10 the always-loaded `open-second-brain-writer` MCP
 server hosts one read tool (`brain_context`) alongside the three
 writers (`brain_feedback`, `brain_apply_evidence`, `brain_note`).
 The reader exists for runtimes without a `SessionStart` hook
-(Cursor, Aider, raw Claude API) — they call it once at session
+(Aider, raw Claude API) — they call it once at session
 start to pull the same `Brain/active.md` content the hook-aware
 runtimes get auto-injected. The MCP server name is preserved for
 backward compatibility with existing client `.mcp.json` entries;

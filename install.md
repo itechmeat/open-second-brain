@@ -27,15 +27,15 @@ Bun 1.1 or later is the only prerequisite.
    and verify, in one command:
 
    ```bash
-   o2b setup --target cursor --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+   o2b setup --target grok --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
    ```
 
-   Replace `cursor` with your host (table below), the vault path and the
+   Replace `grok` with your host (table below), the vault path and the
    agent name with your own values. A machine with no Obsidian vault uses
    `--no-vault` instead of `--vault <path>`:
 
    ```bash
-   o2b setup --target cursor --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+   o2b setup --target grok --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes
    ```
 
    Aider is the exception: its context file lives in the vault, so setup
@@ -83,7 +83,6 @@ Setup exit codes:
 | OpenClaw | Native plugin, no MCP. `o2b setup --target openclaw` names the plugin step (exit `7`) | [`install/openclaw.md`](install/openclaw.md) |
 | opencode | `o2b setup --target opencode`: MCP servers and a native plugin | [`install/opencode.md`](install/opencode.md) |
 | Grok Build | `o2b setup --target grok`: MCP servers and hooks | [`install/grok.md`](install/grok.md) |
-| Cursor | `o2b setup --target cursor` | [`install/cursor.md`](install/cursor.md) |
 | kiro | `o2b setup --target kiro` | [`install/kiro.md`](install/kiro.md) |
 | GitHub Copilot CLI | `o2b setup --target copilot-cli` | [`install/copilot-cli.md`](install/copilot-cli.md) |
 | Gemini CLI | `o2b setup --target gemini-cli` | [`install/gemini-cli.md`](install/gemini-cli.md) |
@@ -187,8 +186,8 @@ The installation is complete only when all of the following hold:
 4. `o2b doctor` reports no failure.
 5. `o2b status` shows the chosen `agent_name`, and a test signal recorded
    without an explicit agent carries that name, not the literal `agent`.
-6. For MCP hosts (Cursor, opencode, Grok Build, kiro, Copilot CLI, Gemini
-   CLI, Claude Code, Codex, Hermes, ZCode; not Aider, Pi or `generic`):
+6. For MCP hosts (opencode, Grok Build, kiro, Copilot CLI, Gemini CLI,
+   Claude Code, Codex, Hermes, ZCode; not Aider, Pi or `generic`):
    the host's MCP listing shows the Open Second Brain tools.
 
 If any item is missing, the install is incomplete: report that to the user

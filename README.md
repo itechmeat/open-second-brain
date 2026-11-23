@@ -2,7 +2,7 @@
 
 ![Open Second Brain carries what your agents learn into future sessions](docs/images/readme-hero.svg)
 
-Open Second Brain is a program that runs on your machine and connects to the AI coding agents you use: Claude Code, Codex, Cursor and [others](install.md#supported-clients).
+Open Second Brain is a program that runs on your machine and connects to the AI coding agents you use: Claude Code, Codex, Grok and [others](install.md#supported-clients).
 It keeps the corrections, decisions and notes your agents save, turns corrections that repeat into rules, and lets later sessions, in the same agent or a different one, use those rules.
 
 ## Why
