@@ -37,6 +37,8 @@ export const DREAM_RUN_COMMAND = "o2b dream run";
 export const DREAM_STATUS_COMMAND = "o2b dream status";
 /** The argument that hands a claim to the worker. */
 export const DREAM_RUN_CLAIM_FLAG = "--claim";
+/** The argument that runs the worker on no vault (a check that served none). */
+export const DREAM_RUN_NO_VAULT_FLAG = "--no-vault";
 
 /** The code of the runtime notice that carries the day check's note. */
 export const DREAM_DAY_NOTICE_CODE = "dream-day";

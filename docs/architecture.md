@@ -9,17 +9,64 @@ Agent runtime
   -> runtime adapter/plugin
     -> skills and commands
       -> CLI/core library
-        -> vault files and local config
+        -> brain store, vault files and local config
 ```
+
+The diagram of how each client reaches the core:
+
+```mermaid
+flowchart LR
+    subgraph Clients["Agent clients"]
+        Plug["Plugins: Claude Code, Codex,<br/>Hermes, opencode, Grok Build"]
+        Mcp["MCP config: Cursor, kiro, Copilot CLI,<br/>Gemini CLI, ZCode, any MCP host"]
+        Claw["OpenClaw<br/>in-process plugin"]
+        Cliu["Aider, Pi<br/>CLI and context file"]
+    end
+    subgraph Product["Open Second Brain"]
+        Srv["MCP servers<br/>open-second-brain, open-second-brain-writer"]
+        Hooks["Lifecycle hooks<br/>o2b-hook"]
+        Cli["CLI<br/>o2b"]
+        Core["Core"]
+    end
+    subgraph Data["Your data"]
+        Store[("Brain store<br/>shared + private partitions")]
+        View["Human view<br/>Markdown pages"]
+        Notes["Your vault notes"]
+    end
+    Plug --> Srv
+    Plug --> Hooks
+    Mcp --> Srv
+    Claw --> Core
+    Cliu --> Cli
+    Srv --> Core
+    Hooks --> Core
+    Cli --> Core
+    Core --> Store
+    Core -->|view writer only| View
+    Core -. reads, writes a named note on request .-> Notes
+```
+
+Each client reaches the same core through a plugin, an MCP registration or
+the CLI. The core keeps its records in the brain store outside the vault
+([`brain-store.md`](brain-store.md)); one machine, the view writer, renders
+the human view. Your notes are read; the note tools write one only at a
+path the caller names. A vault from 1.x that has not moved to the store
+keeps the legacy `Brain/` tree described under [Vault layout](#vault-layout).
+
+Two roles are held by one machine each, and they are separate. The **view
+writer** renders the human view; the **dream owner** (one agent
+installation on one device) runs live dream passes. Both start on the
+installation that creates the brain and move independently:
+`o2b view writer --here` and `o2b dream owner --here`.
 
 ## Core responsibilities
 
 The core (`src/core/`) provides deterministic operations for:
 
 - locating and validating configuration;
-- initializing a vault profile (`o2b brain init`);
+- configuring a machine and creating the brain store (`o2b setup`, `o2b init`, `o2b store init`);
 - recording taste signals, applied-evidence, and narrative milestones into `Brain/log/<YYYY-MM-DD>.md` (plus a JSONL sidecar);
-- running the nightly `dream` learning pass (deterministic, no LLM calls);
+- running the `dream` learning pass on the dream owner's device, started by the first session of the day there (deterministic counting and state changes; work that needs a model waits in the dream work queue for the decision model or the user's dream agent, see [`dream.md`](dream.md));
 - exporting redacted config snapshots;
 - checking vault health (`o2b brain doctor`);
 - querying preferences, signals, and link-graph relationships through the MCP and CLI surface.
@@ -124,18 +171,18 @@ $OPEN_SECOND_BRAIN_CONFIG
 Example:
 
 ```yaml
-version: 1
-instance_name: My Second Brain
-runtime: hermes
-environment_name: <hostname>
-vault:
-  path: <absolute-path-to-Obsidian-vault>
-identity:
-  agent_name: <chosen-agent-name>
-  user_language: <BCP-47 tag, e.g. en or ru>
-policy:
-  write_mode: agent-owned-dir
+vault: <absolute-path-to-Obsidian-vault>
+agent_name: <chosen-agent-name>
+timezone: UTC
+store_root: ~/brain-store
+view_target: ~/brain-view
 ```
+
+It is a plain `key: value` file. `o2b setup` and `o2b init` write the
+first keys; `store_root` and `view_target` are optional (the store has a
+per-user default, and with no `view_target` no page is rendered). Machine
+settings of dream, such as `dream_agent_command`, live here too and are
+never shared between machines.
 
 Machine-local config may contain absolute paths. It must not contain secrets.
 
@@ -265,8 +312,8 @@ writes it, and they act only on a path the caller named.
 
 Three architectural invariants:
 
-- **Filesystem-first.** No database, no daemon. Every artifact is plain Markdown with YAML frontmatter; backup is `cp -r` or `tar`. Background work is started only by agent activity and exits when done: the search index is refreshed by a short detached run a stale read starts (freshen on read) - an applied note-lifecycle write claims one the same way - never by a resident process.
-- **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, current time). No LLM calls inside the core. Semantic merging, if needed, is delegated to external agents via the same CLI / MCP surface. External judgment (the bench judge, the hygiene conflict resolver) goes through one sanctioned fail-open boundary: the operator-configured command bridge (`src/core/reliability/command-bridge.ts`).
+- **Filesystem-first.** No database server, no daemon. The brain store is append-only files with a documented format, and a legacy `Brain/` tree is plain Markdown with YAML frontmatter; backup is a copy. Dream itself starts from a session's day check as one detached worker that exits when the pass is done. Background work is started only by agent activity and exits when done: the search index is refreshed by a short detached run a stale read starts (freshen on read) - an applied note-lifecycle write claims one the same way - never by a resident process.
+- **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, the window's time, and the recorded answers of the dream work queue). The core asks no model for text itself: closed questions go to the optional decision model chain, and wording goes to the user's own agent, which the dream worker starts with the configured `dream_agent_command` in a short session limited to the `dream-executor` MCP profile. Unanswered work waits; no fixed rule stands in for it. External judgment (the bench judge, the hygiene conflict resolver) goes through one sanctioned fail-open boundary: the operator-configured command bridge (`src/core/reliability/command-bridge.ts`).
 - **Pre-run snapshot + atomic per-file writes.** Each `dream` run takes a `.snapshots/<run_id>.tar.zst` before any state change (streamed through a staging file, and published under its final name only once complete); per-file writes go through `fs-atomic` (temp + rename). Combined with retention of the most-recent N snapshots, this gives reversible, audit-friendly mutation.
 
 The layered diagram from the top of this document still holds — `Brain/` sits at the same level as the vault files in the bottom layer:
@@ -358,7 +405,9 @@ fits the rule that Open Second Brain never calls an LLM the same way the
 embedding and rerank calls do: a decision model returns probabilities over
 candidates this code produced and never text, the deterministic result stays
 canonical and is returned on every failure, and no decision writes to the
-vault. It is active only when the operator enables it in machine config AND
+vault. Dream's closed questions are the exception to the fallback: they have
+no deterministic answer, so a question the decision model does not answer
+waits in the dream work queue for the dream agent or a later pass. It is active only when the operator enables it in machine config AND
 the named key variable is set (a self-hosted `laya` or `openjev` server on
 loopback needs no key); otherwise every code path is the one without
 it. Every use goes through `runDecision` (`run.ts`), which owns the modes

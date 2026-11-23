@@ -12,6 +12,16 @@ TypeSafe; its wire format, `POST <base>/v1/systemone`, is also served by
 OpenRouter, the Vercel AI Gateway compatible route, OpenCode Zen and
 self-hosted compatible servers.
 
+For dream, a decision model is an **optional accelerator**. Dream's closed
+questions are answered by the decision model when one is configured for
+their use in `enforce` mode (in `shadow` mode its answer is only recorded
+and the question keeps waiting), and otherwise by your own dream agent
+([dream.md](dream.md)).
+With neither, they wait in the dream work queue; no fixed rule answers in
+their place. Every other use (rerank, filters, agent context) keeps its own
+failure policy: the deterministic result is returned when the model does
+not answer.
+
 The feature is **off by default** and stays off unless you turn it on
 explicitly **and** provide a key. Without that, Open Second Brain behaves
 exactly as it does without the feature: no network request, no record, and no
@@ -416,9 +426,11 @@ failed attempt with backoff. `o2b dream queue`, `o2b dream owner` and doctor
 (`dream-questions-waiting`, `dream-queue-no-executor`) show per question
 how many items wait, the age of the oldest, and why: `no-model`,
 `shadow`, `needs-local-executor`, `retry-at` or `not-reached`, each with
-the action that changes it. A brain with no decision model in force
-routes no record and creates no topic until one is configured, and a
-brain with no dream owner bound decides no closed question.
+the action that changes it. With no decision model in force, the
+dream agent answers these questions when a verified command is set on the
+owner's machine; with neither, no record is routed and no topic is created
+until one of them answers. A brain with no dream owner bound decides no
+closed question.
 
 ## Vault opt-out
 

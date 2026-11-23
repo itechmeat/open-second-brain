@@ -1,5 +1,12 @@
 # Open Second Brain Idea
 
+> **Historical document.** This is the original idea behind the project,
+> kept as it was written. It describes a Hermes-first starting point and
+> plans that later releases replaced: version 2.0 treats every supported
+> agent the same and keeps the brain in a store outside the vault. For the
+> product as it is now, read [`how-it-works.md`](how-it-works.md) and
+> [`features.md`](features.md).
+
 Open Second Brain is a portable second brain system for agentic work. It packages a shared vault protocol, event log, configuration model, CLI tools, skills, and runtime adapters so different AI agents can participate in the same knowledge system.
 
 The initial local instance that motivated this project is Hermes Second Brain: a Hermes-first setup on a VPS where agents develop small projects, operate infrastructure, and write durable operational notes into an Obsidian-compatible vault. The open-source package should not be Hermes-specific. Hermes is one adapter.

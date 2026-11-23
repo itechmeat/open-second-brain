@@ -6,6 +6,116 @@ git marketplace snapshot). **An update must never break an existing install or
 the agent.** This document is the contract that guarantees it, for both
 operators and any agent that edits the plugin.
 
+## Upgrading to 2.0.0
+
+2.0 makes dream a property of the brain instead of one agent's schedule,
+and treats every supported agent the same. Most of the upgrade happens by
+itself; four things need a decision from you, and two breaking changes
+affect Hermes users.
+
+### 1. Install the new version
+
+1. A plugin or clone install updates as before: `o2b update`, or the
+   host's own plugin update (see "For operators" below).
+2. A registry install takes the new version with
+   `bun add -g open-second-brain`. Doctor then reports each host
+   registration that is older than the running version, with the repair
+   command `o2b setup --target <host> --apply --yes`.
+3. Upgrade every machine that shares a brain before you rely on the dream
+   owner: an older binary does not know the owner gate. Upgrade one machine
+   first, and let its brain-store migration finish and sync before you
+   upgrade the others, or set `auto_store_migration: false` on the others
+   until then.
+
+### 2. The store migration
+
+A machine that still keeps its brain in the vault's `Brain/` tree moves it
+into the brain store on its own: the session start and the MCP server
+start hand the move to one background worker after its dry run. `o2b
+update` runs the same migration when one is pending (skip it with
+`--skip-store-migration`). What it does, and when a person has to step
+in: [brain-store.md](brain-store.md#automatic-migration).
+
+### 3. Choose the dream owner
+
+A brain from 1.x has no dream owner record. Until you adopt it, live
+passes run from any device as before, with the `non-primary-dream-run`
+warning when a declared `primary_agent` differs from the caller. Adopt it
+on the machine that should own dream:
+
+```bash
+o2b dream owner --here --agent "<agent-name>"
+```
+
+From then on this is a breaking change: a live pass on any other device
+(`o2b brain dream`, its staged `stage`, `apply`, `discard` and
+`retriage`, `--step heal-enrich`, `brain_dream`, the maintenance lane's
+dream task) is refused with `dream_not_owner` instead of warned about.
+Dry runs still answer everywhere. Doctor names a declared `primary_agent`
+as the requested owner (`dream-owner-unbound`). `o2b brain set-primary
+<name>` now changes the owner's agent on the owner's device and refuses
+elsewhere.
+
+### 4. The rule that no longer decides
+
+In 1.x a fixed rule routed records to topics, named new topics and stood
+in for an unanswered closed question. In 2.0 it does not (breaking):
+
+1. A closed question waits in the dream work queue until the decision
+   model or the dream agent answers it.
+2. A new topic is created only when its group is approved and its title
+   and goal are written by the dream agent.
+3. A rollup summary is written by the dream agent; the model step a 1.x
+   pass printed and lost is now a queued item.
+
+To get answers, set and verify a dream agent on the owner's machine
+(`o2b dream agent set`, `o2b dream agent check`; no presets ship), and
+optionally configure a decision model for the closed questions. Until
+then, doctor reports `dream-agent-unset`, `dream-questions-waiting` or
+`dream-queue-no-executor`, and `o2b dream queue` shows what waits and why.
+Model-written text is applied by the next pass by default; set
+`dream.apply_drafts` to `review` to approve it first. See
+[dream.md](dream.md).
+
+### 5. Dream starts by itself
+
+The first session of a day on the owner's machine starts the day's pass;
+no scheduler is needed. A cron job or a Hermes job that runs `o2b brain
+dream` or the maintenance lane on the owner's machine keeps working: both
+record the day, so at
+most one of them does the day's work, and the job can be removed. To turn
+automatic dream off, set the shared setting `dream.auto` to `false`, or
+`OPEN_SECOND_BRAIN_DREAM_AUTO=false` on one machine. `o2b dream status`
+shows the state of the day.
+
+A pass after a silence now replays the missed days one at a time
+(see [dream.md](dream.md#catch-up-after-missed-days)). One rule changes on
+the way (breaking): evidence confirms a trial only when its event time is
+not after the trial's deadline. A rule whose first applied evidence came
+after its trial window retires as expired, although that evidence still
+counts in its totals.
+
+### 6. Hermes users: the two breaking changes of agent parity
+
+1. **Scheduler recipes no longer read `~/.hermes/.env`.** The scripts the
+   recipes print source the Open Second Brain env file
+   (`${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env`) and print
+   crontab and systemd forms only. A schedule that relied on the Hermes
+   env file needs `OPEN_SECOND_BRAIN_ENV_FILE` set to that file, or its
+   keys copied into the Open Second Brain env file.
+2. **`o2b discipline install` and `o2b discipline uninstall` are
+   removed**, with the packaged report script and the Telegram format.
+   `o2b discipline report` prints plain Markdown, and doctor reports its
+   verdict as advice. Jobs the removed installer left in Hermes call the
+   removed script and fail on their next run. Doctor and the uninstall
+   plan list them and change nothing; remove an unwanted job with
+   `hermes cron remove <id>`, or schedule `o2b discipline report` with a
+   scheduler recipe.
+
+The uninstall plan lists Hermes steps only when a Hermes integration is
+installed. The optional Hermes digest delivery job is described in
+[hermes-cron.md](hermes-cron.md).
+
 ## Upgrading from 0.x to 1.0.0
 
 1.0.0 is the first major release and ships exactly one breaking

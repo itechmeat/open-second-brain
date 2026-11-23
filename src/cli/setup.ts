@@ -258,6 +258,13 @@ export async function cmdSetup(argv: string[]): Promise<number> {
       target,
     );
 
+  if (target === "aider" && explicitVault === undefined && !configuredVault)
+    return usage(
+      "Aider reads its context from a file in the vault; pass --vault <path>",
+      json,
+      target,
+    );
+
   const agentName = flags["agent-name"] as string | undefined;
   const timezone = flags["timezone"] as string | undefined;
   const identityConfigured = Boolean(config.data["agent_name"] && config.data["timezone"]);

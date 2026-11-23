@@ -320,15 +320,14 @@ describe("registry install documentation", () => {
     const release = readFileSync(join(REPO_ROOT, "docs/releasing.md"), "utf8");
     expect(install).toContain("bun add -g open-second-brain");
     expect(install).toContain(
-      'o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes',
+      'o2b setup --target cursor --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
     );
     expect(install).toContain(
-      'o2b setup --target cursor --no-vault --agent-name "Your Name" --timezone UTC --apply --yes',
+      'o2b setup --target cursor --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes',
     );
-    expect(install).toContain("For a brain-store install made with `--no-vault`");
-    expect(install).toMatch(/reports host\s+verification as `ok`/);
+    expect(install).toMatch(/exited `0` with host verification `ok`/);
     expect(prerequisites).toContain("bun add -g open-second-brain");
-    expect(prerequisites).toContain("registry install above or this clone-based");
+    expect(prerequisites).toMatch(/As an\s+alternative to the registry install, use a clone\./);
     expect(release).toContain(
       'bun run scripts/registry-smoke.ts "open-second-brain@<version>" "<version>"',
     );

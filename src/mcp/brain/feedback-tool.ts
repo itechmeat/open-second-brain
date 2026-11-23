@@ -8,6 +8,7 @@
 
 import { contextRecordOrigin } from "./shared.ts";
 import { resolve } from "node:path";
+import { isStoreOnly } from "../../core/store/store-only.ts";
 import { loadPermissionsDocumentFor } from "../../core/brain/permissions/document-source.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { resolveEffectiveScope, signalRecordExists, writeSignal } from "../../core/brain/signal.ts";
@@ -194,6 +195,13 @@ export async function toolBrainFeedback(
 ): Promise<Record<string, unknown>> {
   // `null` on a server with no vault: the writes are store records (D14).
   const vault = contextVault(ctx);
+  // A store-only machine (no vault, or a switched one with a vault) wrote
+  // records, not files: every path field names the record (`store:<id>`),
+  // as the CLI does, never the legacy path the writer still composes.
+  let storeOnly: boolean | undefined;
+  const recordsOnly = (): boolean =>
+    (storeOnly ??=
+      vault === null || isStoreOnly({ vault, configPath: ctx.configPath ?? undefined }));
   // Single source of truth for the brain_feedback payload contract —
   // session-replay (sessions/import.ts) and the MCP live path now go
   // through the same validator so rule shape cannot drift between the
@@ -517,22 +525,26 @@ export async function toolBrainFeedback(
           kind: "preference",
           deduped: true,
           staged: false,
-          signal_path:
-            vault === null
-              ? `${STORE_RECORD_PREFIX}${sigResult.id}`
-              : toolPath(ctx, sigResult.path),
-          signal_absolute_path:
-            vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+          signal_path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+            : toolPath(ctx, sigResult.path),
+          signal_absolute_path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+            : resolve(sigResult.path),
           signal_id: sigResult.id,
-          preference_path:
-            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : toolPath(ctx, existingPath),
-          preference_absolute_path:
-            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : resolve(existingPath),
+          preference_path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${existing.id}`
+            : toolPath(ctx, existingPath),
+          preference_absolute_path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${existing.id}`
+            : resolve(existingPath),
           preference_id: existing.id,
-          path:
-            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : toolPath(ctx, existingPath),
-          absolute_path:
-            vault === null ? `${STORE_RECORD_PREFIX}${existing.id}` : resolve(existingPath),
+          path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${existing.id}`
+            : toolPath(ctx, existingPath),
+          absolute_path: recordsOnly()
+            ? `${STORE_RECORD_PREFIX}${existing.id}`
+            : resolve(existingPath),
           id: existing.id,
           agent,
         };
@@ -547,19 +559,24 @@ export async function toolBrainFeedback(
         deduped: true,
         // The signal was deduped, so the retry staged nothing new.
         staged: false,
-        signal_path:
-          vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
-        signal_absolute_path:
-          vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+        signal_path: recordsOnly()
+          ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+          : toolPath(ctx, sigResult.path),
+        signal_absolute_path: recordsOnly()
+          ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+          : resolve(sigResult.path),
         signal_id: sigResult.id,
-        preference_path:
-          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : toolPath(ctx, resumed.path),
-        preference_absolute_path:
-          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : resolve(resumed.path),
+        preference_path: recordsOnly()
+          ? `${STORE_RECORD_PREFIX}${resumed.id}`
+          : toolPath(ctx, resumed.path),
+        preference_absolute_path: recordsOnly()
+          ? `${STORE_RECORD_PREFIX}${resumed.id}`
+          : resolve(resumed.path),
         preference_id: resumed.id,
-        path: vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : toolPath(ctx, resumed.path),
-        absolute_path:
-          vault === null ? `${STORE_RECORD_PREFIX}${resumed.id}` : resolve(resumed.path),
+        path: recordsOnly() ? `${STORE_RECORD_PREFIX}${resumed.id}` : toolPath(ctx, resumed.path),
+        absolute_path: recordsOnly()
+          ? `${STORE_RECORD_PREFIX}${resumed.id}`
+          : resolve(resumed.path),
         id: resumed.id,
         agent,
       };
@@ -569,15 +586,17 @@ export async function toolBrainFeedback(
       deduped: true,
       // A dedup wrote nothing, so it staged nothing.
       staged: false,
-      signal_path:
-        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
-      signal_absolute_path:
-        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+      signal_path: recordsOnly()
+        ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+        : toolPath(ctx, sigResult.path),
+      signal_absolute_path: recordsOnly()
+        ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+        : resolve(sigResult.path),
       signal_id: sigResult.id,
-      path:
-        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
-      absolute_path:
-        vault === null ? `${STORE_RECORD_PREFIX}${sigResult.id}` : resolve(sigResult.path),
+      path: recordsOnly() ? `${STORE_RECORD_PREFIX}${sigResult.id}` : toolPath(ctx, sigResult.path),
+      absolute_path: recordsOnly()
+        ? `${STORE_RECORD_PREFIX}${sigResult.id}`
+        : resolve(sigResult.path),
       id: sigResult.id,
       agent,
     };
@@ -653,12 +672,12 @@ export async function toolBrainFeedback(
     logConfirmedPreference(prefResult.id);
   }
 
-  // With no vault the records have no file: both fields name the record
-  // (`store:<id>`), as the CLI does.
+  // On a store-only machine the records have no file: both fields name
+  // the record (`store:<id>`), as the CLI does.
   const named = (path: string, id: string): string =>
-    vault === null ? `${STORE_RECORD_PREFIX}${id}` : toolPath(ctx, path);
+    recordsOnly() ? `${STORE_RECORD_PREFIX}${id}` : toolPath(ctx, path);
   const absolute = (path: string, id: string): string =>
-    vault === null ? `${STORE_RECORD_PREFIX}${id}` : resolve(path);
+    recordsOnly() ? `${STORE_RECORD_PREFIX}${id}` : resolve(path);
   return {
     kind: prefResult ? "preference" : "signal",
     ...mirrorReportFields(mirror),

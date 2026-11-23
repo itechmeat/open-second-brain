@@ -9,7 +9,7 @@ of the read-only brain digest.
 - Hermes gateway is running.
 - The Open Second Brain plugin is installed and enabled.
 - `o2b` is on `PATH` for the gateway user.
-- `o2b brain init --vault /path/to/vault` has created the Brain configuration.
+- The machine is configured (`o2b setup` or `o2b init`), so the brain exists.
 - A Telegram destination is configured for the Hermes job.
 
 ## Add an optional digest job

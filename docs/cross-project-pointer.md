@@ -130,10 +130,12 @@ the declared name as before.
 o2b brain set-primary --clear --vault <vault-path>
 ```
 
-clears the declaration. A vault initialised with `o2b brain init
+clears the declaration. On a legacy vault, `o2b brain init
 --primary-agent <name>` writes the value into the fresh `_brain.yaml`
 on the first run; on re-runs against an existing file `--primary-agent`
-is ignored — use `set-primary` instead.
+is ignored — use `set-primary` instead. A machine switched to the brain
+store refuses the flag: there the dream owner (`o2b dream owner`) is the
+role.
 
 ## 3. Multi-device through Syncthing
 

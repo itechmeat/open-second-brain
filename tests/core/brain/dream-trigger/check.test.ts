@@ -6,7 +6,15 @@
  * run; the clock is injected.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import * as claim from "../../../../src/core/brain/dream-trigger/claim.ts";
@@ -23,6 +31,8 @@ import {
 } from "../../../../src/core/brain/dream-trigger/record.ts";
 import { DREAM_RUN_ENV } from "../../../../src/core/brain/dream-queue/dream-session.ts";
 import { readDreamAuto } from "../../../../src/core/brain/dream-trigger/auto.ts";
+import { holdDreamRunClaim } from "../../../../src/core/brain/dream-trigger/outcome.ts";
+import * as localLock from "../../../../src/core/store/local-lock.ts";
 import * as o2bCommand from "../../../../src/core/maintenance/o2b-command.ts";
 import * as streamRead from "../../../../src/core/store/read/stream-read.ts";
 import * as storeOpen from "../../../../src/core/store/store-open.ts";
@@ -148,6 +158,33 @@ describe("the due path", () => {
     ]);
   });
 
+  test("a check that served no vault starts a worker that runs on no vault", () => {
+    expect(run({ vault: null }).started).toBe(true);
+    expect(spawns[0]!.slice(-5)).toEqual([
+      "dream",
+      "run",
+      "--no-vault",
+      "--claim",
+      expect.any(String),
+    ]);
+  });
+
+  test("a vault still in the legacy tree is not cached as the answer for another vault", () => {
+    const legacy = join(f.tmp, "legacy-vault");
+    const original = gate.openDreamOwnerStore;
+    const opened = spyOn(gate, "openDreamOwnerStore").mockImplementation((vault, configPath) =>
+      vault === legacy ? { store: null, reason: "legacy-tree" } : original(vault, configPath),
+    );
+    try {
+      expect(run({ vault: legacy }).started).toBe(false);
+      // The next check, for a vault served from the store, reaches its owner check.
+      expect(run({ vault: join(f.tmp, "served-vault") }).started).toBe(true);
+    } finally {
+      opened.mockRestore();
+    }
+    expect(spawns).toHaveLength(1);
+  });
+
   test("a retry time further ahead than the longest delay was written under a clock ahead", () => {
     seed({ retry_at: new Date(NOW + 30 * HOUR).toISOString(), owner: MINE });
     expect(run().started).toBe(true);
@@ -209,6 +246,27 @@ describe("the due path", () => {
         ...(f.record() ?? emptyDreamTriggerRecord(f.storeRoot)),
         closed: true,
         day: TODAY,
+      });
+      return token;
+    });
+    try {
+      expect(run().started).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(spawns).toEqual([]);
+    expect(existsSync(dreamTriggerClaimPath(f.recordPath))).toBe(false);
+  });
+
+  test("a retry time a pass wrote while the check took its claim gives the claim back", () => {
+    const original = claim.createClaim;
+    const spy = spyOn(claim, "createClaim").mockImplementation((path, at) => {
+      const token = original(path, at);
+      // A failed pass set its retry time between the fast path's read and the claim.
+      writeDreamTriggerRecord(f.recordPath, {
+        ...(f.record() ?? emptyDreamTriggerRecord(f.storeRoot)),
+        closed: false,
+        retry_at: new Date(NOW + HOUR).toISOString(),
       });
       return token;
     });
@@ -386,8 +444,21 @@ describe("the claim", () => {
     expect(order).toEqual(["log-dir", "claim", "spawn"]);
   });
 
+  test("a claim read whole that is not a claim ages by its file and is reported", () => {
+    const path = dreamTriggerClaimPath(f.recordPath);
+    writeFileSync(path, "not a claim");
+    const old = (NOW - GRACE - 1000) / 1000;
+    utimesSync(path, old, old);
+    expect(run().started).toBe(false);
+    expect(existsSync(path)).toBe(false);
+    const r = f.record()!;
+    expect(r.failures).toBe(1);
+    expect(r.reason).toContain("could not be read");
+    expect(r.retry_at).toBe(new Date(NOW + HOUR).toISOString());
+  });
+
   // chmod 000 denies nothing to root or on Windows (tests/helpers/platform.ts).
-  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable claim ages by its file and is reported", () => {
+  test.skipIf(CHMOD_CANNOT_DENY)("a claim that cannot be read now is never aged out", () => {
     const path = dreamTriggerClaimPath(f.recordPath);
     writeClaim(0);
     const old = (NOW - GRACE - 1000) / 1000;
@@ -395,14 +466,12 @@ describe("the claim", () => {
     chmodSync(path, 0o000);
     try {
       expect(run().started).toBe(false);
+      expect(existsSync(path)).toBe(true);
     } finally {
-      if (existsSync(path)) chmodSync(path, 0o600);
+      chmodSync(path, 0o600);
     }
-    expect(existsSync(path)).toBe(false);
-    const r = f.record()!;
-    expect(r.failures).toBe(1);
-    expect(r.reason).toContain("could not be read");
-    expect(r.retry_at).toBe(new Date(NOW + HOUR).toISOString());
+    expect(spawns).toEqual([]);
+    expect(f.record()?.failures ?? 0).toBe(0);
   });
 
   test("a lost claim that cannot be removed is a failed attempt with its reason", () => {
@@ -448,6 +517,52 @@ describe("the claim", () => {
     expect(r.failures).toBe(1);
     expect(r.reason).toContain("no runtime");
     expect(r.last_run?.outcome).toBe("failed");
+  });
+
+  test("an attempt that cannot be recorded before the spawn gives the claim back", () => {
+    const original = record.updateDreamTriggerRecord;
+    const update = spyOn(record, "updateDreamTriggerRecord").mockImplementation(
+      (path, root, change) =>
+        original(path, root, (r) => {
+          const next = change(r);
+          // The pending attempt: started, not ended.
+          if (next?.last_run?.started_at != null && next.last_run.ended_at === null) {
+            throw new Error("ENOSPC: no space left on device");
+          }
+          return next;
+        }),
+    );
+    try {
+      expect(run().started).toBe(false);
+    } finally {
+      update.mockRestore();
+    }
+    expect(spawns).toEqual([]);
+    expect(existsSync(dreamTriggerClaimPath(f.recordPath))).toBe(false);
+    const r = f.record()!;
+    expect(r.failures).toBe(1);
+    expect(r.reason).toContain("ENOSPC");
+  });
+
+  test("a whole run's claim whose release failed does not stand for the rest of the process", () => {
+    const release = holdDreamRunClaim(f.configPath, clock);
+    const path = dreamTriggerClaimPath(f.recordPath);
+    expect(JSON.parse(readFileSync(path, "utf8")).worker_pid).toBe(process.pid);
+    const lock = spyOn(localLock, "withLocalLock").mockImplementation(() => {
+      throw new Error("EIO: i/o error");
+    });
+    try {
+      release();
+    } finally {
+      lock.mockRestore();
+    }
+    // Left behind, carrying this live process's pid.
+    expect(existsSync(path)).toBe(true);
+    // The next run of this process takes the claim, and the day check after it starts a worker.
+    const next = holdDreamRunClaim(f.configPath, clock);
+    next();
+    expect(existsSync(path)).toBe(false);
+    expect(run().started).toBe(true);
   });
 
   test("a claim lock held past the wait before the claim is judged records nothing", () => {
@@ -664,5 +779,30 @@ describe("the check never fails its caller", () => {
     );
     expect(spawns).toEqual([]);
     expect(f.record()).toBeNull();
+  });
+});
+
+describe("a claim this process failed to give back", () => {
+  test("stays queued while the claim cannot be read, and is given back once it can", () => {
+    const path = dreamTriggerClaimPath(f.recordPath);
+    mkdirSync(dirname(path), { recursive: true });
+    const token = claim.createClaim(path, NOW, process.pid)!;
+    const lock = spyOn(localLock, "withLocalLock").mockImplementation(() => {
+      throw new Error("lock busy");
+    });
+    try {
+      expect(() => claim.releaseClaim(path, token)).toThrow("lock busy");
+    } finally {
+      lock.mockRestore();
+    }
+    // The retry finds the claim there but unreadable (a directory reads EISDIR).
+    const held = readFileSync(path, "utf8");
+    rmSync(path);
+    mkdirSync(path);
+    expect(claim.releaseClaim(path, token)).toBe(false);
+    rmSync(path, { recursive: true });
+    writeFileSync(path, held);
+    // Readable again: the next claim gives the queued one back first.
+    expect(claim.createClaim(path, NOW)).not.toBeNull();
   });
 });

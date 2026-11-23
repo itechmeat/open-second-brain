@@ -1,6 +1,6 @@
 # Cursor
 
-`o2b install --target cursor --apply` writes the OSB MCP servers
+`o2b install --target cursor --apply` writes the Open Second Brain MCP servers
 into `~/.cursor/mcp.json` via JSON-merge. The two registered names
 are `open-second-brain` (the **`catalog` two-pass surface** - see
 "The tool surface Cursor gets" below) and `open-second-brain-writer`
@@ -48,11 +48,22 @@ variable still selects the surface of a server you start yourself.
 
 ## Prerequisites
 
-See `install/prerequisites.md`. Then run `o2b init --vault <path>
---agent-name <name> --timezone <tz>` to persist identity that the
-MCP servers will pick up at spawn time.
+See `install/prerequisites.md`. `o2b setup` (below) persists the
+identity the MCP servers pick up at spawn time; on a machine set up
+another way, `o2b init --vault <path> --agent-name <name> --timezone <tz>`
+does the same.
 
 ## Install
+
+On a fresh machine with the registry package, one command configures
+the machine and the brain, runs this install and verifies it (see
+[`install.md`](../install.md#install-from-the-registry)):
+
+```bash
+o2b setup --target cursor --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+```
+
+On a machine that is already configured, the adapter alone:
 
 ```bash
 o2b install --target cursor --apply --yes
@@ -60,7 +71,7 @@ o2b install --target cursor --apply --yes
 
 This preserves any pre-existing `mcpServers.*` keys; only
 `mcpServers.open-second-brain` and `mcpServers.open-second-brain-writer`
-are owned by OSB.
+are owned by Open Second Brain.
 
 After install, **restart the Cursor app** for the new MCP servers
 to load. `o2b install --check --target cursor` confirms the file
@@ -93,7 +104,7 @@ from the code.
 o2b uninstall --target cursor --apply
 ```
 
-Removes exactly the two OSB keys from `mcpServers` (the sidecar
+Removes exactly the two Open Second Brain keys from `mcpServers` (the sidecar
 manifest at `<vault>/.open-second-brain/install.lock.json` records
 which keys to remove). User-authored entries stay intact.
 
@@ -105,7 +116,7 @@ which keys to remove). User-authored entries stay intact.
 - An install written before the profile existed reports `drift` on the
   next `--check`: its `args` carry no `--tool-profile`. Re-run
   `o2b install --target cursor --apply --yes` to regenerate it.
-- If a previous OSB version wrote to `.cursor/mcp.json` without
+- If a previous Open Second Brain version wrote to `.cursor/mcp.json` without
   recording a manifest entry, use
   `o2b uninstall --target cursor --apply --force-from-snippet`
   for a one-time cleanup.

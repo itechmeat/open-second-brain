@@ -1,6 +1,6 @@
 # GitHub Copilot CLI
 
-`o2b install --target copilot-cli --apply` registers the two OSB
+`o2b install --target copilot-cli --apply` registers the two Open Second Brain
 MCP servers with the GitHub Copilot CLI. The primary path calls
 `copilot mcp add` per server name; if the CLI is missing or its
 `add` step fails, the adapter falls back to writing
@@ -8,6 +8,16 @@ MCP servers with the GitHub Copilot CLI. The primary path calls
 directly and prints a stderr note.
 
 ## Install
+
+On a fresh machine with the registry package, one command configures
+the machine and the brain, runs this install and verifies it (see
+[`install.md`](../install.md#install-from-the-registry)):
+
+```bash
+o2b setup --target copilot-cli --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+```
+
+On a machine that is already configured, the adapter alone:
 
 ```bash
 o2b install --target copilot-cli --apply --yes

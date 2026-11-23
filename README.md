@@ -1,147 +1,76 @@
 # Open Second Brain
 
-![Open Second Brain - your knowledge, amplified by AI](docs/images/readme-poster.jpg)
+![Open Second Brain carries what your agents learn into future sessions](docs/images/readme-hero.svg)
 
-Open Second Brain is a memory layer for AI agents that lives in an [Obsidian](https://obsidian.md) vault. Agents read and write it through MCP servers, lifecycle hooks and the `o2b` CLI. Everything the agent learns is a Markdown file under `Brain/`, so you can open, edit, grep and version it like any other note. A deterministic `dream` pass turns repeated signals into rules and retires the ones nothing uses; no model runs inside that algorithm.
+Open Second Brain is a program that runs on your machine and connects to the AI coding agents you use: Claude Code, Codex, Cursor and [others](install.md#supported-clients).
+It keeps the corrections, decisions and notes your agents save, turns corrections that repeat into rules, and lets later sessions, in the same agent or a different one, use those rules.
 
-## How it fits
+## Why
 
-```mermaid
-flowchart LR
-    subgraph Clients["Agent clients"]
-        Plug["Plugins: Claude Code, Codex,<br/>Hermes, opencode, Grok Build"]
-        Mcp["MCP config: Cursor, kiro, Copilot CLI,<br/>Gemini CLI, ZCode, any MCP host"]
-        Claw["OpenClaw<br/>in-process plugin"]
-        Cliu["Aider, Pi<br/>CLI and context file"]
-    end
-    subgraph Product["Open Second Brain"]
-        Srv["MCP servers<br/>open-second-brain, open-second-brain-writer"]
-        Hooks["Lifecycle hooks<br/>o2b-hook"]
-        Cli["CLI<br/>o2b"]
-        Core["Core"]
-    end
-    subgraph Vault["Your vault"]
-        Brain["Brain/<br/>Markdown the agent writes"]
-        Notes["Your notes"]
-        Index[(".open-second-brain/brain.sqlite<br/>rebuildable search index")]
-    end
-    Plug --> Srv
-    Plug --> Hooks
-    Mcp --> Srv
-    Claw --> Core
-    Cliu --> Cli
-    Srv --> Core
-    Hooks --> Core
-    Cli --> Core
-    Core --> Brain
-    Core --> Index
-    Core -. reads, writes a named note on request .-> Notes
+You correct an agent, and the next session makes the same mistake. You switch agents, and the new one knows nothing the old one learned.
+With Open Second Brain connected, an agent can save a correction through its tools, and every connected agent can read the rules that come out of saved corrections. Every record names the agent that wrote it.
+Once a day a background pass, called dream, makes a rule of a correction that keeps coming back. A rule stays while agents record that they applied it; it is retired when that record goes stale, when agents report it outdated, or when you reject it.
+
+## What it looks like
+
+An example. You tell your agents a few times not to use internal abbreviations, and they save it each time:
+
+```text
+Correction, saved three times:  Expand internal abbreviations in user-facing copy.
+After dream and recorded use:   Confirmed rule: Expand internal abbreviations in user-facing copy.
 ```
 
-Each client reaches the same core through a plugin, an MCP registration or the CLI. The core keeps its own records under `Brain/` and a generated search index under `.open-second-brain/` that it can rebuild from the files. Your notes are read; the note tools write one only at a path the caller names.
-
-```mermaid
-flowchart LR
-    Agent["Agent"] -->|brain_feedback| Inbox["Brain/inbox/<br/>signal"]
-    Inbox -->|dream pass| Pref["Brain/preferences/<br/>rule"]
-    Pref -->|rendered into| Active["Brain/active.md"]
-    Active -->|read at session start| Agent
-    Agent -->|brain_apply_evidence| Log["Brain/log/"]
-    Log -->|next dream pass| Pref
-```
-
-The learning loop: signals become rules, rules reach the next session through `Brain/active.md`, and applied or violated evidence confirms, quarantines or retires them. Details: [`docs/how-it-works.md`](docs/how-it-works.md#a-preferences-lifecycle).
+On hosts with a session-start hook, such as Claude Code and Codex, each new session receives the confirmed rules; on other hosts the agent asks for them through a tool.
+If you name a folder for it (`view_target`), the rules are also written there as plain Markdown pages: `about-me.md` with the confirmed rules, a page per week of history, decisions and topics.
+Rewrite a rule on `about-me.md` and your wording becomes the rule; delete its line and the rule is retired. Your edit is stored the next time the pages are rendered, and it wins over anything an agent or a model recorded.
 
 ## Install
 
-1. Install [Bun](https://bun.sh/) 1.1 or later: [`install/prerequisites.md`](install/prerequisites.md).
-2. Install the plugin for your client (guides below), or get the `o2b` CLI: [`install/prerequisites.md`](install/prerequisites.md#get-the-o2b-cli).
-3. Create the vault files:
+### The easy way: let your agent do it
 
-   ```bash
-   o2b init       --vault /path/to/vault --name "My Second Brain"
-   o2b brain init --vault /path/to/vault
-   ```
+Paste this into the agent you want to connect:
 
-4. Connect the client (table below), then check the result:
+```text
+Set up Open Second Brain for this agent. Follow the "Agent setup" procedure in
+https://raw.githubusercontent.com/itechmeat/open-second-brain/main/llms.txt
+If Bun or the open-second-brain package is missing, tell me the command and
+install it after I agree. Ask me only the questions the procedure lists. Run
+o2b setup without --apply, show me the plan, then stop and wait for my explicit
+approval. Apply only the plan I approved, run the verification commands the
+procedure names, report every step that did not pass, and tell me how to undo it.
+```
 
-   ```bash
-   o2b doctor --vault /path/to/vault
-   o2b install --check
-   ```
+### By hand
 
-The full router with readiness criteria is [`install.md`](install.md); native Windows is covered in [`install/windows.md`](install/windows.md).
+With [Bun](https://bun.sh/) 1.1 or later, install the package, then print the setup plan for your host (`--no-vault` instead of `--vault` if you do not use Obsidian):
 
-## Supported clients
+```bash
+bun add -g open-second-brain
+o2b setup --target <host> --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC
+```
 
-| Client             | Integration                                                              | Guide                                              |
-| ------------------ | ------------------------------------------------------------------------ | -------------------------------------------------- |
-| Claude Code        | Marketplace plugin: MCP servers and hooks                                | [`install/claudecode.md`](install/claudecode.md)   |
-| OpenAI Codex       | Marketplace plugin, then `o2b install --target codex --apply`            | [`install/codex.md`](install/codex.md)             |
-| ChatGPT desktop    | Reads the shared Codex config: `o2b install --target codex --apply`      | [`install/codex.md`](install/codex.md)             |
-| Hermes Agent       | Plugin and memory provider                                               | [`install/hermes.md`](install/hermes.md)           |
-| OpenClaw           | Native plugin, no MCP                                                    | [`install/openclaw.md`](install/openclaw.md)       |
-| opencode           | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](install/opencode.md)       |
-| Grok Build         | `o2b install --target grok --apply`: MCP servers and hooks               | [`install/grok.md`](install/grok.md)               |
-| Cursor             | `o2b install --target cursor --apply`                                    | [`install/cursor.md`](install/cursor.md)           |
-| kiro               | `o2b install --target kiro --apply`                                      | [`install/kiro.md`](install/kiro.md)               |
-| GitHub Copilot CLI | `o2b install --target copilot-cli --apply`                               | [`install/copilot-cli.md`](install/copilot-cli.md) |
-| Gemini CLI         | `o2b install --target gemini-cli --apply`                                | [`install/gemini-cli.md`](install/gemini-cli.md)   |
-| ZCode              | MCP servers added to its config by hand                                  | [`install/zcode.md`](install/zcode.md)             |
-| Aider              | `o2b install --target aider --apply`: context file, no MCP               | [`install/aider.md`](install/aider.md)             |
-| Pi                 | `o2b install --target pi --apply`: skill over the CLI                    | [`install/pi.md`](install/pi.md)                   |
-| Any other MCP host | `o2b install --target generic --apply --out -` prints the server entries | [`install/generic.md`](install/generic.md)         |
+The second command writes nothing; add `--apply` to carry out the plan it printed. Every host, the remaining steps, verification and uninstall: [`install.md`](install.md).
 
-`o2b uninstall --target <name> --apply` removes what `o2b install` wrote; the vault is never touched ([`install.md`](install.md#uninstall)).
+## What you control
 
-## Capabilities
+1. **What runs on your machine.** The `o2b` command line, two MCP servers your agent host starts, lifecycle hooks on hosts that have them, and once a day a detached dream worker on the one machine that owns dream ([install](install.md), [dream](docs/dream.md#how-dream-starts)). Dream starts by itself from an agent session, through a session-start hook or the MCP server; Pi, Aider and OpenClaw have neither, so on a machine with only those, run `o2b dream run`. Automatic dream is on by default; `o2b brain settings set dream.auto false` turns it off.
+2. **What leaves your machine.** Dream's summaries and topic wording are written by the agent command you configure; items built from private records are included by default, and an agent that uses a hosted model sends them to its provider ([dream](docs/dream.md#what-a-session-can-and-cannot-do)). Remote embeddings and a decision model are optional and off until you configure them; [every outbound path](docs/cli-reference.md#what-leaves-the-machine-unscanned-network-egress) is listed with what it sends.
+3. **What it costs.** The software is MIT licensed. Dream's sessions use your agent's subscription or provider allowance; an optional decision model stops sending once a daily spending limit is reached, 0.50 USD unless you change it ([decision models](docs/decision-models.md)).
+4. **Your notes.** Records live in a brain store outside your vault. A 1.x brain kept in the vault's `Brain/` folder is moved into the store on upgrade ([updating](docs/updating.md#2-the-store-migration)), and an `@osb` marker you write in a note is annotated once it is captured ([how it works](docs/how-it-works.md#capture-surfaces)).
+5. **Undo.** `o2b uninstall --target <host> --apply` removes what setup wrote for a host, and `bun remove -g open-second-brain` removes the package; your vault, notes and brain store are kept ([uninstall](install.md#uninstall)).
+6. **Removed is not erased.** The store is append-only: retiring or correcting a rule adds a record, and the old one stays until a compaction rewrites it. Do not put a secret into the brain ([brain store](docs/brain-store.md#what-the-partitions-protect-and-what-they-do-not)).
 
-- **Preferences that learn and expire.** Signals, a deterministic dream pass, confidence and retirement: [how it works](docs/how-it-works.md#a-preferences-lifecycle).
-- **Reversible changes.** Brain mutations take a snapshot first; `o2b brain rollback` restores it: [snapshots](docs/how-it-works.md#snapshots-and-rollback).
-- **Attributed writes.** `o2b brain writes` lists every note write by agent and device, `writes revert` plans a restore, `o2b brain freeze` stops all writers, and `o2b brain log verify` checks the hash-chained log: [Brain CLI](docs/cli-reference.md#brain-observing-memory).
-- **Search.** Keyword search with an optional semantic lane, result explanations, recall profiles and compact cards; an opt-in iterative loop (`search_iterative_recall_enabled`, default off) keeps querying when coverage gaps survive, pausing with a plan the caller answers through `brain_search`'s round trip; and an opt-in per-source-session cap (`search_pool_max_per_session`, default off) keeps one long imported session from filling the candidate window, so diversity spreads across sessions: [search CLI](docs/cli-reference.md#search), [iterative recall](docs/cli-reference.md#iterative-recall-since-v1820), [pool cap](docs/cli-reference.md#the-per-source-session-pool-cap-since-v1830), [ranking](docs/how-it-works.md#full-text-search).
-- **Session recall.** Import agent transcripts already on disk, search them, or select whole-thread coverage under a character budget (`o2b brain session-grep --operation coverage --char-budget <n>`, with `--entity-key` seeding the fan-out from mined entity mentions): [session logs](docs/cli-reference.md#session-logs-this-machine-already-has-since-v1500), [coverage](docs/cli-reference.md#coverage-first-session-recall-since-v1820).
-- **Hygiene.** `o2b brain hygiene scan` finds contested, duplicate, stale and unused memories; `apply` runs only the findings you pick: [maintenance](docs/cli-reference.md#maintenance-and-operator-surfaces).
-- **Claim ledger.** `o2b brain truth ingest` records an entity claim with an optional validity window (`--valid-from`/`--valid-until`; with the flags absent, a window on the source record's frontmatter is adopted and frozen at ingest), `truth events` recalls a windowed slice of the ledger, and `truth state` grounds an agent-stated claim with an anchoring verdict - committed, or reported back with reason codes. `truth state` accepts an optional opaque `--sample-id` naming the context-pack sample the claim drew on, and claim reads report the receipt and outcome provenance behind it at the caller's reach - "receipt known, outcome unknown", never an invented verdict: [entity truth CLI](docs/cli-reference.md#entity-truth-and-self-improving-dream-since-v0430).
-- **Corrections.** `o2b brain lifecycle correct <target>` reports a correction's blast radius and retires the affected records - validity-closed by default, tombstoned with `--flatly-wrong`, dry run by default and `--apply` to write. A retired record that recall can still serve is served only beside its correction, never alone: [belief lifecycle CLI](docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330).
-- **Sharing and backup.** Knowledge packs export a chosen subset; `o2b brain bank-export` writes a one-file backup bundle: [knowledge packs](docs/cli-reference.md#knowledge-packs).
-- **Secret custody.** Credentials live encrypted in the vault's state dir behind a capability-gated store; `$secret:NAME` references resolve at the use sites, `o2b brain secret unlock` wraps the keyfile under a passphrase, and `secret export`/`import` move the store between installs as one passphrase-encrypted bundle: [custody CLI](docs/cli-reference.md#write-time-integrity-and-governance-since-v0440).
-- **Today view and note markers.** `o2b brain today`, `@osb loop` and `@osb set` markers: [Brain CLI](docs/cli-reference.md#brain-observing-memory).
-- **Self-inspection.** `o2b version`, `o2b install --friction` and `o2b state status` report what is installed and where state lives: [CLI reference](docs/cli-reference.md#core).
-- **MCP surface.** Tools, tool profiles for hosts with tool limits, and the always-loaded writer server: [`docs/mcp.md`](docs/mcp.md).
+## Works with Agentic Playbooks
 
-## Optional features
+[![Open Second Brain and Agentic Playbooks](docs/brand/banner-open-second-brain-apb.svg)](https://github.com/itechmeat/agentic-playbooks)
 
-- **Semantic search:** an embedding provider plus `sqlite-vec`; the `embeddings-setup` skill walks through it: [`skills/embeddings-setup/SKILL.md`](skills/embeddings-setup/SKILL.md).
-- **Decision models:** a typed judgment model that can rerank search and filter candidates, off by default per use: [`docs/decision-models.md`](docs/decision-models.md).
-- **Deep relational recall:** a fourth search arm over typed links, off by default. Its traversal runs under width budgets - 8 seeds, 4 edges per node, 16 nodes in total, and a hub above 12 walked edges is reached but not expanded - each overridable through an `OPEN_SECOND_BRAIN_SEARCH_TRAVERSAL_*` environment variable or a `search_traversal_*` config key; entity co-occurrence bridges join the walk by default and switch off separately (`OPEN_SECOND_BRAIN_SEARCH_ENTITY_BRIDGES`): [retrieval quality](docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370).
-- **Staged review for agent writes, off by default.** With no key set every write publishes exactly as before. `write_approval.notes` / `OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED` and `write_approval.ingest` / `OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED` (each falling back to the `write_approval.enabled` master, default off) stage note creates and ingest summary pages into `Brain/pending/` beside the staged signals, where they stay out of the search index until an operator runs `o2b brain pending list` and applies or rejects them; [write-path integrity](docs/cli-reference.md#write-path-integrity-and-store-safety-since-v1320).
-- **A permissions document, absent by default.** `Brain/_permissions.yaml` (an operator-edited vault file) resolves `allow`/`ask`/`deny` per agent, role and target for the write, ingest and owner-write actions; with the file absent every check behaves exactly as today. `ask` stages the write, `deny` refuses with the `write-refused` token and the next command `o2b brain permissions show`, and every ask/deny verdict lands in a queryable decision ledger under `Brain/logs/decisions/`; `o2b brain permissions show` dry-runs the decision table, `ledger` reads the rows; [Brain CLI](docs/cli-reference.md#brain-observing-memory).
-- **The owner-write gate, off by default.** `integrity.owner_scope_writes` in `Brain/_brain.yaml` (`off` | `warn` | `fail`, default `off`) refuses a caller-named owner that differs from the caller's resolved identity on the preference and note lanes (`warn` allows and records one decision-ledger row); a document `owner_write` verdict composes most-restrictive-wins with the gate; [write-time integrity](docs/cli-reference.md#write-time-integrity-and-governance-since-v0440).
-- **Named MCP tokens, optional.** `o2b mcp token mint|rotate|revoke|list` keeps a hash-at-rest token per agent (`.open-second-brain/secrets/mcp-tokens.json`; material shown exactly once). Over HTTP a valid token authenticates as its agent per request, the shared `--api-key` stays valid as the operator master credential, and `mcp_tokens_required` / `OPEN_SECOND_BRAIN_MCP_TOKENS_REQUIRED` (default `false`) makes a non-empty token map refuse credential-less requests. `o2b bootstrap --target <harness> [--token] [--rotate] [--check]` provisions MCP registration, token and receipt in one idempotent command, and `o2b bootstrap --remove <harness>` tears a provision down again; the minted token authenticates HTTP clients configured by hand, while the registered stdio harness presents no credential and keeps its config-derived identity; [core CLI](docs/cli-reference.md#core).
-- **Ambient capture consent, opt-out.** `guardrails.ambient_writeback: false` suppresses the ambient extraction lane with a counted `ambient-withheld` event (absent keeps today's behavior), and `guardrails.ambient_ttl_days` stamps an `expiration_date` on ambient-extracted signals so reads drop them after the window (absent stamps nothing); a TTL-stamped signal still stages when the review gate is on and survives apply verbatim.
-- **Open decisions.** `o2b brain decision open --title <t> --question <q> --option <o> [...]` parks a question with enumerated options at `Brain/decisions/open-<slug>.md`; `resolve` mints the real `type: decision` page, `discard` closes without deciding, and the morning brief renders up to five open questions: [belief lifecycle](docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330).
-
-## What is new
-
-Open Second Brain 1.98.0 is the agent-presence and self-improvement release. `o2b install --target <host> --apply` now writes the brain-usage block into the agent-instruction file the installed host reads at the vault root (AGENTS.md for codex, cursor, opencode and aider; GEMINI.md for gemini-cli) under the same consent prompt as the config writes, preserving every byte outside the block and recording its ownership so uninstall removes exactly the pair the tool wrote; the dream pass gains an operator-approved exit into those same files, where a lesson promotes into a managed lessons block only with a fresh approval pinned to the approved text, and the doctor grades every block state it can name. The skill lane gains a benchmark-gated rewrite loop: a skill is rewritten only after a candidate beats the incumbent on scored dev tasks with full coverage and survives the one held-out check - Open Second Brain never calls a model, the scorer reads structural predicates and nothing the agent claims about its own work, and the accept stays an operator step on the command line. And ChatGPT desktop is named where its operators look for it: it reads the shared Codex config, so one codex registration serves both. Every release is described in the [CHANGELOG](CHANGELOG.md).
+apb runs the agents; Open Second Brain gives those agents memory, so what the agents of one run recorded is there for the agents of the next. Each works without the other.
+[Agentic Playbooks (apb)](https://github.com/itechmeat/agentic-playbooks) is a separate project.
 
 ## Documentation
 
-| Topic                                                     | Page                                                             |
-| --------------------------------------------------------- | ---------------------------------------------------------------- |
-| Mental model, vault layout, dream pass, safety properties | [`docs/how-it-works.md`](docs/how-it-works.md)                   |
-| Every CLI verb and flag                                   | [`docs/cli-reference.md`](docs/cli-reference.md)                 |
-| MCP protocol, tools, writer split                         | [`docs/mcp.md`](docs/mcp.md)                                     |
-| Brain store: setup, sync, migration, the human view       | [`docs/brain-store.md`](docs/brain-store.md)                     |
-| Architecture and configuration model                      | [`docs/architecture.md`](docs/architecture.md)                   |
-| Updating (`o2b update`) and upgrade notes                 | [`docs/updating.md`](docs/updating.md)                           |
-| Observability events                                      | [`docs/observability.md`](docs/observability.md)                 |
-| Metrics data contract                                     | [`docs/metrics.md`](docs/metrics.md)                             |
-| Cross-project pointer                                     | [`docs/cross-project-pointer.md`](docs/cross-project-pointer.md) |
-| Scheduled Brain digest (Hermes cron)                      | [`docs/hermes-cron.md`](docs/hermes-cron.md)                     |
-| Stability policy                                          | [`docs/stability.md`](docs/stability.md)                         |
-| Origin of the idea                                        | [`docs/idea.md`](docs/idea.md)                                   |
+[The documentation index](docs/README.md) groups the documents by what you want to do: get started, connect an agent, understand how it works, operate, upgrade, contribute.
+Upgrading from 1.x: [`docs/updating.md`](docs/updating.md).
 
 ## Project
 

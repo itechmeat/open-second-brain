@@ -197,6 +197,25 @@ describe("o2b setup", () => {
     expect(snapshot(root)).toEqual(baseline);
   });
 
+  test.each([[[]], [["--apply", "--yes"]]])(
+    "Aider without a vault stops and asks for --vault before writing (%p)",
+    async (mode) => {
+      const result = await runSetup([
+        "--target",
+        "aider",
+        "--no-vault",
+        "--agent-name",
+        "Setup Test",
+        "--timezone",
+        "UTC",
+        ...mode,
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain("pass --vault <path>");
+      expect(snapshot(root)).toEqual(baseline);
+    },
+  );
+
   test("headless consent refusal writes nothing", async () => {
     const result = await runSetup([
       "--target",

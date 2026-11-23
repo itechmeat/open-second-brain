@@ -7,6 +7,12 @@ operator to wire it into whatever the runtime expects.
 
 ## Print to stdout
 
+With the registry package on a fresh machine, `o2b setup --target generic
+--vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply
+--yes` configures the machine and the brain, prints the same entries and
+exits `7`: merging them into your host is the step that remains. On a
+machine that is already configured:
+
 ```bash
 o2b install --target generic --apply --yes --out -
 ```
@@ -80,5 +86,5 @@ from the code.
 - Detection always reports `not-installed` (there is no canonical
   config to probe for this target).
 - The `generic` target is the right escape hatch when a new
-  runtime appears between OSB releases. Per-runtime adapters land
+  runtime appears between Open Second Brain releases. Per-runtime adapters land
   in subsequent releases as needed.

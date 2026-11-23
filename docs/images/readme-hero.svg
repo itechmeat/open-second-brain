@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-labelledby="title desc">
+  <title id="title">Open Second Brain</title>
+  <desc id="desc">Open Second Brain carries what your agents learn into future sessions. Several agent sessions feed one memory, which reaches the next sessions.</desc>
+  <rect x="0" y="0" width="1280" height="400" rx="28" fill="#fbfaf6"/>
+  <rect x="1" y="1" width="1278" height="398" rx="27" fill="none" stroke="#e6e1d6" stroke-width="2"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" fill="#1f1f1f">
+    <text x="80" y="168" font-size="64" font-weight="700">Open Second Brain</text>
+    <rect x="80" y="196" width="96" height="6" rx="3" fill="#cc785c"/>
+    <text x="80" y="256" font-size="30">carries what your agents learn</text>
+    <text x="80" y="298" font-size="30">into future sessions.</text>
+  </g>
+  <g>
+    <path d="M846 110 C 930 110, 930 200, 1000 200" fill="none" stroke="#1f1f1f" stroke-width="3" stroke-linecap="round"/>
+    <path d="M846 170 C 920 170, 940 200, 1000 200" fill="none" stroke="#1f1f1f" stroke-width="3" stroke-linecap="round"/>
+    <path d="M846 230 C 920 230, 940 200, 1000 200" fill="none" stroke="#1f1f1f" stroke-width="3" stroke-linecap="round"/>
+    <path d="M846 290 C 930 290, 930 200, 1000 200" fill="none" stroke="#1f1f1f" stroke-width="3" stroke-linecap="round"/>
+    <path d="M1080 200 L 1150 200" fill="none" stroke="#1f1f1f" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <g>
+    <circle cx="830" cy="110" r="16" fill="#fbfaf6" stroke="#1f1f1f" stroke-width="3"/>
+    <circle cx="830" cy="170" r="16" fill="#fbfaf6" stroke="#1f1f1f" stroke-width="3"/>
+    <circle cx="830" cy="230" r="16" fill="#fbfaf6" stroke="#1f1f1f" stroke-width="3"/>
+    <circle cx="830" cy="290" r="16" fill="#fbfaf6" stroke="#1f1f1f" stroke-width="3"/>
+  </g>
+  <rect x="1000" y="160" width="80" height="80" rx="18" fill="#cc785c"/>
+  <g fill="#fbfaf6">
+    <rect x="1018" y="184" width="44" height="6" rx="3"/>
+    <rect x="1018" y="197" width="32" height="6" rx="3"/>
+    <rect x="1018" y="210" width="38" height="6" rx="3"/>
+  </g>
+  <circle cx="1170" cy="200" r="20" fill="#fbfaf6" stroke="#cc785c" stroke-width="4"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" fill="#1f1f1f" text-anchor="middle">
+    <text x="830" y="336">agents</text>
+    <text x="1040" y="274">memory</text>
+    <text x="1170" y="256">next session</text>
+  </g>
+</svg>

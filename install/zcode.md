@@ -7,8 +7,11 @@ Open Second Brain servers are added by hand. Verified with the ZCode CLI
 
 ## 1. Prerequisites
 
-- `o2b` on `PATH` and a vault initialized with `o2b init` - see
-  [`prerequisites.md`](prerequisites.md#get-the-o2b-cli).
+- `o2b` on `PATH` and a configured machine - see
+  [`prerequisites.md`](prerequisites.md#get-the-o2b-cli). With the
+  registry package, `o2b setup --target zcode --vault /path/to/vault
+  --agent-name "<agent-name>" --timezone UTC --apply --yes` configures the
+  machine and the brain and exits `7`, naming the step below.
 
 ## 2. Add the MCP servers
 

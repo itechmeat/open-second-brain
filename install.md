@@ -1,192 +1,195 @@
-# Open Second Brain — Installation
+# Open Second Brain installation
 
-Open Second Brain ships one CLI (`o2b`), one always-loaded MCP
-writer server, one full MCP server, and a runtime-specific install
-adapter per supported runtime. This file is a router — pick the
-runtime you use and read the corresponding `install/<runtime>.md`.
-No runtime is preferred. Choose the host that fits your workflow.
-
-> **Always install the latest released version.** The runtime CLIs
-> resolve `latest` from a bare `owner/repo` identifier by default.
-> Do not append `@v...` — that freezes the install at a specific
-> tag, including back to an older release if you happen to know an
-> outdated number.
+Open Second Brain ships one CLI (`o2b`), two MCP servers (the full
+server and the always-loaded writer server), lifecycle hooks, and an
+install adapter for each supported agent host. This page is the router:
+install the package once, then connect each host you use. No host is
+preferred.
 
 ## Prerequisites
 
-Read **`install/prerequisites.md`** first — Bun runtime, vault
-discovery, identity (agent name + timezone), and the verification
-pattern that every install path ends with. On native Windows, read
-**`install/windows.md`** as well.
+Read [`install/prerequisites.md`](install/prerequisites.md) first: Bun,
+vault discovery, the agent name and timezone, and the checks every install
+ends with. On native Windows, read [`install/windows.md`](install/windows.md)
+as well.
 
-## From the registry
+## Install from the registry
 
-With Bun installed, install Open Second Brain and connect a host:
+Bun 1.1 or later is the only prerequisite.
 
-```bash
-bun add -g open-second-brain
-o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes
-```
+1. Install the package. It puts `o2b`, `o2b-mcp` and `o2b-hook` on `PATH`:
 
-On a fresh machine, setup requires a vault choice, agent name, and timezone;
-`--yes` supplies consent only. Replace the vault path and agent name with your
-own values. For a machine without a vault, use `--no-vault` instead:
+   ```bash
+   bun add -g open-second-brain
+   ```
 
-```bash
-o2b setup --target cursor --no-vault --agent-name "Your Name" --timezone UTC --apply --yes
-```
+2. Configure the machine, create or connect the brain, connect one host
+   and verify, in one command:
 
-Interactive `setup --apply` asks for consent; non-interactive runs require
-`--yes`.
-The clone and runtime marketplace paths below remain available.
+   ```bash
+   o2b setup --target cursor --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+   ```
 
-## Quick install
+   Replace `cursor` with your host (table below), the vault path and the
+   agent name with your own values. A machine with no Obsidian vault uses
+   `--no-vault` instead of `--vault <path>`:
 
-For these runtimes one `o2b install` command writes the integration
-(every apply is consent-gated: an interactive run asks once, and a
-headless run needs the shown `--yes` — see
-[`install/prerequisites.md`](install/prerequisites.md#consent-before-apply)):
+   ```bash
+   o2b setup --target cursor --no-vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+   ```
 
-| Runtime              | Command                                            | Notes                                                                 |
-|----------------------|----------------------------------------------------|-----------------------------------------------------------------------|
-| Cursor               | `o2b install --target cursor --apply --yes`        | `install/cursor.md` — JSON-merge; restart Cursor after apply         |
-| Aider                | `o2b install --target aider --apply --yes`         | `install/aider.md` — managed block + sidecar context; no native MCP   |
-| opencode             | `o2b install --target opencode --apply --yes`      | `install/opencode.md` — MCP servers + native plugin                                    |
-| Grok Build           | `o2b install --target grok --apply --yes`          | `install/grok.md` — MCP in `~/.grok/config.toml` + native hooks (absolute command)     |
-| kiro                 | `o2b install --target kiro --apply --yes`          | `install/kiro.md` — JSON-merge                                        |
-| GitHub Copilot CLI   | `o2b install --target copilot-cli --apply --yes`   | `install/copilot-cli.md` — `copilot mcp add` with JSON fallback       |
-| Google Gemini CLI    | `o2b install --target gemini-cli --apply --yes`    | `install/gemini-cli.md` — JSON-merge in `~/.gemini/settings.json`     |
-| Pi (pi.dev)          | `o2b install --target pi --apply --yes`            | `install/pi.md` — skill symlink, not MCP                              |
-| Generic / other      | `o2b install --target generic --apply --yes --out -` | `install/generic.md` — prints payload; never edits external config    |
+   Aider is the exception: its context file lives in the vault, so setup
+   for `aider` on a machine with no vault stops with an error that asks for
+   `--vault <path>`.
 
-ZCode has no install target yet: add the printed servers to its config
-by hand, see `install/zcode.md`.
+3. Restart the host so it loads the new servers.
+4. Run `o2b setup --target <host> ...` again for every other host on this
+   machine. The second run finds the machine configured and only connects
+   the host.
 
-For runtimes that ship their own plugin/MCP install pipeline, OSB
-hooks into that pipeline instead of `o2b install --target`:
+Without `--apply`, setup prints its plan and writes nothing. On a fresh
+machine `--apply` needs a vault choice (`--vault` or `--no-vault`), an agent
+name and a timezone; `--yes` supplies consent and nothing else. An
+interactive run asks for consent instead.
 
-| Runtime              | Doc                       |
-|----------------------|---------------------------|
-| Hermes Agent         | `install/hermes.md`       |
-| OpenClaw             | `install/openclaw.md`     |
-| Codex                | `install/codex.md`        |
-| Claude Code          | `install/claudecode.md`   |
+On a fresh machine, setup creates the brain store outside the vault, binds
+the vault to it, and makes this installation the brain's dream owner and the
+writer of the human view. From a registry install it registers the absolute
+Bun path and the launcher inside the installed package, so the host does not
+depend on the `PATH` it starts with. After registering, it runs an MCP probe
+and the store self-test.
 
-## After setup
+Setup exit codes:
 
-For a vault-backed host, setup can receive the vault, agent name and
-timezone explicitly:
+| Code | Meaning |
+| --- | --- |
+| `0` | Setup and verification passed |
+| `1` | A runtime or self-test failure |
+| `2` | Invalid usage or a missing choice |
+| `3` | Verification found drift |
+| `4` | A user-edited managed block needs attention |
+| `5` | The host could not be reached |
+| `6` | Consent was refused |
+| `7` | A host step remains for you: installing a host plugin, or merging the printed configuration |
 
-```bash
-o2b setup --target cursor --vault /path/to/vault --agent-name "Your Name" --timezone UTC --apply --yes
-```
+## Supported clients
 
-Use `--no-vault` when the machine uses the brain store without a vault.
-Exit `0` means setup and verification passed; `1` means a runtime or
-self-test failure; `2` means invalid usage or a missing choice; `3` means
-verification found drift; `4` means a user-edited block needs attention;
-`5` means the host could not be reached; `6` means consent was refused;
-`7` means a host step remains for you, such as installing a host plugin or
-merging the generic configuration.
+| Client | How it connects | Guide |
+| --- | --- | --- |
+| Claude Code | Marketplace plugin: MCP servers and hooks. `o2b setup --target claude-code` prepares the machine and names the plugin step (exit `7`) | [`install/claudecode.md`](install/claudecode.md) |
+| OpenAI Codex | `o2b setup --target codex`, or `o2b install --target codex --apply`; the marketplace plugin adds the hooks | [`install/codex.md`](install/codex.md) |
+| ChatGPT desktop | Reads the shared Codex config: `o2b install --target codex --apply` | [`install/codex.md`](install/codex.md) |
+| Hermes Agent | Plugin and memory provider. `o2b setup --target hermes` names the plugin step (exit `7`) | [`install/hermes.md`](install/hermes.md) |
+| OpenClaw | Native plugin, no MCP. `o2b setup --target openclaw` names the plugin step (exit `7`) | [`install/openclaw.md`](install/openclaw.md) |
+| opencode | `o2b setup --target opencode`: MCP servers and a native plugin | [`install/opencode.md`](install/opencode.md) |
+| Grok Build | `o2b setup --target grok`: MCP servers and hooks | [`install/grok.md`](install/grok.md) |
+| Cursor | `o2b setup --target cursor` | [`install/cursor.md`](install/cursor.md) |
+| kiro | `o2b setup --target kiro` | [`install/kiro.md`](install/kiro.md) |
+| GitHub Copilot CLI | `o2b setup --target copilot-cli` | [`install/copilot-cli.md`](install/copilot-cli.md) |
+| Gemini CLI | `o2b setup --target gemini-cli` | [`install/gemini-cli.md`](install/gemini-cli.md) |
+| ZCode | MCP servers added to its config by hand. `o2b setup --target zcode` names the step (exit `7`) | [`install/zcode.md`](install/zcode.md) |
+| Aider | `o2b setup --target aider`: context file, no MCP | [`install/aider.md`](install/aider.md) |
+| Pi | `o2b setup --target pi`: a skill over the CLI | [`install/pi.md`](install/pi.md) |
+| Any other MCP host | `o2b setup --target generic` prints the server entries to merge (exit `7`) | [`install/generic.md`](install/generic.md) |
 
-## Interactive setup
+`o2b install --target <name> --apply --yes` connects a host on a machine
+that is already configured, as before; `setup` runs the same adapter after
+the machine steps. The capability overview of every surface is in
+[`docs/features.md`](docs/features.md).
 
-For a guided first-time setup that composes `o2b init`, optional
-`o2b brain init`, and per-target `o2b install`:
+## Other ways to install
 
-```bash
-o2b init --interactive
-```
+1. **From a clone.** Clone the repository and publish the launchers with
+   `scripts/o2b install-cli`; see
+   [`install/prerequisites.md`](install/prerequisites.md#get-the-o2b-cli).
+   Do not mix a clone install and a registry install on one machine:
+   doctor reports several different `o2b` on `PATH`.
+2. **Through a host plugin.** Claude Code, Codex, Hermes and OpenClaw ship
+   the launcher with their plugin; each guide shows how to publish it.
+3. **Guided.** `o2b init --interactive` prints the full plan, asks for an
+   explicit `yes`, then runs `o2b init` and the chosen `o2b install`
+   targets.
 
-The wizard reads from stdin, prints the full action plan, and
-requires an explicit `yes` before any side effects.
+## The dream owner and the dream agent
 
-## Verify
+Dream is the pass that turns what agents recorded into rules and topics.
+It runs on one installation, the dream owner, and starts by itself at the
+first session of the day on that machine. The installation that creates
+the brain becomes the owner when its agent name is known; check it with
+`o2b dream owner`.
 
-For a vault-backed install, verify with:
-
-```bash
-o2b doctor --vault /path/to/vault --repo .
-o2b install --check
-```
-
-`o2b install --check` is the runtime-install health check
-(per-target managed-block / MCP verification). Exit code is `0` when every
-target is ok or not installed, `3` if any target reports drift, and `5` if a
-target is configured but proved unreachable. The `5` is new in v1.46.0: that
-case used to exit `0`, so a script gating on the exit status treated a runtime
-it had proved unreachable as healthy. `docs/cli-reference.md` lists every code.
-
-For a `--no-vault` install, setup initializes the machine and brain store
-without a vault. It is complete when setup exits `0` and reports host
-verification as `ok`, the runtime has been restarted, and
-`o2b install --check` reports the target is healthy. Vault initialization,
-vault-specific doctor checks, and vault event checks do not apply.
-
-## The dream agent (optional)
-
-Dream's text work (rollup summaries, the wording of new topics) and the
-closed questions no decision model answers are done by your own agent in
-a short session that sees only the dream queue. Set the command that
-starts it on each machine that owns dream, then verify it with a real
-short call:
+Model work in dream (summaries, topic wording, closed questions no decision
+model answers) is done by your own agent in a short session. No preset
+commands ship: set the command for your agent and verify it with a real
+short call on the owner's machine:
 
 ```bash
 o2b dream agent set '["/path/to/agent", "--your-flags", "{prompt}", "--mcp-config", "{mcp_config}"]'
 o2b dream agent check
 ```
 
-The command is a JSON array (nothing is split or quoted). Only a
-verified command is used. See [docs/dream.md](docs/dream.md) for the
-placeholders, what a session may and may not do, and drafts.
+The command is a JSON array; nothing is split or quoted. Only a verified
+command is used. Until one is set, that work waits in the dream queue and
+doctor says so. Placeholders, isolation and drafts:
+[`docs/dream.md`](docs/dream.md).
+
+## Verify
+
+```bash
+o2b doctor --vault /path/to/vault --repo .
+o2b install --check
+o2b dream status
+```
+
+`o2b install --check` verifies each connected host (managed block or MCP
+registration): exit `0` when every target is ok or not installed, `3` on
+drift, `5` when a target is configured but proved unreachable. It needs a
+vault: on a `--no-vault` machine it exits `2` before it checks a host, so
+check the host in its own MCP listing instead.
+`o2b doctor` covers the machine, the store and the vault; on a `--no-vault`
+machine run it without `--vault`. `o2b dream status` shows whether
+automatic dream is on and whether this machine is the dream owner. Every
+exit code is in [`docs/cli-reference.md`](docs/cli-reference.md).
 
 ## Uninstall
 
-For MCP-aware runtimes:
+For MCP-aware hosts:
 
 ```bash
 o2b uninstall --target <name> --apply
 ```
 
-Removes exactly what `o2b install --target <name>` wrote (recorded
-in `<vault>/.open-second-brain/install.lock.json`). For runtimes
-that ship their own plugin uninstall command, see the
-corresponding `install/<runtime>.md` for the full sequence.
+Removes exactly what `o2b install --target <name>` wrote (recorded in the
+install manifest). For hosts that ship their own plugin uninstall command,
+see the matching `install/<host>.md`. Uninstall never deletes the vault,
+its Markdown files or the brain store. Finishing steps and the local
+cleanup are in [`after-install.md`](after-install.md#uninstall).
 
-The vault and its Markdown files are never deleted by the
-uninstall process.
+When every host is disconnected, remove the registry package, which takes
+`o2b`, `o2b-mcp` and `o2b-hook` off `PATH`:
+
+```bash
+bun remove -g open-second-brain
+```
+
+A clone install removes its launchers with `o2b uninstall --remove-cli`
+instead.
 
 ## Installation readiness criteria
 
 The installation is complete only when all of the following hold:
 
-Universal:
+1. The host integration is installed (plugin, managed block, symlink or
+   printed entries merged).
+2. The host was restarted to pick up the change.
+3. `o2b install --check` reports `ok` (or `installed` for `generic`) for
+   the target, or `o2b setup` exited `0` with host verification `ok`.
+4. `o2b doctor` reports no failure.
+5. `o2b status` shows the chosen `agent_name`, and a test signal recorded
+   without an explicit agent carries that name, not the literal `agent`.
+6. For MCP hosts (Cursor, opencode, Grok Build, kiro, Copilot CLI, Gemini
+   CLI, Claude Code, Codex, Hermes, ZCode; not Aider, Pi or `generic`):
+   the host's MCP listing shows the Open Second Brain tools.
 
-- [ ] plugin (or per-target managed block / symlink / printout)
-      installed;
-- [ ] runtime restarted to pick up the change;
-- [ ] `o2b install --check` reports `ok` (or `installed` for `generic`)
-      for the target;
-
-Vault-backed installs:
-
-- [ ] vault initialized (`o2b init` succeeded);
-- [ ] `o2b doctor` reports OK;
-- [ ] `AI Wiki/identity/agents.md` contains the chosen agent name;
-- [ ] a test event written without an explicit `agent` argument
-      stamps `@<chosen-agent-name>` in `Daily/`, not `@agent`.
-
-For a brain-store install made with `--no-vault`, use this setup criterion
-instead of the vault-backed items above:
-
-- [ ] `o2b setup --target <host> --no-vault --apply --yes` exits `0` and
-      reports host verification as `ok`;
-
-MCP-driven runtimes only (Cursor, opencode, Grok Build, kiro,
-Copilot CLI, Gemini CLI, Claude Code, Codex, Hermes, ZCode; not `aider`,
-`pi`, or `generic`):
-
-- [ ] all OSB tools advertised by the runtime's MCP listing.
-
-If any single item is missing, the install is incomplete — report
-that to the user and do not mark the workflow as successful.
+If any item is missing, the install is incomplete: report that to the user
+and do not mark the workflow as successful.

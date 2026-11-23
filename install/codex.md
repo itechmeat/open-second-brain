@@ -1,6 +1,6 @@
 # Codex
 
-Codex installs OSB through its marketplace + MCP subsystems. The MCP
+Codex installs Open Second Brain through its marketplace + MCP subsystems. The MCP
 registration is driven by the `codex` install adapter, so the steps below
 are the same two commands every other adapter-backed runtime uses.
 
@@ -43,13 +43,28 @@ manual command instead of dying with a module-not-found trace. Running
 `bun install --frozen-lockfile` inside the clone yourself repairs the same
 state.
 
+Or install the CLI from the registry instead (Bun is the only
+prerequisite; do not combine it with `install-cli` on one machine):
+
+```bash
+bun add -g open-second-brain
+```
+
+The hooks then find `o2b-hook` on `PATH` from the registry package. With
+the registry package, `o2b setup --target codex --vault /path/to/vault
+--agent-name "<agent-name>" --timezone UTC --apply --yes` replaces steps 3
+and 4.
+
 ## 3. Initialize the vault
 
 ```bash
 o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" --timezone "<chosen-tz>"
-o2b brain init --vault /path/to/vault
 ```
+
+On a fresh machine `o2b init` creates the brain store outside the vault,
+binds the vault to it, and makes this installation the dream owner (check
+with `o2b dream owner`). A separate `o2b brain init` is not needed.
 
 ## 4. Register the MCP servers
 
@@ -263,7 +278,13 @@ codex plugin marketplace remove open-second-brain
 o2b uninstall --apply-local --remove-cli
 ```
 
-`o2b uninstall --target codex` removes only the two OSB server
+With the registry package, also remove the package:
+
+```bash
+bun remove -g open-second-brain
+```
+
+`o2b uninstall --target codex` removes only the two Open Second Brain server
 registrations - through `codex mcp remove` when the binary is present,
 and by stripping the two tables from `~/.codex/config.toml` when it is
 not. Every other table in that file is left alone.

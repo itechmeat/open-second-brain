@@ -332,7 +332,7 @@ function releaseOf(path: string, token: string): () => void {
     try {
       releaseClaim(path, token);
     } catch {
-      // a claim left behind is judged by its worker pid, this process
+      // remembered: this process's next claim gives it back first
     }
   };
 }
@@ -349,14 +349,16 @@ function runClaimGraceMs(configPath: string | undefined): number {
  * Whether a claim already there still stands for a run that wants its own:
  * its worker (the pid it wrote) lives; or no worker has proved it yet and
  * its maker started one within the start window, or the maker still lives
- * within the pass deadline; or it cannot be read and is younger than the
- * deadline. Anything else was left by a holder that is gone.
+ * within the pass deadline; or it was read whole, is not a claim, and is
+ * younger than the deadline; or it cannot be read now. Anything else was
+ * left by a holder that is gone.
  */
 export function runClaimStands(
   seen: Exclude<ClaimSeen, { kind: "absent" }>,
   nowMs: number,
   grace: number,
 ): boolean {
+  if (seen.kind === "inconclusive") return true;
   const age = nowMs - claimMadeAt(seen);
   if (seen.kind === "unreadable") return age < grace;
   const { claim } = seen;
@@ -384,6 +386,9 @@ export class DreamRunClaimHeldError extends Error {
 function describeClaimHolder(seen: ClaimSeen | null): string {
   if (seen === null || seen.kind === "absent") {
     return "another dream pass on this machine is taking the claim now";
+  }
+  if (seen.kind === "inconclusive") {
+    return "a dream pass on this machine holds it; the claim cannot be read now";
   }
   const since = new Date(claimMadeAt(seen)).toISOString();
   if (seen.kind === "unreadable") return `a dream pass on this machine holds it since ${since}`;

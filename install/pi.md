@@ -1,10 +1,20 @@
 # Pi (pi.dev)
 
-Pi intentionally chose "CLI-tool + README + skill" over MCP. OSB
+Pi intentionally chose "CLI-tool + README + skill" over MCP. Open Second Brain
 installs as a thin skill that points at the `o2b brain *` CLI
 verbs.
 
 ## Install
+
+On a fresh machine with the registry package, one command configures
+the machine and the brain, runs this install and verifies it (see
+[`install.md`](../install.md#install-from-the-registry)):
+
+```bash
+o2b setup --target pi --vault /path/to/vault --agent-name "<agent-name>" --timezone UTC --apply --yes
+```
+
+On a machine that is already configured, the adapter alone:
 
 ```bash
 o2b install --target pi --apply --yes
