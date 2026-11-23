@@ -52,6 +52,24 @@ export interface DoctorExitExclusion {
 }
 
 const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
+  {
+    code: "discipline-alert",
+    reason:
+      "the daily discipline report is an advisory finding; run the report command named in the " +
+      "finding to read its details, and doctor keeps this out of its warning and error exit streams",
+  },
+  {
+    code: "discipline-info",
+    reason:
+      "the daily discipline report is an advisory finding; run the report command named in the " +
+      "finding to read its details, and doctor keeps this out of its warning and error exit streams",
+  },
+  {
+    code: "discipline-legacy-jobs",
+    reason:
+      "these are old scheduled jobs in Hermes state; remove each id with the Hermes command named " +
+      "in the finding because Open Second Brain no longer manages or edits that scheduler file",
+  },
   // --- The dream work queue (change dream-work-queue) --------------------
   {
     code: "dream-queue-no-executor",

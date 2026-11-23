@@ -45,7 +45,7 @@ describe("parseInterval", () => {
     const r = parseInterval("30m");
     expect(r.cron).toBe("*/30 * * * *");
     expect(r.human).toBe("30 minutes");
-    expect(r.hermesSchedule).toBe(r.cron);
+    expect(r.cron).toBe("*/30 * * * *");
   });
 
   test("6h → 0 */6 * * *", () => {
@@ -135,7 +135,10 @@ describe("renderCronTemplate", () => {
     expect(body).toContain("30 minutes");
     expect(body).toContain("*/30 * * * *");
     expect(body).toContain("osb-reindex.sh");
-    expect(body).toContain("hermes cron create");
+    expect(body).not.toContain("hermes cron create");
+    expect(body).not.toContain(".hermes");
+    expect(body).toContain("OPEN_SECOND_BRAIN_ENV_FILE");
+    expect(body).toContain("${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env");
     expect(body).toContain("search reindex --embeddings");
   });
 

@@ -2237,15 +2237,13 @@ broken invocation retries the wrong one. A rollback that restored four of
 five files exits `1` even though everything it DID do succeeded, because
 "restored 4 of 5" is not a success.
 
-## Discipline (daily logging cron)
+## Discipline (daily logging)
 
 ```text
-o2b discipline report         Render the daily MarkdownV2 block to stdout (brain-event counts per agent vs git/mtime/vault activity plus complexity-to-thinking ratio); status ok | info | alert
-o2b discipline install        Register the Hermes cron job that delivers the report. --telegram-target is required; --at defaults to "59 4 * * *" UTC; --weekly installs a Monday 08:59 weekly digest. The jobs file is `~/.hermes/cron/jobs.json` of the running user (since v1.65.0; before, always under the root user's home); `OSB_HERMES_JOBS` overrides it
-o2b discipline uninstall      Remove the cron job; --weekly removes only the weekly digest, without flag removes both
+o2b discipline report         Render the daily report as plain Markdown to stdout; status ok | info | alert
 ```
 
-See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delivery shape.
+`o2b brain doctor` reports the daily verdict as advice when discipline reporting is enabled. The first verdict for a vault and local date is cached for that day, so later imports or configuration edits affect the next day's verdict. It also names legacy Hermes jobs left by the removed installer. The uninstall plan lists those jobs without changing them; remove an unwanted job with `hermes cron remove <id>`.
 
 ## Partner (read-only, since v1.12.0)
 

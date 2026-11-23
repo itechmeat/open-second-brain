@@ -1573,11 +1573,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       "discipline",
       "Daily logging discipline verbs",
       [],
-      [
-        command("report", "Render discipline report"),
-        command("install", "Install discipline cron"),
-        command("uninstall", "Remove discipline cron"),
-      ],
+      [command("report", "Render discipline report")],
     ),
     command(
       "partner",

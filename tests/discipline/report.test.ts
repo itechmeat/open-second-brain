@@ -90,7 +90,7 @@ describe("runDisciplineReport", () => {
     expect(res.status).toBe("alert");
     expect(res.activity?.complexity?.warning).toBe(true);
     expect(res.text).toContain("complexity");
-    expect(res.text).toContain("productivity\\-trap");
+    expect(res.text).toContain("productivity-trap");
     rmSync(vault, { recursive: true });
   });
 

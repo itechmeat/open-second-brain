@@ -2,9 +2,8 @@
  * Shared renderer for every `--cron-template` recipe this CLI prints.
  *
  * A recipe is text on stdout and nothing else. It prints a script body,
- * a native crontab line, and an optional 'hermes cron create'
- * invocation; the operator (or an agent acting in the operator's name)
- * copies whichever path fits their host into their own scheduler. No
+ * a native crontab line, and a systemd user timer recipe; the operator
+ * copies whichever path fits their host into their scheduler. No
  * verb that renders a recipe writes a file, spawns a scheduler, or
  * installs anything - the writes all happen later, on the operator's
  * host, from the operator's own crontab.
@@ -40,7 +39,7 @@
  *
  * A second renderer, {@link renderSystemdTimer}, reads the same spec and
  * prints the same script section followed by a systemd user service and
- * timer pair instead of the crontab and Hermes paths. It is print-only in
+ * timer pair instead of the crontab path. It is print-only in
  * exactly the same way: the unit files, `systemctl --user` and
  * `loginctl enable-linger` are commands the operator runs, never this
  * CLI. It validates the interval through the same {@link parseInterval},
@@ -140,8 +139,6 @@ export interface ParsedInterval {
   readonly cron: string;
   /** Human-readable label (e.g. "30 minutes"). */
   readonly human: string;
-  /** Schedule string for 'hermes cron create --schedule ...'. */
-  readonly hermesSchedule: string;
   /**
    * The same cadence as a systemd time span (`30m`, `6h`, `1d`): the
    * normalised `<N><unit>`, which systemd reads natively for m, h and d.
@@ -180,7 +177,7 @@ export function parseInterval(raw: string): ParsedInterval {
       );
     }
     const cron = "*/" + n + " * * * *";
-    return { cron, human: n + " minutes", hermesSchedule: cron, systemdSpan };
+    return { cron, human: n + " minutes", systemdSpan };
   }
   if (unit === "h") {
     if (n >= HOURS_PER_DAY) {
@@ -190,7 +187,7 @@ export function parseInterval(raw: string): ParsedInterval {
       );
     }
     const cron = "0 */" + n + " * * *";
-    return { cron, human: n + " hours", hermesSchedule: cron, systemdSpan };
+    return { cron, human: n + " hours", systemdSpan };
   }
   // unit === "d". The day-of-month field is the one that cannot be widened
   // by moving to a larger unit, because there is none - so the refusal
@@ -212,7 +209,7 @@ export function parseInterval(raw: string): ParsedInterval {
     );
   }
   const cron = "0 0 */" + n + " * *";
-  return { cron, human: n + " days", hermesSchedule: cron, systemdSpan };
+  return { cron, human: n + " days", systemdSpan };
 }
 
 /** Options every recipe accepts. Consumers widen this with their own inputs. */
@@ -238,14 +235,12 @@ export type ResolvedCronRecipeOptions<TOptions extends CronRecipeOptions> = TOpt
 export interface CronRecipeSpec<TOptions extends CronRecipeOptions = CronRecipeOptions> {
   /** Header line naming the recipe, e.g. "... - periodic reindex template". */
   readonly title: string;
-  /** Job name for the scheduler recipe (`hermes cron create --name`). */
+  /** Stable name for the scheduled script and systemd units. */
   readonly cronName: string;
   /** Where the operator saves the script, in tilde form. */
   readonly scriptPath: string;
   /** Extra `##` lines under the script section, without their prefix. */
   readonly scriptNotes: ReadonlyArray<string>;
-  /** Parenthetical appended to the scheduler section header. */
-  readonly schedulerNote: string;
   /** The bash body placed inside the heredoc, newline-terminated. */
   readonly buildScriptBody: (opts: ResolvedCronRecipeOptions<TOptions>) => string;
   /** The command the footer tells the operator to verify the install with. */
@@ -266,7 +261,6 @@ const HEREDOC_MARKER = "OSBEOF";
 
 /** Prefix of a tilde-relative home path, and its shell-variable form. */
 const TILDE_HOME_PREFIX = "~/";
-const SHELL_HOME_PREFIX = "$HOME/";
 
 /** The horizontal rule that opens and closes the recipe. */
 const RULE = "# ----------------------------------------------------------------------\n";
@@ -300,18 +294,6 @@ const SYSTEMD_BOOT_DELAY = "5m";
  */
 export function operatorScriptPath(cronName: string): string {
   return OPERATOR_SCRIPT_DIR + cronName + SCRIPT_EXTENSION;
-}
-
-/**
- * Rewrite a tilde-relative path into its `$HOME` form. The scheduler
- * recipe passes the script path as a quoted argument, where a leading
- * `~` is not expanded by the shell, so the variable form is the only
- * one that resolves. Paths that are not tilde-relative pass through.
- */
-function homeExpanded(path: string): string {
-  return path.startsWith(TILDE_HOME_PREFIX)
-    ? SHELL_HOME_PREFIX + path.slice(TILDE_HOME_PREFIX.length)
-    : path;
 }
 
 /** The `%h` form of a tilde-relative path, for `ExecStart=`. */
@@ -364,18 +346,32 @@ function renderScriptSection<TOptions extends CronRecipeOptions>(
   spec: CronRecipeSpec<TOptions>,
   resolved: ResolvedCronRecipeOptions<TOptions>,
 ): string {
+  const body = spec.buildScriptBody(resolved);
+  const shebangEnd = body.indexOf("\n");
+  const envBootstrap =
+    "set -euo pipefail\n" +
+    'env_file="${OPEN_SECOND_BRAIN_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env}"\n' +
+    'if [[ -r "$env_file" && -f "$env_file" ]]; then\n' +
+    '  set -a; . "$env_file"; set +a\n' +
+    "fi\n";
+  const scriptBody =
+    shebangEnd >= 0
+      ? body.slice(0, shebangEnd + 1) + envBootstrap + body.slice(shebangEnd + 1)
+      : envBootstrap + body;
   return (
     "## 1. Watchdog script - save to " +
     spec.scriptPath +
     "\n" +
     spec.scriptNotes.map((line) => NOTE_PREFIX + line + "\n").join("") +
+    NOTE_PREFIX +
+    "Sources the optional Open Second Brain env file when readable.\n" +
     "\n" +
     "cat >" +
     spec.scriptPath +
     " <<'" +
     HEREDOC_MARKER +
     "'\n" +
-    spec.buildScriptBody(resolved) +
+    scriptBody +
     HEREDOC_MARKER +
     "\n" +
     "chmod +x " +
@@ -405,8 +401,8 @@ export function renderCronRecipe<TOptions extends CronRecipeOptions>(
 ): string {
   const { parsed, resolved } = recipeInputs(interval, opts);
   const header = renderHeader(spec.title, parsed, [
-    "Pick ONE of the three paths below. The watchdog script is the",
-    "common piece; both crontab and Hermes-cron rely on it.",
+    "Pick ONE of the two paths below. The watchdog script is the",
+    "common piece; both crontab and systemd rely on it.",
   ]);
   const watchdog = renderScriptSection(spec, resolved);
   const nativeCron =
@@ -416,24 +412,8 @@ export function renderCronRecipe<TOptions extends CronRecipeOptions>(
     "    " +
     spec.scriptPath +
     "\n";
-  const hermesCron =
-    "## 3. Hermes cron " +
-    spec.schedulerNote +
-    ":\n" +
-    "\n" +
-    "hermes cron create \\\n" +
-    "  --name " +
-    spec.cronName +
-    " \\\n" +
-    "  --schedule '" +
-    parsed.hermesSchedule +
-    "' \\\n" +
-    '  --command "' +
-    homeExpanded(spec.scriptPath) +
-    '" \\\n' +
-    "  --no-agent\n";
   const footer = renderFooter(spec, resolved);
-  return [header, "", watchdog, "", nativeCron, "", hermesCron, "", footer].join("\n");
+  return [header, "", watchdog, "", nativeCron, "", footer].join("\n");
 }
 
 /**

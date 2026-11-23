@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 6954125 bytes
-# Maximum unpacked size: 23605847 bytes
+# Maximum packed size: 6955208 bytes
+# Maximum unpacked size: 23609915 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -8,7 +8,6 @@ LICENSE
 README.md
 __init__.py
 bin/_launch.js
-bin/o2b-discipline-report
 bin/o2b-hook.js
 bin/o2b-mcp.js
 bin/o2b.js
@@ -85,7 +84,6 @@ schemas/brain/retention-review.schema.json
 schemas/brain/search-query.schema.json
 scripts/_bun-precheck.sh
 scripts/_macos-sqlite.sh
-scripts/discipline-report.ts
 scripts/o2b
 scripts/o2b-aider
 scripts/o2b-aider.cmd
@@ -286,7 +284,6 @@ src/cli/completions.ts
 src/cli/cron-recipe.ts
 src/cli/decision-model.ts
 src/cli/deps-bootstrap.ts
-src/cli/discipline-install.ts
 src/cli/discipline.ts
 src/cli/dream/owner.ts
 src/cli/dream/queue.ts
@@ -474,6 +471,7 @@ src/core/brain/diagnostics.ts
 src/core/brain/diarization.ts
 src/core/brain/digest-agent-summary.ts
 src/core/brain/digest-analysis.ts
+src/core/brain/digest-brief.ts
 src/core/brain/digest-collect.ts
 src/core/brain/digest-types.ts
 src/core/brain/digest.ts
@@ -495,6 +493,7 @@ src/core/brain/doctor/config-checks.ts
 src/core/brain/doctor/delivery-provenance-check.ts
 src/core/brain/doctor/device-retire-check.ts
 src/core/brain/doctor/device-state-check.ts
+src/core/brain/doctor/discipline-check.ts
 src/core/brain/doctor/dream-owner-check.ts
 src/core/brain/doctor/dream-queue-check.ts
 src/core/brain/doctor/embedding-sunset-check.ts
@@ -1167,10 +1166,10 @@ src/core/discipline/activity-git.ts
 src/core/discipline/activity-mtime.ts
 src/core/discipline/complexity.ts
 src/core/discipline/decision.ts
+src/core/discipline/legacy-jobs.ts
 src/core/discipline/log-counts.ts
 src/core/discipline/render.ts
 src/core/discipline/report.ts
-src/core/discipline/telegram.ts
 src/core/discipline/transcripts/claude-code.ts
 src/core/discipline/transcripts/codex.ts
 src/core/discipline/transcripts/cursor.ts
@@ -1225,6 +1224,7 @@ src/core/install/host-kinds.ts
 src/core/install/host-probe.ts
 src/core/install/identity.ts
 src/core/install/instruction-block.ts
+src/core/install/integrations.ts
 src/core/install/json-merge.ts
 src/core/install/jsonc.ts
 src/core/install/managed-block.ts

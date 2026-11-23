@@ -7,6 +7,11 @@ import { fileURLToPath } from "node:url";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 import { untrustedBindingFramingHeader } from "../../src/core/brain/untrusted-source.ts";
+import {
+  renderLogDayHeader,
+  renderLogEntryBlock,
+  type BrainLogEntry,
+} from "../../src/core/brain/log.ts";
 import { SOURCE_ACTIVE_BODY, SOURCE_LESSONS_BODY } from "../../hooks/lib/active-context.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 
@@ -79,6 +84,29 @@ function writeLessons(body: string): void {
   writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
 }
 
+function writeDreamEvent(): void {
+  const date = "2026-11-22";
+  const entry: BrainLogEntry = {
+    timestamp: `${date}T10:00:00Z`,
+    eventType: "dream",
+    body: {
+      run_id: "dream-2026-11-22-100000",
+      new_unconfirmed: ["[[pref-rule-a|Prefer stable keys]]", "[[pref-rule-b|Keep changes small]]"],
+    },
+  };
+  mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "log", `${date}.md`),
+    `${renderLogDayHeader(date)}\n${renderLogEntryBlock(entry)}`,
+  );
+  const runs = join(vault, "Brain", "log", "dream-runs");
+  mkdirSync(runs, { recursive: true });
+  writeFileSync(
+    join(runs, "dream-2026-11-22-100000.jsonl"),
+    '{"phase":"started"}\n{"phase":"finalized"}\n',
+  );
+}
+
 function writeStandingRules(body: string): string {
   const path = join(vault, "Brain", "standing-rules.md");
   writeFileSync(path, body, "utf8");
@@ -86,6 +114,76 @@ function writeStandingRules(body: string): string {
 }
 
 describe("active-inject hook", () => {
+  test("delivers a changed dream digest once across session ids", async () => {
+    writeDreamEvent();
+    const first = await runHook(
+      { hook_event_name: "SessionStart", session_id: "session-one" },
+      { VAULT_DIR: vault },
+    );
+    const second = await runHook(
+      { hook_event_name: "SessionStart", session_id: "session-two" },
+      { VAULT_DIR: vault },
+    );
+    expect(first.exit).toBe(0);
+    expect(first.stdout).toContain("Prefer stable keys");
+    expect(first.stdout).toContain("o2b brain digest");
+    expect(second.exit).toBe(0);
+    expect(second.stdout).not.toContain("Dream digest:");
+  });
+
+  test("shows a pending digest alone when memory payload is empty", async () => {
+    writeDreamEvent();
+    const result = await runHook(
+      { hook_event_name: "SessionStart", session_id: "empty-session" },
+      { VAULT_DIR: vault },
+    );
+    expect(result.exit).toBe(0);
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain("Dream digest:");
+    expect(context).toContain("o2b brain digest");
+    expect(context).not.toContain("# Active Brain Preferences");
+  });
+
+  test("keeps a digest pending when it cannot fit, then retries at the next session", async () => {
+    writeDreamEvent();
+    writeStandingRules("x".repeat(10_000));
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  standing_rules_max_chars: 20000\n",
+    );
+    const first = await runHook(
+      { hook_event_name: "SessionStart", session_id: "too-large" },
+      { VAULT_DIR: vault },
+    );
+    expect(first.exit).toBe(0);
+    expect(first.stdout).not.toContain("Dream digest:");
+    rmSync(join(vault, "Brain", "standing-rules.md"));
+    const second = await runHook(
+      { hook_event_name: "SessionStart", session_id: "retry" },
+      { VAULT_DIR: vault },
+    );
+    expect(second.stdout).toContain("Prefer stable keys");
+  });
+
+  test("keeps the digest with a cut payload and leaves the cut note last", async () => {
+    writeDreamEvent();
+    writeActive(
+      `# Active Brain Preferences\n\n## Confirmed (30)\n\n${"- `pref-extra` - A rule that fills the payload.\n".repeat(30)}`,
+    );
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n",
+    );
+    const result = await runHook(
+      { hook_event_name: "SessionStart", session_id: "cut-session" },
+      { VAULT_DIR: vault },
+    );
+    expect(result.exit).toBe(0);
+    const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain("Prefer stable keys");
+    expect(context.trim().split("\n").at(-1)).toContain("Injection truncated to budget");
+  });
+
   test("injects active.md content as SessionStart additionalContext", async () => {
     writeActive(
       "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n",

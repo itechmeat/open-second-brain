@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
   CATCHUP_COMMAND,
   MissingTelegramTokenError,
+  escapeMarkdownV2,
   handleCaptureUpdate,
   requireTelegramToken,
   runTelegramCapture,
@@ -28,11 +29,15 @@ import {
   readCatchupWatermark,
 } from "../../../../src/core/brain/capture/capture-note.ts";
 import { captureDecisionLogPath } from "../../../../src/core/brain/paths.ts";
-import { escapeMarkdownV2 } from "../../../../src/core/discipline/telegram.ts";
 import { withDeviceId } from "../../../helpers/device-id.ts";
 
 const NOW = new Date("2026-07-19T12:00:00Z");
 const ALLOW = new Set(["100"]);
+
+test("Telegram capture keeps MarkdownV2 escaping", () => {
+  expect(escapeMarkdownV2("@claude-vps-agent")).toBe("@claude\\-vps\\-agent");
+  expect(escapeMarkdownV2("hello world 123")).toBe("hello world 123");
+});
 
 let vault: string;
 

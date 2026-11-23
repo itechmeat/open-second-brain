@@ -1,8 +1,7 @@
 /**
  * §E.3 -- 'o2b search reindex --cron-template' renderer.
  *
- * Prints a watchdog script body, a native crontab line, and an
- * optional 'hermes cron create' invocation - or, with
+ * Prints a watchdog script body and a native crontab line or, with
  * `--format systemd`, the same script as a systemd user timer. Pure
  * stdout, writes nothing. The operator (or agent in the user's name) copies what
  * fits their host into the cron infrastructure of choice.
@@ -50,10 +49,9 @@ export const SEARCH_REINDEX_RECIPE: CronRecipeSpec = Object.freeze<CronRecipeSpe
   cronName: SEARCH_REINDEX_CRON_NAME,
   scriptPath: operatorScriptPath(SEARCH_REINDEX_CRON_NAME),
   scriptNotes: Object.freeze([
-    "(then chmod +x). Sources ~/.hermes/.env if present so the",
-    "embedding API key lands in the environment.",
+    "(then chmod +x). Set embedding credentials in the optional",
+    "Open Second Brain env file named below.",
   ]),
-  schedulerNote: "(preferred when Hermes is the embedding owner)",
   buildScriptBody: ({ o2bBin }) => renderWatchdogBody(o2bBin),
   buildVerifyCommand: ({ o2bBin }) => o2bBin + " search status",
 });
@@ -78,12 +76,6 @@ function renderWatchdogBody(o2bBin: string): string {
   const lines = [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    "",
-    "# Pick up OPEN_SECOND_BRAIN_EMBEDDING_* from the Hermes env file",
-    "# if it exists. Other env files can be appended below.",
-    'if [[ -f "$HOME/.hermes/.env" ]]; then',
-    '  set -a; . "$HOME/.hermes/.env"; set +a',
-    "fi",
     "",
     "out=$(" + o2bBin + " search reindex --embeddings --json)",
     "# Emit the JSON line only when the reindex actually changed",

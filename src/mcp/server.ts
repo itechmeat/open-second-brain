@@ -665,6 +665,8 @@ export class MCPServer {
       serverInfo: { name: this.serverName, version: SERVER_VERSION },
       instructions: buildInstructions({
         agent: identity,
+        vault: this.vault,
+        configPath: this.configPath,
         scope: this.scope,
         // Computed in the constructor and held on the instance, so the
         // handshake states what this runtime actually left callable

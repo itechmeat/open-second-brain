@@ -49,12 +49,14 @@ describe("renderReport", () => {
         },
       },
     });
-    expect(text).toContain("OSB discipline");
-    expect(text).toContain("2026\\-05\\-17");
+    expect(text).toContain("Open Second Brain discipline");
+    expect(text).toContain("2026-05-17");
     expect(text).toContain("Europe/Belgrade");
     expect(text).toContain("Status: ok");
-    expect(text).toContain("@claude\\-vps\\-agent");
-    expect(text).toContain("2 feedback, 3 apply\\-evidence, 1 note, 0 other \\(total 6\\)");
+    expect(text).toContain("@claude-vps-agent");
+    expect(text).toContain("2 feedback, 3 apply-evidence, 1 note, 0 other (total 6)");
+    expect(text).toContain("- @claude-vps-agent:");
+    expect(text).not.toContain("\\-");
     expect(text).toContain("/srv/projects/foo");
     expect(text).toContain("4 commits");
     expect(text).toContain("vault");
@@ -91,7 +93,7 @@ describe("renderReport", () => {
     });
     expect(text).toContain("Status: alert");
     expect(text).toContain("zero brain events");
-    expect(text).not.toContain("transcript\\-confirmed");
+    expect(text).not.toContain("transcript-confirmed");
   });
 
   test("status: alert + transcripts present adds transcript-confirmed sub-reason", () => {
@@ -143,8 +145,8 @@ describe("renderReport", () => {
       },
     });
     expect(text).toContain("Status: alert");
-    expect(text).toContain("transcripts — claudecode: 2");
-    expect(text).toContain("transcript\\-confirmed");
+    expect(text).toContain("transcripts - claudecode: 2");
+    expect(text).toContain("transcript-confirmed");
   });
 
   test("a runtime whose store could not be read is named, not silently zero", () => {
@@ -191,9 +193,9 @@ describe("renderReport", () => {
       },
     });
     // The zero is still reported, but never on its own.
-    expect(text).toContain("transcripts — claudecode: 0");
+    expect(text).toContain("transcripts - claudecode: 0");
     expect(text).toContain(TRANSCRIPT_SCAN.unreadable);
-    expect(text).toContain("transcript\\-unreadable");
+    expect(text).toContain("transcript-unreadable");
     // The runtime that genuinely had a quiet day is not implicated.
     expect(text).not.toContain("codex: 0");
   });
@@ -231,9 +233,9 @@ describe("renderReport", () => {
         },
       },
     });
-    expect(text).toContain("\\- complexity — score 12, thinking 0, ratio 12");
-    expect(text).toContain("complexity — score 12, thinking 0, ratio 12");
-    expect(text).toContain("productivity\\-trap");
+    expect(text).toContain("- complexity - score 12, thinking 0, ratio 12");
+    expect(text).toContain("complexity - score 12, thinking 0, ratio 12");
+    expect(text).toContain("productivity-trap");
   });
 
   test("transcripts with zero files omit the line and skip the sub-reason", () => {
@@ -277,7 +279,7 @@ describe("renderReport", () => {
         },
       },
     });
-    expect(text).not.toContain("transcripts —");
-    expect(text).not.toContain("transcript\\-confirmed");
+    expect(text).not.toContain("transcripts -");
+    expect(text).not.toContain("transcript-confirmed");
   });
 });

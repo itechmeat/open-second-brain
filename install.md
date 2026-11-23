@@ -4,6 +4,7 @@ Open Second Brain ships one CLI (`o2b`), one always-loaded MCP
 writer server, one full MCP server, and a runtime-specific install
 adapter per supported runtime. This file is a router — pick the
 runtime you use and read the corresponding `install/<runtime>.md`.
+No runtime is preferred. Choose the host that fits your workflow.
 
 > **Always install the latest released version.** The runtime CLIs
 > resolve `latest` from a bare `owner/repo` identifier by default.

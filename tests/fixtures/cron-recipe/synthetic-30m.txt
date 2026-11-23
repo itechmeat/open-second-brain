@@ -1,0 +1,33 @@
+# ----------------------------------------------------------------------
+# Synthetic Suite - probe recipe
+# interval: 30 minutes
+#
+# Pick ONE of the two paths below. The watchdog script is the
+# common piece; both crontab and systemd rely on it.
+# ----------------------------------------------------------------------
+
+
+## 1. Watchdog script - save to ~/.local/bin/probe-runner.sh
+##    probe note line
+##    Sources the optional Open Second Brain env file when readable.
+
+cat >~/.local/bin/probe-runner.sh <<'OSBEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+env_file="${OPEN_SECOND_BRAIN_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/open-second-brain/env}"
+if [[ -r "$env_file" && -f "$env_file" ]]; then
+  set -a; . "$env_file"; set +a
+fi
+probe_body_marker o2b
+OSBEOF
+chmod +x ~/.local/bin/probe-runner.sh
+
+
+## 2. Native crontab - open 'crontab -e' and append:
+
+*/30 * * * *    ~/.local/bin/probe-runner.sh
+
+
+# ----------------------------------------------------------------------
+# After install, verify with: o2b probe-verify --now
+# ----------------------------------------------------------------------

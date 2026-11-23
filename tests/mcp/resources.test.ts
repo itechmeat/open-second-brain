@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,7 @@ import { regenerateActive } from "../../src/core/brain/active.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
+import { pendingDreamDigest } from "../../src/core/brain/digest-brief.ts";
 
 let tmp: string;
 let vault: string;
@@ -36,10 +37,37 @@ beforeEach(() => {
   vault = join(tmp, "vault");
   configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-res-cfg-"));
   configPath = join(configHome, "config.yaml");
-  for (const k of ["VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
+  for (const k of [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "VAULT_DIR",
+    "OPEN_SECOND_BRAIN_CONFIG",
+    "OPEN_SECOND_BRAIN_STORE_ROOT",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CURSOR_HOME",
+    "GROK_HOME",
+    "PI_HOME",
+    "HERMES_HOME",
+  ]) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  process.env["HOME"] = join(tmp, "home");
+  process.env["XDG_CONFIG_HOME"] = join(tmp, "xdg-config");
+  process.env["XDG_DATA_HOME"] = join(tmp, "xdg-data");
+  process.env["XDG_CACHE_HOME"] = join(tmp, "xdg-cache");
+  process.env["XDG_STATE_HOME"] = join(tmp, "xdg-state");
+  process.env["OPEN_SECOND_BRAIN_STORE_ROOT"] = join(tmp, "store");
+  process.env["CODEX_HOME"] = join(tmp, "codex");
+  process.env["CLAUDE_CONFIG_DIR"] = join(tmp, "claude");
+  process.env["CURSOR_HOME"] = join(tmp, "cursor");
+  process.env["GROK_HOME"] = join(tmp, "grok");
+  process.env["PI_HOME"] = join(tmp, "pi");
+  process.env["HERMES_HOME"] = join(tmp, "hermes");
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
@@ -56,6 +84,12 @@ afterEach(() => {
 
 function makeServer(): MCPServer {
   return new MCPServer({ vault, configPath });
+}
+
+function writeFinalizedDreamRun(runId: string): void {
+  const dir = join(vault, "Brain", "log", "dream-runs");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${runId}.jsonl`), '{"phase":"started"}\n{"phase":"finalized"}\n');
 }
 
 async function initialize(server: MCPServer): Promise<any> {
@@ -216,6 +250,49 @@ describe("MCP resources — read osb://digest/latest", () => {
     expect(r.result.contents[0].mimeType).toBe("text/markdown");
     expect(typeof r.result.contents[0].text).toBe("string");
     expect(r.result.contents[0].text.length).toBeGreaterThan(0);
+  });
+
+  test("initialize announces an undelivered dream digest and the resource read leaves it pending", async () => {
+    mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+    appendLogEvent(vault, {
+      timestamp: "2026-11-22T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "claude",
+      body: {
+        run_id: "dream-2026-11-22-100000",
+        new_unconfirmed: ["[[pref-a|Read before editing]]"],
+      },
+    });
+    writeFinalizedDreamRun("dream-2026-11-22-100000");
+    const server = makeServer();
+    const initialized = await initialize(server);
+    expect(initialized.result.instructions).toContain("A dream digest is available");
+    expect(pendingDreamDigest(vault, configPath)?.text).toContain("Read before editing");
+    await read(server, "osb://digest/latest");
+    expect(pendingDreamDigest(vault, configPath)?.text).toContain("Read before editing");
+  });
+
+  test("brain_brief view=digest leaves the pending dream digest undelivered", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-11-22T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "claude",
+      body: { run_id: "dream-2026-11-22-100001", confirmed: ["[[pref-a|Keep changes small]]"] },
+    });
+    writeFinalizedDreamRun("dream-2026-11-22-100001");
+    const server = makeServer();
+    const initialized = await initialize(server);
+    expect(initialized.result.instructions).toContain("A dream digest is available");
+    const result = await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 5,
+      method: "tools/call",
+      params: { name: "brain_brief", arguments: { view: "digest" } },
+    });
+    const toolResult = result?.result as { isError?: boolean } | undefined;
+    expect(toolResult).toBeDefined();
+    expect(toolResult?.isError).not.toBe(true);
+    expect(pendingDreamDigest(vault, configPath)?.text).toContain("Keep changes small");
   });
 });
 

@@ -6,6 +6,8 @@ import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 
 import { discoverConfig } from "../core/config.ts";
+import { findLegacyDisciplineJobs } from "../core/discipline/legacy-jobs.ts";
+import { installedIntegrations } from "../core/install/integrations.ts";
 import type { UninstallPlan } from "../core/types.ts";
 
 export const PLUGIN_NAME = "open-second-brain";
@@ -69,6 +71,7 @@ export function planUninstall(opts: PlanUninstallOptions): UninstallPlan {
   const cfgDirExists = existsSync(cfgDir) && statSync(cfgDir).isDirectory();
   const entries = listEntries(cfgDir);
   const vaultPath = vaultPathFromConfig(discovery.data);
+  const integrations = installedIntegrations(vaultPath);
 
   const removed: string[] = [];
   const skipped: Array<readonly [string, string]> = [];
@@ -100,7 +103,8 @@ export function planUninstall(opts: PlanUninstallOptions): UninstallPlan {
     configDirEntries: entries,
     vaultPath,
     applyLocal,
-    hermesCommands: HERMES_COMMANDS,
+    hermesCommands: integrations.has("hermes") ? HERMES_COMMANDS : [],
+    legacyDisciplineJobs: findLegacyDisciplineJobs(),
     removedPaths: removed,
     skippedPaths: skipped,
     errors,
@@ -109,7 +113,7 @@ export function planUninstall(opts: PlanUninstallOptions): UninstallPlan {
 
 export function renderPlan(plan: UninstallPlan): string {
   const lines: string[] = [];
-  const title = "Open Second Brain — Uninstall plan";
+  const title = "Open Second Brain - Uninstall plan";
   lines.push(title);
   lines.push("=".repeat(title.length));
   lines.push("");
@@ -136,14 +140,23 @@ export function renderPlan(plan: UninstallPlan): string {
   }
   lines.push("");
 
-  lines.push("Hermes integration (run these yourself; this tool will not):");
-  for (const cmd of plan.hermesCommands) {
-    lines.push(`  $ ${cmd}`);
+  if (plan.hermesCommands.length > 0) {
+    lines.push("Hermes integration (run these yourself; this tool will not):");
+    for (const cmd of plan.hermesCommands) {
+      lines.push(`  $ ${cmd}`);
+    }
+    lines.push("");
+    lines.push("  Hermes owns plugin installation and MCP registration. Open Second");
+    lines.push("  Brain never edits ~/.hermes/config.yaml on your behalf.");
+    lines.push("");
   }
-  lines.push("");
-  lines.push("  Hermes owns plugin installation and MCP registration. Open Second");
-  lines.push("  Brain never edits ~/.hermes/config.yaml on your behalf.");
-  lines.push("");
+  if (plan.legacyDisciplineJobs !== null) {
+    lines.push("Legacy Open Second Brain Hermes jobs (not changed by this tool):");
+    lines.push(`  file: ${plan.legacyDisciplineJobs.file}`);
+    for (const id of plan.legacyDisciplineJobs.ids) lines.push(`  job: ${id}`);
+    lines.push("  remove with: hermes cron remove <id>");
+    lines.push("");
+  }
 
   lines.push("Vault (NEVER removed by this tool):");
   if (plan.vaultPath !== null) {
@@ -160,10 +173,10 @@ export function renderPlan(plan: UninstallPlan): string {
       for (const p of plan.removedPaths) lines.push(`  removed: ${p}`);
     }
     if (plan.skippedPaths.length > 0) {
-      for (const [p, reason] of plan.skippedPaths) lines.push(`  skipped: ${p} — ${reason}`);
+      for (const [p, reason] of plan.skippedPaths) lines.push(`  skipped: ${p} - ${reason}`);
     }
     if (plan.errors.length > 0) {
-      for (const [p, reason] of plan.errors) lines.push(`  error:   ${p} — ${reason}`);
+      for (const [p, reason] of plan.errors) lines.push(`  error:   ${p} - ${reason}`);
     }
     if (
       plan.removedPaths.length === 0 &&
@@ -175,12 +188,21 @@ export function renderPlan(plan: UninstallPlan): string {
     lines.push("");
   } else {
     lines.push("Next steps:");
-    lines.push("  1. Run the Hermes commands above to deregister the MCP server and plugin.");
-    lines.push("  2. Re-run with --apply-local to remove the machine-local config directory.");
+    let step = 1;
+    if (plan.hermesCommands.length > 0) {
+      lines.push(
+        `  ${step++}. Run the Hermes commands above to deregister the MCP server and plugin.`,
+      );
+    }
     lines.push(
-      "  3. Add --remove-cli to also remove the o2b/vault-log symlinks from ~/.local/bin.",
+      `  ${step++}. Re-run with --apply-local to remove the machine-local config directory.`,
     );
-    lines.push("  4. Delete the vault yourself if and only if you really want to lose your notes.");
+    lines.push(
+      `  ${step++}. Add --remove-cli to also remove the o2b/vault-log symlinks from ~/.local/bin.`,
+    );
+    lines.push(
+      `  ${step}. Delete the vault yourself if and only if you really want to lose your notes.`,
+    );
     lines.push("");
   }
 

@@ -80,7 +80,8 @@ async function toolBrainBrief(
         `every view is already scoped by the server-resolved identity`,
     );
   }
-  return localizeEnvelope(ctx, await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args, onProgress));
+  const result = await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args, onProgress);
+  return localizeEnvelope(ctx, result);
 }
 
 export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

@@ -15,6 +15,7 @@
  */
 
 import { PARAGRAPH_BREAK, renderScopeBody } from "./instruction-segments.ts";
+import { pendingDreamDigest } from "../core/brain/digest-brief.ts";
 import { TOOL_SCOPE, type ToolCapabilityReport, type ToolScope } from "./tool-contract.ts";
 
 export interface BuildInstructionsOpts {
@@ -30,6 +31,8 @@ export interface BuildInstructionsOpts {
    * refusal is rendered in its place instead, naming the file.
    */
   readonly agent: string | Error;
+  readonly vault?: string | null;
+  readonly configPath?: string | null;
   /** Which surface's body follows the identity line. Defaults to full. */
   readonly scope?: ToolScope;
   /**
@@ -83,5 +86,11 @@ function identityLine(agent: string | Error): string {
  */
 export function buildInstructions(opts: BuildInstructionsOpts): string {
   const scope = opts.scope ?? TOOL_SCOPE.full;
-  return identityLine(opts.agent) + PARAGRAPH_BREAK + renderScopeBody(scope, opts.capabilities);
+  const digest = opts.vault ? pendingDreamDigest(opts.vault, opts.configPath ?? undefined) : null;
+  const announcement = digest
+    ? "A dream digest is available: read osb://digest/latest or call brain_brief with view=digest."
+    : "";
+  return [identityLine(opts.agent), renderScopeBody(scope, opts.capabilities), announcement]
+    .filter(Boolean)
+    .join(PARAGRAPH_BREAK);
 }

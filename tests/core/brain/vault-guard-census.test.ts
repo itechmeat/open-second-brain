@@ -74,6 +74,12 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "writes no vault file. Its one direct write is the dream owner's claim-seen note " +
     "in the store's device-local state directory, never synced and never in a vault; " +
     "the role's records go through the store appender.",
+  "src/core/brain/digest-brief.ts":
+    "writes only the device-local ledger of dream digest deliveries, never vault files; " +
+    "the digest itself is read from the completed dream log and workrun.",
+  "src/core/brain/doctor/discipline-check.ts":
+    "writes only the device-local daily cache of discipline verdicts, never vault files; " +
+    "the report is read from the configured vault and its job check is read-only.",
   "src/core/brain/architect/manifests.ts":
     "never writes. It names `openSync` only to open a project manifest " +
     "read-only (O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so " +
@@ -193,6 +199,9 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/dedup-index-cache.ts": "writes only outside the vault (the user cache dir)",
   "src/core/brain/dream-owner/owner.ts":
     "writes only outside the vault (the store and its device-local state)",
+  "src/core/brain/digest-brief.ts": "writes only outside the vault (device-local delivery ledger)",
+  "src/core/brain/doctor/discipline-check.ts":
+    "writes only outside the vault (device-local daily verdict cache)",
   "src/core/brain/init.ts": ASKS_THE_GATE,
   "src/core/brain/gitignore-guard.ts":
     "called by the bootstrap, after `bootstrapBrain` asked the gate for the vault",

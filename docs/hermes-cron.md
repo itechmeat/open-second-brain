@@ -1,19 +1,20 @@
-# Hermes cron — daily Brain digest
+# Optional digest delivery for Hermes users
 
-`o2b brain digest` renders a short Markdown summary of what the `dream` pass did over a given window: new unconfirmed preferences, confirmations, retirements, confidence shifts, and contradictions. `--no-agent --script` ships the markdown verbatim, `--silent-if-empty` suppresses delivery when nothing changed.
+Dream runs through the configured Open Second Brain owner and needs no Hermes
+schedule. This guide shows how a Hermes user can separately schedule delivery
+of the read-only brain digest.
 
 ## Prerequisites
 
-- Hermes is installed and the gateway is running (`hermes gateway status`).
-- The Open Second Brain plugin is enabled in Hermes (`hermes plugins list | grep open-second-brain`).
-- `o2b` is on `PATH` for the user that runs the gateway. If not, run `o2b install-cli` once.
-- Your vault is at `/path/to/vault` (the same one the gateway is configured to use).
-- You have a Telegram supergroup `chat_id` and a thread/topic id to post to.
-- `o2b brain init --vault <path>` must have been run once on the target vault so `Brain/_brain.yaml` exists.
+- Hermes gateway is running.
+- The Open Second Brain plugin is installed and enabled.
+- `o2b` is on `PATH` for the gateway user.
+- `o2b brain init --vault /path/to/vault` has created the Brain configuration.
+- A Telegram destination is configured for the Hermes job.
 
-## Register the cron job
+## Add an optional digest job
 
-The example below fires at 20:00 UTC daily and reports the trailing 24 hours of `Brain/log/`:
+This example reports the trailing 24 hours at 20:00 UTC:
 
 ```bash
 hermes cron create \
@@ -25,79 +26,25 @@ hermes cron create \
   'o2b brain digest --vault /path/to/vault --silent-if-empty'
 ```
 
-Notes:
+The job runs only the digest command. It does not start dream. The digest is
+read-only, and `--silent-if-empty` exits with code `2` when the selected window
+contains no changes, so Hermes sends no message.
 
-- `--no-agent --script` makes Hermes shell out to the command and deliver its stdout verbatim. `cron.wrap_response: false` (default Hermes config) keeps the framing clean.
-- `--silent-if-empty` produces no output AND exits with code `2` when nothing changed in the window; Hermes treats the empty stdout as a no-op and does not push a Telegram message.
-- The default window is the trailing 24h. Use `--since <ISO>` / `--until <ISO>` to override.
-- Run frequency is up to you; `dream` is idempotent, so a higher-frequency digest does not produce duplicate noise — it only reports new transitions.
+The default window is the trailing 24 hours. Use `--since <ISO>` and
+`--until <ISO>` to choose another interval. Use Hermes commands to list, edit,
+pause, resume, run, or remove this optional job.
 
-## Run, edit, pause, remove
+## Use a printed maintenance recipe
 
-```bash
-hermes cron list
-hermes cron run brain-digest-daily          # one-shot dry run
-hermes cron edit brain-digest-daily --schedule '0 19 * * *'
-hermes cron pause brain-digest-daily
-hermes cron resume brain-digest-daily
-hermes cron remove brain-digest-daily
-```
-
-## What the digest looks like
-
-```markdown
-# Brain digest — 2026-05-14T20:00Z (24h)
-
-## New (unconfirmed, in trial)
-
-- [[pref-no-internal-abbrev]] — writing, 3 signals, trial ends 2026-05-28
-- [[pref-imperative-prompts]] — coding, 4 signals, trial ends 2026-05-28
-
-## Confirmed
-
-- [[pref-prefer-typed-errors]] — coding, first applied in [[src/cli/main.ts]]
-
-## Retired
-
-- [[ret-prefer-bullets-over-prose]] — writing, stale-no-evidence (91 days)
-
-## Confidence shifts
-
-- [[pref-no-internal-abbrev]] medium → high (applied: 11, violated: 0)
-```
-
-When `--silent-if-empty` is set and the window has no changes, the command writes nothing to stdout and exits `2` — Hermes posts nothing to the Telegram topic on those days.
-
-## Pairing with the dream pass
-
-`o2b brain digest` is read-only and never runs `dream` on its own. If you want a single nightly job that *first* consolidates and *then* posts the digest, chain them:
+Open Second Brain prints cron and systemd user timer recipes for maintenance,
+search reindexing, and codegraph resync. The recipes do not install anything.
+Choose a scheduler for the machine and add the printed command yourself.
 
 ```bash
-'o2b brain dream --vault /path/to/vault >/dev/null && o2b brain digest --vault /path/to/vault --silent-if-empty'
+o2b brain maintenance run --vault /path/to/vault --cron-template
+o2b search reindex --vault /path/to/vault --cron-template
+o2b partner codegraph resync --cron-template
 ```
 
-`dream` is itself idempotent — running it on top of an unchanged Brain is a no-op (no log entry written, no snapshot taken). The chained form is safe at any cadence.
-
-The alternative to a hand-chained dream job is the maintenance lane, which runs dream, reindex, bridges, clusters and relink under one lease and only inside its window; the relink task previews the anchor additions it would make to the stored signals and reports them, rewriting the stored lines only when the lane line carries `--relink-apply`: `o2b brain maintenance run --vault /path/to/vault --cron-template` prints a script and the `hermes cron create` line that schedules it (hourly by default; `--interval`, `--window H-H --tz ZONE` narrow it). The script is silent when the lane succeeds or a gate skips, and prints the lane's JSON report when a task failed, timed out or was refused, so Hermes delivers only the runs that need attention. Since v1.76.0 the keyword index needs no scheduled reindex: freshen on read keeps it current while agents work (see "Freshen on read" in `docs/cli-reference.md`), so a scheduled reindex is only worth keeping to compute embeddings periodically. Every recipe this CLI prints - the maintenance lane, `o2b search reindex --cron-template` and `o2b partner codegraph resync --cron-template` - also prints a systemd user timer with `--format systemd`, for a host where Hermes does not own the schedule.
-
-## Discipline report (daily logging-discipline sanity-check)
-
-`o2b discipline report` renders a deterministic Telegram MarkdownV2 block comparing brain-event counts per agent (parsed from `Brain/log/<yesterday>.md`) against runtime-agnostic activity proxies (git on watched repos + mtime walk on watched non-repo paths + vault delta on `Brain/inbox|preferences|retired/`). Status is binary - `alert` if taste events (`feedback`+`apply_evidence`) are zero while activity is non-zero, `info` for a quiet day, `ok` otherwise. No LLM in the report path.
-
-`o2b discipline install --vault <v> --telegram-target <target>` writes one cron entry into the Hermes scheduler (job id derived from `sha256(vault)` so multiple vaults on one host do not collide). The entry goes into `~/.hermes/cron/jobs.json` of the user running the command; set `OSB_HERMES_JOBS` to write another jobs file. The configuration block lives in `Brain/_brain.yaml`:
-
-```yaml
-discipline_report:
-  enabled: true
-  timezone: "Europe/Belgrade"
-  watched_paths:
-    - "/srv/projects/open-second-brain"
-    - "/root/.hermes/plugins"
-  known_agents:
-    - "@claude-vps-agent"
-    - "@codex-vps-agent"
-```
-
-When the section is absent or `enabled: false`, the report exits `0` with a stderr note and the cron job stays silent. A field the section leaves out reads as its fallback (`enabled: false`, `timezone: "UTC"`, no watched paths, no known agents), so each field can be set on its own with `o2b brain settings set discipline_report.<field> <value>` (or `brain_settings`); on a machine that keeps its brain in the store, `timezone` is a setting of each machine (`brain_discipline_report_timezone` in the machine config). A field of the wrong type still drops the whole section with a warning.
-
-A weekly digest variant ships under `--weekly` (Monday 08:59 local timezone by default); `o2b discipline uninstall --weekly` removes only the weekly job, without the flag removes both.
+Freshen on read keeps the keyword index current while agents work. Schedule
+reindexing only when you want to refresh embedding vectors periodically.

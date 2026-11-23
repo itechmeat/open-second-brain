@@ -70,6 +70,8 @@ import {
 } from "../src/core/config.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
+import { pendingDreamDigest, recordDreamDigestDelivered } from "../src/core/brain/digest-brief.ts";
+import { renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts";
 import { armProcessCeiling, decisionWaitMs, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -259,6 +261,13 @@ async function main(): Promise<void> {
     // fits its own ceiling there.
     const startsEpoch = hookEventName === "SessionStart";
     const splits = startsEpoch && regroundSplitApplies(payload);
+    const pendingDigest = startsEpoch ? pendingDreamDigest(vault) : null;
+    const candidateDigestBlock =
+      pendingDigest === null
+        ? ""
+        : renderRuntimeNotices([
+            { code: "dream-digest", severity: "info", message: pendingDigest.text },
+          ]);
     // The payload ends in one note for every lane the budgets cut
     // (src/core/agent-context/digest-cut-note.ts). Its room comes off the
     // ceiling before any lane is sized, so the lanes fill what is left
@@ -270,10 +279,23 @@ async function main(): Promise<void> {
     const measure = hostMeasureFor(detectHookRuntime(payload));
     const ceiling = HOST_CONTEXT_CEILING_CHARS - separated(DIGEST_CUT_NOTE_RESERVE);
     const hostRoom = splits ? null : Math.max(0, ceiling - separated(measure(standingBlock)));
+    const digestFits =
+      candidateDigestBlock.length > 0 &&
+      separated(measure(joinBlocks([standingBlock, candidateDigestBlock]))) <= ceiling &&
+      (hostRoom === null || separated(measure(candidateDigestBlock)) <= hostRoom);
+    const digestBlock = digestFits ? candidateDigestBlock : "";
+    if (digestBlock.length > 0) {
+      meter.sources.unshift({
+        name: "runtime-notices",
+        text: digestBlock,
+        lane: LANE_UNBUDGETED,
+        outsideBoundary: false,
+      });
+    }
     const agentBlocks = await buildAgentContextBlocks({
       vault,
       workspaceDir,
-      limits: agentContextLimits(limits, scopedBlock.length, hostRoom),
+      limits: agentContextLimits(limits, scopedBlock.length + digestBlock.length, hostRoom),
       meter,
       remainingMs,
       measure,
@@ -282,7 +304,11 @@ async function main(): Promise<void> {
     const pinnedBlock = agentBlocks.pinnedBlock;
     const memoryBudget = Math.max(
       0,
-      limits.injectBudgetChars - scopedBlock.length - headsBlock.length - pinnedBlock.length,
+      limits.injectBudgetChars -
+        scopedBlock.length -
+        headsBlock.length -
+        pinnedBlock.length -
+        digestBlock.length,
     );
     // What the blocks ahead of the memory context leave of the ceiling.
     const memoryRoom =
@@ -291,7 +317,11 @@ async function main(): Promise<void> {
         : Math.max(
             0,
             ceiling -
-              separated(measure(joinBlocks([standingBlock, scopedBlock, headsBlock, pinnedBlock]))),
+              separated(
+                measure(
+                  joinBlocks([standingBlock, scopedBlock, headsBlock, pinnedBlock, digestBlock]),
+                ),
+              ),
           );
 
     // Fail-open context load: assemble the injected body inside a guard that
@@ -339,7 +369,15 @@ async function main(): Promise<void> {
         outsideBoundary: true,
       });
     }
-    const blocks = [standingBlock, scopedBlock, headsBlock, pinnedBlock, memoryContext, cutNote];
+    const blocks = [
+      standingBlock,
+      scopedBlock,
+      headsBlock,
+      pinnedBlock,
+      digestBlock,
+      memoryContext,
+      cutNote,
+    ];
     const context = joinBlocks(blocks);
 
     // Only a SessionStart starts an injection epoch: the same hook run on
@@ -394,6 +432,13 @@ async function main(): Promise<void> {
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
+    if (
+      pendingDigest !== null &&
+      digestBlock.length > 0 &&
+      delivery.parts[0]!.includes(pendingDigest.text)
+    ) {
+      recordDreamDigestDelivered(vault, pendingDigest.key);
+    }
 
     // After stdout, like the meter: the ledger serves later hooks in this
     // session and must never delay or alter what was injected. A split

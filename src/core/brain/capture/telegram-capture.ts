@@ -24,7 +24,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { escapeMarkdownV2 } from "../../discipline/telegram.ts";
 import { isoSecond } from "../time.ts";
 import { CAPTURE_DECISION_LEDGER_STEM, captureDecisionLogPath } from "../paths.ts";
 import { ledgerRowRecord } from "../../store/dual-write-records.ts";
@@ -40,6 +39,13 @@ import {
   type CaptureNote,
 } from "./capture-note.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+
+/** Telegram MarkdownV2 characters that must be escaped in capture replies. */
+const TELEGRAM_MARKDOWN_V2_RESERVED = /([_*[\]()~`>#+\-=|{}.!\\])/g;
+
+export function escapeMarkdownV2(text: string): string {
+  return text.replace(TELEGRAM_MARKDOWN_V2_RESERVED, "\\$1");
+}
 
 /** Telegram command that triggers a catchup reply. */
 export const CATCHUP_COMMAND = "/catchup";

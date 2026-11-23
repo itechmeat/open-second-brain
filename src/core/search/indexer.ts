@@ -3343,7 +3343,7 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
 
   if (input.config.semantic.enabled && !input.embeddingKeyResolved) {
     recs.push(
-      "Set OPEN_SECOND_BRAIN_EMBEDDING_KEY in ~/.hermes/.env (or the configured env file).",
+      "Set OPEN_SECOND_BRAIN_EMBEDDING_KEY in the Open Second Brain env file or set OPEN_SECOND_BRAIN_ENV_FILE.",
     );
     recs.push(
       "Provider: OpenAI `text-embedding-3-small` is the default; any OpenAI-compatible endpoint works via OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL.",
