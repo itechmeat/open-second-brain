@@ -52,12 +52,26 @@ machine `--apply` needs a vault choice (`--vault` or `--no-vault`), an agent
 name and a timezone; `--yes` supplies consent and nothing else. An
 interactive run asks for consent instead.
 
-On a fresh machine, setup creates the brain store outside the vault, binds
-the vault to it, and makes this installation the brain's dream owner and the
+On a fresh machine, setup creates the brain store in the vault's hidden
+folder `.open-second-brain-store/` (outside any vault with `--no-vault`, or
+at `store_root` when you set one), so it travels with the vault's sync when
+that sync carries hidden folders (Obsidian Sync does not; see
+[the brain store](docs/brain-store.md#the-default-the-store-travels-with-the-vault)),
+binds the vault to it, and makes this installation the brain's dream owner and the
 writer of the human view. From a registry install it registers the absolute
 Bun path and the launcher inside the installed package, so the host does not
 depend on the `PATH` it starts with. After registering, it runs an MCP probe
 and the store self-test.
+
+An existing installation needs no setup step after an update: its next
+agent session moves the brain into the vault's store folder, writes the
+pages into `brain-view/` and, once every machine has updated, takes the
+legacy `Brain/` tree out of the vault, saying so in one line a day at most
+([updating](docs/updating.md#upgrading-to-201)). One step needs you on a
+machine that switched on 2.0.0: its store sits outside the vault, where no
+other machine can receive it, and its session start says so. Close every
+agent session on that machine and run `o2b store move-into-vault`
+([details](docs/updating.md#a-machine-that-switched-on-200)).
 
 Setup exit codes:
 

@@ -47,7 +47,9 @@ flowchart LR
 ```
 
 Each client reaches the same core through a plugin, an MCP registration or
-the CLI. The core keeps its records in the brain store outside the vault
+the CLI. The core keeps its records in the brain store, by default the
+vault's hidden `.open-second-brain-store/` folder that travels with the
+vault's sync and that no note tool reads
 ([`brain-store.md`](brain-store.md)); one machine, the view writer, renders
 the human view. Your notes are read; the note tools write one only at a
 path the caller names. A vault from 1.x that has not moved to the store

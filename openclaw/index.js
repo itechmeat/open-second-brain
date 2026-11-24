@@ -2589,7 +2589,7 @@ var init_format_wikilink = __esm(() => {
 });
 
 // src/core/store/constants.ts
-var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days", SETTING_DREAM_APPLY_DRAFTS = "dream.apply_drafts", SETTING_DREAM_AUTO = "dream.auto", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
+var STORE_FORMAT_VERSION = 1, STORE_FORMAT_FILE = "FORMAT.md", STORE_IDENTITY_FILE = "store.json", STORE_PARTITIONS, STORE_STREAMS, LEDGER_STREAM = "ledgers", STORE_BLOBS_DIR = "blobs", STORE_SHARD_EXT = "jsonl", ENVELOPE_FIELDS, BLOB_REF_KEY = "$blob", BLOB_REF_BYTES_KEY = "bytes", COMPACTED_KIND = "compacted", STORE_RECORD_KINDS, STORE_LINE_CAP_BYTES, STORE_BODY_MAX_DEPTH = 64, STORE_BLOB_MAX_BYTES, STORE_ROOT_CONFIG_KEY = "store_root", STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT", STORE_DEFAULT_DIR = "store", STORE_VAULT_DIR = ".open-second-brain-store", STORE_RELOCATED_FILE = "relocated.json", STORE_STATE_DIR = "stores", STORE_LOCKS_DIR = "locks", STORE_CLOCK_DIR = "clock", SEEN_SHARDS_FILE = "seen-shards.json", AUTHORITY_FIELD = "authority", VAULT_ID_FIELD = "vault_id", AUTHORITIES, PREFERENCE_SET_KIND = "preference-set", PREFERENCE_REMOVE_KIND = "preference-remove", PREFERENCE_EVIDENCE_KIND = "preference-evidence", PINNED_SET_KIND = "pinned-set", PINNED_CLEAR_KIND = "pinned-clear", SETTING_SET_KIND = "setting-set", SETTING_UNSET_KIND = "setting-unset", SETTING_ENTRY_KIND = "setting-entry", DEVICE_RETIRE_KIND = "device-retire", STATE_DIGEST_KIND = "state-digest", FOLD_RECORD_KINDS, EVIDENCE_RESULTS, PREFERENCE_COUNTER_FIELDS, SETTING_VIEW_LANGUAGE = "view.language", SETTING_TOPIC_MIN_RECORDS = "topics.new_min_records", SETTING_TOPIC_MIN_SESSIONS = "topics.new_min_sessions", SETTING_TOPIC_QUIET_DAYS = "topics.quiet_days", SETTING_SILENT_DEVICE_DAYS = "migration.silent_device_days", SETTING_DREAM_APPLY_DRAFTS = "dream.apply_drafts", SETTING_DREAM_AUTO = "dream.auto", SETTING_KEYS, STATE_DIGEST_FOLDS, STATE_DIGEST_REQUIRED_FOLDS, DAY_MS, STORE_DUAL_WRITE_CONFIG_KEY = "store_dual_write", STORE_DUAL_WRITE_ENV = "OPEN_SECOND_BRAIN_STORE_DUAL_WRITE", SIGNAL_KIND = "signal", LOG_EVENT_KIND = "log-event", LEDGER_ROW_KIND = "ledger-row", DUAL_WRITE_RECORD_KINDS, DUAL_WRITE_STATUS_FILE = "dual-write.json", STORE_TMP_DIR = "tmp", BLOB_TEMP_PREFIX = ".tmp-";
 var init_constants = __esm(() => {
   STORE_PARTITIONS = Object.freeze(["shared", "private"]);
   STORE_STREAMS = Object.freeze([
@@ -2670,6 +2670,8 @@ __export(exports_config, {
   ANSWER_QUOTE_CHECK_DEFAULT: () => ANSWER_QUOTE_CHECK_DEFAULT,
   ANSWER_QUOTE_CHECK_MODES: () => ANSWER_QUOTE_CHECK_MODES,
   ANSWER_QUOTE_CHECK_PHASES: () => ANSWER_QUOTE_CHECK_PHASES,
+  AUTO_LEGACY_REMOVAL_ENV: () => AUTO_LEGACY_REMOVAL_ENV,
+  AUTO_LEGACY_REMOVAL_KEY: () => AUTO_LEGACY_REMOVAL_KEY,
   AUTO_STORE_MIGRATION_ENV: () => AUTO_STORE_MIGRATION_ENV,
   AUTO_STORE_MIGRATION_KEY: () => AUTO_STORE_MIGRATION_KEY,
   AUTO_STORE_MIGRATION_OFF_VALUES: () => AUTO_STORE_MIGRATION_OFF_VALUES,
@@ -2701,6 +2703,7 @@ __export(exports_config, {
   UNCONFIGURED_AGENT_NAME: () => UNCONFIGURED_AGENT_NAME,
   UnsupportedPlatformError: () => UnsupportedPlatformError,
   VAULT_STORE_REF_PREFIX: () => VAULT_STORE_REF_PREFIX,
+  autoLegacyRemovalSetting: () => autoLegacyRemovalSetting,
   autoStoreMigrationSetting: () => autoStoreMigrationSetting,
   configuredVaultKey: () => configuredVaultKey,
   defaultConfigPath: () => defaultConfigPath,
@@ -2719,6 +2722,7 @@ __export(exports_config, {
   resolveAnswerQuoteCheckActive: () => resolveAnswerQuoteCheckActive,
   resolveAnswerQuoteCheckRecall: () => resolveAnswerQuoteCheckRecall,
   resolveAnswerQuoteCheckSubagent: () => resolveAnswerQuoteCheckSubagent,
+  resolveAutoLegacyRemoval: () => resolveAutoLegacyRemoval,
   resolveAutoStoreMigration: () => resolveAutoStoreMigration,
   resolveBacklogNudgeEnabled: () => resolveBacklogNudgeEnabled,
   resolveBenchJudgeCmd: () => resolveBenchJudgeCmd,
@@ -3191,13 +3195,16 @@ function readOptOutValue(raw, emptyIsUnset) {
   return { kind: "unrecognised", value: raw.trim() };
 }
 function autoStoreMigrationSetting(configPath) {
+  return optOutSetting(AUTO_STORE_MIGRATION_ENV, AUTO_STORE_MIGRATION_KEY, configPath);
+}
+function optOutSetting(envName, key, configPath) {
   const unrecognised = [];
-  const env = readOptOutValue(process.env[AUTO_STORE_MIGRATION_ENV], true);
+  const env = readOptOutValue(process.env[envName], true);
   if (env.kind === "unrecognised")
     unrecognised.push({ source: "environment", value: env.value });
   let config;
   try {
-    config = readOptOutValue(discoverConfig(configPath).data[AUTO_STORE_MIGRATION_KEY], false);
+    config = readOptOutValue(discoverConfig(configPath).data[key], false);
   } catch (err) {
     return {
       enabled: false,
@@ -3221,6 +3228,18 @@ function describeAutoStoreMigrationProblem(setting) {
     return null;
   const named = setting.unrecognised.map((u) => u.source === "environment" ? `${AUTO_STORE_MIGRATION_ENV}=${JSON.stringify(u.value)}` : `${AUTO_STORE_MIGRATION_KEY}: ${JSON.stringify(u.value)} in the machine config`).join(" and ");
   return `unrecognised value ${named}, so the automatic store migration is off; use one of ` + `${AUTO_STORE_MIGRATION_ON_VALUES.join(", ")} to turn it on or ` + `${AUTO_STORE_MIGRATION_OFF_VALUES.join(", ")} to turn it off`;
+}
+function autoLegacyRemovalSetting(configPath) {
+  const migration = autoStoreMigrationSetting(configPath);
+  const own = optOutSetting(AUTO_LEGACY_REMOVAL_ENV, AUTO_LEGACY_REMOVAL_KEY, configPath);
+  return {
+    enabled: migration.enabled && own.enabled,
+    unrecognised: [...migration.unrecognised, ...own.unrecognised],
+    unreadable: migration.unreadable ?? own.unreadable
+  };
+}
+function resolveAutoLegacyRemoval(configPath) {
+  return autoLegacyRemovalSetting(configPath).enabled;
 }
 function resolveConfigNonNegativeInt(envKey, configKey, configPath) {
   const env = process.env[envKey]?.trim();
@@ -3576,7 +3595,7 @@ function expandTilde(p, platform = process.platform, home = homedir2()) {
     return join6(home, p.slice(2));
   return p;
 }
-var namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, WINDOWS_RESERVED_DEVICE_NAME_RE, DEVICE_ID_ENV = "O2B_DEVICE_ID", INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, AUTO_STORE_MIGRATION_ENV = "OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION", AUTO_STORE_MIGRATION_KEY = "auto_store_migration", AUTO_STORE_MIGRATION_ON_VALUES, AUTO_STORE_MIGRATION_OFF_VALUES, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, ANSWER_QUOTE_CHECK_DEFAULT = "shadow", QUOTE_CHECK_DEFAULT, quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES, SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode", SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE", SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd", SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
+var namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, WINDOWS_RESERVED_DEVICE_NAME_RE, DEVICE_ID_ENV = "O2B_DEVICE_ID", INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, AUTO_STORE_MIGRATION_ENV = "OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION", AUTO_STORE_MIGRATION_KEY = "auto_store_migration", AUTO_STORE_MIGRATION_ON_VALUES, AUTO_STORE_MIGRATION_OFF_VALUES, AUTO_LEGACY_REMOVAL_ENV = "OPEN_SECOND_BRAIN_AUTO_LEGACY_REMOVAL", AUTO_LEGACY_REMOVAL_KEY = "auto_legacy_removal", DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", LESSONS_PROMOTION_SCOPES_ENV_KEY = "OPEN_SECOND_BRAIN_LESSONS_PROMOTION_SCOPES", MODEL_CONTEXT_WINDOW_ENV_KEY = "OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, ANSWER_QUOTE_CHECK_DEFAULT = "shadow", QUOTE_CHECK_DEFAULT, quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES, SKILL_REWRITE_MODE_CONFIG_KEY = "skill_rewrite.mode", SKILL_REWRITE_MODE_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_MODE", SKILL_REWRITE_JUDGE_CMD_CONFIG_KEY = "skill_rewrite_judge_cmd", SKILL_REWRITE_JUDGE_CMD_ENV_KEY = "OPEN_SECOND_BRAIN_SKILL_REWRITE_JUDGE_CMD";
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_ref();
@@ -4511,7 +4530,7 @@ var init_clock_store = __esm(() => {
 });
 
 // src/core/store/ulid.ts
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { createHash as createHash2, randomBytes as randomBytes3 } from "node:crypto";
 function encodeTime(time) {
   let out = "";
   let rest = time;
@@ -4723,9 +4742,12 @@ import {
   fstatSync as fstatSync3,
   lstatSync as lstatSync4,
   mkdirSync as mkdirSync8,
-  openSync as openSync4
+  openSync as openSync4,
+  readlinkSync,
+  realpathSync as realpathSync2,
+  unlinkSync as unlinkSync4
 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute2, join as join9, relative as relative2, sep as sep3 } from "node:path";
+import { basename as basename4, dirname as dirname8, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve8, sep as sep3 } from "node:path";
 function errnoCode(err) {
   return err?.code;
 }
@@ -4747,12 +4769,59 @@ function assertRealDirectory(path) {
   if (!stat.isDirectory())
     throw new StoreUnsafePathError(path, "is not a directory");
 }
+function hasVaultStoreName(path) {
+  const name = basename4(path);
+  return process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() === STORE_VAULT_DIR : name === STORE_VAULT_DIR;
+}
+function aliasHops(root) {
+  const hops = [];
+  let at = root;
+  for (let i = 0;i < ALIAS_HOPS_MAX; i++) {
+    let target;
+    try {
+      if (!lstatSync4(at).isSymbolicLink())
+        break;
+      target = readlinkSync(at);
+    } catch {
+      break;
+    }
+    at = resolve8(dirname8(at), target);
+    hops.push(at);
+  }
+  return hops;
+}
+function vaultStoreFolders(root, partitionFolders) {
+  if (hasVaultStoreName(root))
+    return [root, ...partitionFolders];
+  const reserved = aliasHops(root).find(hasVaultStoreName);
+  if (reserved !== undefined)
+    return [reserved, ...partitionFolders];
+  let real;
+  try {
+    real = realpathSync2(root);
+  } catch {
+    return [];
+  }
+  return hasVaultStoreName(real) ? [...partitionFolders] : [];
+}
+function firstLinkedFolder(folders) {
+  return folders.find((folder) => lstatOrNull(folder)?.isSymbolicLink() === true) ?? null;
+}
+function assertNoVaultStoreLink(folders) {
+  const linked = firstLinkedFolder(folders);
+  if (linked !== null) {
+    throw new StoreUnsafePathError(linked, VAULT_STORE_LINK_WHY, VAULT_STORE_LINK_REMEDY);
+  }
+}
 function ensureStoreDir(partitionRoot, dir) {
   const rel = relative2(partitionRoot, dir);
   if (rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute2(rel)) {
     throw new StoreUnsafePathError(dir, "is outside the partition folder");
   }
+  const vaultFolders = vaultStoreFolders(dirname8(partitionRoot), [partitionRoot]);
+  assertNoVaultStoreLink(vaultFolders);
   mkdirSync8(partitionRoot, { recursive: true, mode: STORE_DIR_MODE });
+  assertNoVaultStoreLink(vaultFolders);
   let current = partitionRoot;
   for (const part of rel === "" ? [] : rel.split(sep3)) {
     current = join9(current, part);
@@ -4849,25 +4918,146 @@ function openShardForAppend(path) {
   }
   return fd;
 }
-var STORE_DIR_MODE = 448, STORE_FILE_MODE = 384, StoreUnsafePathError, NO_FOLLOW, NON_BLOCK;
+var STORE_DIR_MODE = 448, STORE_FILE_MODE = 384, StoreUnsafePathError, ALIAS_HOPS_MAX = 40, VAULT_STORE_LINK_WHY, VAULT_STORE_LINK_REMEDY = "replace the link with a real folder holding the files it leads to, then start again", NO_FOLLOW, NON_BLOCK;
 var init_safe_fs = __esm(() => {
   init_fs_identity();
+  init_constants();
   StoreUnsafePathError = class StoreUnsafePathError extends Error {
     path;
-    constructor(path, why) {
-      super(`refusing to write through ${path} in the brain store: it ${why}. ` + "Something other than Open Second Brain put it there (a sync peer, a restore, a manual " + "edit); remove it and let the store create the path again");
+    constructor(path, why, remedy = "remove it and let the store create the path again") {
+      super(`refusing to write through ${path} in the brain store: it ${why}. ` + `Something other than Open Second Brain put it there (a sync peer, a restore, a manual ` + `edit); ${remedy}`);
       this.name = "StoreUnsafePathError";
       this.path = path;
     }
   };
+  VAULT_STORE_LINK_WHY = "is a link (or a junction), and the vault's brain store folder and its partition folders, " + "which the vault's sync fills, are never opened or written through a link: records would " + "go wherever it leads";
   NO_FOLLOW = constants2.O_NOFOLLOW ?? 0;
   NON_BLOCK = constants2.O_NONBLOCK ?? 0;
 });
 
+// src/core/store/relocation-target.ts
+import { readFileSync as readFileSync7 } from "node:fs";
+import { join as join10 } from "node:path";
+function isOffsetMap(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  return Object.values(value).every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+}
+function isMarker(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const v = value;
+  return isUlid(v["store_id"]) && typeof v["to"] === "string" && v["to"] !== "" && typeof v["device"] === "string" && v["device"] !== "" && typeof v["at"] === "string" && isOffsetMap(v["files"]);
+}
+function readRelocationMarker(root) {
+  const path = join10(root, STORE_RELOCATED_FILE);
+  let text;
+  try {
+    text = readFileSync7(path, "utf8");
+  } catch (err) {
+    const code = err.code;
+    if (code === "ENOENT" || code === "ENOTDIR")
+      return { kind: "absent" };
+    return { kind: "unreadable", path, why: `cannot be read (${code ?? String(err)})` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { kind: "unreadable", path, why: "is not valid JSON" };
+  }
+  if (!isMarker(parsed)) {
+    return { kind: "unreadable", path, why: "is not a relocation marker this release can read" };
+  }
+  return { kind: "valid", marker: parsed };
+}
+function relocationOf(root, storeId) {
+  const read = readRelocationMarker(root);
+  if (read.kind === "absent")
+    return { kind: "none" };
+  if (read.kind === "unreadable")
+    return { kind: "unreadable", marker: read.path, why: read.why };
+  if (read.marker.store_id !== storeId)
+    return { kind: "none" };
+  const to = read.marker.to;
+  const ids = new Set;
+  const held = new Set;
+  for (const partition of STORE_PARTITIONS) {
+    const id = identityAt(join10(to, partition, STORE_IDENTITY_FILE));
+    if (id === null)
+      continue;
+    ids.add(id);
+    if (id === storeId)
+      held.add(partition);
+  }
+  if (ids.size === 1 && ids.has(storeId))
+    return { kind: "moved", to, held };
+  const found = ids.size === 0 ? "no brain store" : `another brain store (${[...ids].join(", ")})`;
+  return { kind: "unavailable", to, found };
+}
+function followRelocation(root, storeId) {
+  const first = relocationOf(root, storeId);
+  if (first.kind === "none")
+    return first;
+  if (first.kind !== "moved")
+    return { kind: "refused", root, state: first };
+  if (first.to === root)
+    return { kind: "none" };
+  const onward = relocationOf(first.to, storeId);
+  if (onward.kind === "unavailable" || onward.kind === "unreadable") {
+    return { kind: "refused", root: first.to, state: onward };
+  }
+  if (onward.kind === "moved" && onward.to !== first.to) {
+    return {
+      kind: "refused",
+      root,
+      state: {
+        kind: "unavailable",
+        to: first.to,
+        found: `a copy of the store whose own relocation marker points on to ${onward.to}`
+      }
+    };
+  }
+  return first;
+}
+function storeIdsAt(root) {
+  const ids = new Set;
+  for (const partition of STORE_PARTITIONS) {
+    const id = identityAt(join10(root, partition, STORE_IDENTITY_FILE));
+    if (id !== null)
+      ids.add(id);
+  }
+  return ids;
+}
+function identityAt(path) {
+  let text;
+  try {
+    text = readFileSync7(path, "utf8");
+  } catch (err) {
+    return err.code === "ENOENT" ? null : "unreadable";
+  }
+  try {
+    const id = JSON.parse(text).store_id;
+    return isUlid(id) ? id : "unreadable";
+  } catch {
+    return "unreadable";
+  }
+}
+function relocationUnavailableReason(root, state) {
+  if (state.kind === "unreadable") {
+    return `the brain store at ${root} carries a relocation marker that ${state.why} ` + `(${state.marker}), so whether the store moved into the vault cannot be told; nothing is ` + `read or written at ${root} or in the vault until that is settled. If the vault's ` + `store folder holds this store, it moved there: move ${root} aside (it is the recovery ` + `copy). If it does not, remove ${state.marker}`;
+  }
+  return `the brain store at ${root} moved to ${state.to}, which holds ${state.found} now; ` + `${root} is a recovery copy and is not used, so nothing is read or written until ` + `${state.to} holds the store again (let the sync finish, or restore that folder)`;
+}
+var init_relocation_target = __esm(() => {
+  init_constants();
+  init_ulid();
+});
+
 // src/core/store/store-paths.ts
-import { lstatSync as lstatSync5, realpathSync as realpathSync2 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync5, realpathSync as realpathSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join10, posix as posix4, win32 as win322 } from "node:path";
+import { join as join11, posix as posix4, win32 as win322 } from "node:path";
 function pathsFor(platform) {
   return platform === "win32" ? win322 : posix4;
 }
@@ -4888,7 +5078,7 @@ function resolveLinks(path, platform) {
   const tail = [];
   for (;; ) {
     try {
-      return paths.join(realpathSync2(head), ...tail.toReversed());
+      return paths.join(realpathSync3(head), ...tail.toReversed());
     } catch {
       const parent = paths.dirname(head);
       if (parent === head)
@@ -4911,28 +5101,107 @@ function isPathInsideResolved(child, parent, platform) {
 function defaultStoreRoot(source = processDirsEnv()) {
   return pathsFor(source.platform).join(dataBaseDir(source), APP_DIR_NAME, STORE_DEFAULT_DIR);
 }
+function vaultStoreRoot(vault, platform = process.platform) {
+  return pathsFor(platform).join(vault, STORE_VAULT_DIR);
+}
+function samePath(a, b, platform) {
+  return isPathInside(a, b, platform) && isPathInside(b, a, platform);
+}
+function reservedFolderLeadsIntoVault(vault, platform) {
+  const reserved = resolveLinks(vaultStoreRoot(vault, platform), platform);
+  const real = resolveLinks(vault, platform);
+  if (!isPathInside(reserved, real, platform))
+    return null;
+  return samePath(reserved, vaultStoreRoot(real, platform), platform) ? null : reserved;
+}
+function isVaultStoreRoot(root, vault, platform) {
+  const reserved = vaultStoreRoot(vault, platform);
+  const match = samePath(root, reserved, platform) || samePath(resolveLinks(root, platform), resolveLinks(reserved, platform), platform);
+  return match && reservedFolderLeadsIntoVault(vault, platform) === null;
+}
+function storeRootForbiddenInVault(root, vault, platform) {
+  return isPathInsideResolved(root, vault, platform) && !isVaultStoreRoot(root, vault, platform);
+}
+function externalStoreState(root, platform, exists) {
+  const paths = pathsFor(platform);
+  if (!STORE_PARTITIONS.some((p) => exists(paths.join(root, p, STORE_IDENTITY_FILE)))) {
+    return "none";
+  }
+  if (!exists(paths.join(root, STORE_RELOCATED_FILE)))
+    return "active";
+  if (platform !== process.platform)
+    return "moved";
+  const read = readRelocationMarker(root);
+  if (read.kind === "unreadable")
+    return "unreadable";
+  if (read.kind === "absent")
+    return "moved";
+  const ids = storeIdsAt(root);
+  if (ids.size === 0 || ids.has(read.marker.store_id) || ids.has("unreadable"))
+    return "moved";
+  return "active";
+}
+function holdsMovedStore(dest, storeId) {
+  const ids = storeIdsAt(dest);
+  return ids.size === 1 && ids.has(storeId);
+}
+function hostExists(platform) {
+  return platform === process.platform ? (path) => existsSync4(path) : () => false;
+}
 function resolveStoreRoot(source) {
   const paths = pathsFor(source.platform);
   const env = source.env[STORE_ROOT_ENV]?.trim();
   const configured = source.config[STORE_ROOT_CONFIG_KEY]?.trim();
   let resolved;
   if (env) {
-    resolved = { root: paths.resolve(expandHome(env, source)), origin: "env" };
+    resolved = {
+      root: paths.resolve(expandHome(env, source)),
+      origin: "env",
+      placement: "external",
+      relocationPending: false
+    };
   } else if (configured) {
     const expanded = expandHome(configured, source);
     const root = paths.isAbsolute(expanded) ? paths.normalize(expanded) : paths.resolve(paths.dirname(source.configPath), expanded);
-    resolved = { root, origin: "config" };
+    resolved = { root, origin: "config", placement: "external", relocationPending: false };
   } else {
-    resolved = { root: defaultStoreRoot(source), origin: "default" };
+    resolved = defaultRoot(source);
   }
   if (source.vault !== null && source.vault.trim() !== "") {
     const vault = expandHome(source.vault.trim(), source);
-    if (isPathInsideResolved(resolved.root, vault, source.platform))
-      throw new StoreRootInsideVaultError(resolved.root, vault, resolved.origin);
+    if (storeRootForbiddenInVault(resolved.root, vault, source.platform)) {
+      throw new StoreRootInsideVaultError(resolved.root, vault, resolved.origin, reservedFolderLeadsIntoVault(vault, source.platform));
+    }
+    if (resolved.origin !== "default" && isVaultStoreRoot(resolved.root, vault, source.platform)) {
+      resolved = { ...resolved, placement: "vault" };
+    }
   }
   return resolved;
 }
-function resolveConfiguredStoreRoot(configPath) {
+function defaultRoot(source) {
+  const external = defaultStoreRoot(source);
+  const vault = source.vault?.trim() ?? "";
+  if (vault === "") {
+    return { root: external, origin: "default", placement: "external", relocationPending: false };
+  }
+  const exists = source.exists ?? hostExists(source.platform);
+  const state = externalStoreState(external, source.platform, exists);
+  if (state === "active") {
+    return { root: external, origin: "default", placement: "external", relocationPending: true };
+  }
+  if (state === "unreadable") {
+    return { root: external, origin: "default", placement: "external", relocationPending: false };
+  }
+  const inVault = vaultStoreRoot(pathsFor(source.platform).resolve(expandHome(vault, source)), source.platform);
+  if (state === "moved" && source.platform === process.platform) {
+    const marker = readRelocationMarker(external);
+    if (marker.kind === "valid" && samePath(resolveLinks(marker.marker.to, source.platform), resolveLinks(inVault, source.platform), source.platform) && !holdsMovedStore(marker.marker.to, marker.marker.store_id)) {
+      return { root: external, origin: "default", placement: "external", relocationPending: false };
+    }
+  }
+  return { root: inVault, origin: "default", placement: "vault", relocationPending: false };
+}
+function resolveConfiguredStoreRoot(configPath, vault) {
   const path = configPath ?? defaultConfigPath();
   return resolveStoreRoot({
     platform: process.platform,
@@ -4940,7 +5209,7 @@ function resolveConfiguredStoreRoot(configPath) {
     env: process.env,
     config: discoverConfig(path).data,
     configPath: path,
-    vault: resolveVault(path)
+    vault: vault === undefined ? resolveVault(path) : vault
   });
 }
 function storesStateDir(source = processDirsEnv()) {
@@ -4955,7 +5224,7 @@ function dualWriteStatusPath(source = processDirsEnv()) {
   return pathsFor(source.platform).join(storesStateDir(source), DUAL_WRITE_STATUS_FILE);
 }
 function partitionDir(root, partition) {
-  return join10(root, partition);
+  return join11(root, partition);
 }
 function shardMonth(physicalMs) {
   return new Date(physicalMs).toISOString().slice(0, 7);
@@ -4979,12 +5248,12 @@ function shardRelPath(ref, device, month) {
   return posix4.join(...streamSegments(ref), device, `${month}.${STORE_SHARD_EXT}`);
 }
 function shardPath(root, partition, ref, device, month) {
-  return join10(partitionDir(root, partition), ...shardRelPath(ref, device, month).split("/"));
+  return join11(partitionDir(root, partition), ...shardRelPath(ref, device, month).split("/"));
 }
 function blobPath(partitionRoot, sha) {
   if (!SHA256_RE2.test(sha))
     throw new Error(`"${sha}" is not a sha256 hex digest`);
-  return join10(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
+  return join11(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2), sha);
 }
 function lstatIdentity(path) {
   const st = lstatSync5(path, { bigint: true });
@@ -4993,7 +5262,7 @@ function lstatIdentity(path) {
 function blobStamp(partitionRoot, sha) {
   try {
     const blob = lstatIdentity(blobPath(partitionRoot, sha));
-    const folder = lstatIdentity(join10(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2)));
+    const folder = lstatIdentity(join11(partitionRoot, STORE_BLOBS_DIR, sha.slice(0, 2)));
     return `${blob};${folder}`;
   } catch {
     return "absent";
@@ -5015,23 +5284,25 @@ function pendingBlobStampLines(root, identities) {
   return lines;
 }
 function shardLockTarget(deviceStateDir, partition, rel) {
-  return join10(deviceStateDir, STORE_LOCKS_DIR, partition, ...rel.split("/"));
+  return join11(deviceStateDir, STORE_LOCKS_DIR, partition, ...rel.split("/"));
 }
 var StoreRootInsideVaultError, CASE_INSENSITIVE_PLATFORMS, LEDGER_NAME_RE, SHARD_MONTH_RE, SHA256_RE2;
 var init_store_paths = __esm(() => {
   init_config();
   init_platform_dirs();
   init_constants();
+  init_relocation_target();
   init_ulid();
   StoreRootInsideVaultError = class StoreRootInsideVaultError extends Error {
     root;
     vault;
     setting;
     origin;
-    constructor(root, vault, origin) {
+    constructor(root, vault, origin, linkedTo = null) {
       const setting = origin === "env" ? `the ${STORE_ROOT_ENV} environment variable` : origin === "config" ? `\`${STORE_ROOT_CONFIG_KEY}\` in the machine config` : "the default store root";
-      const remedy = origin === "default" ? `set \`${STORE_ROOT_CONFIG_KEY}\` in the machine config to a directory outside the vault` : `change ${setting} to a directory outside the vault, or remove it to use the per-user default`;
-      super(`the brain store root ${root} (from ${setting}) is inside the vault ${vault}; ` + `the store must live outside the vault: ${remedy}.`);
+      const remedy = origin === "default" ? `set \`${STORE_ROOT_CONFIG_KEY}\` in the machine config to a directory outside the vault` : `change ${setting} to a directory outside the vault, or remove it to use the default ` + `(the vault's ${STORE_VAULT_DIR}/ folder)`;
+      const linked = linkedTo === null ? "" : `the vault's ${STORE_VAULT_DIR}/ folder is a link to ${linkedTo}, another place in ` + "the vault, so it is not the reserved folder (replace the link with a folder); ";
+      super(`the brain store root ${root} (from ${setting}) is inside the vault ${vault}; ${linked}` + `the only store root allowed inside the vault is its ${STORE_VAULT_DIR}/ folder: ${remedy}.`);
       this.name = "StoreRootInsideVaultError";
       this.root = root;
       this.vault = vault;
@@ -5053,13 +5324,13 @@ import {
   linkSync as linkSync2,
   mkdirSync as mkdirSync9,
   openSync as openSync5,
-  readFileSync as readFileSync7,
+  readFileSync as readFileSync8,
   readSync,
   statSync as statSync6,
-  unlinkSync as unlinkSync4,
+  unlinkSync as unlinkSync5,
   writeSync as writeSync3
 } from "node:fs";
-import { basename as basename4, dirname as dirname9, join as join11 } from "node:path";
+import { basename as basename5, dirname as dirname9, join as join12 } from "node:path";
 function errnoCode2(err) {
   return err?.code;
 }
@@ -5091,10 +5362,10 @@ function tempPathFor(target, tempDir) {
     try {
       mkdirSync9(tempDir, { recursive: true });
       if (sameFilesystem(tempDir, blobDir))
-        return join11(tempDir, `${basename4(target)}.${unique}`);
+        return join12(tempDir, `${basename5(target)}.${unique}`);
     } catch {}
   }
-  return join11(blobDir, `${BLOB_TEMP_PREFIX}${basename4(target)}.${unique}`);
+  return join12(blobDir, `${BLOB_TEMP_PREFIX}${basename5(target)}.${unique}`);
 }
 function verifies(path, sha, size, attempts, sleepMs) {
   for (let attempt = 0;attempt < attempts; attempt += 1) {
@@ -5102,7 +5373,7 @@ function verifies(path, sha, size, attempts, sleepMs) {
       const fd = openRegularFileForRead(path);
       if (fd !== null) {
         try {
-          if (fstatSync4(fd).size === size && sha256Hex(readFileSync7(fd)) === sha)
+          if (fstatSync4(fd).size === size && sha256Hex(readFileSync8(fd)) === sha)
             return true;
         } finally {
           closeSync5(fd);
@@ -5134,7 +5405,7 @@ function settleExisting(path, sha, bytes, options) {
     }
   } finally {
     try {
-      unlinkSync4(repair);
+      unlinkSync5(repair);
     } catch {}
   }
   if (!verifies(path, sha, bytes.length, 1, 0)) {
@@ -5159,7 +5430,7 @@ function createFileOnce(path, bytes, options = {}) {
     }
   } finally {
     try {
-      unlinkSync4(temp);
+      unlinkSync5(temp);
     } catch {}
   }
   try {
@@ -5234,9 +5505,446 @@ var init_blobs = __esm(() => {
   STILL_OPEN_CODES = new Set(["EPERM", "EBUSY"]);
 });
 
+// src/core/store-migration/process-identity.ts
+import { spawnSync } from "node:child_process";
+import { readFileSync as readFileSync9 } from "node:fs";
+function linuxIdentity(pid) {
+  const stat = readFileSync9(`/proc/${pid}/stat`, "utf8");
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const ticks = fields[STAT_STARTTIME_INDEX];
+  if (ticks === undefined || !/^\d+$/.test(ticks))
+    return null;
+  let boot = "";
+  try {
+    boot = readFileSync9("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {}
+  return `linux:${boot}:${ticks}`;
+}
+function query(command, args, env) {
+  const out = spawnSync(command, args, {
+    encoding: "utf8",
+    timeout: QUERY_TIMEOUT_MS,
+    windowsHide: true,
+    env: env ?? process.env
+  });
+  return out.status === 0 && typeof out.stdout === "string" ? out.stdout.trim() : "";
+}
+function windowsIdentity(pid) {
+  const out = query("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`
+  ]);
+  return /^\d+$/.test(out) ? `win32:${out}` : null;
+}
+function psIdentity(pid) {
+  const out = query("ps", ["-o", "lstart=", "-p", String(pid)], {
+    ...process.env,
+    LC_ALL: "C",
+    TZ: "UTC"
+  });
+  return out === "" ? null : `ps:${out.replace(/\s+/g, " ")}`;
+}
+function processStartIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return null;
+  if (pid === process.pid && own !== undefined)
+    return own;
+  let identity;
+  try {
+    if (process.platform === "linux")
+      identity = linuxIdentity(pid);
+    else if (process.platform === "win32")
+      identity = windowsIdentity(pid);
+    else
+      identity = psIdentity(pid);
+  } catch {
+    identity = null;
+  }
+  if (pid === process.pid)
+    own = identity;
+  return identity;
+}
+var QUERY_TIMEOUT_MS = 15000, STAT_STARTTIME_INDEX = 19, own;
+var init_process_identity = () => {};
+
+// src/core/store-migration/holder-liveness.ts
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0)
+    return false;
+  if (pid === process.pid)
+    return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+function holderLiveness(pid, started) {
+  if (!processAlive(pid))
+    return "dead";
+  if (started === undefined || started === null)
+    return "unknown";
+  const now = processStartIdentity(pid);
+  if (now === null)
+    return "unknown";
+  return now === started ? "alive" : "dead";
+}
+function gateHolderLiveness(gate, judge) {
+  if (judge === "cheap")
+    return processAlive(gate.pid) ? "unknown" : "dead";
+  return holderLiveness(gate.pid, gate.started);
+}
+var init_holder_liveness = __esm(() => {
+  init_process_identity();
+});
+
+// src/core/store/process-lock.ts
+import { readFileSync as readFileSync10, statSync as statSync7, unlinkSync as unlinkSync6, writeSync as writeSync4 } from "node:fs";
+function parseHolder(text) {
+  try {
+    const v = JSON.parse(text);
+    const { pid, started, at, token } = v;
+    if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
+      return null;
+    if (typeof at !== "number" || typeof token !== "string")
+      return null;
+    if (started !== null && typeof started !== "string")
+      return null;
+    return { pid, started, at, token };
+  } catch {
+    return null;
+  }
+}
+function readHolder(path) {
+  let text;
+  let mtimeMs;
+  try {
+    mtimeMs = statSync7(path).mtimeMs;
+    text = readFileSync10(path, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return { kind: "absent" };
+    throw err;
+  }
+  const holder = parseHolder(text);
+  return holder === null ? { kind: "unreadable", mtimeMs } : { kind: "record", holder };
+}
+function abandoned(seen, now) {
+  if (seen.kind === "absent")
+    return true;
+  if (seen.kind === "unreadable")
+    return now - seen.mtimeMs > STORE_LOCK_STALE_MS;
+  const liveness = holderLiveness(seen.holder.pid, seen.holder.started);
+  if (liveness === "dead")
+    return true;
+  if (liveness === "alive")
+    return false;
+  return now - seen.holder.at > STORE_LOCK_STALE_MS;
+}
+function processLockHeld(lockTarget, now = Date.now) {
+  let seen;
+  try {
+    seen = readHolder(`${lockTarget}${HOLDER_SUFFIX}`);
+  } catch {
+    return true;
+  }
+  return !abandoned(seen, now());
+}
+var HOLDER_SUFFIX = ".holder";
+var init_process_lock = __esm(() => {
+  init_sync_lockfile();
+  init_fs_atomic();
+  init_fs_lock();
+  init_holder_liveness();
+  init_process_identity();
+  init_local_lock();
+});
+
+// src/core/store/relocation-marker.ts
+import { join as join13 } from "node:path";
+function relocationLockTarget(deviceStateDir) {
+  return join13(deviceStateDir, "relocation");
+}
+function relocationRunning(deviceStateDir) {
+  return processLockHeld(relocationLockTarget(deviceStateDir));
+}
+function waitForRelocation(deviceStateDir, budgetMs = resolveLockWaitBudgetMs()) {
+  const started = Date.now();
+  while (relocationRunning(deviceStateDir)) {
+    if (Date.now() - started >= budgetMs) {
+      const err = new Error("the brain store is being moved into the vault on this machine; retry in a moment");
+      err.code = "ELOCKED";
+      throw err;
+    }
+    sleepSync(50);
+  }
+}
+var init_relocation_marker = __esm(() => {
+  init_sync_lockfile();
+  init_fs_atomic();
+  init_process_lock();
+  init_relocation_target();
+});
+
+// src/core/store/format-doc.ts
+import { readFileSync as readFileSync11 } from "node:fs";
+import { join as join14 } from "node:path";
+import { fileURLToPath } from "node:url";
+function shippedFormatDoc() {
+  shipped ??= readFileSync11(join14(fileURLToPath(new URL(".", import.meta.url)), STORE_FORMAT_FILE), "utf8");
+  return shipped;
+}
+function formatDocVersion(text) {
+  const match = VERSION_MARKER_RE.exec(text);
+  return match === null ? null : Number(match[1]);
+}
+function writeFormatDoc(dir) {
+  const text = shippedFormatDoc();
+  const target = join14(dir, STORE_FORMAT_FILE);
+  let existing = null;
+  try {
+    existing = readFileSync11(target, "utf8");
+  } catch {
+    existing = null;
+  }
+  if (existing === text)
+    return false;
+  if (existing !== null) {
+    const onDisk = formatDocVersion(existing);
+    const ours = formatDocVersion(text);
+    if (onDisk !== null && ours !== null && onDisk >= ours)
+      return false;
+  }
+  return atomicWriteText(target, text, { mode: FORMAT_DOC_MODE });
+}
+var VERSION_MARKER_RE, FORMAT_DOC_MODE = 420, shipped;
+var init_format_doc = __esm(() => {
+  init_fs_atomic();
+  init_constants();
+  VERSION_MARKER_RE = /^<!-- open-second-brain-store-format: (\d+) -->/;
+});
+
+// src/core/store/held-ledger.ts
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync5, mkdirSync as mkdirSync10, rmSync as rmSync2 } from "node:fs";
+import { join as join15, resolve as resolve9 } from "node:path";
+function ledgerDir(dirs = processDirsEnv()) {
+  return join15(storesStateDir(dirs), HELD_LEDGER_DIR);
+}
+function markerPath(dir, root, partition) {
+  const key = createHash3("sha256").update(resolve9(root)).digest("hex").slice(0, 32);
+  return join15(dir, `${key}.${partition}`);
+}
+function recordHeldPartitions(root, partitions, dirs) {
+  const dir = ledgerDir(dirs);
+  for (const partition of partitions) {
+    const marker = markerPath(dir, root, partition);
+    if (existsSync5(marker))
+      continue;
+    try {
+      mkdirSync10(dir, { recursive: true });
+      atomicWriteFileSync(marker, `${resolve9(root)}
+`);
+    } catch {}
+  }
+}
+function lostHeldPartitions(root, held) {
+  if (STORE_PARTITIONS.every((p) => held.has(p)))
+    return [];
+  const dir = ledgerDir();
+  return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync5(markerPath(dir, root, p)));
+}
+var HELD_LEDGER_DIR = "held-partitions";
+var init_held_ledger = __esm(() => {
+  init_fs_atomic();
+  init_platform_dirs();
+  init_constants();
+  init_store_paths();
+});
+
+// src/core/store/store-open.ts
+import { readFileSync as readFileSync12, statSync as statSync8 } from "node:fs";
+import { join as join16 } from "node:path";
+function readStoreId(dir) {
+  let text;
+  try {
+    text = readFileSync12(join16(dir, STORE_IDENTITY_FILE), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT")
+      return null;
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new StoreIdentityError(`${join16(dir, STORE_IDENTITY_FILE)} is not valid JSON`);
+  }
+  if (!isUlid(parsed.store_id)) {
+    throw new StoreIdentityError(`${join16(dir, STORE_IDENTITY_FILE)} carries no valid store_id`);
+  }
+  return parsed.store_id;
+}
+function heldPartitions(root) {
+  const linked = firstLinkedFolder(vaultStoreFolders(root, STORE_PARTITIONS.map((partition) => partitionDir(root, partition))));
+  if (linked !== null)
+    throw new LinkedVaultStoreFolderError(linked);
+  if (statSync8(root, { throwIfNoEntry: false })?.isDirectory() === false) {
+    throw new StoreOpenError(`the brain store root ${root} is not a directory; move the file away or point ` + "the store root at a directory");
+  }
+  const ids = new Map;
+  for (const partition of STORE_PARTITIONS) {
+    const id = readStoreId(partitionDir(root, partition));
+    if (id !== null)
+      ids.set(partition, id);
+  }
+  if (new Set(ids.values()).size > 1) {
+    throw new StoreOpenError(`the partitions under ${root} belong to different stores (${[...ids].map(([p, id]) => `${p}: ${id}`).join(", ")}); keep one store per root`);
+  }
+  const first = ids.values().next();
+  return { held: new Set(ids.keys()), storeId: first.done === true ? null : first.value };
+}
+function heldPartitionsChecked(root) {
+  const found = heldPartitions(root);
+  const lost = lostHeldPartitions(root, found.held);
+  if (lost.length > 0)
+    throw new HeldPartitionLostError(root, lost);
+  return found;
+}
+function inspectStore(root) {
+  return inspectAt(root, null);
+}
+function inspectAt(root, redirect) {
+  const { held, storeId } = heldPartitionsChecked(root);
+  expectRedirected(root, storeId, redirect);
+  if (storeId === null)
+    return null;
+  const moved = movedTo(root, storeId, redirect);
+  if (moved !== null)
+    return inspectAt(moved, { from: root, storeId });
+  return { root, storeId, partitions: held };
+}
+function expectRedirected(root, found, redirect) {
+  if (redirect === null || found === redirect.storeId)
+    return;
+  throw new RelocatedStoreUnavailableError(redirect.from, {
+    kind: "unavailable",
+    to: root,
+    found: found === null ? "no brain store" : `another brain store (${found})`
+  });
+}
+function movedTo(root, storeId, redirect) {
+  if (redirect === null) {
+    const followed = followRelocation(root, storeId);
+    if (followed.kind === "refused") {
+      throw new RelocatedStoreUnavailableError(followed.root, followed.state);
+    }
+    return followed.kind === "moved" && followed.to !== root ? followed.to : null;
+  }
+  const state = relocationOf(root, storeId);
+  if (state.kind === "unavailable" || state.kind === "unreadable") {
+    throw new RelocatedStoreUnavailableError(root, state);
+  }
+  if (state.kind !== "moved" || state.to === root)
+    return null;
+  throw new RelocatedStoreUnavailableError(redirect.from, {
+    kind: "unavailable",
+    to: root,
+    found: `a copy of the store whose own relocation marker points on to ${state.to}`
+  });
+}
+function openStore(options) {
+  if (!isUsableLocalDeviceId(options.device)) {
+    throw new StoreOpenError(`the brain store needs a device id, got "${options.device}"; set device_id in the machine ` + `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`);
+  }
+  return openAt(options, null);
+}
+function openAt(options, redirect) {
+  const { held, storeId } = heldPartitionsChecked(options.root);
+  expectRedirected(options.root, storeId, redirect);
+  if (storeId === null)
+    throw new NoStoreError(options.root);
+  const moved = movedTo(options.root, storeId, redirect);
+  if (moved !== null)
+    return openAt({ ...options, root: moved }, { from: options.root, storeId });
+  recordHeldPartitions(options.root, held, options.dirs);
+  writeFormatDoc(options.root);
+  for (const partition of held)
+    writeFormatDoc(partitionDir(options.root, partition));
+  return {
+    root: options.root,
+    storeId,
+    device: options.device,
+    deviceStateDir: deviceStateDirFor(storeId, options.dirs ?? processDirsEnv()),
+    partitions: held
+  };
+}
+var StoreOpenError, RelocatedStoreUnavailableError, LinkedVaultStoreFolderError, NoStoreError, StoreIdentityError, HeldPartitionLostError;
+var init_store_open = __esm(() => {
+  init_platform_dirs();
+  init_config();
+  init_constants();
+  init_format_doc();
+  init_held_ledger();
+  init_relocation_target();
+  init_safe_fs();
+  init_store_paths();
+  init_ulid();
+  StoreOpenError = class StoreOpenError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "StoreOpenError";
+    }
+  };
+  RelocatedStoreUnavailableError = class RelocatedStoreUnavailableError extends StoreOpenError {
+    root;
+    constructor(root, state) {
+      super(relocationUnavailableReason(root, state));
+      this.root = root;
+      this.name = "RelocatedStoreUnavailableError";
+    }
+  };
+  LinkedVaultStoreFolderError = class LinkedVaultStoreFolderError extends StoreOpenError {
+    path;
+    constructor(path) {
+      super(`${path} ${VAULT_STORE_LINK_WHY}. To use the store, ${VAULT_STORE_LINK_REMEDY}`);
+      this.path = path;
+      this.name = "LinkedVaultStoreFolderError";
+    }
+  };
+  NoStoreError = class NoStoreError extends StoreOpenError {
+    root;
+    constructor(root) {
+      super(`no brain store at ${root}: no partition holds ${STORE_IDENTITY_FILE}; ` + "run `o2b store init` to create one, or let sync deliver it from a machine that has it");
+      this.root = root;
+      this.name = "NoStoreError";
+    }
+  };
+  StoreIdentityError = class StoreIdentityError extends StoreOpenError {
+    constructor(message) {
+      super(message);
+      this.name = "StoreIdentityError";
+    }
+  };
+  HeldPartitionLostError = class HeldPartitionLostError extends StoreOpenError {
+    root;
+    partitions;
+    constructor(root, partitions) {
+      const leave = partitions.includes("shared") ? "" : `, or run ${partitions.map((p) => `\`o2b store partition leave ${p}\``).join(" and ")} to stop holding ${partitions.length > 1 ? "them" : "it"} on this machine`;
+      super(`the ${partitions.join(" and ")} partition${partitions.length > 1 ? "s" : ""} of the ` + `brain store at ${root}, which this machine has held, no longer show${partitions.length > 1 ? "" : "s"} ${STORE_IDENTITY_FILE}; its records cannot be read, so the store is not opened. ` + `Restore ${partitions.map((p) => `${p}/${STORE_IDENTITY_FILE}`).join(" and ")} ` + `from sync or a backup${leave}`);
+      this.root = root;
+      this.partitions = partitions;
+      this.name = "HeldPartitionLostError";
+    }
+  };
+});
+
 // src/core/store/appender.ts
-import { closeSync as closeSync6, fstatSync as fstatSync5, fsyncSync as fsyncSync3, openSync as openSync6, readSync as readSync2, writeSync as writeSync4 } from "node:fs";
-import { dirname as dirname10, join as join12 } from "node:path";
+import { closeSync as closeSync6, fstatSync as fstatSync5, fsyncSync as fsyncSync3, openSync as openSync6, readSync as readSync2, writeSync as writeSync5 } from "node:fs";
+import { dirname as dirname10, join as join17 } from "node:path";
 function lineBytes(record) {
   return Buffer.from(`${JSON.stringify(record)}
 `, "utf8");
@@ -5268,7 +5976,7 @@ function appendLine(partitionRoot, path, bytes) {
     }
     let written = 0;
     while (written < payload.length) {
-      written += writeSync4(fd, payload, written, payload.length - written);
+      written += writeSync5(fd, payload, written, payload.length - written);
     }
     fsyncSync3(fd);
     const post = fstatSync5(fd, { bigint: true });
@@ -5293,7 +6001,7 @@ function prepareLine(store, input, hlc) {
     body: input.body
   });
   let bytes = lineBytes(record);
-  let spilled = false;
+  let blob = null;
   if (bytes.length > STORE_LINE_CAP_BYTES) {
     const text = canonicalBodyText(record.body);
     const reference = {
@@ -5303,24 +6011,101 @@ function prepareLine(store, input, hlc) {
     bytes = lineBytes({ ...record, body: reference });
     if (bytes.length > STORE_LINE_CAP_BYTES)
       throw new RecordTooLargeError(bytes.length);
-    writeBlob(partitionDir(store.root, input.partition), text, {
-      tempDir: join12(store.deviceStateDir, STORE_TMP_DIR)
-    });
-    spilled = true;
+    blob = text;
   }
   const path = shardPath(store.root, input.partition, ref, store.device, month);
-  return { result: { record, path, rel, spilled }, bytes, partition: input.partition };
+  return {
+    result: { record, path, rel, spilled: blob !== null },
+    bytes,
+    partition: input.partition,
+    blob
+  };
 }
 function appendRecords(store, inputs, options = {}) {
-  for (const input of inputs) {
-    if (!store.partitions.has(input.partition)) {
-      throw new PartitionUnavailableError(input.partition, store.root);
-    }
-  }
   if (inputs.length === 0)
     return [];
-  const stamps = tickClockMany(store.deviceStateDir, store.device, inputs.length, options.now, observedClockFloor(store.root));
-  const lines = inputs.map((input, i) => prepareLine(store, input, stamps[i]));
+  let target = writeTarget(store);
+  for (const input of inputs) {
+    if (!target.partitions.has(input.partition)) {
+      throw new PartitionUnavailableError(input.partition, target.root);
+    }
+  }
+  let stamps = tickClockMany(store.deviceStateDir, store.device, inputs.length, options.now, clockFloor(store, target));
+  let lines = inputs.map((input, i) => prepareLine(target, input, stamps[i]));
+  const results = lines.map(() => {
+    return;
+  });
+  let done = 0;
+  try {
+    while (done < lines.length) {
+      const byShard = groupByShard(lines.filter((_, i) => results[i] === undefined));
+      let moved = false;
+      for (const group of byShard) {
+        const first = group[0];
+        const wrote = withLocalLock(shardLockTarget(store.deviceStateDir, first.partition, first.result.rel), () => {
+          if (!targetStands(store, target, first.partition))
+            return false;
+          for (const line of group) {
+            if (line.blob === null)
+              continue;
+            writeBlob(partitionDir(target.root, line.partition), line.blob, {
+              tempDir: join17(store.deviceStateDir, STORE_TMP_DIR)
+            });
+          }
+          appendLine(partitionDir(target.root, first.partition), first.result.path, Buffer.concat(group.map((line) => line.bytes)));
+          for (const line of group)
+            results[lines.indexOf(line)] = line.result;
+          done += group.length;
+          return true;
+        });
+        if (!wrote) {
+          moved = true;
+          break;
+        }
+        options.afterShard?.();
+      }
+      if (moved) {
+        target = writeTarget(store);
+        const left = lines.filter((_, i) => results[i] === undefined);
+        for (const line of left) {
+          const input = inputs[lines.indexOf(line)];
+          if (!target.partitions.has(input.partition)) {
+            throw new PartitionUnavailableError(input.partition, target.root);
+          }
+        }
+        const floor = clockFloor(store, target);
+        if (floor !== null && left.some((l) => compareHlc(stamps[lines.indexOf(l)], floor) <= 0)) {
+          const again = tickClockMany(store.deviceStateDir, store.device, left.length, options.now, floor);
+          stamps = stamps.map((stamp, i) => {
+            const at = left.indexOf(lines[i]);
+            return at < 0 ? stamp : again[at];
+          });
+        }
+        const fresh = left.map((line) => prepareLine(target, inputs[lines.indexOf(line)], stamps[lines.indexOf(line)]));
+        lines = lines.map((line) => {
+          const at = left.indexOf(line);
+          return at < 0 ? line : fresh[at];
+        });
+      }
+    }
+  } catch (err) {
+    if (done > 0 && typeof err === "object" && err !== null) {
+      writtenBeforeFailure.set(err, [...results]);
+    }
+    throw err;
+  }
+  return results;
+}
+function clockFloor(store, target) {
+  const own = observedClockFloor(store.root);
+  if (target.root === store.root)
+    return own;
+  const there = observedClockFloor(target.root);
+  if (own === null)
+    return there;
+  return there === null ? own : maxHlc(own, there);
+}
+function groupByShard(lines) {
   const byShard = new Map;
   for (const line of lines) {
     const at = `${line.partition}\x00${line.result.rel}`;
@@ -5330,23 +6115,40 @@ function appendRecords(store, inputs, options = {}) {
     else
       group.push(line);
   }
-  for (const group of byShard.values()) {
-    const first = group[0];
-    withLocalLock(shardLockTarget(store.deviceStateDir, first.partition, first.result.rel), () => appendLine(partitionDir(store.root, first.partition), first.result.path, Buffer.concat(group.map((line) => line.bytes))));
-    options.afterShard?.();
-  }
-  return lines.map((line) => line.result);
+  return [...byShard.values()];
 }
-var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10;
+function targetStands(store, target, partition) {
+  if (target.root === store.root && relocationRunning(store.deviceStateDir))
+    return false;
+  const now = followRelocation(store.root, store.storeId);
+  if (target.root === store.root)
+    return now.kind === "none";
+  return now.kind === "moved" && now.to === target.root && now.held.has(partition);
+}
+function writeTarget(store) {
+  waitForRelocation(store.deviceStateDir);
+  const moved = followRelocation(store.root, store.storeId);
+  if (moved.kind === "refused") {
+    throw new RelocatedStoreUnavailableError(moved.root, moved.state);
+  }
+  if (moved.kind === "none")
+    return store;
+  const partitions = new Set([...store.partitions].filter((p) => moved.held.has(p)));
+  return { ...store, root: moved.to, partitions };
+}
+var PartitionUnavailableError, RecordTooLargeError, NEWLINE = 10, writtenBeforeFailure;
 var init_appender = __esm(() => {
   init_own_appends();
   init_clock_floor();
   init_clock_store();
+  init_hlc();
   init_constants();
   init_envelope();
   init_blobs();
   init_local_lock();
+  init_relocation_marker();
   init_safe_fs();
+  init_store_open();
   init_store_paths();
   PartitionUnavailableError = class PartitionUnavailableError extends Error {
     partition;
@@ -5362,6 +6164,7 @@ var init_appender = __esm(() => {
       this.name = "RecordTooLargeError";
     }
   };
+  writtenBeforeFailure = new WeakMap;
 });
 
 // src/core/store/fold.ts
@@ -5929,16 +6732,16 @@ var init_fs_stamp = __esm(() => {
 });
 
 // src/core/store/shard-quarantine.ts
-import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync7, readFileSync as readFileSync8, readSync as readSync3, statSync as statSync7 } from "node:fs";
-import { join as join13, resolve as resolve8 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { closeSync as closeSync7, readFileSync as readFileSync13, readSync as readSync3, statSync as statSync9 } from "node:fs";
+import { join as join18, resolve as resolve10 } from "node:path";
 function ledgerPath(root) {
-  const key = createHash2("sha256").update(resolve8(root)).digest("hex").slice(0, 32);
-  return join13(storesStateDir(), SHARD_QUARANTINE_DIR, `${key}.json`);
+  const key = createHash4("sha256").update(resolve10(root)).digest("hex").slice(0, 32);
+  return join18(storesStateDir(), SHARD_QUARANTINE_DIR, `${key}.json`);
 }
 function stampOf(path) {
   const observedAtMs = Date.now();
-  const stat = statSync7(path, { bigint: true, throwIfNoEntry: false });
+  const stat = statSync9(path, { bigint: true, throwIfNoEntry: false });
   return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function isPartition(value) {
@@ -5964,7 +6767,7 @@ function load2(root) {
   try {
     stamp = stampOf(path);
   } catch {
-    return { root: resolve8(root), lines: [] };
+    return { root: resolve10(root), lines: [] };
   }
   const hit = loaded.get(path);
   if (hit !== undefined && hit.stamp === stamp)
@@ -5972,12 +6775,12 @@ function load2(root) {
   let lines = [];
   if (stamp !== "absent") {
     try {
-      lines = appliedLines(JSON.parse(readFileSync8(path, "utf8")));
+      lines = appliedLines(JSON.parse(readFileSync13(path, "utf8")));
     } catch {
       lines = [];
     }
   }
-  const ledger = { root: resolve8(root), lines };
+  const ledger = { root: resolve10(root), lines };
   loaded.set(path, { stamp, ledger });
   return ledger;
 }
@@ -5989,11 +6792,11 @@ function quarantineStamp(root) {
   }
 }
 function quarantinedLines(partitionRoot, rel) {
-  const partition = resolve8(partitionRoot).split(/[\\/]/).pop();
+  const partition = resolve10(partitionRoot).split(/[\\/]/).pop();
   if (!isPartition(partition))
     return new Map;
   const out = new Map;
-  for (const line of load2(resolve8(partitionRoot, "..")).lines) {
+  for (const line of load2(resolve10(partitionRoot, "..")).lines) {
     if (line.partition === partition && line.shard === rel) {
       out.set(line.offset, { sha256: line.sha256, kind: line.kind });
     }
@@ -6002,7 +6805,7 @@ function quarantinedLines(partitionRoot, rel) {
 }
 function probeLineHashAtFd(fd, offset) {
   try {
-    const hash = createHash2("sha256");
+    const hash = createHash4("sha256");
     const chunk = Buffer.alloc(HASH_CHUNK_BYTES);
     let position = offset;
     let read = 0;
@@ -6046,7 +6849,7 @@ var init_shard_quarantine = __esm(() => {
 
 // src/core/store/shard-list.ts
 import { readdirSync as readdirSync2 } from "node:fs";
-import { join as join14, posix as posix5 } from "node:path";
+import { join as join19, posix as posix5 } from "node:path";
 function isShardFileName(name) {
   return SHARD_FILE_RE.test(name) && !name.includes(".sync-conflict");
 }
@@ -6066,18 +6869,18 @@ function listShards(partitionRoot, ref) {
   const segments = ref.ledger === undefined ? [ref.stream] : [ref.stream, ref.ledger];
   if (ref.ledger !== undefined && !LEDGER_NAME_RE.test(ref.ledger))
     return [];
-  const streamDir = join14(partitionRoot, ...segments);
+  const streamDir = join19(partitionRoot, ...segments);
   const out = [];
   for (const deviceEntry of entries(streamDir)) {
     if (!deviceEntry.isDirectory() || !isReadableDeviceDir(deviceEntry.name))
       continue;
-    for (const file of entries(join14(streamDir, deviceEntry.name))) {
+    for (const file of entries(join19(streamDir, deviceEntry.name))) {
       if (!(file.isFile() || file.isSymbolicLink()) || !isShardFileName(file.name))
         continue;
       out.push({
         device: deviceEntry.name,
         rel: posix5.join(...segments, deviceEntry.name, file.name),
-        path: join14(streamDir, deviceEntry.name, file.name)
+        path: join19(streamDir, deviceEntry.name, file.name)
       });
     }
   }
@@ -6235,7 +7038,7 @@ var init_torn_line = __esm(() => {
 });
 
 // src/core/store/reader.ts
-import { basename as basename5, dirname as dirname11, relative as relative3 } from "node:path";
+import { basename as basename6, dirname as dirname11, relative as relative3 } from "node:path";
 import { closeSync as closeSync8, fstatSync as fstatSync6, readSync as readSync4 } from "node:fs";
 function isPaths(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
@@ -6282,9 +7085,9 @@ function resolveBody(record, partitionRoot) {
   return "pending";
 }
 function shardDeviceOf(path) {
-  if (!isShardFileName(basename5(path)))
+  if (!isShardFileName(basename6(path)))
     return null;
-  const device = basename5(dirname11(path));
+  const device = basename6(dirname11(path));
   return isValidDeviceId(device) ? device : null;
 }
 function readLine(text, lineOffset, length, isLast, shardDevice, partitionRoot) {
@@ -6562,197 +7365,10 @@ var init_device_retirement = __esm(() => {
   init_envelope();
 });
 
-// src/core/store/format-doc.ts
-import { readFileSync as readFileSync9 } from "node:fs";
-import { join as join15 } from "node:path";
-import { fileURLToPath } from "node:url";
-function shippedFormatDoc() {
-  shipped ??= readFileSync9(join15(fileURLToPath(new URL(".", import.meta.url)), STORE_FORMAT_FILE), "utf8");
-  return shipped;
-}
-function formatDocVersion(text) {
-  const match = VERSION_MARKER_RE.exec(text);
-  return match === null ? null : Number(match[1]);
-}
-function writeFormatDoc(dir) {
-  const text = shippedFormatDoc();
-  const target = join15(dir, STORE_FORMAT_FILE);
-  let existing = null;
-  try {
-    existing = readFileSync9(target, "utf8");
-  } catch {
-    existing = null;
-  }
-  if (existing === text)
-    return false;
-  if (existing !== null) {
-    const onDisk = formatDocVersion(existing);
-    const ours = formatDocVersion(text);
-    if (onDisk !== null && ours !== null && onDisk >= ours)
-      return false;
-  }
-  return atomicWriteText(target, text, { mode: FORMAT_DOC_MODE });
-}
-var VERSION_MARKER_RE, FORMAT_DOC_MODE = 420, shipped;
-var init_format_doc = __esm(() => {
-  init_fs_atomic();
-  init_constants();
-  VERSION_MARKER_RE = /^<!-- open-second-brain-store-format: (\d+) -->/;
-});
-
-// src/core/store/held-ledger.ts
-import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync as mkdirSync10, rmSync as rmSync2 } from "node:fs";
-import { join as join16, resolve as resolve9 } from "node:path";
-function ledgerDir(dirs = processDirsEnv()) {
-  return join16(storesStateDir(dirs), HELD_LEDGER_DIR);
-}
-function markerPath(dir, root, partition) {
-  const key = createHash3("sha256").update(resolve9(root)).digest("hex").slice(0, 32);
-  return join16(dir, `${key}.${partition}`);
-}
-function recordHeldPartitions(root, partitions, dirs) {
-  const dir = ledgerDir(dirs);
-  for (const partition of partitions) {
-    const marker = markerPath(dir, root, partition);
-    if (existsSync4(marker))
-      continue;
-    try {
-      mkdirSync10(dir, { recursive: true });
-      atomicWriteFileSync(marker, `${resolve9(root)}
-`);
-    } catch {}
-  }
-}
-function lostHeldPartitions(root, held) {
-  if (STORE_PARTITIONS.every((p) => held.has(p)))
-    return [];
-  const dir = ledgerDir();
-  return STORE_PARTITIONS.filter((p) => !held.has(p) && existsSync4(markerPath(dir, root, p)));
-}
-var HELD_LEDGER_DIR = "held-partitions";
-var init_held_ledger = __esm(() => {
-  init_fs_atomic();
-  init_platform_dirs();
-  init_constants();
-  init_store_paths();
-});
-
-// src/core/store/store-open.ts
-import { readFileSync as readFileSync10, statSync as statSync8 } from "node:fs";
-import { join as join17 } from "node:path";
-function readStoreId(dir) {
-  let text;
-  try {
-    text = readFileSync10(join17(dir, STORE_IDENTITY_FILE), "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new StoreIdentityError(`${join17(dir, STORE_IDENTITY_FILE)} is not valid JSON`);
-  }
-  if (!isUlid(parsed.store_id)) {
-    throw new StoreIdentityError(`${join17(dir, STORE_IDENTITY_FILE)} carries no valid store_id`);
-  }
-  return parsed.store_id;
-}
-function heldPartitions(root) {
-  if (statSync8(root, { throwIfNoEntry: false })?.isDirectory() === false) {
-    throw new StoreOpenError(`the brain store root ${root} is not a directory; move the file away or point ` + "the store root at a directory");
-  }
-  const ids = new Map;
-  for (const partition of STORE_PARTITIONS) {
-    const id = readStoreId(partitionDir(root, partition));
-    if (id !== null)
-      ids.set(partition, id);
-  }
-  if (new Set(ids.values()).size > 1) {
-    throw new StoreOpenError(`the partitions under ${root} belong to different stores (${[...ids].map(([p, id]) => `${p}: ${id}`).join(", ")}); keep one store per root`);
-  }
-  const first = ids.values().next();
-  return { held: new Set(ids.keys()), storeId: first.done === true ? null : first.value };
-}
-function heldPartitionsChecked(root) {
-  const found = heldPartitions(root);
-  const lost = lostHeldPartitions(root, found.held);
-  if (lost.length > 0)
-    throw new HeldPartitionLostError(root, lost);
-  return found;
-}
-function inspectStore(root) {
-  const { held, storeId } = heldPartitionsChecked(root);
-  return storeId === null ? null : { root, storeId, partitions: held };
-}
-function openStore(options) {
-  if (!isUsableLocalDeviceId(options.device)) {
-    throw new StoreOpenError(`the brain store needs a device id, got "${options.device}"; set device_id in the machine ` + `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`);
-  }
-  const { held, storeId } = heldPartitionsChecked(options.root);
-  if (storeId === null)
-    throw new NoStoreError(options.root);
-  recordHeldPartitions(options.root, held, options.dirs);
-  writeFormatDoc(options.root);
-  for (const partition of held)
-    writeFormatDoc(partitionDir(options.root, partition));
-  return {
-    root: options.root,
-    storeId,
-    device: options.device,
-    deviceStateDir: deviceStateDirFor(storeId, options.dirs ?? processDirsEnv()),
-    partitions: held
-  };
-}
-var StoreOpenError, NoStoreError, StoreIdentityError, HeldPartitionLostError;
-var init_store_open = __esm(() => {
-  init_platform_dirs();
-  init_config();
-  init_constants();
-  init_format_doc();
-  init_held_ledger();
-  init_store_paths();
-  init_ulid();
-  StoreOpenError = class StoreOpenError extends Error {
-    constructor(message) {
-      super(message);
-      this.name = "StoreOpenError";
-    }
-  };
-  NoStoreError = class NoStoreError extends StoreOpenError {
-    root;
-    constructor(root) {
-      super(`no brain store at ${root}: no partition holds ${STORE_IDENTITY_FILE}; ` + "run `o2b store init` to create one, or let sync deliver it from a machine that has it");
-      this.root = root;
-      this.name = "NoStoreError";
-    }
-  };
-  StoreIdentityError = class StoreIdentityError extends StoreOpenError {
-    constructor(message) {
-      super(message);
-      this.name = "StoreIdentityError";
-    }
-  };
-  HeldPartitionLostError = class HeldPartitionLostError extends StoreOpenError {
-    root;
-    partitions;
-    constructor(root, partitions) {
-      const leave = partitions.includes("shared") ? "" : `, or run ${partitions.map((p) => `\`o2b store partition leave ${p}\``).join(" and ")} to stop holding ${partitions.length > 1 ? "them" : "it"} on this machine`;
-      super(`the ${partitions.join(" and ")} partition${partitions.length > 1 ? "s" : ""} of the ` + `brain store at ${root}, which this machine has held, no longer show${partitions.length > 1 ? "" : "s"} ${STORE_IDENTITY_FILE}; its records cannot be read, so the store is not opened. ` + `Restore ${partitions.map((p) => `${p}/${STORE_IDENTITY_FILE}`).join(" and ")} ` + `from sync or a backup${leave}`);
-      this.root = root;
-      this.partitions = partitions;
-      this.name = "HeldPartitionLostError";
-    }
-  };
-});
-
 // src/core/store/seen-shards.ts
-import { mkdirSync as mkdirSync11, readFileSync as readFileSync11, statSync as statSync9 } from "node:fs";
-import { createHash as createHash4 } from "node:crypto";
-import { basename as basename6, dirname as dirname12, join as join18, resolve as resolve10 } from "node:path";
+import { mkdirSync as mkdirSync11, readFileSync as readFileSync14, statSync as statSync10 } from "node:fs";
+import { createHash as createHash5 } from "node:crypto";
+import { basename as basename7, dirname as dirname12, join as join20, resolve as resolve11 } from "node:path";
 function withLocalLock2(lockTarget, fn, budgetMs) {
   const lock = (init_local_lock(), {});
   return withLocalLock(lockTarget, fn, budgetMs);
@@ -6784,7 +7400,7 @@ function isPartition2(value) {
 }
 function stampOf2(path) {
   const observedAtMs = Date.now();
-  const stat = statSync9(path, { bigint: true, throwIfNoEntry: false });
+  const stat = statSync10(path, { bigint: true, throwIfNoEntry: false });
   return stat === undefined ? "absent" : stampKey(stat, observedAtMs);
 }
 function parseLedger(text) {
@@ -6810,7 +7426,7 @@ function load3(path) {
   let ledger = new Map;
   if (stamp !== "absent") {
     try {
-      ledger = parseLedger(readFileSync11(path, "utf8"));
+      ledger = parseLedger(readFileSync14(path, "utf8"));
     } catch {}
   }
   loaded2.set(path, { stamp, ledger });
@@ -6855,18 +7471,18 @@ function update2(path, change) {
 }
 function lockHolderStamp(path) {
   try {
-    return statSync9(`${path}.lock`).mtimeMs;
+    return statSync10(`${path}.lock`).mtimeMs;
   } catch {
     return null;
   }
 }
 function seenLedgerFile(storeRoot, storeId) {
-  const rootKey = createHash4("sha256").update(resolve10(storeRoot)).digest("hex").slice(0, 16);
+  const rootKey = createHash5("sha256").update(resolve11(storeRoot)).digest("hex").slice(0, 16);
   const name = SEEN_SHARDS_FILE.replace(/\.json$/, `-${rootKey}.json`);
-  return join18(deviceStateDirFor(storeId, processDirsEnv()), name);
+  return join20(deviceStateDirFor(storeId, processDirsEnv()), name);
 }
 function ledgerPath2(partitionRoot) {
-  const partition = basename6(partitionRoot);
+  const partition = basename7(partitionRoot);
   if (!isPartition2(partition))
     return null;
   let storeId;
@@ -6988,7 +7604,7 @@ var init_record_path = __esm(() => {
 });
 
 // src/core/store/read/stream-read.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { closeSync as closeSync9, lstatSync as lstatSync6, readSync as readSync5 } from "node:fs";
 
 class StreamReadInterrupted {
@@ -7024,7 +7640,7 @@ function hashRange(path, partitionRoot, hash, from, to) {
 function keptStampHolds(path, partitionRoot, kept, tails, rel, observedAtMs) {
   if (statSettled(kept, kept.observedAtMs))
     return true;
-  const check = hashRange(path, partitionRoot, createHash5("sha256"), 0, kept.size);
+  const check = hashRange(path, partitionRoot, createHash6("sha256"), 0, kept.size);
   if (check === null || check.digest("hex") !== kept.hash.copy().digest("hex"))
     return false;
   if (statSettled(kept, observedAtMs))
@@ -7102,7 +7718,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
       if (appendedByThisProcess(path, { size: kept.size, mtimeNs: kept.mtimeNs, ctimeNs: kept.ctimeNs }, appendStampOf(now))) {
         base = kept;
       } else {
-        const check = hashRange(path, partitionRoot, createHash5("sha256"), 0, kept.size);
+        const check = hashRange(path, partitionRoot, createHash6("sha256"), 0, kept.size);
         if (check !== null && check.copy().digest("hex") === kept.hash.copy().digest("hex")) {
           base = kept;
         }
@@ -7125,7 +7741,7 @@ function readShardWithTails(path, rel, partitionRoot, tails, keep, checkpoint) {
   if (after.ino === 0n || Number(after.size) !== pass.nextOffset || !sameStamp(now, after)) {
     return pass;
   }
-  hash = base === null ? hashRange(path, partitionRoot, createHash5("sha256"), 0, pass.nextOffset) : hashRange(path, partitionRoot, base.hash.copy(), base.size, pass.nextOffset);
+  hash = base === null ? hashRange(path, partitionRoot, createHash6("sha256"), 0, pass.nextOffset) : hashRange(path, partitionRoot, base.hash.copy(), base.size, pass.nextOffset);
   if (hash === null || !sameStamp(after, lstatSync6(path, { bigint: true })))
     return pass;
   tails.set(rel, {
@@ -7318,102 +7934,6 @@ var init_journal_scope = __esm(() => {
   init_digest();
   init_migration_records();
 });
-// src/core/store-migration/process-identity.ts
-import { spawnSync } from "node:child_process";
-import { readFileSync as readFileSync12 } from "node:fs";
-function linuxIdentity(pid) {
-  const stat = readFileSync12(`/proc/${pid}/stat`, "utf8");
-  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-  const ticks = fields[STAT_STARTTIME_INDEX];
-  if (ticks === undefined || !/^\d+$/.test(ticks))
-    return null;
-  let boot = "";
-  try {
-    boot = readFileSync12("/proc/sys/kernel/random/boot_id", "utf8").trim();
-  } catch {}
-  return `linux:${boot}:${ticks}`;
-}
-function query(command, args, env) {
-  const out = spawnSync(command, args, {
-    encoding: "utf8",
-    timeout: QUERY_TIMEOUT_MS,
-    windowsHide: true,
-    env: env ?? process.env
-  });
-  return out.status === 0 && typeof out.stdout === "string" ? out.stdout.trim() : "";
-}
-function windowsIdentity(pid) {
-  const out = query("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`
-  ]);
-  return /^\d+$/.test(out) ? `win32:${out}` : null;
-}
-function psIdentity(pid) {
-  const out = query("ps", ["-o", "lstart=", "-p", String(pid)], {
-    ...process.env,
-    LC_ALL: "C",
-    TZ: "UTC"
-  });
-  return out === "" ? null : `ps:${out.replace(/\s+/g, " ")}`;
-}
-function processStartIdentity(pid) {
-  if (!Number.isInteger(pid) || pid <= 0)
-    return null;
-  if (pid === process.pid && own !== undefined)
-    return own;
-  let identity;
-  try {
-    if (process.platform === "linux")
-      identity = linuxIdentity(pid);
-    else if (process.platform === "win32")
-      identity = windowsIdentity(pid);
-    else
-      identity = psIdentity(pid);
-  } catch {
-    identity = null;
-  }
-  if (pid === process.pid)
-    own = identity;
-  return identity;
-}
-var QUERY_TIMEOUT_MS = 15000, STAT_STARTTIME_INDEX = 19, own;
-var init_process_identity = () => {};
-
-// src/core/store-migration/holder-liveness.ts
-function processAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0)
-    return false;
-  if (pid === process.pid)
-    return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-function holderLiveness(pid, started) {
-  if (!processAlive(pid))
-    return "dead";
-  if (started === undefined || started === null)
-    return "unknown";
-  const now = processStartIdentity(pid);
-  if (now === null)
-    return "unknown";
-  return now === started ? "alive" : "dead";
-}
-function gateHolderLiveness(gate, judge) {
-  if (judge === "cheap")
-    return processAlive(gate.pid) ? "unknown" : "dead";
-  return holderLiveness(gate.pid, gate.started);
-}
-var init_holder_liveness = __esm(() => {
-  init_process_identity();
-});
-
 // src/core/store-migration/spill-map.ts
 var init_spill_map = __esm(() => {
   init_holder_liveness();
@@ -7432,22 +7952,22 @@ var init_journal = __esm(() => {
 });
 
 // src/core/store/store-only.ts
-import { mkdirSync as mkdirSync12, readFileSync as readFileSync13 } from "node:fs";
-import { dirname as dirname13, join as join19 } from "node:path";
+import { mkdirSync as mkdirSync12, readFileSync as readFileSync15 } from "node:fs";
+import { dirname as dirname13, join as join21 } from "node:path";
 function lookAtLegacyTree(vault) {
   if (vault === null || vault.trim() === "")
     return "absent";
-  return lookAtDirectory(join19(vault, BRAIN_ROOT_REL));
+  return lookAtDirectory(join21(vault, BRAIN_ROOT_REL));
 }
 function markerPath2() {
-  return join19(storesStateDir(processDirsEnv()), SWITCH_MARKER_FILE);
+  return join21(storesStateDir(processDirsEnv()), SWITCH_MARKER_FILE);
 }
 function markerKey(root, device) {
   return `${root}\x00${device}`;
 }
 function readMarker() {
   try {
-    const parsed = JSON.parse(readFileSync13(markerPath2(), "utf8"));
+    const parsed = JSON.parse(readFileSync15(markerPath2(), "utf8"));
     if (!Array.isArray(parsed.switched))
       return new Set;
     return new Set(parsed.switched.filter((e) => typeof e === "object" && e !== null && typeof e.root === "string" && typeof e.device === "string").map((e) => markerKey(e.root, e.device)));
@@ -7572,7 +8092,7 @@ var init_store_only = __esm(() => {
   StoreOnlyUndeterminedError = class StoreOnlyUndeterminedError extends VaultUnexaminableError {
     constructor(vault, cause) {
       const code = cause.code;
-      super(vault, cause, `cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join19(vault, BRAIN_ROOT_REL)} ` + `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` + "the store or the vault until the vault can be read (check its permissions)");
+      super(vault, cause, `cannot tell whether ${vault} holds a ${BRAIN_ROOT_REL}/ tree: ${join21(vault, BRAIN_ROOT_REL)} ` + `cannot be examined (${code ?? cause.message}); nothing is read from or written to ` + "the store or the vault until the vault can be read (check its permissions)");
       this.name = "StoreOnlyUndeterminedError";
     }
   };
@@ -7581,7 +8101,7 @@ var init_store_only = __esm(() => {
 
 // src/core/brain/secrets/owner-acl.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { resolve as resolve11, win32 as win323 } from "node:path";
+import { resolve as resolve12, win32 as win323 } from "node:path";
 function system32Tool(name, env = process.env) {
   const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
   return win323.join(root, "System32", name);
@@ -7612,7 +8132,7 @@ function ownerOnlyAclArgv(path, sid, kind) {
 function restrictToOwner(path, kind, platform = process.platform, force = false) {
   if (platform !== "win32")
     return true;
-  const key = `${kind}:${resolve11(path).toLowerCase()}`;
+  const key = `${kind}:${resolve12(path).toLowerCase()}`;
   if (!force && restricted.has(key))
     return true;
   let detail;
@@ -7654,22 +8174,22 @@ import {
   closeSync as closeSync10,
   constants as constants3,
   copyFileSync,
-  existsSync as existsSync5,
+  existsSync as existsSync6,
   fsyncSync as fsyncSync4,
   openSync as openSync7,
   linkSync as linkSync3,
   lstatSync as lstatSync7,
   mkdirSync as mkdirSync13,
   readdirSync as readdirSync3,
-  readFileSync as readFileSync14,
+  readFileSync as readFileSync16,
   rmdirSync as rmdirSync2,
-  statSync as statSync10,
-  unlinkSync as unlinkSync5,
+  statSync as statSync11,
+  unlinkSync as unlinkSync7,
   utimesSync,
   writeFileSync,
-  writeSync as writeSync5
+  writeSync as writeSync6
 } from "node:fs";
-import { basename as basename7, dirname as dirname14, join as join20, relative as relative4, sep as sep4 } from "node:path";
+import { basename as basename8, dirname as dirname14, join as join22, relative as relative4, sep as sep4 } from "node:path";
 function filesBelow(path) {
   let stat;
   try {
@@ -7678,16 +8198,16 @@ function filesBelow(path) {
     return [];
   }
   if (stat.isFile())
-    return TEMP_NAME_RE.test(basename7(path)) ? [] : [path];
+    return TEMP_NAME_RE.test(basename8(path)) ? [] : [path];
   if (!stat.isDirectory())
     return [];
-  return readdirSync3(path).toSorted().flatMap((name) => filesBelow(join20(path, name)));
+  return readdirSync3(path).toSorted().flatMap((name) => filesBelow(join22(path, name)));
 }
 function sameBytes(a, b) {
   try {
-    if (statSync10(a).size !== statSync10(b).size)
+    if (statSync11(a).size !== statSync11(b).size)
       return false;
-    return readFileSync14(a).equals(readFileSync14(b));
+    return readFileSync16(a).equals(readFileSync16(b));
   } catch {
     return false;
   }
@@ -7700,7 +8220,7 @@ function mkdirOwnerOnly(dir) {
 function writeExclusive(path, bytes) {
   const fd = openSync7(path, "wx", 384);
   try {
-    writeSync5(fd, bytes);
+    writeSync6(fd, bytes);
     fsyncSync4(fd);
   } catch (err) {
     closeSync10(fd);
@@ -7711,15 +8231,15 @@ function writeExclusive(path, bytes) {
 }
 function tryUnlink(path) {
   try {
-    unlinkSync5(path);
+    unlinkSync7(path);
   } catch {}
 }
 function copyNoClobber(file, target) {
-  if (existsSync5(target))
+  if (existsSync6(target))
     return false;
   mkdirOwnerOnly(dirname14(target));
-  const temp = join20(dirname14(target), `.${basename7(target)}${TEMP_INFIX}${randomBytes4(6).toString("hex")}`);
-  const { atime, mtime } = statSync10(file);
+  const temp = join22(dirname14(target), `.${basename8(target)}${TEMP_INFIX}${randomBytes4(6).toString("hex")}`);
+  const { atime, mtime } = statSync11(file);
   try {
     copyFileSync(file, temp, constants3.COPYFILE_EXCL);
     if (process.platform !== "win32")
@@ -7733,7 +8253,7 @@ function copyNoClobber(file, target) {
         return false;
     }
     try {
-      writeExclusive(target, readFileSync14(temp));
+      writeExclusive(target, readFileSync16(temp));
     } catch (err) {
       if (err.code === "EEXIST")
         return false;
@@ -7742,7 +8262,7 @@ function copyNoClobber(file, target) {
     utimesSync(target, atime, mtime);
     return true;
   } finally {
-    if (existsSync5(temp))
+    if (existsSync6(temp))
       tryUnlink(temp);
   }
 }
@@ -7756,7 +8276,7 @@ function removeEmptyDirs(dir) {
   if (!stat.isDirectory())
     return;
   for (const name of readdirSync3(dir))
-    removeEmptyDirs(join20(dir, name));
+    removeEmptyDirs(join22(dir, name));
   try {
     rmdirSync2(dir);
   } catch {}
@@ -7765,8 +8285,8 @@ function sameLanded(file, target, aside, rel) {
   if (sameBytes(file, target))
     return true;
   for (let n = 0;n < 100; n++) {
-    const kept = join20(aside, n === 0 ? rel : `${rel}.${n}`);
-    if (!existsSync5(kept))
+    const kept = join22(aside, n === 0 ? rel : `${rel}.${n}`);
+    if (!existsSync6(kept))
       return false;
     if (sameBytes(file, kept))
       return true;
@@ -7775,10 +8295,10 @@ function sameLanded(file, target, aside, rel) {
 }
 function keepAside(file, aside, rel) {
   for (let n = 0;n < 100; n++) {
-    const kept = join20(aside, n === 0 ? rel : `${rel}.${n}`);
+    const kept = join22(aside, n === 0 ? rel : `${rel}.${n}`);
     if (sameBytes(file, kept))
       return true;
-    if (!existsSync5(kept)) {
+    if (!existsSync6(kept)) {
       copyNoClobber(file, kept);
       if (sameBytes(file, kept))
         return true;
@@ -7789,20 +8309,20 @@ function keepAside(file, aside, rel) {
 function adoptFolder(from, to) {
   if (from === to)
     return true;
-  if (!existsSync5(from))
+  if (!existsSync6(from))
     return true;
   let settled = true;
-  const aside = join20(dirname14(to), ADOPT_CONFLICTS_DIR, basename7(from));
+  const aside = join22(dirname14(to), ADOPT_CONFLICTS_DIR, basename8(from));
   for (const file of filesBelow(from)) {
     const rel = relative4(from, file);
-    const target = join20(to, rel);
+    const target = join22(to, rel);
     try {
       const landed = copyNoClobber(file, target) || sameBytes(file, target) || keepAside(file, aside, rel);
       if (!landed || !sameLanded(file, target, aside, rel)) {
         settled = false;
         continue;
       }
-      unlinkSync5(file);
+      unlinkSync7(file);
     } catch {
       settled = false;
     }
@@ -7811,13 +8331,13 @@ function adoptFolder(from, to) {
   return settled && filesBelow(from).length === 0;
 }
 function seedFolderOnce(from, to, marker) {
-  if (existsSync5(marker) || !existsSync5(from))
+  if (existsSync6(marker) || !existsSync6(from))
     return;
   try {
     const seeded = [];
     for (const file of filesBelow(from)) {
       const rel = relative4(from, file);
-      if (copyNoClobber(file, join20(to, rel)))
+      if (copyNoClobber(file, join22(to, rel)))
         seeded.push(rel.split(sep4).join("/"));
     }
     mkdirSync13(dirname14(marker), { recursive: true });
@@ -7832,9 +8352,9 @@ var init_state_moves = __esm(() => {
 });
 
 // src/core/state/machine-state.ts
-import { createHash as createHash6 } from "node:crypto";
-import { cpSync, existsSync as existsSync6, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname15, join as join21, relative as relative5, resolve as resolve12, sep as sep5 } from "node:path";
+import { createHash as createHash7 } from "node:crypto";
+import { cpSync, existsSync as existsSync7, readdirSync as readdirSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname15, join as join23, relative as relative5, resolve as resolve13, sep as sep5 } from "node:path";
 function storeIdAt(root) {
   const known = STORE_IDS.get(root);
   if (known !== undefined)
@@ -7861,32 +8381,32 @@ function deviceStateDir(storeId) {
   return storeId === null ? storesStateDir(source) : deviceStateDirFor(storeId, source);
 }
 function vaultKey(vault) {
-  return createHash6("sha256").update(resolve12(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
+  return createHash7("sha256").update(resolve13(vault)).digest("hex").slice(0, VAULT_KEY_CHARS);
 }
 function freshVaultRel(vault) {
-  return join21(FRESH_STATE_DIR, vaultKey(vault));
+  return join23(FRESH_STATE_DIR, vaultKey(vault));
 }
 function adoptOnce(from, to) {
-  if (from === to || ADOPTED.has(from) || !existsSync6(from))
+  if (from === to || ADOPTED.has(from) || !existsSync7(from))
     return;
   if (adoptFolder(from, to))
     ADOPTED.add(from);
 }
 function seedFromVaultOnce(vault, root) {
-  const marker = join21(root, SEEDED_MARKER_DIR, `${vaultKey(vault)}.json`);
-  seedFolderOnce(join21(vault, DERIVED_STORE_DIR), join21(root, DERIVED_STORE_DIR), marker);
+  const marker = join23(root, SEEDED_MARKER_DIR, `${vaultKey(vault)}.json`);
+  seedFolderOnce(join23(vault, DERIVED_STORE_DIR), join23(root, DERIVED_STORE_DIR), marker);
 }
 function restoreBackupOnce(local) {
   if (RESTORED.has(local))
     return;
   const migration = dirname15(local);
-  const marker = join21(migration, BACKUP_RESTORED_MARKER);
-  if (existsSync6(marker)) {
+  const marker = join23(migration, BACKUP_RESTORED_MARKER);
+  if (existsSync7(marker)) {
     RESTORED.add(local);
     return;
   }
-  const files = join21(migration, MIGRATION_BACKUP_DIR, MIGRATION_BACKUP_FILES_DIR);
-  if (!existsSync6(files)) {
+  const files = join23(migration, MIGRATION_BACKUP_DIR, MIGRATION_BACKUP_FILES_DIR);
+  if (!existsSync7(files)) {
     RESTORED.add(local);
     return;
   }
@@ -7894,8 +8414,8 @@ function restoreBackupOnce(local) {
     const restored = [];
     for (const file of filesBelow(files)) {
       const rel = relative5(files, file);
-      const target = join21(local, rel);
-      if (existsSync6(target))
+      const target = join23(local, rel);
+      if (existsSync7(target))
         continue;
       cpSync(file, target, { preserveTimestamps: true });
       restored.push(rel.split(sep5).join("/"));
@@ -7916,27 +8436,27 @@ function locate(vault, configPath, settle) {
       return { relocated: false, root: vault };
     if (mode.reason === "no-legacy-tree") {
       const storeId = configuredStoreId(configPath);
-      const root = join21(deviceStateDir(storeId), freshVaultRel(vault));
+      const root = join23(deviceStateDir(storeId), freshVaultRel(vault));
       if (!settle)
         return { relocated: true, root };
       if (storeId !== null)
-        adoptOnce(join21(deviceStateDir(null), freshVaultRel(vault)), root);
+        adoptOnce(join23(deviceStateDir(null), freshVaultRel(vault)), root);
       seedFromVaultOnce(vault, root);
       return { relocated: true, root };
     }
   }
   const storeId = configuredStoreId(configPath);
-  const root = join21(deviceStateDir(storeId), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR);
+  const root = join23(deviceStateDir(storeId), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR);
   if (!settle)
     return { relocated: true, root };
   if (storeId !== null) {
-    adoptOnce(join21(deviceStateDir(null), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR), root);
+    adoptOnce(join23(deviceStateDir(null), MIGRATION_STATE_DIR, MIGRATION_LOCAL_DIR), root);
   }
   if (hasVault) {
-    adoptOnce(join21(deviceStateDir(null), freshVaultRel(vault)), root);
+    adoptOnce(join23(deviceStateDir(null), freshVaultRel(vault)), root);
     if (storeId !== null)
-      adoptOnce(join21(deviceStateDir(storeId), freshVaultRel(vault)), root);
-    if (!pathPresent(vault, join21(vault, BRAIN_ROOT_REL)))
+      adoptOnce(join23(deviceStateDir(storeId), freshVaultRel(vault)), root);
+    if (!pathPresent(vault, join23(vault, BRAIN_ROOT_REL)))
       seedFromVaultOnce(vault, root);
   }
   restoreBackupOnce(root);
@@ -7949,7 +8469,7 @@ function machineStatePath(vault, ...segments) {
   return machineStatePathIn(machineStateRoot(vault), ...segments);
 }
 function machineStatePathIn(root, ...segments) {
-  return ensureInsideVault(join21(root, ...segments), root);
+  return ensureInsideVault(join23(root, ...segments), root);
 }
 var FRESH_STATE_DIR = "fresh", VAULT_KEY_CHARS = 16, BACKUP_RESTORED_MARKER = "local-restored.json", STORE_IDS, ADOPTED, SEEDED_MARKER_DIR, RESTORED;
 var init_machine_state = __esm(() => {
@@ -7964,7 +8484,7 @@ var init_machine_state = __esm(() => {
   init_state_moves();
   STORE_IDS = new Map;
   ADOPTED = new Set;
-  SEEDED_MARKER_DIR = join21(DERIVED_STORE_DIR, "seeded-from-vault");
+  SEEDED_MARKER_DIR = join23(DERIVED_STORE_DIR, "seeded-from-vault");
   RESTORED = new Set;
 });
 
@@ -8073,8 +8593,8 @@ var init_stamp = __esm(() => {
 });
 
 // src/core/brain/freeze-marker.ts
-import { existsSync as existsSync7, readFileSync as readFileSync15, statSync as statSync11 } from "node:fs";
-import { resolve as resolve13 } from "node:path";
+import { existsSync as existsSync8, readFileSync as readFileSync17, statSync as statSync12 } from "node:fs";
+import { resolve as resolve14 } from "node:path";
 function markerPathIn(root) {
   return machineStatePathIn(root, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE);
 }
@@ -8082,7 +8602,7 @@ function parseMarker(path) {
   reloadCount += 1;
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync15(path, "utf8"));
+    parsed = JSON.parse(readFileSync17(path, "utf8"));
   } catch {
     return UNREADABLE_MARKER;
   }
@@ -8099,7 +8619,7 @@ function parseMarker(path) {
   });
 }
 function readFreezeMarker(vault) {
-  const root = resolve13(vault);
+  const root = resolve14(vault);
   let path = MARKER_PATHS.get(root);
   if (path === undefined) {
     const location = machineStateLocation(root);
@@ -8110,7 +8630,7 @@ function readFreezeMarker(vault) {
   const readAtMs = Date.now();
   let stat;
   try {
-    stat = statSync11(path, { bigint: true, throwIfNoEntry: false });
+    stat = statSync12(path, { bigint: true, throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -8131,7 +8651,7 @@ function vaultFrozenNotice(vault, marker) {
   return degradationNotice({
     code: DEGRADATION_CODE.vaultFrozen,
     site: SITE,
-    path: resolve13(vault),
+    path: resolve14(vault),
     detail: `refusing to write: this vault was frozen at ${marker.frozen_at} by ` + `${marker.by === "" ? "an unnamed agent" : marker.by} (${why}). ` + `Run \`${FREEZE_NEXT_COMMAND}\` to lift it`
   });
 }
@@ -8180,8 +8700,8 @@ var init_freeze_marker = __esm(() => {
 
 // src/core/migration-gate.ts
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdirSync as mkdirSync14, readFileSync as readFileSync16, realpathSync as realpathSync3, statSync as statSync12, unlinkSync as unlinkSync6 } from "node:fs";
-import { basename as basename8, dirname as dirname16, isAbsolute as isAbsolute3, join as join22, relative as relative6, resolve as resolve14, sep as sep6 } from "node:path";
+import { mkdirSync as mkdirSync14, readFileSync as readFileSync18, realpathSync as realpathSync4, statSync as statSync13, unlinkSync as unlinkSync8 } from "node:fs";
+import { basename as basename9, dirname as dirname16, isAbsolute as isAbsolute3, join as join24, relative as relative6, resolve as resolve15, sep as sep6 } from "node:path";
 function gateRunKind(gate) {
   if (gate.run_id.startsWith("migrate-"))
     return GATE_RUN_KIND.migration;
@@ -8192,15 +8712,15 @@ function gateRunKind(gate) {
   return GATE_RUN_KIND.unknown;
 }
 function migrationGatePath(source = processDirsEnv()) {
-  return join22(stateRootDir(source), GATE_FILE);
+  return join24(stateRootDir(source), GATE_FILE);
 }
 function canonicalVault(vault) {
   resolveCount++;
   let path;
   try {
-    path = realpathSync3(vault);
+    path = realpathSync4(vault);
   } catch {
-    path = resolve14(vault);
+    path = resolve15(vault);
   }
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
@@ -8219,7 +8739,7 @@ function readGateState(source) {
     if (attempt > 0)
       sleepSync(READ_RETRY_MS);
     try {
-      text = readFileSync16(path, "utf8");
+      text = readFileSync18(path, "utf8");
     } catch (err) {
       code = String(err.code ?? "EIO");
       if (code === "ENOENT")
@@ -8247,11 +8767,11 @@ function readGateState(source) {
   return { state: { kind: "damaged" }, text };
 }
 function progressPath(source = processDirsEnv()) {
-  return join22(stateRootDir(source), PROGRESS_FILE);
+  return join24(stateRootDir(source), PROGRESS_FILE);
 }
 function readMigrationGateProgress(runId) {
   try {
-    const parsed = JSON.parse(readFileSync16(progressPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync18(progressPath(), "utf8"));
     if (parsed["run_id"] !== runId || typeof parsed["progress"] !== "string")
       return null;
     const journaled = parsed["journaled"];
@@ -8332,7 +8852,7 @@ function gateNamesCached(text, gate, vault) {
 function fsIdentity(path) {
   statCount++;
   try {
-    const stat = statSync12(path, { bigint: true, throwIfNoEntry: false });
+    const stat = statSync13(path, { bigint: true, throwIfNoEntry: false });
     return stat === undefined ? "missing" : `${stat.dev}:${stat.ino}`;
   } catch {
     return "unreadable";
@@ -8452,17 +8972,17 @@ var init_migration_gate = __esm(() => {
 });
 
 // src/core/brain/vault-identity.ts
-import { existsSync as existsSync8, readFileSync as readFileSync17, statSync as statSync13 } from "node:fs";
-import { join as join23, resolve as resolve15 } from "node:path";
+import { existsSync as existsSync9, readFileSync as readFileSync19, statSync as statSync14 } from "node:fs";
+import { join as join25, resolve as resolve16 } from "node:path";
 function vaultIdentityPath(vault) {
-  return ensureInsideVault(join23(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
+  return ensureInsideVault(join25(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
 }
 function readVaultIdentity(vault) {
   const path = vaultIdentityPath(vault);
-  if (!existsSync8(path))
+  if (!existsSync9(path))
     return null;
   try {
-    const parsed = JSON.parse(readFileSync17(path, "utf8"));
+    const parsed = JSON.parse(readFileSync19(path, "utf8"));
     if (typeof parsed.vault_id !== "string" || parsed.vault_id.length === 0)
       return null;
     return Object.freeze({
@@ -8483,7 +9003,7 @@ function currentVaultId(root) {
   const readAtMs = Date.now();
   let stat;
   try {
-    stat = statSync13(path, { bigint: true, throwIfNoEntry: false });
+    stat = statSync14(path, { bigint: true, throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -8504,7 +9024,7 @@ function currentVaultId(root) {
   return identity.vault_id;
 }
 function vaultMarkerAbsentNotice(vault) {
-  const root = resolve15(vault);
+  const root = resolve16(vault);
   if (currentVaultId(root) !== null)
     return null;
   return degradationNotice({
@@ -8515,7 +9035,7 @@ function vaultMarkerAbsentNotice(vault) {
   });
 }
 function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
-  const root = resolve15(vault);
+  const root = resolve16(vault);
   assertNoMigrationInProgress(root);
   if (lane === WRITE_LANE.content)
     assertVaultNotFrozen(root);
@@ -8570,21 +9090,21 @@ var init_vault_identity = __esm(() => {
 });
 
 // src/core/brain/paths.ts
-import { join as join24, posix as posix6 } from "node:path";
+import { join as join26, posix as posix6 } from "node:path";
 function brainDirs(vault) {
-  const brain = ensureInsideVault(join24(vault, BRAIN_ROOT_REL), vault);
+  const brain = ensureInsideVault(join26(vault, BRAIN_ROOT_REL), vault);
   return {
     brain,
-    inbox: ensureInsideVault(join24(vault, BRAIN_INBOX_REL), vault),
-    processed: ensureInsideVault(join24(vault, BRAIN_PROCESSED_REL), vault),
-    archived: ensureInsideVault(join24(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
-    pending: ensureInsideVault(join24(vault, BRAIN_PENDING_REL), vault),
-    preferences: ensureInsideVault(join24(vault, BRAIN_PREFERENCES_REL), vault),
-    retired: ensureInsideVault(join24(vault, BRAIN_RETIRED_REL), vault),
-    log: ensureInsideVault(join24(vault, BRAIN_LOG_REL), vault),
-    entities: ensureInsideVault(join24(vault, BRAIN_ENTITIES_REL), vault),
-    bases: ensureInsideVault(join24(vault, BRAIN_BASES_REL), vault),
-    snapshots: ensureInsideVault(join24(vault, BRAIN_SNAPSHOTS_REL), vault)
+    inbox: ensureInsideVault(join26(vault, BRAIN_INBOX_REL), vault),
+    processed: ensureInsideVault(join26(vault, BRAIN_PROCESSED_REL), vault),
+    archived: ensureInsideVault(join26(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
+    pending: ensureInsideVault(join26(vault, BRAIN_PENDING_REL), vault),
+    preferences: ensureInsideVault(join26(vault, BRAIN_PREFERENCES_REL), vault),
+    retired: ensureInsideVault(join26(vault, BRAIN_RETIRED_REL), vault),
+    log: ensureInsideVault(join26(vault, BRAIN_LOG_REL), vault),
+    entities: ensureInsideVault(join26(vault, BRAIN_ENTITIES_REL), vault),
+    bases: ensureInsideVault(join26(vault, BRAIN_BASES_REL), vault),
+    snapshots: ensureInsideVault(join26(vault, BRAIN_SNAPSHOTS_REL), vault)
   };
 }
 function brainDirsForWrite(vault, notices, lane) {
@@ -8596,14 +9116,14 @@ function preferencePath(vault, slug) {
 }
 function preferencePathUnder(dirs, vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join24(dirs.preferences, `pref-${s}.md`), vault);
+  return ensureInsideVault(join26(dirs.preferences, `pref-${s}.md`), vault);
 }
 function retiredPath(vault, slug) {
   return retiredPathUnder(brainDirs(vault), vault, slug);
 }
 function retiredPathUnder(dirs, vault, slug) {
   const s = validateSlug(slug);
-  return ensureInsideVault(join24(dirs.retired, `ret-${s}.md`), vault);
+  return ensureInsideVault(join26(dirs.retired, `ret-${s}.md`), vault);
 }
 function validateSlug(slug) {
   const trimmed = slug.trim();
@@ -8723,13 +9243,13 @@ var init_privacy_markers = __esm(() => {
 });
 
 // src/core/vault.ts
-import { mkdirSync as mkdirSync15, readFileSync as readFileSync18, readdirSync as readdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname17, join as join25, relative as relative7 } from "node:path";
+import { mkdirSync as mkdirSync15, readFileSync as readFileSync20, readdirSync as readdirSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname17, join as join27, relative as relative7 } from "node:path";
 function parseFrontmatterWithNotices(path, opts = {}) {
   const site = opts.site ?? FRONTMATTER_SITE;
   let text;
   try {
-    text = readFileSync18(path, "utf8");
+    text = readFileSync20(path, "utf8");
   } catch (err) {
     const notices = [];
     emitDegradationNotice(notices, {
@@ -8840,7 +9360,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
     return;
   }
   for (const entry of entries) {
-    const full = join25(dir, entry.name);
+    const full = join27(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -8915,6 +9435,7 @@ function splitInlineArray(inner) {
 }
 var FRONTMATTER_RE, BYTE_ORDER_MARK = 65279, FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*", FRONTMATTER_KEY_RE, KEY_VALUE_RE, DASH_ITEM_RE, MEDIA_EXTENSIONS, DEFAULT_SKIP_DIRS, DEFAULT_SKIP_FILES, FRONTMATTER_SITE = "vault.parseFrontmatter", NOTICE_LINE_MAX = 120, NOTICE_LINE_ELLIPSIS = "…", SLUG_FALLBACK_PREFIX = "unnamed", SLUG_FALLBACK_HASH_LEN = 8, HASHED_FALLBACK_RE, HASHED_SLUG_STEM_RE, LIST_VAULT_PAGES_SITE = "vault.listVaultPages", COLLATOR, UNMEASURABLE_PAGE_VISIBILITY, DOUBLE_QUOTED_ESCAPES;
 var init_vault = __esm(() => {
+  init_constants();
   init_scoped_rule_key();
   init_wikilink();
   init_fs_atomic();
@@ -8951,7 +9472,7 @@ var init_vault = __esm(() => {
     ".m4a",
     ".pdf"
   ]);
-  DEFAULT_SKIP_DIRS = [".git", ".obsidian", ".trash", ".stversions"];
+  DEFAULT_SKIP_DIRS = [".git", ".obsidian", ".trash", ".stversions", STORE_VAULT_DIR];
   DEFAULT_SKIP_FILES = ["index.md", "log.md"];
   HASHED_FALLBACK_RE = new RegExp(`^${SLUG_FALLBACK_PREFIX}-[0-9a-f]{${SLUG_FALLBACK_HASH_LEN}}$`, "u");
   HASHED_SLUG_STEM_RE = new RegExp(`^${SLUG_FALLBACK_PREFIX}-[0-9a-f]{${SLUG_FALLBACK_HASH_LEN}}(?:-[0-9a-f]+)?$`, "u");
@@ -9298,7 +9819,7 @@ var init_viewed_read = __esm(() => {
 });
 
 // src/core/store/read/store-entities.ts
-import { lstatSync as lstatSync8, statSync as statSync14 } from "node:fs";
+import { lstatSync as lstatSync8, statSync as statSync15 } from "node:fs";
 function sharedCountersOf(history, privateIds) {
   const out = Object.fromEntries(PREFERENCE_COUNTER_FIELDS.map((name) => [name, 0]));
   for (const record of history) {
@@ -9354,7 +9875,7 @@ function fingerprintOf(store) {
 `);
 }
 function shardFileStamp(path) {
-  const s = statSync14(path, { bigint: true });
+  const s = statSync15(path, { bigint: true });
   const id = identityOfStats(s);
   const identity = id === null ? "no-identity" : `${id.dev}:${id.ino}`;
   return `${identity}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
@@ -9689,8 +10210,8 @@ var init_memory_ids = __esm(() => {
 });
 
 // src/core/brain/artifact-ref-resolve.ts
-import { isAbsolute as isAbsolute4, join as join26 } from "node:path";
-import { existsSync as existsSync9, statSync as statSync15 } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join28 } from "node:path";
+import { existsSync as existsSync10, statSync as statSync16 } from "node:fs";
 function artifactRefScope(vault, fromStore, configPath) {
   let store = fromStore;
   let dirs;
@@ -9718,12 +10239,12 @@ function artifactPath(vault, id, scope) {
   const memoryDirs = fromStore ? [] : [dirs.preferences, dirs.retired, dirs.inbox, dirs.processed, dirs.archived, dirs.pending];
   for (const dir of [
     ...memoryDirs,
-    join26(vault, BRAIN_SOURCES_REL),
+    join28(vault, BRAIN_SOURCES_REL),
     dirs.entities,
-    join26(vault, BRAIN_DECISIONS_REL)
+    join28(vault, BRAIN_DECISIONS_REL)
   ]) {
-    const abs = join26(dir, `${id}${MARKDOWN_EXT}`);
-    if (existsSync9(abs))
+    const abs = join28(dir, `${id}${MARKDOWN_EXT}`);
+    if (existsSync10(abs))
       return vaultRelative(abs, vault);
   }
   return null;
@@ -9737,10 +10258,10 @@ function pageCandidate(vault, bare) {
   return null;
 }
 function isVaultFile(vault, rel) {
-  if (!pathIsInside(join26(vault, rel), vault))
+  if (!pathIsInside(join28(vault, rel), vault))
     return false;
   try {
-    return statSync15(join26(vault, rel)).isFile();
+    return statSync16(join28(vault, rel)).isFile();
   } catch {
     return false;
   }
@@ -9824,8 +10345,8 @@ var init_private_region = __esm(() => {
 });
 
 // src/core/store/reference-privacy.ts
-import { existsSync as existsSync10, statSync as statSync16 } from "node:fs";
-import { resolve as resolve16 } from "node:path";
+import { existsSync as existsSync11, statSync as statSync17 } from "node:fs";
+import { resolve as resolve17 } from "node:path";
 function namesAPage(ref) {
   const trimmed = ref.trim();
   return ANCHORED_WIKILINK_RE.test(trimmed) || trimmed.endsWith(PAGE_EXTENSION);
@@ -9840,7 +10361,7 @@ function preferenceIdIsPrivate(vault, id, fromStore, scope, configPath) {
       preferencePathUnder(scope.dirs(), vault, slug),
       retiredPathUnder(scope.dirs(), vault, slug)
     ];
-    paths = pages.filter((p) => existsSync10(p));
+    paths = pages.filter((p) => existsSync11(p));
   } catch {
     return true;
   }
@@ -9920,8 +10441,8 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope, configPath)
     const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore, configPath));
     if (rel === null)
       continue;
-    const abs = resolve16(vault, rel);
-    if (!pathIsInside(abs, vault) || existsSync10(abs) && isPrivatePageFile(abs))
+    const abs = resolve17(vault, rel);
+    if (!pathIsInside(abs, vault) || existsSync11(abs) && isPrivatePageFile(abs))
       return true;
   }
   return false;
@@ -9964,7 +10485,7 @@ var init_operation_scope = __esm(() => {
 });
 
 // src/core/store/dual-write.ts
-import { readFileSync as readFileSync19 } from "node:fs";
+import { readFileSync as readFileSync21 } from "node:fs";
 function isDualWriteEnabled(configPath) {
   try {
     return resolveStoreDualWrite(configPath);
@@ -9974,7 +10495,7 @@ function isDualWriteEnabled(configPath) {
 }
 function readDualWriteStatus(path = dualWriteStatusPath()) {
   try {
-    const parsed = JSON.parse(readFileSync19(path, "utf8"));
+    const parsed = JSON.parse(readFileSync21(path, "utf8"));
     return {
       failures: typeof parsed.failures === "number" ? parsed.failures : 0,
       skipped_no_device: typeof parsed.skipped_no_device === "number" ? parsed.skipped_no_device : 0,
@@ -10039,7 +10560,7 @@ function recordNoStore(root) {
 function storeFor(device, context) {
   const { root, origin } = resolveConfiguredStoreRoot(context.configPath);
   const vault = context.vault?.trim();
-  if (vault !== undefined && vault !== "" && isPathInsideResolved(root, vault, process.platform)) {
+  if (vault !== undefined && vault !== "" && storeRootForbiddenInVault(root, vault, process.platform)) {
     throw new StoreRootInsideVaultError(root, vault, origin);
   }
   const key = `${root}\x00${device}`;
@@ -10180,10 +10701,10 @@ var init_dual_write = __esm(() => {
 });
 
 // src/core/store/store-identity.ts
-import { mkdirSync as mkdirSync16, readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname18, join as join27 } from "node:path";
+import { mkdirSync as mkdirSync16, readFileSync as readFileSync22 } from "node:fs";
+import { dirname as dirname18, join as join29 } from "node:path";
 function storeIdentityPath() {
-  return join27(storesStateDir(processDirsEnv()), STORE_IDENTITY_FILE2);
+  return join29(storesStateDir(processDirsEnv()), STORE_IDENTITY_FILE2);
 }
 function isBinding(value) {
   if (typeof value !== "object" || value === null)
@@ -10194,7 +10715,7 @@ function isBinding(value) {
 function readBindingsStrict(path) {
   let text;
   try {
-    text = readFileSync20(path, "utf8");
+    text = readFileSync22(path, "utf8");
   } catch (err) {
     return err.code === "ENOENT" ? [] : null;
   }
@@ -10284,8 +10805,8 @@ var init_store_identity = __esm(() => {
 });
 
 // src/core/store/store-write.ts
-import { mkdirSync as mkdirSync17, readFileSync as readFileSync21 } from "node:fs";
-import { dirname as dirname19, join as join28 } from "node:path";
+import { mkdirSync as mkdirSync17, readFileSync as readFileSync23 } from "node:fs";
+import { dirname as dirname19, join as join30 } from "node:path";
 function asStoreWriteError(err) {
   if (err instanceof StoreWriteError)
     return err;
@@ -10353,11 +10874,11 @@ function routeWrite(spec) {
   }
 }
 function storeWriteStatusPath() {
-  return join28(storesStateDir(processDirsEnv()), STORE_WRITE_STATUS_FILE);
+  return join30(storesStateDir(processDirsEnv()), STORE_WRITE_STATUS_FILE);
 }
 function readStoreWriteStatus(path = storeWriteStatusPath()) {
   try {
-    const parsed = JSON.parse(readFileSync21(path, "utf8"));
+    const parsed = JSON.parse(readFileSync23(path, "utf8"));
     return {
       failures: typeof parsed.failures === "number" ? parsed.failures : 0,
       last_reason: typeof parsed.last_reason === "string" && Object.hasOwn(REMEDIES, parsed.last_reason) ? parsed.last_reason : null,
@@ -10450,7 +10971,7 @@ var init_store_write = __esm(() => {
 
 // src/core/reliability/audit.ts
 import { closeSync as closeSync11, fsyncSync as fsyncSync5, mkdirSync as mkdirSync18, openSync as openSync8, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename as basename9, join as join29 } from "node:path";
+import { basename as basename10, join as join31 } from "node:path";
 function appendAuditRecord(auditRoot, record, vault, options = {}) {
   const timestamp = new Date(record.timestamp);
   if (!Number.isFinite(timestamp.getTime())) {
@@ -10468,7 +10989,7 @@ function appendAuditRecord(auditRoot, record, vault, options = {}) {
     legacy: () => appendLegacyAuditLine(auditRoot, timestamp, line),
     store: () => {
       const written = JSON.parse(line);
-      const row = { audit_dir: basename9(auditRoot), record: written };
+      const row = { audit_dir: basename10(auditRoot), record: written };
       const agent = isRecordLabel(written.actor) ? written.actor : undefined;
       if (options.attestsShared === true) {
         return ledgerRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, "shared", agent);
@@ -10476,7 +10997,7 @@ function appendAuditRecord(auditRoot, record, vault, options = {}) {
       return auditRowRecord(DUAL_WRITE_LEDGERS.reliabilityAudit, row, agent, auditRowNamesPrivatePage(vault, written));
     },
     context,
-    ...options.failOpen === true || basename9(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}
+    ...options.failOpen === true || basename10(auditRoot) === HOOK_AUDIT_TRAIL ? { failOpen: true } : {}
   });
   if (routed.mode === "legacy")
     return routed.value;
@@ -10495,7 +11016,7 @@ function trailInsideVault(auditRoot, vault) {
 }
 function appendLegacyAuditLine(auditRoot, timestamp, line) {
   mkdirSync18(auditRoot, { recursive: true });
-  const path = join29(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
+  const path = join31(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
   const fileDescriptor = openSync8(path, "a", 384);
   try {
     writeFileSync4(fileDescriptor, line + `
@@ -10602,11 +11123,11 @@ import {
   closeSync as closeSync12,
   fsyncSync as fsyncSync6,
   openSync as openSync9,
-  readFileSync as readFileSync22,
-  unlinkSync as unlinkSync7,
-  writeSync as writeSync6
+  readFileSync as readFileSync24,
+  unlinkSync as unlinkSync9,
+  writeSync as writeSync7
 } from "node:fs";
-import { dirname as dirname20, resolve as resolve17 } from "node:path";
+import { dirname as dirname20, resolve as resolve18 } from "node:path";
 function kdfCostCurveRefusal(kdf) {
   if (kdf.n > SCRYPT_N_MAX) {
     return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
@@ -10627,7 +11148,7 @@ function kdfCostCurveRefusal(kdf) {
   return null;
 }
 function holderSlot(keyPath) {
-  const resolved = resolve17(keyPath);
+  const resolved = resolve18(keyPath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function heldUnlockedKey(keyPath) {
@@ -10686,7 +11207,7 @@ function hasEnvelopeShape(parsed) {
 function isEnvelopeFile(keyPath) {
   let bytes;
   try {
-    bytes = readFileSync22(keyPath);
+    bytes = readFileSync24(keyPath);
   } catch {
     return false;
   }
@@ -10702,7 +11223,7 @@ function isEnvelopeBytes(bytes) {
 function readEnvelope(keyPath) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync22(keyPath, "utf8"));
+    parsed = JSON.parse(readFileSync24(keyPath, "utf8"));
   } catch (err) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, `not parseable as an envelope: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -10816,7 +11337,7 @@ function writeRawKeyfileBytes(keyPath, dek) {
     fd = openSync9(tmp, "wx", 384);
     let written = 0;
     while (written < dek.byteLength) {
-      written += writeSync6(fd, dek, written, dek.byteLength - written);
+      written += writeSync7(fd, dek, written, dek.byteLength - written);
     }
     fsyncSync6(fd);
     closeSync12(fd);
@@ -10829,7 +11350,7 @@ function writeRawKeyfileBytes(keyPath, dek) {
       } catch {}
     }
     try {
-      unlinkSync7(tmp);
+      unlinkSync9(tmp);
     } catch {}
     throw err;
   }
@@ -10911,17 +11432,17 @@ import { randomBytes as randomBytes7 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync13,
-  existsSync as existsSync11,
+  existsSync as existsSync12,
   mkdirSync as mkdirSync19,
   openSync as openSync10,
-  readFileSync as readFileSync23,
+  readFileSync as readFileSync25,
   writeFileSync as writeFileSync5,
-  writeSync as writeSync7
+  writeSync as writeSync8
 } from "node:fs";
-import { dirname as dirname21, join as join30 } from "node:path";
+import { dirname as dirname21, join as join32 } from "node:path";
 function ensureSyncExclusionMarker(dir) {
-  const marker = join30(dir, ".gitignore");
-  if (existsSync11(marker))
+  const marker = join32(dir, ".gitignore");
+  if (existsSync12(marker))
     return;
   try {
     writeFileSync5(marker, SYNC_EXCLUSION_CONTENT, { encoding: "utf8", flag: "wx", mode: 384 });
@@ -10934,7 +11455,7 @@ function ensureSyncExclusionMarker(dir) {
 }
 function loadOrCreateKey(keyPath) {
   const keyDir = dirname21(keyPath);
-  if (existsSync11(keyPath)) {
+  if (existsSync12(keyPath)) {
     restrictToOwner(keyDir, "directory");
     restrictToOwner(keyPath, "file");
     if (process.platform !== "win32") {
@@ -10947,7 +11468,7 @@ function loadOrCreateKey(keyPath) {
       }
     }
     ensureSyncExclusionMarker(keyDir);
-    const key = readFileSync23(keyPath);
+    const key = readFileSync25(keyPath);
     if (isEnvelopeBytes(key))
       return heldKeyOrRefusal(keyPath);
     if (key.length !== KEY_BYTES) {
@@ -10968,7 +11489,7 @@ function loadOrCreateKey(keyPath) {
     throw exc;
   }
   try {
-    writeSync7(fd, key);
+    writeSync8(fd, key);
   } finally {
     closeSync13(fd);
   }
@@ -10986,7 +11507,7 @@ var init_crypto = __esm(() => {
 
 // src/core/store-migration/owner-only-copy.ts
 import { chmodSync as chmodSync4, copyFileSync as copyFileSync2, mkdirSync as mkdirSync20 } from "node:fs";
-import { dirname as dirname22, relative as relative8, resolve as resolve18, sep as sep7 } from "node:path";
+import { dirname as dirname22, relative as relative8, resolve as resolve19, sep as sep7 } from "node:path";
 function ensureOwnerOnlyRoot(root) {
   mkdirSync20(root, { recursive: true, mode: DIR_MODE });
   if (process.platform === "win32")
@@ -10995,10 +11516,10 @@ function ensureOwnerOnlyRoot(root) {
     chmodSync4(root, DIR_MODE);
 }
 function foldersFrom(root, dir) {
-  const rel = relative8(resolve18(root), resolve18(dir));
+  const rel = relative8(resolve19(root), resolve19(dir));
   if (rel === "" || rel.startsWith(".."))
-    return [resolve18(root)];
-  const out = [resolve18(root)];
+    return [resolve19(root)];
+  const out = [resolve19(root)];
   for (const segment of rel.split(sep7))
     out.push(`${out.at(-1)}${sep7}${segment}`);
   return out;
@@ -11044,24 +11565,24 @@ __export(exports_store, {
 });
 import {
   chmodSync as chmodSync5,
-  existsSync as existsSync12,
+  existsSync as existsSync13,
   readdirSync as readdirSync6,
-  readFileSync as readFileSync24,
+  readFileSync as readFileSync26,
   renameSync as renameSync2,
   rmSync as rmSync3,
-  statSync as statSync17,
+  statSync as statSync18,
   writeFileSync as writeFileSync6
 } from "node:fs";
-import { join as join31 } from "node:path";
+import { join as join33 } from "node:path";
 function secretsDir(vault) {
   const dir = machineStatePath(vault, DERIVED_STORE_DIR, "secrets");
-  adoptVaultSecrets(join31(vault, DERIVED_STORE_DIR, "secrets"), dir);
+  adoptVaultSecrets(join33(vault, DERIVED_STORE_DIR, "secrets"), dir);
   return dir;
 }
 function adoptVaultSecrets(legacy, dir) {
-  if (legacy === dir || existsSync12(dir) || !existsSync12(legacy))
+  if (legacy === dir || existsSync13(dir) || !existsSync13(legacy))
     return;
-  const names = readdirSync6(legacy).filter((name) => statSync17(join31(legacy, name)).isFile());
+  const names = readdirSync6(legacy).filter((name) => statSync18(join33(legacy, name)).isFile());
   if (names.length === 0)
     return;
   const staging = `${dir}.adopt-${process.pid}`;
@@ -11069,11 +11590,11 @@ function adoptVaultSecrets(legacy, dir) {
   try {
     ensureOwnerOnlyRoot(staging);
     for (const name of names)
-      copyOwnerOnly(join31(legacy, name), join31(staging, name), staging);
+      copyOwnerOnly(join33(legacy, name), join33(staging, name), staging);
     try {
       renameSync2(staging, dir);
     } catch (err) {
-      if (!existsSync12(dir))
+      if (!existsSync13(dir))
         throw err;
     }
   } finally {
@@ -11081,13 +11602,13 @@ function adoptVaultSecrets(legacy, dir) {
   }
 }
 function storePath(vault) {
-  return join31(secretsDir(vault), "secrets.json");
+  return join33(secretsDir(vault), "secrets.json");
 }
 function keyPath(vault) {
-  return join31(secretsDir(vault), "keyfile");
+  return join33(secretsDir(vault), "keyfile");
 }
 function tokenStorePath(vault) {
-  return join31(secretsDir(vault), "mcp-tokens.json");
+  return join33(secretsDir(vault), "mcp-tokens.json");
 }
 function isValidSecretName(name) {
   return NAME_RE.test(name);
@@ -11218,7 +11739,7 @@ function resolveSecretReadOnly(vault, name) {
     throw new Error(`unknown secret "${normalized}"`);
   }
   const kp = keyPath(vault);
-  if (!existsSync12(kp))
+  if (!existsSync13(kp))
     throw new SecretStoreKeyfileMissingError(kp);
   const key = loadOrCreateKey(kp);
   return {
@@ -11271,9 +11792,9 @@ function custodyTargets(vault) {
     [secretsDir(vault), "directory"],
     [keyPath(vault), "file"]
   ];
-  if (existsSync12(storePath(vault)))
+  if (existsSync13(storePath(vault)))
     targets.push([storePath(vault), "file"]);
-  if (existsSync12(tokenStorePath(vault)))
+  if (existsSync13(tokenStorePath(vault)))
     targets.push([tokenStorePath(vault), "file"]);
   return targets;
 }
@@ -11288,19 +11809,19 @@ function toMetadata(name, stored) {
 }
 function readStore(vault) {
   const path = storePath(vault);
-  if (!existsSync12(path))
+  if (!existsSync13(path))
     return { version: SECRETS_SCHEMA_VERSION, secrets: {} };
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
     try {
-      if ((statSync17(path).mode & 511) !== 384)
+      if ((statSync18(path).mode & 511) !== 384)
         chmodSync5(path, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the secrets store: ` + `${path}: ${err instanceof Error ? err.message : String(err)}
 `);
     }
   }
-  const parsed = JSON.parse(readFileSync24(path, "utf8"));
+  const parsed = JSON.parse(readFileSync26(path, "utf8"));
   if (parsed === null || typeof parsed !== "object" || parsed.version !== SECRETS_SCHEMA_VERSION) {
     throw new Error(`secrets store is corrupt or from a newer version: ${path}`);
   }
@@ -11334,7 +11855,7 @@ function touchLastUsed(vault, name, now) {
   });
 }
 function audit(vault, ctx, action, name, details) {
-  appendAuditRecord(join31(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
+  appendAuditRecord(join33(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action,
@@ -11543,7 +12064,7 @@ function redactConfigMapping(data, policy = {}) {
 init_config();
 init_secret_ref();
 init_secret_ref();
-import { existsSync as existsSync13 } from "node:fs";
+import { existsSync as existsSync14 } from "node:fs";
 var custodyStoreModule;
 function custodyStore() {
   if (custodyStoreModule === undefined) {
@@ -11596,7 +12117,7 @@ function resolvedSecretLiterals(vault) {
   }
   const heldNames = new Set(held.map((meta) => meta.name));
   const out = [];
-  if (held.length > 0 && existsSync13(store.keyPath(vault))) {
+  if (held.length > 0 && existsSync14(store.keyPath(vault))) {
     for (const meta of held) {
       try {
         out.push(store.resolveSecretReadOnly(vault, meta.name).value);
@@ -11653,21 +12174,21 @@ init_fs_utils();
 init_path_constants();
 init_vault_unexaminable();
 import {
-  existsSync as existsSync15,
+  existsSync as existsSync16,
   mkdirSync as mkdirSync21,
   openSync as openSync11,
-  readFileSync as readFileSync25,
+  readFileSync as readFileSync27,
   rmSync as rmSync4,
-  writeSync as writeSync8,
+  writeSync as writeSync9,
   closeSync as closeSync14
 } from "node:fs";
-import { dirname as dirname24, join as join33 } from "node:path";
+import { dirname as dirname24, join as join35 } from "node:path";
 
 // src/core/partner/codegraph.ts
 init_config();
 init_fs_utils();
-import { existsSync as existsSync14, readdirSync as readdirSync7, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname23, join as join32, resolve as resolve19 } from "node:path";
+import { existsSync as existsSync15, readdirSync as readdirSync7, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname23, join as join34, resolve as resolve20 } from "node:path";
 
 // src/core/project-manifests.ts
 var MANIFEST_ECOSYSTEM = Object.freeze({
@@ -11712,7 +12233,7 @@ var GRAPH_HEALTH_CODE_LIST = Object.freeze(Object.values(GRAPH_HEALTH_CODES));
 function stripTrailingSlash(p) {
   return p.replace(/\/+$/, "");
 }
-function samePath(a, b) {
+function samePath2(a, b) {
   return stripTrailingSlash(a) === stripTrailingSlash(b);
 }
 function assessGraphHealth(input) {
@@ -11742,7 +12263,7 @@ function assessGraphHealth(input) {
       message: `${input.selfLoops} self-loop edge(s): a node references itself; ` + "impact and traversal surfaces may double-count or cycle"
     });
   }
-  if (input.indexRoot && input.worktreeRoot && !samePath(input.indexRoot, input.worktreeRoot)) {
+  if (input.indexRoot && input.worktreeRoot && !samePath2(input.indexRoot, input.worktreeRoot)) {
     warnings.push({
       code: GRAPH_HEALTH_CODES.cacheRootMismatch,
       message: `index was built for '${input.indexRoot}' but is being read from ` + `'${input.worktreeRoot}'; file and line references may be stale for this tree - ` + "re-index the current root before trusting graph-derived artifacts"
@@ -11770,11 +12291,11 @@ function codegraphInitCommand(projectPath) {
 }
 function isCodeProject(dir) {
   try {
-    if (!existsSync14(dir))
+    if (!existsSync15(dir))
       return false;
-    if (!isDir(join32(dir, ".git")))
+    if (!isDir(join34(dir, ".git")))
       return false;
-    return CODE_MANIFEST_FILES.some((m) => existsSync14(join32(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync15(join34(dir, m)));
   } catch {
     return false;
   }
@@ -11787,7 +12308,7 @@ function findCodeProjects(opts) {
   const consider = (raw) => {
     if (scanned >= limit)
       return;
-    const path = resolve19(raw);
+    const path = resolve20(raw);
     if (seen.has(path))
       return;
     seen.add(path);
@@ -11798,7 +12319,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname23(resolve19(opts.vault));
+  const vaultParent = dirname23(resolve20(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -11810,7 +12331,7 @@ function findCodeProjects(opts) {
     for (const name of entries) {
       if (scanned >= limit)
         break;
-      consider(join32(vaultParent, name));
+      consider(join34(vaultParent, name));
     }
   }
   for (const extra of opts.scanExtraPaths ?? []) {
@@ -11952,7 +12473,7 @@ function codegraphDisabledResult() {
   };
 }
 function evaluateProjectStatus(project, deps) {
-  const indexDir = join32(project, ".codegraph");
+  const indexDir = join34(project, ".codegraph");
   let indexed;
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
@@ -12022,7 +12543,7 @@ function resolveRealpath(value) {
   if (!value)
     return null;
   try {
-    return realpathSync4(value);
+    return realpathSync5(value);
   } catch {
     return value;
   }
@@ -12048,7 +12569,7 @@ function checkVaultWriteable(vault) {
       fix: `chmod u+rwx "${vault}"`
     };
   }
-  const brain = join33(vault, BRAIN_ROOT_REL);
+  const brain = join35(vault, BRAIN_ROOT_REL);
   const brainLook = lookAtDirectory(brain);
   if (brainLook !== "present" && brainLook !== "absent") {
     return {
@@ -12058,7 +12579,7 @@ function checkVaultWriteable(vault) {
       fix: `chmod u+rwx "${brain}"`
     };
   }
-  const probe = join33(vault, ".open-second-brain-doctor-test");
+  const probe = join35(vault, ".open-second-brain-doctor-test");
   try {
     const fd = openSync11(probe, "w");
     closeSync14(fd);
@@ -12077,10 +12598,10 @@ function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
     mkdirSync21(dirname24(config), { recursive: true });
-    if (!existsSync15(config))
+    if (!existsSync16(config))
       createdForCheck = true;
     const fd = openSync11(config, "a");
-    writeSync8(fd, "");
+    writeSync9(fd, "");
     closeSync14(fd);
     if (createdForCheck)
       rmSync4(config);
@@ -12119,7 +12640,7 @@ function loadJsonManifest(path, name) {
   }
   let data;
   try {
-    data = JSON.parse(readFileSync25(path, "utf8"));
+    data = JSON.parse(readFileSync27(path, "utf8"));
   } catch (exc) {
     return {
       result: {
@@ -12245,7 +12766,7 @@ function checkHermesManifest(path) {
   }
   let text;
   try {
-    text = readFileSync25(path, "utf8");
+    text = readFileSync27(path, "utf8");
   } catch (exc) {
     return {
       name: "hermes_manifest",
@@ -12294,7 +12815,7 @@ function checkOpenclawManifest(path) {
 }
 function checkOpenclawInstallability(repoRoot) {
   const results = [];
-  const pkgPath = join33(repoRoot, "package.json");
+  const pkgPath = join35(repoRoot, "package.json");
   const { result, data } = loadJsonManifest(pkgPath, "openclaw_package_json");
   results.push(result);
   if (!data)
@@ -12325,7 +12846,7 @@ function checkOpenclawInstallability(repoRoot) {
       });
       continue;
     }
-    const entryPath = join33(repoRoot, entry);
+    const entryPath = join35(repoRoot, entry);
     const problem = manifestFileProblem(entryPath);
     if (problem === null) {
       results.push({
@@ -12361,10 +12882,10 @@ function doctor(opts) {
     results.push(checkConfigWriteable(opts.config));
   if (opts.repoRoot) {
     const root = opts.repoRoot;
-    results.push(checkClaudeManifest(join33(root, ".claude-plugin", "plugin.json")));
-    results.push(checkCodexManifest(join33(root, ".codex-plugin", "plugin.json")));
-    results.push(checkHermesManifest(join33(root, "plugins", "hermes", "plugin.yaml")));
-    results.push(checkOpenclawManifest(join33(root, "openclaw.plugin.json")));
+    results.push(checkClaudeManifest(join35(root, ".claude-plugin", "plugin.json")));
+    results.push(checkCodexManifest(join35(root, ".codex-plugin", "plugin.json")));
+    results.push(checkHermesManifest(join35(root, "plugins", "hermes", "plugin.yaml")));
+    results.push(checkOpenclawManifest(join35(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
   const cg = checkCodegraph({
@@ -12379,10 +12900,10 @@ function doctor(opts) {
 }
 
 // src/core/identity-reminder.ts
-import { readFileSync as readFileSync26 } from "node:fs";
-import { dirname as dirname25, resolve as resolve20 } from "node:path";
+import { readFileSync as readFileSync28 } from "node:fs";
+import { dirname as dirname25, resolve as resolve21 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var TEMPLATE_PATH = resolve20(dirname25(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve21(dirname25(fileURLToPath2(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var RUNTIME_TARGET = Object.freeze({
   hermes: "hermes",
   openclaw: "openclaw"
@@ -12399,7 +12920,7 @@ function loadReminderTemplate() {
   if (commonTemplateCache !== undefined)
     return commonTemplateCache;
   try {
-    commonTemplateCache = readFileSync26(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync28(TEMPLATE_PATH, "utf8").trimEnd();
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -12408,8 +12929,8 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve20(dirname25(fileURLToPath2(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve20(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
+var TEMPLATES_DIR = resolve21(dirname25(fileURLToPath2(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve21(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);
@@ -12417,7 +12938,7 @@ function tryReadTargetTemplate(target) {
     return cached;
   let body;
   try {
-    body = readFileSync26(PER_TARGET_PATHS[target], "utf8").trimEnd();
+    body = readFileSync28(PER_TARGET_PATHS[target], "utf8").trimEnd();
   } catch (err) {
     if (err.code !== "ENOENT")
       throw err;

@@ -1202,12 +1202,21 @@ function readOptOutValue(
  * default. A config key with no value is unrecognised. Never throws.
  */
 export function autoStoreMigrationSetting(configPath?: string): AutoStoreMigrationSetting {
+  return optOutSetting(AUTO_STORE_MIGRATION_ENV, AUTO_STORE_MIGRATION_KEY, configPath);
+}
+
+/** One default-on, fail-closed opt-out: an environment variable and a machine config key. */
+function optOutSetting(
+  envName: string,
+  key: string,
+  configPath: string | undefined,
+): AutoStoreMigrationSetting {
   const unrecognised: UnrecognisedAutoStoreMigrationValue[] = [];
-  const env = readOptOutValue(process.env[AUTO_STORE_MIGRATION_ENV], true);
+  const env = readOptOutValue(process.env[envName], true);
   if (env.kind === "unrecognised") unrecognised.push({ source: "environment", value: env.value });
   let config: { kind: OptOutValue; value: string };
   try {
-    config = readOptOutValue(discoverConfig(configPath).data[AUTO_STORE_MIGRATION_KEY], false);
+    config = readOptOutValue(discoverConfig(configPath).data[key], false);
   } catch (err) {
     return {
       enabled: false,
@@ -1252,6 +1261,38 @@ export function describeAutoStoreMigrationProblem(
     `${AUTO_STORE_MIGRATION_ON_VALUES.join(", ")} to turn it on or ` +
     `${AUTO_STORE_MIGRATION_OFF_VALUES.join(", ")} to turn it off`
   );
+}
+
+/**
+ * Environment form of the automatic legacy tree removal's opt-out. Like
+ * {@link AUTO_STORE_MIGRATION_ENV}, it can only turn the removal off.
+ */
+export const AUTO_LEGACY_REMOVAL_ENV = "OPEN_SECOND_BRAIN_AUTO_LEGACY_REMOVAL";
+
+/** The machine config key of the automatic legacy tree removal's opt-out. */
+export const AUTO_LEGACY_REMOVAL_KEY = "auto_legacy_removal";
+
+/**
+ * Whether the legacy tree may leave the vault on its own once the
+ * migration cohort allows it (`store-migration/auto-removal.ts`). Default
+ * on, read like {@link autoStoreMigrationSetting} (fail closed, off wins),
+ * and off whenever the automatic store migration is off: a machine that
+ * opted out of the automatic migration opted out of everything automatic
+ * that follows it. Never throws.
+ */
+export function autoLegacyRemovalSetting(configPath?: string): AutoStoreMigrationSetting {
+  const migration = autoStoreMigrationSetting(configPath);
+  const own = optOutSetting(AUTO_LEGACY_REMOVAL_ENV, AUTO_LEGACY_REMOVAL_KEY, configPath);
+  return {
+    enabled: migration.enabled && own.enabled,
+    unrecognised: [...migration.unrecognised, ...own.unrecognised],
+    unreadable: migration.unreadable ?? own.unreadable,
+  };
+}
+
+/** Whether the legacy tree may leave the vault on its own; see {@link autoLegacyRemovalSetting}. */
+export function resolveAutoLegacyRemoval(configPath?: string): boolean {
+  return autoLegacyRemovalSetting(configPath).enabled;
 }
 
 /**

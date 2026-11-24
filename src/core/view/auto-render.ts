@@ -43,7 +43,7 @@ import { runViewPass, type ViewPassReport } from "./render.ts";
 import { resolveViewTarget } from "./target.ts";
 
 /** What started the pass. */
-export type AutoViewTrigger = "dream" | "session-start";
+export type AutoViewTrigger = "dream" | "session-start" | "worker";
 
 export interface AutoViewOptions {
   readonly trigger: AutoViewTrigger;

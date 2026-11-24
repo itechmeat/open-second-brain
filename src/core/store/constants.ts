@@ -116,6 +116,33 @@ export const STORE_ROOT_ENV = "OPEN_SECOND_BRAIN_STORE_ROOT";
 /** Directory name of the default store root under the per-user data directory. */
 export const STORE_DEFAULT_DIR = "store";
 
+/**
+ * The reserved hidden folder in the vault root that is the default store
+ * root of an installation with a vault, so the store travels with the
+ * sync that already carries the vault. Never inside `Brain/` or the
+ * vault's device-local `.open-second-brain/` folder, which the legacy-tree
+ * removal and the device-local rules treat as their own. The note tools,
+ * the walkers, the search index and the view writer skip it.
+ */
+export const STORE_VAULT_DIR = ".open-second-brain-store";
+
+/**
+ * The command a person runs, with the agent sessions closed, to move a
+ * store that 2.0.0 left at the per-user default into the vault's reserved
+ * folder (`store-migration/move-into-vault.ts`). Nothing runs it by itself.
+ */
+export const MOVE_INTO_VAULT_COMMAND = "o2b store move-into-vault";
+
+/**
+ * File in a store root the store was relocated away from (the 2.0.0
+ * default outside the vault): names the store id and the new root. The old
+ * root stays as an inactive recovery copy; nothing writes it again.
+ */
+export const STORE_RELOCATED_FILE = "relocated.json";
+
+/** File in a store root while its store is being relocated: writers wait. */
+export const STORE_RELOCATING_FILE = "relocating.json";
+
 /** Directory under the tool's state root that holds one device-local directory per store id. */
 export const STORE_STATE_DIR = "stores";
 

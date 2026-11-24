@@ -69,6 +69,7 @@ describe("the other-device mark", () => {
     expect(markOf(vault)).toEqual({
       device: "dev-z",
       runId: "store-migration-z",
+      at: Date.parse("2026-11-17T10:00:00Z"),
     });
   });
 

@@ -177,6 +177,7 @@ const ALLOWLIST: Readonly<Record<string, string>> = Object.freeze({
   "src/core/search/reinforce.ts": LEDGER,
   "src/core/search/visibility-surface-registry.ts": TEXT,
   "src/core/state/surfaces.ts": TEXT,
+  "src/core/store-migration/auto-removal.ts": TEXT,
   "src/core/write-binding/index.ts": TEXT,
   "src/mcp/brain/context-tools.ts": NOTE_WALL,
   // Task 3.19 moved the handlers with the literals into sibling modules;

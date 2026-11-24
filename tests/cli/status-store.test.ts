@@ -51,9 +51,10 @@ describe("o2b status store block", () => {
     expect(store["root"]).toEqual({ path: root, origin: "env", exists: false });
     expect(store["initialized"]).toBe(false);
     expect(store["device_id"]).toBe("dev-a");
+    // With a vault in the config, the view goes to its `brain-view/` folder (2.0.1).
     expect(store["view_target"]).toEqual({
-      path: null,
-      origin: "none",
+      path: join(vault, "brain-view"),
+      origin: "default",
       exists: false,
       error: null,
     });
@@ -62,6 +63,7 @@ describe("o2b status store block", () => {
       available: true,
       legacy_tree_present: true,
       store_exists: false,
+      relocation: null,
       switched: false,
       next_commands: ["o2b store init", "o2b brain migrate-store --dry-run"],
       // The suite's preload turns the automatic migration off, so the

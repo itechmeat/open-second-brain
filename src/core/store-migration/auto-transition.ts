@@ -52,7 +52,7 @@ export const AUTO_TRANSITION_INTERVAL_MS = 60 * 60 * 1000;
 
 const THROTTLE_FILE = "transition-auto.json";
 
-export type AutoTransitionTrigger = "dream" | "session-start";
+export type AutoTransitionTrigger = "dream" | "session-start" | "worker";
 
 export type AutoTransitionResult =
   | { readonly status: "not-switched" | "no-legacy-devices" | "throttled" | "idle" }

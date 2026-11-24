@@ -10,7 +10,7 @@
  * and the device id.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const TIME_CHARS = 10;
@@ -78,4 +78,18 @@ export function ulidTime(id: string): number {
   let time = 0;
   for (const ch of id.slice(0, TIME_CHARS)) time = time * 32 + ALPHABET.indexOf(ch);
   return time;
+}
+
+/**
+ * A ULID-shaped id that depends only on `seed`: the same seed gives the
+ * same id on every machine. The store a vault's automatic migration
+ * creates in the vault's reserved folder takes its id from the vault's
+ * synced identity, so two machines that create it before either has seen
+ * the other's create one store, not two that sync would mix in one folder.
+ */
+export function ulidFromSeed(seed: string): string {
+  const digest = createHash("sha256").update(`open-second-brain-store\u0000${seed}`).digest();
+  let out = ALPHABET[digest[0]! % 8]!;
+  for (let i = 1; i < TIME_CHARS + RANDOM_CHARS; i++) out += ALPHABET[digest[i]! % 32]!;
+  return out;
 }

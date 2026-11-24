@@ -1457,6 +1457,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
  */
 export const STATE_SURFACE_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/core/store-migration/removal.ts",
+    "it only STATS the directory: whether a legacy root is still in the vault, which a " +
+      "switched machine's start reads before it asks for the automatic removal of the legacy " +
+      "tree. The removal moves the roots the migration catalogue names; the surfaces of that " +
+      "folder are the rows above",
+  ],
+  [
     "src/core/brain/doctor/migration-check.ts",
     "it only READS: on a switched machine whose vault no longer holds the legacy Brain/ tree, " +
       "the doctor lists what the vault still holds of this machine's legacy " +

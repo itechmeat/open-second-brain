@@ -16,11 +16,13 @@
  *     `clock-floor.ts`), so a record that replaces or removes one it read
  *     folds after it.
  *  3. Build the envelope. When the line would exceed the line-size cap,
- *     write the body as a blob first and put a blob reference on the line;
- *     the blob is complete before any line names it. Its temp file goes to
- *     the device-local state directory when that is on the store's
- *     filesystem (see `blobs.ts`).
- *  4. Under the shard lock, append the line and fsync it. When the shard
+ *     the body becomes a blob and the line carries a blob reference.
+ *  4. Under the shard lock, once the root the batch writes to is checked
+ *     to still take it, write the blobs (complete before any line names
+ *     them; a temp file goes to the device-local state directory when
+ *     that is on the store's filesystem, see `blobs.ts`), then append the
+ *     line and fsync it. A blob is never written to a root the check then
+ *     turns away (the recovery copy a relocation left). When the shard
  *     does not end in a newline (a write torn by a crash), a newline goes
  *     first, so the torn fragment stays one bad line that readers report
  *     and the new record stays whole.
@@ -37,7 +39,7 @@ import { noteOwnAppend } from "./own-appends.ts";
 
 import { observedClockFloor } from "./clock-floor.ts";
 import { tickClockMany, type WallClock } from "./clock-store.ts";
-import type { Hlc } from "./hlc.ts";
+import { compareHlc, maxHlc, type Hlc } from "./hlc.ts";
 import {
   BLOB_REF_BYTES_KEY,
   BLOB_REF_KEY,
@@ -48,8 +50,9 @@ import {
 import { buildRecord, canonicalBodyText, type RecordBody, type StoreRecord } from "./envelope.ts";
 import { writeBlob } from "./blobs.ts";
 import { withLocalLock } from "./local-lock.ts";
+import { followRelocation, relocationRunning, waitForRelocation } from "./relocation-marker.ts";
 import { ensureStoreDir, openShardForAppend } from "./safe-fs.ts";
-import type { StoreHandle } from "./store-open.ts";
+import { RelocatedStoreUnavailableError, type StoreHandle } from "./store-open.ts";
 import {
   partitionDir,
   shardLockTarget,
@@ -184,6 +187,8 @@ interface PreparedLine {
   readonly result: AppendResult;
   readonly bytes: Buffer;
   readonly partition: StorePartition;
+  /** The body text the line's blob reference names, written under the shard lock; null inline. */
+  readonly blob: string | null;
 }
 
 /** Steps 3 of the module docblock for one record stamped `hlc`. */
@@ -206,7 +211,7 @@ function prepareLine(store: StoreHandle, input: AppendInput, hlc: Hlc): Prepared
   });
 
   let bytes = lineBytes(record);
-  let spilled = false;
+  let blob: string | null = null;
   if (bytes.length > STORE_LINE_CAP_BYTES) {
     const text = canonicalBodyText(record.body);
     const reference = {
@@ -214,16 +219,18 @@ function prepareLine(store: StoreHandle, input: AppendInput, hlc: Hlc): Prepared
       [BLOB_REF_BYTES_KEY]: Buffer.byteLength(text, "utf8"),
     };
     bytes = lineBytes({ ...record, body: reference });
-    // Checked before the blob is written, so a refused record leaves no
+    // Checked before anything is written, so a refused record leaves no
     // orphan blob in the synced partition.
     if (bytes.length > STORE_LINE_CAP_BYTES) throw new RecordTooLargeError(bytes.length);
-    writeBlob(partitionDir(store.root, input.partition), text, {
-      tempDir: join(store.deviceStateDir, STORE_TMP_DIR),
-    });
-    spilled = true;
+    blob = text;
   }
   const path = shardPath(store.root, input.partition, ref, store.device, month);
-  return { result: { record, path, rel, spilled }, bytes, partition: input.partition };
+  return {
+    result: { record, path, rel, spilled: blob !== null },
+    bytes,
+    partition: input.partition,
+    blob,
+  };
 }
 
 /**
@@ -235,26 +242,156 @@ function prepareLine(store: StoreHandle, input: AppendInput, hlc: Hlc): Prepared
  * nothing. A crash mid-batch leaves each shard with a prefix of its lines
  * (and at most one torn last line, which readers report), as a crash
  * between single appends would. Returns the results in input order.
+ *
+ * The root the lines go to is settled before the clock is ticked: the
+ * handle's, or the root its store was relocated to (`store-relocation.ts`),
+ * so a process that opened the store before a relocation never writes the
+ * old root after it, stamps its records after what it read from either
+ * root, and is refused a partition the new root does not hold.
+ *
+ * A batch that throws after some of its shards were written (a write that
+ * fails, a lock that fails to release, a relocation that began between two
+ * shards and outlasts the lock budget) throws the error as it is;
+ * {@link appendedBeforeFailure} of that error names the records already
+ * written, so the caller can report or undo them instead of writing them
+ * again.
  */
 export function appendRecords(
   store: StoreHandle,
   inputs: ReadonlyArray<AppendInput>,
   options: AppendOptions = {},
 ): AppendResult[] {
+  if (inputs.length === 0) return [];
+  let target = writeTarget(store);
   for (const input of inputs) {
-    if (!store.partitions.has(input.partition)) {
-      throw new PartitionUnavailableError(input.partition, store.root);
+    if (!target.partitions.has(input.partition)) {
+      throw new PartitionUnavailableError(input.partition, target.root);
     }
   }
-  if (inputs.length === 0) return [];
-  const stamps = tickClockMany(
+  let stamps = tickClockMany(
     store.deviceStateDir,
     store.device,
     inputs.length,
     options.now,
-    observedClockFloor(store.root),
+    clockFloor(store, target),
   );
-  const lines = inputs.map((input, i) => prepareLine(store, input, stamps[i]!));
+  let lines = inputs.map((input, i) => prepareLine(target, input, stamps[i]!));
+  const results: Array<AppendResult | undefined> = lines.map(() => undefined);
+  let done = 0;
+  try {
+    while (done < lines.length) {
+      const byShard = groupByShard(lines.filter((_, i) => results[i] === undefined));
+      let moved = false;
+      for (const group of byShard) {
+        const first = group[0]!;
+        const wrote = withLocalLock(
+          shardLockTarget(store.deviceStateDir, first.partition, first.result.rel),
+          () => {
+            // Checked under the shard lock: a relocation that began after
+            // this append prepared its lines waits for this lock before it
+            // copies, and an append that sees it here goes to the new root;
+            // a redirected append writes only while the new root still
+            // holds this partition of this store.
+            if (!targetStands(store, target, first.partition)) return false;
+            // The blobs go where the lines go, only once that root stands.
+            for (const line of group) {
+              if (line.blob === null) continue;
+              writeBlob(partitionDir(target.root, line.partition), line.blob, {
+                tempDir: join(store.deviceStateDir, STORE_TMP_DIR),
+              });
+            }
+            appendLine(
+              partitionDir(target.root, first.partition),
+              first.result.path,
+              Buffer.concat(group.map((line) => line.bytes)),
+            );
+            // Recorded before the lock is released: a release that fails
+            // after the line is durable still leaves these records named.
+            for (const line of group) results[lines.indexOf(line)] = line.result;
+            done += group.length;
+            return true;
+          },
+        );
+        if (!wrote) {
+          moved = true;
+          break;
+        }
+        options.afterShard?.();
+      }
+      if (moved) {
+        // Lines not written yet are prepared again for the new root (their
+        // blobs are written there, under its shard lock). They keep their stamps unless the new
+        // root's floor reaches them; then they are stamped again after it.
+        target = writeTarget(store);
+        const left = lines.filter((_, i) => results[i] === undefined);
+        for (const line of left) {
+          const input = inputs[lines.indexOf(line)]!;
+          if (!target.partitions.has(input.partition)) {
+            throw new PartitionUnavailableError(input.partition, target.root);
+          }
+        }
+        const floor = clockFloor(store, target);
+        if (floor !== null && left.some((l) => compareHlc(stamps[lines.indexOf(l)]!, floor) <= 0)) {
+          const again = tickClockMany(
+            store.deviceStateDir,
+            store.device,
+            left.length,
+            options.now,
+            floor,
+          );
+          stamps = stamps.map((stamp, i) => {
+            const at = left.indexOf(lines[i]!);
+            return at < 0 ? stamp : again[at]!;
+          });
+        }
+        const fresh = left.map((line) =>
+          prepareLine(target, inputs[lines.indexOf(line)]!, stamps[lines.indexOf(line)]!),
+        );
+        lines = lines.map((line) => {
+          const at = left.indexOf(line);
+          return at < 0 ? line : fresh[at]!;
+        });
+      }
+    }
+  } catch (err) {
+    if (done > 0 && typeof err === "object" && err !== null) {
+      writtenBeforeFailure.set(err, [...results]);
+    }
+    throw err;
+  }
+  return results as AppendResult[];
+}
+
+/**
+ * The newest stamp this process read from the store, at the handle's root
+ * or at the root its writes go to (a reader that opened the store after a
+ * relocation noted its reads under the new root).
+ */
+function clockFloor(store: StoreHandle, target: StoreHandle): Hlc | null {
+  const own = observedClockFloor(store.root);
+  if (target.root === store.root) return own;
+  const there = observedClockFloor(target.root);
+  if (own === null) return there;
+  return there === null ? own : maxHlc(own, there);
+}
+
+/** The records each failed batch wrote before it threw (see {@link appendedBeforeFailure}). */
+const writtenBeforeFailure = new WeakMap<object, ReadonlyArray<AppendResult | undefined>>();
+
+/**
+ * The results of the records an {@link appendRecords} call wrote before it
+ * threw `err`, by input index (undefined for a record it did not write), or
+ * null when it wrote none.
+ */
+export function appendedBeforeFailure(
+  err: unknown,
+): ReadonlyArray<AppendResult | undefined> | null {
+  if (typeof err !== "object" || err === null) return null;
+  return writtenBeforeFailure.get(err) ?? null;
+}
+
+/** The prepared lines grouped by shard, in order of first appearance. */
+function groupByShard(lines: ReadonlyArray<PreparedLine>): PreparedLine[][] {
   const byShard = new Map<string, PreparedLine[]>();
   for (const line of lines) {
     const at = `${line.partition}\u0000${line.result.rel}`;
@@ -262,16 +399,43 @@ export function appendRecords(
     if (group === undefined) byShard.set(at, [line]);
     else group.push(line);
   }
-  for (const group of byShard.values()) {
-    const first = group[0]!;
-    withLocalLock(shardLockTarget(store.deviceStateDir, first.partition, first.result.rel), () =>
-      appendLine(
-        partitionDir(store.root, first.partition),
-        first.result.path,
-        Buffer.concat(group.map((line) => line.bytes)),
-      ),
-    );
-    options.afterShard?.();
+  return [...byShard.values()];
+}
+
+/**
+ * Whether the root `target` (settled by {@link writeTarget}) still takes
+ * this append, checked under the shard lock. For the handle's own root: no
+ * relocation runs and the root's marker names no move of this store (none,
+ * and none that cannot be read). For the root the store moved to: the old root's marker
+ * still names it, and its `partition` still carries this store's identity
+ * file. Anything else sends the batch back to {@link writeTarget}, which
+ * waits, follows the move, or refuses.
+ */
+function targetStands(store: StoreHandle, target: StoreHandle, partition: StorePartition): boolean {
+  if (target.root === store.root && relocationRunning(store.deviceStateDir)) return false;
+  // The same reading of the markers as {@link writeTarget}'s (and as an
+  // open's, `followRelocation`), so the two never disagree and send a
+  // batch back and forth, and a write never lands where an open refuses.
+  const now = followRelocation(store.root, store.storeId);
+  if (target.root === store.root) return now.kind === "none";
+  return now.kind === "moved" && now.to === target.root && now.held.has(partition);
+}
+
+/**
+ * The handle with the root writes go to now (waiting out a relocation that
+ * runs), holding only the partitions that root carries for this store. A
+ * store whose relocation destination does not hold it now, or whose marker
+ * cannot be read, is refused ({@link RelocatedStoreUnavailableError}):
+ * neither the frozen old root nor whatever is at the destination may
+ * receive its records.
+ */
+function writeTarget(store: StoreHandle): StoreHandle {
+  waitForRelocation(store.deviceStateDir);
+  const moved = followRelocation(store.root, store.storeId);
+  if (moved.kind === "refused") {
+    throw new RelocatedStoreUnavailableError(moved.root, moved.state);
   }
-  return lines.map((line) => line.result);
+  if (moved.kind === "none") return store;
+  const partitions = new Set([...store.partitions].filter((p) => moved.held.has(p)));
+  return { ...store, root: moved.to, partitions };
 }

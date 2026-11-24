@@ -34,7 +34,7 @@ import { deviceSwitchedHere } from "./store-only.ts";
 import { withoutSeenRecording } from "./seen-shards.ts";
 import { inspectStore } from "./store-open.ts";
 import {
-  isPathInsideResolved,
+  storeRootForbiddenInVault,
   resolveConfiguredStoreRoot,
   StoreRootInsideVaultError,
 } from "./store-paths.ts";
@@ -109,7 +109,7 @@ function storeSide(source: MigrationAvailabilitySource): {
   try {
     const { root, origin } = resolveConfiguredStoreRoot(source.configPath);
     // The vault looked at may not be the configured one; a root inside it is just as wrong.
-    if (source.vault !== null && isPathInsideResolved(root, source.vault, process.platform)) {
+    if (source.vault !== null && storeRootForbiddenInVault(root, source.vault, process.platform)) {
       throw new StoreRootInsideVaultError(root, source.vault, origin);
     }
     const store = inspectStore(root);

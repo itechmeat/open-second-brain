@@ -39,6 +39,7 @@ import { dirname } from "node:path";
 import { resolveAgentName } from "../config.ts";
 import { resolveAppendShardId } from "../brain/ledger-shards.ts";
 import { readVaultIdentity, writeVaultIdentity } from "../brain/vault-identity.ts";
+import { legacyLogSeed } from "../brain/vault-seed.ts";
 import { readMigrationGate, recordMigrationGateProgress } from "../migration-gate.ts";
 import { appendRecord } from "../store/appender.ts";
 import { bindVaultToStore } from "../vault-adapter/vault-binding.ts";
@@ -47,7 +48,7 @@ import { cutHash, readPartitionCut } from "../store/state-digest.ts";
 import { deviceSwitchedHere, recordSwitchMarker } from "../store/store-only.ts";
 import { openStore, type StoreHandle } from "../store/store-open.ts";
 import {
-  isPathInsideResolved,
+  storeRootForbiddenInVault,
   partitionDir,
   resolveConfiguredStoreRoot,
   StoreRootInsideVaultError,
@@ -102,8 +103,10 @@ import {
 } from "./journal.ts";
 import {
   cohortBody,
+  ownSwitchLacksCut,
   deviceSwitchedBody,
   hasCohortRecord,
+  latestOwnSwitch,
   legacyDevices,
   standingDoneRecords,
   MIGRATION_COHORT_KIND,
@@ -341,7 +344,7 @@ function plannedRecordItems(plan: ReturnType<typeof planMigrationDryRun>): numbe
 
 export function openMigrationStore(vault: string, configPath?: string): StoreHandle {
   const { root, origin } = resolveConfiguredStoreRoot(configPath);
-  if (isPathInsideResolved(root, vault, process.platform)) {
+  if (storeRootForbiddenInVault(root, vault, process.platform)) {
     throw new StoreRootInsideVaultError(root, vault, origin);
   }
   const device = resolveAppendShardId();
@@ -395,6 +398,16 @@ function partitionCuts(store: StoreHandle): Partial<Record<StorePartition, Parti
     // Record by record: only each shard's count, last id and pending count.
     const cut = readPartitionCut(partitionDir(store.root, partition));
     cuts[partition] = { cut, cut_hash: cutHash(cut) };
+  }
+  return cuts;
+}
+
+/** {@link partitionCuts} of only the shards `store.device` writes (`<stream>/<device>/<month>.jsonl`). */
+function ownShardCuts(store: StoreHandle): Partial<Record<StorePartition, PartitionCut>> {
+  const cuts: Partial<Record<StorePartition, PartitionCut>> = {};
+  for (const [partition, all] of Object.entries(partitionCuts(store))) {
+    const cut = all.cut.filter((entry) => entry.shard.split("/").at(-2) === store.device);
+    cuts[partition as StorePartition] = { cut, cut_hash: cutHash(cut) };
   }
   return cuts;
 }
@@ -790,7 +803,10 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // marker, so the id this run records is the one on disk. This machine
     // is not switched yet, so the marker is a legacy-layout write (the
     // snapshot below includes it).
-    const vaultId = writeVaultIdentity(vault).vault_id;
+    // Minted from what every machine of the vault holds alike, so a store
+    // another machine created before this marker existed is the one this
+    // marker leads to (`init-store.ts`).
+    const vaultId = writeVaultIdentity(vault, { seed: legacyLogSeed(vault) }).vault_id;
     // The run is on record once it holds the gate: a run refused by a
     // gate another run holds leaves no interrupted run behind. A run
     // killed in between leaves a gate no state names; the gate's run id
@@ -985,11 +1001,21 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     // chose the store again, and a later rollback starts from this run's
     // snapshot. Cleared before the switch, so no switched machine keeps it.
     clearRollbackRecord(dir);
+    // A later machine's switch record carries the cut of its own shards,
+    // taken now, after everything its migration wrote: a machine that
+    // removes the legacy tree waits until those records arrive, not only
+    // the switch record (`cohort-in-flight.ts`). So does a first machine's
+    // resumed run, whose `migration-done` (kept from before) does not
+    // cover what it imported since.
     const switched = settingsRecord(
       store,
       agent,
       DEVICE_SWITCHED_KIND,
-      deviceSwitchedBody(vaultId, store.device),
+      deviceSwitchedBody(
+        vaultId,
+        store.device,
+        later || ownDone !== null ? ownShardCuts(store) : undefined,
+      ),
     );
     options.hooks?.atStep?.(MIGRATION_STEP.deviceSwitched);
     // The automatic import's baseline: the tree as the final pass read it,
@@ -1019,6 +1045,29 @@ export function runMigration(vault: string, options: MigrationOptions = {}): Mig
     scratch?.close();
     if (held) releaseGateAfter(vault, state.run_id, failure);
   }
+}
+
+/**
+ * Record the cut of this device's own shards in one more `device-switched`
+ * record, when this device switched as a later machine on a release that
+ * wrote no cut (`ownSwitchLacksCut`): until it does, a machine that
+ * removes the legacy tree cannot tell whether the records its migration
+ * wrote have arrived, and waits. Returns whether it wrote the record.
+ */
+export function recordOwnSwitchCut(store: StoreHandle, agent: string): boolean {
+  if (!ownSwitchLacksCut(store)) return false;
+  const vaultId = latestOwnSwitch(store)?.body["vault_id"];
+  settingsRecord(
+    store,
+    agent,
+    DEVICE_SWITCHED_KIND,
+    deviceSwitchedBody(
+      typeof vaultId === "string" ? vaultId : null,
+      store.device,
+      ownShardCuts(store),
+    ),
+  );
+  return true;
 }
 
 export function safeAgent(configPath?: string): string {

@@ -1768,8 +1768,11 @@ const DIRECT_WRITE_ROWS = 91;
  * 123 -> 124: `src/core/brain/dream-trigger/claim.ts` rewrites the dream
  * trigger's claim with the worker's pid through the shared atomic writer,
  * in the machine's state directory.
+ * 124 -> 125: `src/core/brain/runtime-notices.ts` stamps when the session
+ * notice about another device's store that has not arrived was last shown
+ * (once a day), through the shared atomic writer in device-local state.
  */
-const SHARED_HELPER_ROWS = 124;
+const SHARED_HELPER_ROWS = 125;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -2065,8 +2068,10 @@ const UNSTAMPED_DIRECT_ROWS = 90;
  * writer in the machine's state directory, machine state and no note.
  * 119 -> 120: the dream trigger's claim, rewritten with the worker's pid
  * through the shared atomic writer, machine state and no note.
+ * 120 -> 121: the once-a-day stamp of the session notice about a store
+ * that has not arrived, device-local state and no note.
  */
-const UNSTAMPED_SHARED_ROWS = 120;
+const UNSTAMPED_SHARED_ROWS = 121;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

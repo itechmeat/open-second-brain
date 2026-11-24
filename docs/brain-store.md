@@ -1,8 +1,12 @@
 # The brain store: setup, sync and migration
 
 Open Second Brain keeps its machine data (signals, preferences, the log,
-ledgers, settings) in the **brain store**: a folder of append-only files
-outside your Obsidian vault. People read the brain through the **human
+ledgers, settings) in the **brain store**: a folder of append-only files.
+With a vault, the store lives in a hidden folder of the vault,
+`.open-second-brain-store/`, so it travels to every machine with the sync
+you already use for the vault and needs no setup of its own; the note
+tools, search and the view writer never look inside it. With no vault, or
+with a `store_root` you set, it lives where that says. People read the brain through the **human
 view**: a few plain Markdown pages that one machine writes into a folder you
 choose. This guide covers setting both up on one or more machines, syncing
 them, moving an existing install whose data still lives in the vault's
@@ -22,12 +26,13 @@ the commands should exit; a Markdown viewer does not show it.
 | --- | --- | --- |
 | `shared/` partition | `<store root>/shared` | Yes, to every machine that runs an agent |
 | `private/` partition | `<store root>/private` | Yes, but only to machines you trust with private records |
-| Store root | `store_root` in the machine config | No: the root is never a sync folder itself |
+| Store root | `<vault>/.open-second-brain-store/` by default; `store_root` in the machine config moves it | With the vault, when it is the default; otherwise never as a whole |
 | Device-local state | the platform state directory, keyed by store id | Never |
-| Human view | `view_target` in the machine config | Its own folder, to the view writer and to phones |
+| Human view | `view_target` in the machine config; by default the vault's `brain-view/` folder | Its own folder, to the view writer and to phones |
 
 - **The store root** is a plain folder that holds the two partition folders
-  and a copy of `FORMAT.md`. It is never synced as a whole.
+  and a copy of `FORMAT.md`. The default root inside the vault travels
+  with the vault; a root you set elsewhere is never synced as a whole.
 - **`shared/`** holds everything that is not private.
 - **`private/`** has the same shape and holds records about private pages
   (a note whose frontmatter `visibility` includes `private`, an informal
@@ -42,9 +47,16 @@ the commands should exit; a Markdown viewer does not show it.
   machine, the view writer, and can live inside your vault or anywhere else.
 
 The store root comes from `OPEN_SECOND_BRAIN_STORE_ROOT`, then `store_root`
-in the machine config, then a per-user default
-(`${XDG_DATA_HOME:-~/.local/share}/open-second-brain/store` on Linux and
-macOS). A root inside the vault is refused. The machine config is
+in the machine config, then a default. With a vault the default is the
+vault's reserved folder `.open-second-brain-store/`; with no vault it is a
+per-user folder (`${XDG_DATA_HOME:-~/.local/share}/open-second-brain/store`
+on Linux and macOS). Any other root inside the vault is refused: the
+reserved folder is the one place the walkers, search and the view writer
+are built to skip. It is never inside `Brain/` or the vault's device-local
+`.open-second-brain/` folder. A machine whose store still sits at the
+per-user folder because release 2.0.0 put it there keeps using it until a
+person runs `o2b store move-into-vault` on it with its agent sessions
+closed (see [The store moves into the vault](#the-store-moves-into-the-vault)). The machine config is
 `~/.config/open-second-brain/config.yaml` on Linux and macOS and
 `%LOCALAPPDATA%\open-second-brain\config.yaml` on Windows; `XDG_CONFIG_HOME`
 moves it on every platform, and `OPEN_SECOND_BRAIN_CONFIG` names another file. It is a simple
@@ -83,8 +95,10 @@ o2b store path
 ```
 
 The view target line reads `view target:  <folder> (config, missing)` until
-the first render creates the folder, and `none` when `view_target` is not
-set. It creates nothing, so it is safe to run at
+the first render creates the folder. With no `view_target`, a machine whose
+config names a vault shows that vault's `brain-view/` folder with the origin
+`default`; it reads `none` when there is no vault either, or when
+`view_target` is `none`. It creates nothing, so it is safe to run at
 any time; `--json` gives the same answer to scripts, and agents read it from
 the `store` block of `second_brain_status`.
 
@@ -221,10 +235,58 @@ the machine hold the partition again.
 Open Second Brain never syncs anything itself. Use any file sync tool:
 Syncthing, a cloud drive folder, or similar.
 
+### The default: the store travels with the vault
+
+With a vault and no `store_root`, there is nothing to set up: the store is
+the vault's hidden folder `.open-second-brain-store/`, and whatever syncs
+the vault carries it. A second machine that receives the vault finds the
+store in it and joins it by itself, at its next start, with no setting.
+
+- **The sync tool must carry hidden folders.** Syncthing and most cloud
+  drive folders do by default. Obsidian Sync skips folders whose name
+  starts with a dot, so with Obsidian Sync alone the store never reaches
+  the other machines; add a second sync for the vault folder, or move the
+  store to a folder another tool syncs on every machine
+  ([Moving the store out of the vault folder](#moving-the-store-out-of-the-vault-folder)).
+- **Both partitions travel with the vault.** Every machine that receives
+  the vault receives `private/` too, as it received the legacy `Brain/`
+  tree with its private pages before the store existed. Setting
+  `store_root` on a machine changes only where Open Second Brain looks:
+  the vault's sync still delivers `.open-second-brain-store/private/` to
+  it. A machine that must not hold private records needs that folder kept
+  out of its sync before it first receives the vault: add it to the sync
+  tool's ignore list on that machine (Syncthing: the line
+  `/.open-second-brain-store/private` in that machine's `.stignore`), or
+  keep the whole `.open-second-brain-store/` out of its sync and give it a
+  `store_root` that receives only `shared/` (below). If `private/` has
+  arrived there already, exclude it first, then delete that machine's copy
+  of the folder, and run `o2b store partition leave private` if the
+  machine has opened the store since
+  ([Leaving a partition](#leaving-a-partition)).
+- **Phones** receive the folder with the vault and ignore it: Obsidian
+  does not show hidden folders, and no note tool reads it.
+- **Never sync the device-local state directory.** Locks, clocks, the
+  search index, backups and run state live outside the vault and never in
+  the store folder.
+
+When a machine waits for a store another machine created and it does not
+arrive, the machine says so plainly, once a day at session start and every
+time in `o2b status`, `second_brain_status` and `o2b brain doctor`: which
+device it waits for, and what to check (that device runs 2.0.1 or later;
+if it switched on 2.0.0, that someone ran `o2b store move-into-vault` on
+it with its agent sessions closed; that it is online and the sync ran;
+and that the sync tool carries hidden folders).
+
+### A store root you choose
+
+Set `store_root` (or `OPEN_SECOND_BRAIN_STORE_ROOT`) when the store must not
+travel with the vault: a server that must hold only `shared/`, a vault
+synced by a tool that drops hidden folders, or no vault at all. Then:
+
 - **Sync `shared/` and `private/` as two separate folders.** That lets you
   give each machine exactly the partitions it should hold.
-- **Never sync the store root itself.** It would sync both partitions as
-  one unit, and a machine could no longer leave `private/` out.
+- **Never sync a root you chose as a whole.** It would sync both partitions
+  as one unit, and a machine could no longer leave `private/` out.
 - **Never sync the device-local state directory.** It lives outside the
   store root by default; keep it out of every sync folder. Doctor reports it
   as `store-device-state-foreign` when another device's entries show up in
@@ -237,6 +299,40 @@ Syncthing, a cloud drive folder, or similar.
   never the store. A phone has no Open Second Brain install; it reads and
   edits pages, and the view writer picks up the edits (see
   [The human view](#the-human-view)).
+
+### Moving the store out of the vault folder
+
+A machine whose store is in the vault's `.open-second-brain-store/` folder
+keeps it there until you move it. Setting `store_root` first does not move
+it: the machine then looks at an empty folder, and the next `o2b init` or
+session start there makes a new store with another id. So move it, in this
+order:
+
+1. On the machine that holds the store, close every agent session
+   (Claude Code, Codex, Hermes, OpenClaw and any other client that runs
+   Open Second Brain), wait for running `o2b` commands to finish, and note
+   the store id `o2b store path` prints.
+2. Copy `<vault>/.open-second-brain-store/shared` and
+   `<vault>/.open-second-brain-store/private` into the new root, for
+   example `~/brain-store/shared` and `~/brain-store/private`.
+3. Set `store_root: ~/brain-store` in that machine's config and run
+   `o2b store path`. It must print the same store id, with the partitions
+   held as before. If it does not, remove the setting, check the copy, and
+   start no session until it does.
+4. Point the other sync tool at `~/brain-store/shared` and
+   `~/brain-store/private` (only `shared/` for a machine that must not hold
+   private records).
+5. On every other machine, wait until those folders have arrived at its
+   own store root, then set `store_root` there and check that
+   `o2b store path` prints the same store id before any session starts. A
+   machine that holds records of this store in its own vault folder (its
+   `o2b store path` names that folder with the same store id) first copies
+   into its new root, from its vault folder, the files the new root does
+   not have yet: every device writes only its own files, so nothing is
+   overwritten.
+6. Once every machine prints the same store id from its store root, delete
+   the vault's `.open-second-brain-store/` folder: nothing reads it any
+   more, and a later sync would only spread an old copy.
 
 Files in the store are append-only and every device writes only its own
 files, so two machines never edit the same file and sync conflicts do not
@@ -280,8 +376,13 @@ A language the view has no strings for is refused and the command names
 the ones it has; a regional tag of one (`ru-RU`) is accepted.
 `o2b brain settings unset view.language` goes back to English.
 
-With no `view_target` no page is written anywhere, and the brain works the
-same.
+With no `view_target`, a machine whose machine config names a vault
+(`vault`) writes the view into that vault's `brain-view/` folder, so the
+pages appear where you already look, beside your notes. Set `view_target`
+to another folder to move it, or to `none` (or `off`) to write no page
+anywhere; the brain works the same without a view. The default folder is
+never `Brain/`: that name stays the legacy tree's while machines on 1.x
+still write it.
 
 A view folder inside the vault belongs to the view writer: the note tools
 (`brain_create_note`, `brain_update_note`, `brain_append_note`, the write
@@ -494,7 +595,9 @@ run it by hand, step by step, as described below.
 
 Every machine migrates on its own, one after the other. The commands below
 assume the machine config already names the vault (it does on any existing
-install) and that you have set `store_root` as in [Setup](#setup).
+install). Without `store_root` the store is created in the vault's
+`.open-second-brain-store/` folder and reaches the other machines with the
+vault; with `store_root` set as in [Setup](#setup) it is created there.
 
 ### Automatic migration
 
@@ -556,8 +659,19 @@ The worker:
    started migrating this vault (its `store-migration` snapshot event in
    the synced Brain log): it then waits for that device's store to arrive
    by sync instead of creating a second one; otherwise it creates the
-   store at the configured `store_root` (or the default), as
-   `o2b store init` does; a root inside the vault is refused. The look is
+   store at the configured `store_root` or, by default, in the vault's
+   `.open-second-brain-store/` folder, as `o2b store init` does; any other
+   root inside the vault is refused. A store created in the vault folder
+   takes its id from the vault's synced identity marker
+   (`Brain/vault-id.json`), so two machines that create it at once, and
+   both hold the marker, create the same store. A vault with no marker
+   yet has one minted first, from the oldest legacy log line, and the
+   store id derived from it; that marker is kept for good. Two machines
+   with no marker agree only when both hold the same oldest log shard: a
+   machine still missing an older shard than the other has mints another
+   marker and creates another store, and a marker that arrives later does
+   not change a store that exists. So let one machine migrate and sync
+   its store (and marker) before you start the next. The look is
    bounded: at most 32 other devices (by the date of their newest log
    shard, newest first), per device only its newest two log shards, and
    of each only the last 256 KiB, because a migrating device's snapshot event is
@@ -573,14 +687,15 @@ The worker:
    next start instead of creating a store. When another device has
    started migrating and its store has not arrived, the answer is
    remembered: the next starts start no worker and read no log shard
-   until the store arrives or a day has passed. Doctor and the session
-   start say what it waits for. When this machine is meant to share that
-   device's store, set `auto_store_migration: false` here until the store
-   has arrived by sync (or fix its sync), then turn it back on. Give this
-   machine a store of its own (`o2b store init`, then
-   `o2b brain migrate-store`) only at a store root that sync never brings
-   together with the other device's: two stores at one root refuse to
-   open (see below);
+   until the store arrives or a day has passed. The session start (once a
+   day), status and doctor say plainly what it waits for and what to
+   check: that the other device runs 2.0.1 or later; if it switched on
+   2.0.0, that someone ran `o2b store move-into-vault` on it with its
+   agent sessions closed (nothing moves that store by itself); that it is
+   online and the vault's sync has run; and that the sync tool carries
+   the hidden `.open-second-brain-store/` folder.
+   This machine needs no setting: it joins the store as soon as it
+   arrives;
 5. runs the same migration as `o2b brain migrate-store`, resuming an
    interrupted one instead of starting again;
 6. on a later machine whose first machine's migration has not arrived by
@@ -672,9 +787,18 @@ the store's `shared` partition), the `auto_store_migration` metrics surface
 one row, and the next session start shows once that the brain moved, where
 the snapshot taken before the move is, and how to undo it:
 `o2b brain migrate-store --rollback` (see
-[Rolling back a machine](#5-rolling-back-a-machine)). The legacy tree stays
-in the vault: its removal is always the explicit step described in
-[Removing the legacy tree](#6-removing-the-legacy-tree).
+[Rolling back a machine](#5-rolling-back-a-machine)).
+
+Right after the switch the same worker asks for the removal of the legacy
+tree and renders the human view. When every device of the migration
+cohort has switched or is retired (on a brain only this machine used, that
+is at once), the tree leaves the vault in the same run, through the same
+removal as `o2b brain migrate-store --remove-legacy`; the session line then
+says the brain moved and the tree left, without the rollback advice, since
+a rollback is no longer possible. While another device still writes the
+legacy layout the tree stays; see
+[Removing the legacy tree](#6-removing-the-legacy-tree) for what happens
+next.
 
 The worker lock, the failure or waiting record and the one-time notice
 live in this machine's device-local state
@@ -793,11 +917,15 @@ and the command that clears it:
 9. A vault configured after the switch whose deny rules differ from the
    store's: it stays unbound, and doctor names the file
    (`permissions-legacy-only`) until you reconcile the two policies.
-10. Every device of the migration cohort switched or is retired, by you or
-    by silence, and the legacy tree is still in the vault: doctor reports
+10. A device of the migration cohort still writes the legacy layout: the
+    tree stays, and the session start says once a day which device to
+    update (see [Removing the legacy tree](#6-removing-the-legacy-tree)).
+    Once every device switched or is retired, doctor reports
     `legacy-tree-can-leave` and the `migration.cohort` block of the status
-    says `can_leave`. Nothing is removed on its own; run
-    `o2b brain migrate-store --remove-legacy` when you want the tree gone.
+    says `can_leave`; the tree then leaves at the next session start, or at
+    once with `o2b brain migrate-store --remove-legacy`. With
+    `auto_legacy_removal: false` (or `auto_store_migration: false`) nothing
+    is removed until you run that command.
 11. A device retired by silence writes the legacy layout after the
     removal: doctor reports `legacy-tree-reappeared` and names it. Update
     Open Second Brain on that machine, then run the removal again.
@@ -814,21 +942,105 @@ run needs no one: the next start leaves it for up to a day (it reads only
 the pid), then its worker opens it; `o2b brain migrate-store` opens it at
 once.
 
+### The store moves into the vault
+
+Release 2.0.0 created the store at the per-user folder outside the vault,
+which nothing synced, so a second machine waited for a store that never
+came. Since 2.0.1 such a machine, with a vault and no `store_root`, keeps
+using that folder until a person moves it with one command, run on that
+machine with its agent sessions closed: `o2b store move-into-vault`
+(`o2b store move-into-vault --dry-run` prints the plan and writes nothing).
+
+Nothing moves it by itself: a move that races running agent sessions,
+processes of the old release and the sync tool cannot be made safe at a
+session start. Until it moves, the session start says once a day that the
+store is outside the vault and that no other machine can receive it, and
+`o2b status`, `second_brain_status` and `o2b brain doctor`
+(`store-outside-vault`) say it every time, with the command.
+
+The command refuses, and changes nothing, unless the store sits at the
+default per-user folder and a vault is configured: a `store_root` you set
+is yours and is never moved. Then:
+
+1. it takes a device-local relocation lock; a second run is refused, not
+   queued, and every write to the store on this machine that starts from
+   here on does not write while the lock is held;
+2. it refuses, without waiting, while anything writes the store: an
+   append that holds a shard lock, a dream pass, the automatic migration
+   or the automatic legacy removal. It names each and asks you to close
+   every agent session and wait for running `o2b` commands. An idle MCP
+   server holds nothing it could see, which is why you close the
+   sessions; a write it makes after the move goes to the vault folder
+   (this release) or is carried over (an older release, below);
+3. it copies every file of every partition into the vault folder. A
+   partition the folder lacks is copied into a hidden staging folder and
+   renamed into place whole. A partition already there with this store's
+   identity (an earlier run cut short) is completed file by file: a file
+   that holds the copy as a prefix is kept, one that is a prefix of it is
+   replaced only while it is still the file that was compared, and two
+   copies that diverged stop the move;
+4. it compares every byte of the copy with the original;
+5. it binds this machine to the new root (the same store id and device
+   id; record ids do not change, the bytes are the same bytes);
+6. it compares the copy once more, then writes `relocated.json` into the
+   old folder. From then on the old folder is an inactive recovery copy
+   that nothing of this release writes again; a process started before
+   the move that still holds the old folder writes into the vault folder
+   instead.
+
+It prints how long the move took and where the recovery copy is. Nothing
+removes the recovery copy; delete that folder by hand, and only once:
+
+- every agent session that ran before the move has ended, so no process of
+  the older release still writes the old folder;
+- `o2b store move-into-vault --carry` says nothing waits in the old folder
+  (lines an older process appended after the move exist only there until
+  they are carried; keep the copy while a carry leaves files waiting, for
+  example while the vault folder lacks a partition);
+- the vault store has reached your other machines.
+
+A crash at any step leaves the old folder in use; run the command again.
+Lines that a process of the older release (an MCP server that had not
+restarted yet) appended to the old folder after the move stay there until
+the command runs again: the session start says so (and doctor, as
+`store-late-writes`), and `o2b store move-into-vault`, or
+`o2b store move-into-vault --carry`, carries them into the vault folder
+once. A carry writes only while the vault folder's partition still holds
+this store; one a sync took away receives nothing, and the lines wait for
+the next run. When the vault folder already holds a store with another id,
+the two are never merged: the command stops, this machine keeps writing
+its old folder, and the session start, status and doctor name both and ask
+you to decide which one to keep.
+
+A machine that waits for such a store says which device it waits for and
+that, on that device, `o2b store move-into-vault` must run.
+
+The removal of the legacy tree waits while another device of the cohort is
+known to have switched but its records have not arrived on this machine:
+its migration mark is in the synced Brain log and its switch record is not
+in this store, or the first migration's cut has not arrived in full. The
+legacy tree is then the only place both machines' records meet. `--force`
+goes past it.
+
 ### Two machines that start before either sees the other
 
 The wait in step 4 needs the other device's Brain log shard to have
 synced. When two machines that share a vault, and have no store yet, both
 start their first automatic migration before either one's log shard has
-reached the other, each creates its own store and migrates into it. When
-sync then brings the two stores together at one root, its partitions
-belong to two different stores and the store refuses to open, naming
-them; doctor and status report that error, and it needs your hand. The
-window runs from the moment the first machine's worker looks at the log
-(before it creates its store, takes the gate and takes the snapshot that
-writes its mark) until the second machine receives that mark by sync, so
-it is wider than one sync delay. To stay out of it, update one machine
-first and let its migration finish and sync before you update the others,
-or set `auto_store_migration: false` on the others until then.
+reached the other, each creates the store in its copy of the vault folder.
+The store id comes from the vault's synced identity, so both create the
+same store, and sync brings their shards together as one store with no
+refusal. Each machine imported the legacy tree as a first machine, so the
+store then holds two imported copies of the legacy records, one per
+device: signals, preferences and settings still fold to one each, but the
+imported Brain log lines and ledger rows (metrics, continuity, history)
+appear twice. To stay out of that
+window, update one machine first and let its migration finish and sync
+before you update the others. A vault with no identity marker (made by a
+release before the marker existed) has one minted from its oldest legacy
+log line, so the two agree only when both hold the same oldest log shard;
+when one lacks it, they create two stores, which refuse to open together,
+naming both; that needs your hand.
 
 ### 1. Check and dry run on the first machine
 
@@ -1117,9 +1329,13 @@ machine reports `migration-available` again; to switch again, run
 
 The legacy tree leaves the vault only when every device of the migration
 cohort (every device id found anywhere in the legacy tree) has switched,
-been retired by you, or been retired by silence. Until then the removal
-refuses and names the devices it waits for, each with the date of its last
-evidence of life:
+been retired by you, or been retired by silence, and no device that
+switched is still waiting for its records to arrive on this machine (its
+migration mark is in the synced Brain log while its switch record is not in
+this store, or the first migration's cut has not arrived in full; a device
+retired by silence is no exception, since its store may simply never have
+reached this machine). Until then the removal refuses and names the devices
+it waits for, each with the date of its last evidence of life:
 
 <!-- doc-test: scenario=migration machine=laptop exit=1 expect="the legacy layout" -->
 ```sh
@@ -1224,10 +1440,11 @@ o2b brain migrate-store
 ```
 
 Now every cohort device has switched or been retired, so doctor reports
-`legacy-tree-can-leave` with the command. It is advice: nothing is removed
-until you run it. The removal goes ahead, and its report names the devices
-that switched and, apart from them, each device retired by silence with its
-last evidence (`switched` and `retired_by_silence` under `--json`):
+`legacy-tree-can-leave`. A session start removes the tree by itself (see
+"The removal without a command" below); here it is run by hand. The removal
+goes ahead, and its report names the devices that switched and, apart from
+them, each device retired by silence with its last evidence (`switched` and
+`retired_by_silence` under `--json`):
 
 <!-- doc-test: scenario=migration machine=laptop exit=0 expect="Everything else was moved into the archive, not deleted" -->
 ```sh
@@ -1255,8 +1472,10 @@ Doctor names them (`legacy-local-files-left`, with their sizes), and
 `o2b brain migrate-store --remove-legacy` run on that machine clears them
 the same way (the cohort no longer matters there: the tree is gone). Where
 nothing of the tree is left at all (the sync also deleted that folder), the
-command says so, lists the cohort as above, moves nothing and exits 0. Afterwards the vault holds your notes and, if
-`view_target` points into it, the view folder. A rollback is no longer
+command says so, lists the cohort as above, moves nothing and exits 0. Afterwards the vault holds your notes, the view folder (`brain-view/` by
+default, or wherever `view_target` points), and the managed block of the
+vault's `.gitignore` that names `.open-second-brain/` (kept, so a returning
+1.x machine's index is never committed). A rollback is no longer
 possible:
 
 <!-- doc-test: scenario=migration machine=laptop exit=1 expect="rollback is only possible until then" -->
@@ -1276,6 +1495,64 @@ its own leftover files, reports and records the verdict of the removal
 that moved the tree; its own record says it moved no tree
 (`tree_already_left`), so it never replaces that verdict for a later
 machine.
+
+#### The removal without a command
+
+After the update nobody has to run `--remove-legacy`. On a switched machine
+every session start and every MCP server start checks, with two `stat`s and
+a small device-local file, whether a legacy root (`Brain/`, or this
+machine's `.open-second-brain/`) is still in the vault. When one is, it
+starts one background worker (`o2b brain migrate-store
+--auto-remove-legacy`) that runs exactly the removal above, never with
+`--force`: every refusal of that command refuses it too (a device still on
+the legacy layout, a settings or data shard that cannot be read in full,
+items held back for a partition this machine lacks, an interrupted
+migration or rollback that holds the gate, a tree that keeps changing). The
+automatic migration's own worker asks the same right after it switched the
+machine, so a brain that only this machine used loses its tree in the same
+update.
+
+- The removal also waits while another device switched and its records
+  have not arrived on this machine (its switch record, or the first
+  migration's cut, is not in this store yet; see
+  [The store moves into the vault](#the-store-moves-into-the-vault)): the
+  tree is then the only place both machines' records meet. The daily line
+  says which device's records it waits for and that they travel in the
+  hidden `.open-second-brain-store/` folder.
+- While a device still writes the legacy layout, a start asks again at
+  most once an hour, so the tree leaves within the hour after the last
+  pending device switched (its switch must have arrived by sync). Machines
+  on an old release keep working meanwhile: their writes to the tree are
+  imported as they arrive.
+- The session start says once a day, in one line, which device the tree
+  waits for (its id and the day it was last seen) and that it leaves by
+  itself after that device updates, or how to retire the device if it is
+  gone for good (`o2b store device retire <device>`). A device id is the
+  `device_id` of that machine's config; `o2b store device list` lists them.
+- After a refusal the session start names the reason once a day and the
+  next attempt waits a day; `o2b brain migrate-store --remove-legacy` runs
+  it at once after you fixed the cause.
+- When the tree left, the next session start says so once and names the
+  archive.
+- These lines share one rule with the migration's and the store move's
+  lines: a session start shows at most one of them a day on a machine,
+  the most important first (that the brain moved, then a failure or a
+  store that has not arrived, then the other one-time news, then a wait).
+  A line held back is shown on a later day; `o2b status` and doctor show
+  every one of them every time.
+- The removal touches only `Brain/` and `.open-second-brain/`; the store
+  folder `.open-second-brain-store/` and the view folder `brain-view/`
+  stay, and neither one's walkers read the other.
+
+The worker's record (`legacy-removal.json`), its lock and its error log
+live in this machine's device-local state beside the automatic migration's
+(`<state dir>/open-second-brain/stores/auto-migration/<vault key>/`).
+Set `auto_legacy_removal: false` in the machine config to keep the tree
+until you remove it by hand; `OPEN_SECOND_BRAIN_AUTO_LEGACY_REMOVAL=false`
+does the same for one process. Both read their values the way
+`auto_store_migration` does (on for `true`, `1`, `yes`, `on`, off for
+`false`, `0`, `no`, `off`, anything else off), and
+`auto_store_migration: false` turns the automatic removal off too.
 
 #### A device retired by silence that comes back
 
@@ -1670,7 +1947,9 @@ that come from the store, the migration and the view:
 | Code | What it means | What to do |
 | --- | --- | --- |
 | `store-missing` | No store exists at the configured root. | Run `o2b init` (or `o2b store init`) on the first machine; on other machines check `store_root` and wait for sync. |
-| `store-root-invalid` | The store root cannot be used: it is inside the vault, a partition's `store.json` does not parse, or it holds partitions of two different stores. A caller below local reach (a remote MCP client) sees only that the store could not be opened, without the file or the store ids. | Point `store_root` outside the vault, keep only one store's partitions under it, and restore a `store.json` that does not parse from sync or a backup. |
+| `store-outside-vault` | The store sits at the per-user folder where 2.0.0 put it, outside the vault, so no other machine can receive its records. Nothing moves it by itself. The last refusal of the move command, if any, is named too. | Close every agent session on the machine, then run `o2b store move-into-vault` (`--dry-run` first shows the plan). |
+| `store-late-writes` | After the store moved into the vault, a process of an older release wrote to the old folder; those records wait there. | Close every agent session on the machine, then run `o2b store move-into-vault --carry`. |
+| `store-root-invalid` | The store root cannot be used: it is inside the vault anywhere but the reserved `.open-second-brain-store/` folder, a partition's `store.json` does not parse, or it holds partitions of two different stores. A caller below local reach (a remote MCP client) sees only that the store could not be opened, without the file or the store ids. | Remove `store_root` (the vault folder is then used) or point it outside the vault, keep only one store's partitions under it, and restore a `store.json` that does not parse from sync or a backup. |
 | `store-partition-lost` | A partition this machine has held (it opened or initialised it here) no longer shows its `store.json`. The store is not opened: every protection fails closed and every store write is refused, because the partition's records cannot be read. | Restore that partition's `store.json` from sync or a backup. To stop holding `private` on this machine on purpose, stop syncing its folder, remove the folder, then run `o2b store partition leave private` (it needs `shared/store.json`, so restore `shared` first when both are lost); `shared` can only be restored. |
 | `store-device-state-foreign` | The device-local state directory holds entries of other devices: it was put into a sync folder. | Remove it from the sync tool, sync only `shared/` and `private/`, then delete the other devices' entries in it. |
 | `machine-state-adopt-conflicts` | When this machine switched, two fresh vaults held a machine-state file with different bytes; the first vault's copy is live and the other is kept in the `adopt-conflicts/` folder the finding names, with the file count. | Compare each kept file with the live copy at the same path, copy over what is still needed, then delete the folder. |

@@ -54,6 +54,7 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
+import { legacyLogSeed } from "./vault-seed.ts";
 import { formatPrimaryAgentYamlValue } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { renderBrainManual } from "./templates.ts";
@@ -530,7 +531,12 @@ export function bootstrapBrain(
   //     id would make every synced peer look like a different store.
   const identityPath = vaultIdentityPath(vault);
   const identityExisted = existsSync(identityPath);
-  writeVaultIdentity(vault);
+  // A store created in the vault's reserved folder minted this marker
+  // before itself and took its id from it (`init-store.ts`), so the marker
+  // is kept as it is and the two never disagree. A vault with no marker
+  // yet mints the id every machine of it derives alike from its legacy
+  // log (`vault-seed.ts`).
+  writeVaultIdentity(vault, { seed: legacyLogSeed(vault) });
   if (!identityExisted) created.push(vaultRelative(identityPath, vault));
 
   // 1c. `<vault>/.gitignore` — the derived-state guard (t_206562ae).

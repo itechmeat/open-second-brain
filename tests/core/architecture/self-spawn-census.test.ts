@@ -36,6 +36,8 @@ const SITES: Readonly<Record<string, string>> = Object.freeze({
   "src/core/maintenance/ensure-current.ts":
     "the automatic store migration worker, the self-heal upgrade and the self-heal reindex",
   "src/core/search/freshen.ts": "freshen on read (a background incremental index run)",
+  "src/core/store-migration/auto-removal.ts":
+    "the automatic removal of the legacy tree (`o2b brain migrate-store --auto-remove-legacy`), started by a switched machine's session start or MCP server start",
   "hooks/session-capture.ts": "the deferred session capture worker",
 });
 

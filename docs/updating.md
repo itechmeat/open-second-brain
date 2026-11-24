@@ -6,6 +6,115 @@ git marketplace snapshot). **An update must never break an existing install or
 the agent.** This document is the contract that guarantees it, for both
 operators and any agent that edits the plugin.
 
+## Upgrading to 2.0.1
+
+2.0.1 finishes the move from 1.x by itself and makes the brain reach every
+machine through the vault's own sync. Update each machine and start an
+agent session on it. At a start, in the background, in this order:
+
+1. **The brain moves into the store.** With a vault and no `store_root`,
+   the brain store lives in the vault's hidden folder
+   `.open-second-brain-store/`, so the sync you already use carries it to
+   your other machines, provided it carries hidden folders. A machine
+   still on the `Brain/` tree imports it, as a first machine or, when the
+   store has arrived from another machine, as a later one that adds only
+   what it alone has.
+2. **The pages are written** into the vault's `brain-view/` folder
+   (`about-me.md`, weekly history, decisions, topics), unless
+   `view_target` names another folder or `none`.
+3. **The legacy tree leaves.** `Brain/` and `.open-second-brain/` move
+   into a dated archive in the machine's device-local state, never
+   deleted, as soon as every machine that wrote them has switched or is
+   retired and their records have arrived: on a brain only one machine
+   used, in the same update. Each machine removes its own copy; a sync
+   tool that propagates deletions removes it on the others first.
+
+The session start tells this story in plain words, in at most one line a
+day: that the brain moved, what blocks the next step (a failure, a store
+outside the vault, or a store that has not arrived), or which machine the
+tree still waits for. `o2b status` and `o2b brain doctor` show the full
+state every time.
+
+### A machine that switched on 2.0.0
+
+2.0.0 kept the store of a machine that switched at the per-user folder
+outside the vault (`~/.local/share/open-second-brain/store` on Linux),
+which nothing syncs, so no other machine ever received it. 2.0.1 does not
+move it by itself: a move that races running agent sessions, processes of
+the old release and the sync tool cannot be made safe at a session start.
+Until it moves, the machine keeps using that folder, its session start
+says so once a day, and `o2b status` and doctor (`store-outside-vault`)
+say it every time. The other machines wait for it and name it.
+
+To move it, on that machine:
+
+1. Close every agent session (Claude Code, Codex, Hermes, OpenClaw and
+   any other client that runs Open Second Brain) and wait for running
+   `o2b` commands to finish.
+2. Optionally look first: `o2b store move-into-vault --dry-run` prints
+   where the store goes, how many files it copies, what the vault folder
+   holds now, and whether anything still writes the store.
+3. Run `o2b store move-into-vault`.
+
+The command refuses, and changes nothing, when the store is not at the
+default folder outside the vault (a `store_root` you set is never moved),
+when no vault is configured, or while anything writes the store (an
+append, a dream pass, the automatic migration or removal): it names what
+writes and asks you to close the sessions; it never waits. Otherwise it
+copies every file into the vault folder, compares every byte, binds the
+machine to the new folder, compares again, and commits: the store id,
+record ids and device id stay the same, and the old folder is kept as an
+inactive recovery copy that is never written again. It prints how long it
+took and where the recovery copy is. On the 410,000-record brain this was
+tested with, a 429 MB store moved in about two seconds.
+
+A crash at any step leaves the old folder in use; run the command again.
+A process of an older release that kept running and wrote to the old
+folder after the move leaves those records there: the session start says
+so, and `o2b store move-into-vault` (or `--carry`) carries them over,
+once. A store with another id already in the vault folder is never merged
+with this one: the command stops and says so. Details:
+[brain-store.md](brain-store.md#the-store-moves-into-the-vault).
+
+### What can need you
+
+1. **A machine that never updates.** The tree waits for it, and the daily
+   line names it with the day it was last seen. A machine silent for 30
+   days is retired by itself; one that is gone for good sooner:
+   `o2b store device retire <device>`.
+2. **A sync tool that skips hidden folders.** Obsidian Sync does: the
+   store cannot arrive, and the waiting machine says so. Move the store to
+   a folder another tool syncs, on every machine, in the order of
+   [Moving the store out of the vault folder](brain-store.md#moving-the-store-out-of-the-vault-folder):
+   first copy it out of the vault folder on the machine that holds it and
+   check that `o2b store path` prints the same store id with `store_root`
+   set, then set `store_root` on each other machine only once the folders
+   have arrived there and it prints that id too. A machine whose
+   `store_root` points at an empty folder makes a new store with another
+   id.
+3. **Private records.** Every machine that receives the vault receives the
+   store's `private/` partition too, as it received the private pages of
+   the legacy `Brain/` tree. Setting `store_root` does not stop that: a
+   machine that must not hold private records keeps
+   `.open-second-brain-store/private/` out of its vault sync before it
+   receives the vault, and deletes a copy that already arrived (see
+   [brain-store.md](brain-store.md#syncing)).
+4. **Two machines that create the store at once.** A vault with an
+   identity marker (`Brain/vault-id.json`, which every 1.x `o2b init`
+   wrote) gives both the same store id. Without one, they agree only when
+   both hold the same oldest log shard; let one machine migrate and sync
+   the store before starting the other.
+
+A machine with `store_root` set, or with no vault, keeps its store where
+it is. `auto_legacy_removal: false` keeps the tree until you run
+`o2b brain migrate-store --remove-legacy`; `auto_store_migration: false`
+keeps every step off. The recovery copy of a moved store is not removed
+by itself. Delete the old folder by hand only once every agent session
+that ran before the move has ended, `o2b store move-into-vault --carry`
+says nothing waits there, and the vault store has synced to your other
+machines: lines an older process wrote there after the move exist nowhere
+else until they are carried.
+
 ## Upgrading to 2.0.0
 
 2.0 makes dream a property of the brain instead of one agent's schedule,
@@ -35,6 +144,12 @@ start hand the move to one background worker after its dry run. `o2b
 update` runs the same migration when one is pending (skip it with
 `--skip-store-migration`). What it does, and when a person has to step
 in: [brain-store.md](brain-store.md#automatic-migration).
+
+From 2.0.1 the rest follows by itself too, with no command to run: the
+pages appear in the vault's `brain-view/` folder and the legacy tree leaves
+once every machine has switched (see
+[Upgrading to 2.0.1](#upgrading-to-201) and
+[brain-store.md](brain-store.md#the-removal-without-a-command)).
 
 ### 3. Choose the dream owner
 
@@ -1219,6 +1334,13 @@ hands-off:
   machine (any value other than `true`, `1`, `yes` or `on` turns it off
   too, and the environment variable can only turn it off). How it works, and how to roll back:
   [`docs/brain-store.md`](brain-store.md#automatic-migration);
+- once every machine of the migration cohort has switched or is retired,
+  the legacy `Brain/` tree leaves the vault by itself (a background worker
+  started by the session start or the MCP server start runs
+  `o2b brain migrate-store --remove-legacy`, with every refusal of that
+  command); while one is still on 1.x, the session start names it once a
+  day. `auto_legacy_removal: false` keeps the tree until you remove it by
+  hand ([`docs/brain-store.md`](brain-store.md#the-removal-without-a-command));
 - a stale-schema or missing search index is rebuilt in the **background** (a
   detached reindex), so startup never blocks; and as a safety net the search
   read path self-heals a stale/missing index on first query;

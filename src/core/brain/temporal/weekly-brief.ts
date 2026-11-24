@@ -16,6 +16,7 @@
  * Task 7 in `plan.md`.
  */
 
+import { STORE_VAULT_DIR } from "../../store/constants.ts";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -194,6 +195,7 @@ const SKIPPED_DIR_NAMES: ReadonlySet<string> = new Set([
   ".git",
   "node_modules",
   ".open-second-brain",
+  STORE_VAULT_DIR,
   ".obsidian",
   ".trash",
   ".stversions",

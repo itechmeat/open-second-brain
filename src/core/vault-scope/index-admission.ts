@@ -21,6 +21,7 @@ import {
   BRAIN_PAYLOADS_REL,
   BRAIN_STATE_REL,
 } from "../brain/paths.ts";
+import { STORE_VAULT_DIR } from "../store/constants.ts";
 import { pathCovers } from "./defaults.ts";
 
 export interface AdmissionVerdict {
@@ -42,6 +43,11 @@ const ADMIT: AdmissionVerdict = Object.freeze({ admit: true });
  * already satisfies the canonical-prefix precondition.
  */
 export function admitToIndex(relPath: string): AdmissionVerdict {
+  // The brain store's reserved folder holds machine records that travel
+  // with the vault; they are read through the store, never as notes.
+  if (pathCovers(STORE_VAULT_DIR, relPath)) {
+    return Object.freeze({ admit: false, reason: "brain-store" });
+  }
   if (pathCovers(BRAIN_STATE_REL, relPath)) {
     return Object.freeze({ admit: false, reason: "exact-state-lane" });
   }

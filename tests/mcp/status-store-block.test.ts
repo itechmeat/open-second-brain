@@ -103,6 +103,7 @@ interface StoreBlock {
     available: boolean;
     legacy_tree_present: boolean;
     store_exists: boolean | null;
+    relocation: Record<string, unknown> | null;
     switched: boolean;
     next_commands: string[];
     automatic: { state: string } | null;
@@ -142,6 +143,7 @@ describe("second_brain_status store block", () => {
       available: true,
       legacy_tree_present: true,
       store_exists: false,
+      relocation: null,
       switched: false,
       next_commands: ["o2b store init", "o2b brain migrate-store --dry-run"],
       automatic: expect.objectContaining({ state: "pending" }),
@@ -190,6 +192,7 @@ describe("second_brain_status store block", () => {
       available: false,
       legacy_tree_present: false,
       store_exists: false,
+      relocation: null,
       switched: false,
       next_commands: [],
       automatic: expect.objectContaining({ state: "not_needed" }),
@@ -214,6 +217,7 @@ describe("second_brain_status store block", () => {
       available: false,
       legacy_tree_present: true,
       store_exists: true,
+      relocation: null,
       switched: true,
       next_commands: [],
       automatic: expect.objectContaining({ state: "done" }),

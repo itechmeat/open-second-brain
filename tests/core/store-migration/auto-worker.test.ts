@@ -1209,7 +1209,9 @@ describe("a store another device created for this vault", () => {
     const report = autoMigrationReport({ vault: bench.vault, now });
     expect(report.state).toBe(AUTO_MIGRATION_STATE.waiting);
     expect(report.nextStart).toContain("store arrives");
-    expect(report.message).toContain("o2b store init");
+    // Plainly: what it waits for and what to check, never only "waiting for sync".
+    expect(report.message).toContain(".open-second-brain-store/");
+    expect(report.message).toContain("hidden folders");
     // A day later the synced log is looked at again.
     const dayLater = new Date(now.getTime() + 25 * 60 * 60_000);
     expect(planAutoMigrationStart(bench.vault, undefined, dayLater, false)).toBe(

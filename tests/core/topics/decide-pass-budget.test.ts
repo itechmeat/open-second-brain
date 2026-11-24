@@ -10,7 +10,10 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { runDecisionExecutor } from "../../../src/core/brain/dream-queue/decision-executor.ts";
+import {
+  RELEASE_SHADOW,
+  runDecisionExecutor,
+} from "../../../src/core/brain/dream-queue/decision-executor.ts";
 import { MIN_REQUEST_MS } from "../../../src/core/decision-model/request-floor.ts";
 import { readTopicQuestionState } from "../../../src/core/topics/decide-operations.ts";
 import { produceTopicQuestions } from "../../../src/core/topics/decide-produce.ts";
@@ -106,14 +109,31 @@ describe("the model budget of a pass", () => {
     produce();
     const pairs = f.items("topic-same").length;
     expect(pairs).toBeGreaterThan(5);
-    const fake = new FakeDecisionProvider({ latencyMs: 150 });
-    const result = await execute(fake, "topic_same:shadow", Date.now() + 600, Date.now);
+    // Each answer takes 150 ms of a clock only the answers move: the
+    // budget runs out at the same request on every run, however loaded
+    // the machine is.
+    let now = f.still();
+    class Slow extends FakeDecisionProvider {
+      override async decide(
+        req: Parameters<FakeDecisionProvider["decide"]>[0],
+        opts: Parameters<FakeDecisionProvider["decide"]>[1],
+      ) {
+        now += 150;
+        return super.decide(req, opts);
+      }
+    }
+    const fake = new Slow({});
+    const result = await execute(fake, "topic_same:shadow", now + 600, () => now);
     expect(result.status === "ran" && result.stopped).toBe("deadline");
     const asked = fake.requests.length;
     expect(asked).toBeGreaterThan(0);
     expect(asked).toBeLessThan(pairs);
-    // What was not reached is still ready for the next pass.
-    const waiting = f.items("topic-same").filter((i) => i.last_release === null);
+    // What was not reached is still ready for the next pass: never asked,
+    // or taken and given back unasked at the deadline (a release that is
+    // not a shadow answer leaves the item takeable).
+    const waiting = f
+      .items("topic-same")
+      .filter((i) => i.attempts === 0 && i.last_release?.reason !== RELEASE_SHADOW);
     expect(waiting).toHaveLength(pairs - asked);
   });
 

@@ -109,6 +109,7 @@ import {
   resetVaultIdentityPins,
   vaultIdentityPath,
   vaultMarkerAbsentNotice,
+  vaultIdFromSeed,
   writeVaultIdentity,
 } from "../../../src/core/brain/vault-identity.ts";
 import type { DegradationNotice } from "../../../src/core/integrity/degradation.ts";
@@ -166,6 +167,29 @@ describe("vault identity marker", () => {
   test("an unreadable or malformed marker reads as absent, never as a mismatch", () => {
     writeFileSync(vaultIdentityPath(vault), "{ not json", "utf8");
     expect(readVaultIdentity(vault)).toBeNull();
+  });
+
+  test("one another process publishes while this one mints its own stands, for both", () => {
+    // Two processes found no marker and read different seeds (an older log
+    // shard arrived between their reads); the other one publishes first,
+    // between this one's look and its write.
+    let other: ReturnType<typeof writeVaultIdentity> | null = null;
+    const racing = new Date("2026-11-24T10:00:00Z");
+    const stamp = racing.toISOString();
+    racing.toISOString = () => {
+      other ??= writeVaultIdentity(vault, { seed: "seed-read-second" });
+      return stamp;
+    };
+    const mine = writeVaultIdentity(vault, { seed: "seed-read-first", now: racing });
+    expect(other).not.toBeNull();
+    expect(mine.vault_id).toBe(vaultIdFromSeed("seed-read-second"));
+    expect(readVaultIdentity(vault)?.vault_id).toBe(vaultIdFromSeed("seed-read-second"));
+  });
+
+  test("a marker that cannot be read is replaced", () => {
+    writeFileSync(vaultIdentityPath(vault), "{ not json", "utf8");
+    const written = writeVaultIdentity(vault, { seed: "seed" });
+    expect(readVaultIdentity(vault)?.vault_id).toBe(written.vault_id);
   });
 });
 

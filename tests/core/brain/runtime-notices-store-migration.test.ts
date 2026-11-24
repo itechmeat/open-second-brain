@@ -22,6 +22,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { collectRuntimeNotices } from "../../../src/core/brain/runtime-notices.ts";
 import {
+  autoMigrationStateDir,
   autoMigrationStatePath,
   claimAutoMigrationLock,
   readAutoMigrationNotice,
@@ -69,6 +70,36 @@ const migrationNotices = (oneTime = false) =>
   collectRuntimeNotices(vault, { configPath, env: {}, oneTime }).filter((n) =>
     n.code.startsWith("store_migration"),
   );
+
+describe("one line of the update a day at session start", () => {
+  test("a session start shows it once a day; status shows it every time", () => {
+    seedLegacy();
+    recordAutoMigrationFailure(vault, "the disk is full", {
+      manualCommand: "o2b brain migrate-store",
+      now: NOW,
+    });
+    expect(migrationNotices(true)).toHaveLength(1);
+    // A second start the same day says nothing more about the update.
+    expect(migrationNotices(true)).toEqual([]);
+    // Status and doctor read it every time.
+    expect(migrationNotices(false)).toHaveLength(1);
+    // The next day (the device-local day stamp moved back one day): again.
+    writeFileSync(
+      join(autoMigrationStateDir(vault), "update-notice.json"),
+      `${JSON.stringify({ day: "2000-01-01" })}\n`,
+    );
+    expect(migrationNotices(true)).toHaveLength(1);
+  });
+
+  test("a start with the news that the brain moved shows that line alone", () => {
+    seedLegacy();
+    recordAutoMigrationNotice(vault, { snapshot: "store-migration-run" }, NOW);
+    recordAutoMigrationWaiting(vault, { missing: [], firstMachines: ["dev-b"] }, NOW);
+    const first = collectRuntimeNotices(vault, { configPath, env: {}, oneTime: true });
+    const update = first.filter((n) => n.code.startsWith("store_"));
+    expect(update.map((n) => n.code)).toEqual(["store_migration_done"]);
+  });
+});
 
 describe("the store migration's runtime notices", () => {
   test("nothing recorded, nothing said", () => {

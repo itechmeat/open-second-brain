@@ -44,7 +44,15 @@ import {
   autoMigrationWorkerLogPath,
 } from "../../../core/store-migration/auto-state.ts";
 import { boundStderrToLog } from "../../../core/store-migration/worker-log.ts";
-import { runAutoStoreMigration } from "../../../core/store-migration/auto-worker.ts";
+import {
+  AUTO_MIGRATION_OUTCOME,
+  runAutoStoreMigration,
+} from "../../../core/store-migration/auto-worker.ts";
+import {
+  AUTO_LEGACY_REMOVAL_FLAG,
+  runAutoLegacyRemoval,
+} from "../../../core/store-migration/auto-removal.ts";
+import { describeAutoView, runAutoViewPass } from "../../../core/view/auto-render.ts";
 import { brainVerbContext, failWith, parse, usageError, writeJson } from "../helpers.ts";
 import {
   cohortLines,
@@ -72,12 +80,21 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
     // it was handed. Not an operator flag: the worker's outcome is
     // recorded, never printed (its streams are ignored).
     auto: { type: "string" },
+    // The detached worker that moves the legacy tree out of the vault on
+    // its own (`auto-removal.ts`). Not an operator flag either.
+    "auto-remove-legacy": { type: "boolean" },
   });
   const forms = ["dry-run", "resume", "rollback", "remove-legacy", "force-release-gate"].filter(
     (f) => flags[f] === true,
   );
   if (forms.length > 1) return usageError(MIGRATE_STORE_ONE_FORM);
   const autoToken = flags["auto"] as string | undefined;
+  const autoRemove = flags["auto-remove-legacy"] === true;
+  if (autoRemove && (forms.length > 0 || flags["wait"] !== undefined || autoToken !== undefined)) {
+    return usageError(
+      `${AUTO_LEGACY_REMOVAL_FLAG} is the automatic removal's entry point and takes no other form`,
+    );
+  }
   if (autoToken !== undefined && (forms.length > 0 || flags["wait"] !== undefined)) {
     return usageError("--auto is the automatic worker's entry point and takes no other form");
   }
@@ -99,6 +116,12 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
   if (flags["remove-legacy"] === true) {
     return runRemoveLegacy(vault, config, flags["force"] === true, json);
   }
+  if (autoRemove) {
+    // The automatic removal worker: never throws, records its own outcome
+    // and prints nothing; its stderr is its device-local log.
+    afterSwitch(vault, config, workerLogLine);
+    return 0;
+  }
   if (autoToken !== undefined) {
     // The automatic worker: never throws, records its own outcome, and
     // prints nothing (its streams are ignored). One exit for every way it
@@ -117,6 +140,12 @@ export async function cmdBrainMigrateStore(argv: string[]): Promise<number> {
       progress: workerLogLine,
     });
     workerLogLine(describeAutoWorkerOutcome(outcome, performance.now() - began));
+    // The machine switched in this run: the legacy tree leaves the vault at
+    // once when every device of the cohort has switched (a brain used by
+    // this machine alone), and the human view is rendered, so one update
+    // ends with readable pages and no machine files in the vault.
+    if (outcome.outcome === AUTO_MIGRATION_OUTCOME.applied)
+      afterSwitch(vault, config, workerLogLine);
     return 0;
   }
   if (flags["dry-run"] !== true) {
@@ -479,4 +508,31 @@ function workerLogLine(text: string): void {
   } catch {
     // a log that cannot be written never stops the worker
   }
+}
+
+/**
+ * What follows a switch without a manual command: the automatic removal of
+ * the legacy tree (it refuses, and records why, while a device of the
+ * cohort is still on the legacy layout) and the human view on the view
+ * writer. A machine that has just claimed the role renders only from its
+ * catch-up after the one that noted the claim (design D7), so one pass
+ * runs before the removal and one after it. Never throws; each step's
+ * outcome goes to `log`.
+ */
+function afterSwitch(vault: string, configPath: string, log: (line: string) => void): void {
+  const view = (): void => {
+    try {
+      const result = runAutoViewPass({ trigger: "worker", configPath });
+      if (result !== null) log(`the human view: ${describeAutoView(result)}`);
+    } catch (err) {
+      log(`the human view could not be rendered: ${String(err)}`);
+    }
+  };
+  view();
+  try {
+    runAutoLegacyRemoval(vault, { configPath, progress: log });
+  } catch (err) {
+    log(`the automatic removal of the legacy tree failed: ${String(err)}`);
+  }
+  view();
 }

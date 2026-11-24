@@ -107,6 +107,7 @@ vault:
     - .git
     - node_modules
     - .open-second-brain
+    - .open-second-brain-store
     - .obsidian
     - .trash
     - .stversions

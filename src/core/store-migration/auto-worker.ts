@@ -78,7 +78,7 @@ import { LOG_EVENT_KIND } from "../store/constants.ts";
 import { forEachPartitionRecord } from "../store/state-digest.ts";
 import { inspectStore } from "../store/store-open.ts";
 import {
-  isPathInsideResolved,
+  storeRootForbiddenInVault,
   resolveConfiguredStoreRoot,
   storesStateDir,
   StoreRootInsideVaultError,
@@ -117,6 +117,7 @@ import {
   type AutoMigrationWaiting,
 } from "./auto-state.ts";
 import { readMigrationBackup } from "./backup.ts";
+import { storeNotArrivedText } from "./store-wait.ts";
 import { planMigrationDryRun } from "./dry-run.ts";
 import {
   checkDisk,
@@ -842,14 +843,7 @@ function attemptOnLegacy(
           missing: [],
           firstMachines: [mark.device],
           awaitsStore: true,
-          reason:
-            `device ${mark.device} started migrating this vault into its brain store, and that ` +
-            "store has not arrived on this machine yet; this machine migrates as a later " +
-            "machine once sync delivers it. If this machine is to share that store, set " +
-            "auto_store_migration: false here until it arrives (or fix its sync); give this " +
-            `machine a store of its own (\`${STORE_INIT_COMMAND}\`, then ` +
-            `\`${MIGRATE_STORE_COMMAND}\`) only at a store root sync never brings together ` +
-            "with that device's",
+          reason: storeNotArrivedText([mark.device], null),
         });
       }
       // Created under the claim: a worker whose claim was taken over
@@ -974,7 +968,7 @@ function preflight(
   } catch (err) {
     return refuse(messageOf(err), STORE_INIT_COMMAND);
   }
-  if (isPathInsideResolved(root, a.vault, process.platform)) {
+  if (storeRootForbiddenInVault(root, a.vault, process.platform)) {
     return refuse(
       `the brain store root ${root} is inside the vault ${a.vault}; set store_root to a ` +
         "folder outside it",

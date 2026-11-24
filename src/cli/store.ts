@@ -13,6 +13,9 @@
  * retires one that is gone (`store-device.ts`); `partition leave` takes a
  * partition off this machine (`store-partition.ts`). `shard` quarantines one bad
  * line of a held shard on this machine, lists and releases it (`store-shard.ts`).
+ * `move-into-vault` moves a store that 2.0.0 left outside the vault into
+ * the vault's reserved folder, run by a person with the agent sessions
+ * closed (`store-move.ts`).
  */
 
 import {
@@ -37,12 +40,13 @@ import { CliError, parseFlags } from "./argparse.ts";
 import { sortedReplacer } from "./helpers.ts";
 import { cmdStoreDevice, STORE_DEVICE_USAGE } from "./store-device.ts";
 import { cmdStorePartition, STORE_PARTITION_USAGE } from "./store-partition.ts";
+import { cmdStoreMoveIntoVault, STORE_MOVE_USAGE } from "./store-move.ts";
 import { cmdStorePath, STORE_PATH_USAGE } from "./store-path.ts";
 import { cmdStoreShard, STORE_SHARD_USAGE } from "./store-shard.ts";
 
 const INIT_USAGE =
   "usage: o2b store init [--partitions shared|shared,private] [--config <file>] [--json]";
-const USAGE = `${INIT_USAGE}\n${STORE_PATH_USAGE}\n${STORE_DEVICE_USAGE}\n${STORE_PARTITION_USAGE}\n${STORE_SHARD_USAGE}`;
+const USAGE = `${INIT_USAGE}\n${STORE_PATH_USAGE}\n${STORE_DEVICE_USAGE}\n${STORE_PARTITION_USAGE}\n${STORE_SHARD_USAGE}\n${STORE_MOVE_USAGE}`;
 
 /** `refused` is an answer (the store exists, or is partial), not a broken argv. */
 const STORE_EXIT = Object.freeze({ ok: 0, refused: 1, usage: 2 } as const);
@@ -65,6 +69,8 @@ export async function handleStoreSubcommand(argv: ReadonlyArray<string>): Promis
       return cmdStorePartition(rest);
     case "shard":
       return cmdStoreShard(rest);
+    case "move-into-vault":
+      return cmdStoreMoveIntoVault(rest);
     default:
       process.stderr.write(`error: unknown store verb: ${verb}\n${USAGE}\n`);
       return STORE_EXIT.usage;

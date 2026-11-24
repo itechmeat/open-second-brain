@@ -3,7 +3,7 @@
 > **Historical document.** This is the original idea behind the project,
 > kept as it was written. It describes a Hermes-first starting point and
 > plans that later releases replaced: version 2.0 treats every supported
-> agent the same and keeps the brain in a store outside the vault. For the
+> agent the same and keeps the brain in a brain store, not in the notes. For the
 > product as it is now, read [`how-it-works.md`](how-it-works.md) and
 > [`features.md`](features.md).
 

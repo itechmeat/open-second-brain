@@ -46,6 +46,7 @@
  * per-call channel at every reader would duplicate that, not add to it.
  */
 
+import { STORE_VAULT_DIR } from "./store/constants.ts";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -132,7 +133,10 @@ const MEDIA_EXTENSIONS = new Set([
   ".pdf",
 ]);
 
-const DEFAULT_SKIP_DIRS = [".git", ".obsidian", ".trash", ".stversions"] as const;
+// The brain store's reserved folder (`STORE_VAULT_DIR`) holds machine
+// records, never notes: no note walk, wikilink resolution or page list
+// enters it.
+const DEFAULT_SKIP_DIRS = [".git", ".obsidian", ".trash", ".stversions", STORE_VAULT_DIR] as const;
 const DEFAULT_SKIP_FILES = ["index.md", "log.md"] as const;
 
 /**

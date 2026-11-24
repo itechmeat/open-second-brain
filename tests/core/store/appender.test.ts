@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -10,11 +10,20 @@ import {
 import { join } from "node:path";
 
 import {
+  appendedBeforeFailure,
   appendRecord,
   appendRecords,
   PartitionUnavailableError,
 } from "../../../src/core/store/appender.ts";
-import { BLOB_REF_KEY, STORE_LINE_CAP_BYTES } from "../../../src/core/store/constants.ts";
+import { LOCK_WAIT_BUDGET_ENV } from "../../../src/core/brain/sync-lockfile.ts";
+import { acquireProcessLock } from "../../../src/core/store/process-lock.ts";
+import { relocationLockTarget } from "../../../src/core/store/relocation-marker.ts";
+import {
+  BLOB_REF_KEY,
+  STORE_LINE_CAP_BYTES,
+  STORE_LOCKS_DIR,
+} from "../../../src/core/store/constants.ts";
+import * as localLock from "../../../src/core/store/local-lock.ts";
 import { compareRecords } from "../../../src/core/store/envelope.ts";
 import { clockFilePath, observeClock, readClock } from "../../../src/core/store/clock-store.ts";
 import { parseHlc } from "../../../src/core/store/hlc.ts";
@@ -398,5 +407,63 @@ describe("batch append", () => {
       appendRecords(store, [input("log", 1), { ...input("log", 2), partition: "private" }]),
     ).toThrow(PartitionUnavailableError);
     expect(existsSync(join(tmp.root, "shared", "log"))).toBe(false);
+  });
+
+  test("a batch that fails after its first shard names the records it wrote", () => {
+    const store = tmp.open("dev-a");
+    const saved = process.env[LOCK_WAIT_BUDGET_ENV];
+    // No wait: a relocation still running fails the batch at once.
+    process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+    const lock: { release?: () => void } = {};
+    let thrown: unknown = null;
+    try {
+      appendRecords(store, [input("log", 1), input("events", 2), input("log", 3)], {
+        now: () => NOV_2026,
+        // A relocation of this store begins between the two shards.
+        afterShard: () => {
+          lock.release ??= acquireProcessLock(relocationLockTarget(store.deviceStateDir));
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      lock.release?.();
+      if (saved === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+      else process.env[LOCK_WAIT_BUDGET_ENV] = saved;
+    }
+    expect((thrown as NodeJS.ErrnoException | null)?.code).toBe("ELOCKED");
+    const written = appendedBeforeFailure(thrown);
+    expect(written?.map((r) => r?.record.body["n"])).toEqual([1, undefined, 3]);
+    const log = readShard(written![0]!.path).records.map((r) => r.record.id);
+    expect(log).toEqual([written![0]!.record.id, written![2]!.record.id]);
+    expect(existsSync(join(tmp.root, "shared", "events"))).toBe(false);
+  });
+
+  test("a shard lock whose release fails after its lines are written still names them", () => {
+    const store = tmp.open("dev-a");
+    const real = localLock.withLocalLock;
+    let failed = false;
+    const spy = spyOn(localLock, "withLocalLock").mockImplementation(((target, fn, budget) => {
+      const out = real(target, fn, budget);
+      if (!failed && target.startsWith(join(store.deviceStateDir, STORE_LOCKS_DIR))) {
+        failed = true;
+        throw new Error("the lock could not be released");
+      }
+      return out;
+    }) as typeof real);
+    let thrown: unknown = null;
+    try {
+      appendRecords(store, [input("log", 1), input("events", 2)], { now: () => NOV_2026 });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      spy.mockRestore();
+    }
+    expect((thrown as Error | null)?.message).toBe("the lock could not be released");
+    const written = appendedBeforeFailure(thrown);
+    expect(written?.map((r) => r?.record.body["n"])).toEqual([1, undefined]);
+    expect(readShard(written![0]!.path).records.map((r) => r.record.id)).toEqual([
+      written![0]!.record.id,
+    ]);
   });
 });
