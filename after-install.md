@@ -68,8 +68,10 @@ o2b brain settings set dream.apply_drafts review
 
 ## 5. Read the human view
 
-Name a folder for the readable pages with `view_target` in the machine
-config (it can be inside your vault), then render once:
+With a vault the readable pages go to its `brain-view/` folder; name
+another folder with `view_target` in the machine config (or `none` for no
+pages). The view writer renders them at session start and after each dream
+pass; to render at once:
 
 ```bash
 o2b view render

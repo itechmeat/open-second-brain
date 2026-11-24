@@ -63,7 +63,7 @@ import { compareRecords } from "../store/envelope.ts";
 import { AUTHORITY_FIELD, STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { legacyRootNames, migrationCatalogue } from "./catalogue.ts";
-import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
+import { BRAIN_ROOT_REL, DERIVED_STORE_DIR } from "../brain/path-constants.ts";
 import { treeBytes } from "./sizes.ts";
 import { describeUnseen, migrationDir, unseenHeldShards } from "./journal.ts";
 import { claims } from "./legacy-claims.ts";
@@ -88,6 +88,20 @@ import {
   type DeviceEvidenceDate,
 } from "./cohort-status.ts";
 import { GATED_IMPORT_WAIT_MS, importLateLegacyWrites } from "./transition.ts";
+import { cohortRecordsInFlight } from "./cohort-in-flight.ts";
+
+/**
+ * Whether a legacy root is in the vault: `Brain/`, or this machine's
+ * `.open-second-brain/` the sync never carried. Two `stat`s; a root that
+ * cannot be examined counts as present. What a start reads before it asks
+ * for the automatic removal (`auto-removal.ts`).
+ */
+export function legacyRootPresent(vault: string): boolean {
+  return (
+    pathPresent(vault, join(vault, BRAIN_ROOT_REL)) ||
+    pathPresent(vault, join(vault, DERIVED_STORE_DIR))
+  );
+}
 
 /** Where archives of removed legacy trees go, inside the device-local state. */
 export const LEGACY_ARCHIVE_DIR = "legacy-archive";
@@ -384,6 +398,23 @@ function removalChecks(store: StoreHandle, options: RemovalOptions): RemovalResu
   return null;
 }
 
+/**
+ * Refuse while another device switched and its records have not arrived
+ * here (`cohort-in-flight.ts`): the tree is then the only place both
+ * machines' records meet. `--force` goes past it, as past any cohort device.
+ */
+function refuseRecordsInFlight(vault: string, store: StoreHandle, options: RemovalOptions): void {
+  if (options.force === true) return;
+  const inFlight = cohortRecordsInFlight(vault, store, store.device);
+  if (inFlight.reasons.length === 0) return;
+  throw new Error(
+    `${inFlight.reasons.join("; ")}; nothing was moved. The legacy tree stays until those ` +
+      "records arrive (check that the other machine runs Open Second Brain 2.0.1 or later, is " +
+      "online, and that the sync tool carries the vault's hidden .open-second-brain-store/ " +
+      "folder), or remove it anyway with --force",
+  );
+}
+
 /** Remove the legacy tree of `vault` into the device-local archive, when the cohort allows. */
 export function removeLegacyTree(
   vault: string,
@@ -392,6 +423,7 @@ export function removeLegacyTree(
 ): RemovalResult {
   const refused = removalChecks(store, options);
   if (refused !== null) return refused;
+  refuseRecordsInFlight(vault, store, options);
   const runId = `${REMOVAL_RUN_PREFIX}${(options.now ?? new Date()).toISOString()}`;
   // An interrupted migration or rollback's gate keeps its writers stopped
   // until that run resumes; only an earlier removal's gate is taken over.
@@ -406,6 +438,7 @@ export function removeLegacyTree(
     // What the removal decided on before it held the gate, read again.
     const changed = removalChecks(store, options);
     if (changed !== null) return changed;
+    refuseRecordsInFlight(vault, store, options);
     const catalogue = migrationCatalogue(vault);
     // Not `existsSync`: a root that cannot be examined is not one that left.
     const roots = legacyRootNames(vault, catalogue).filter((top) =>

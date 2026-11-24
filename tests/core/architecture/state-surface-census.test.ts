@@ -122,7 +122,9 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 // registry.
 // 33 -> 34: the migration doctor check joins, excused: it lists what a
 // vault whose legacy tree left still holds of this machine's legacy folder.
-const SWEPT_POPULATION_SIZE = 34;
+// 34 -> 35: the legacy tree removal joins, excused: it stats whether this
+// machine's legacy folder is still in the vault before the automatic removal.
+const SWEPT_POPULATION_SIZE = 35;
 
 /** Declared surfaces today. Pinned for the same reason. */
 // 50: the source-archives row (answer-trust Task C1) joins the population,

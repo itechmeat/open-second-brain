@@ -1,0 +1,369 @@
+schema_version: 1
+
+# Optional. When set, dream runs from a different agent emit a stderr
+# warning and a non_primary_agent payload row. The vault should have a
+# single dream-running runtime even when it is shared across devices
+# via Syncthing.
+primary_agent: null
+
+dream:
+  candidate_threshold: 3
+  unconfirmed_window_days: 14
+  contradiction_window_days: 14
+  # Opt-in heal-phase enrichment. Left off, the heal phase is a
+  # checkpoint-only no-op.
+  # heal_enrich_enabled: false
+  # Unset by default, which archives: inbox signals older than
+  # contradiction_window_days that no preference consumed can never
+  # count toward a candidate again, so dream moves them to
+  # Brain/inbox/archived/ (never deleted). Set false to keep them in
+  # the inbox.
+  # archive_stale_signals: false
+  # Unset by default, which leaves the salience gate open: every fact
+  # enters the rollup ladder's fold set. Set a number in [0, 1] to fold
+  # only facts whose combined salience score (decayed outcome mass,
+  # Wilson-bound confidence, observed reuse) reaches it. Excluded facts
+  # are always named in the dream summary, never silently dropped.
+  # salience_threshold: 0.2
+
+retire:
+  stale_evidence_days: 90
+  # Unset by default, which leaves the destructive-from-confirmed gate
+  # off. Set a positive integer to refuse retiring a confirmed, unpinned
+  # preference whose applied+violated count is below it; skipped retires
+  # surface as gated_retires in the dream summary.
+  # confirmed_evidence_min_threshold: 3
+
+confidence:
+  # low_max_applied gates the "low-evidence-confirmed" doctor warning
+  # and the auto-promotion of unconfirmed preferences to confirmed.
+  low_max_applied: 2
+  # Band thresholds on the numeric confidence_value (Wilson lower
+  # bound times freshness decay). value >= high_min ⇒ high;
+  # value >= medium_min ⇒ medium; else low.
+  medium_min: 0.40
+  high_min: 0.75
+
+snapshots:
+  retention_count: 10
+  # Also archive the derived SQLite store next to each snapshot.
+  # Off by default: the store holds embeddings and a tier baseline,
+  # which cost money to rebuild but carry no information the
+  # Markdown tree cannot replay - and every retained archive is
+  # replicated to every peer. The live store size is recorded in
+  # each snapshot manifest whether or not this is on, so the cost
+  # of turning it on is visible before you do.
+  # include_derived_store: false
+  # Refuse the snapshot when the live store is larger than this.
+  # A refusal, never a truncation: half a database is not a recovery
+  # point. Worst case on disk is this times retention_count, on every
+  # device the vault replicates to.
+  # derived_store_max_bytes: 268435456
+
+# Vault-wide scope policy. Single source of truth for every
+# vault walker (search indexer, scan-inline, future scanners).
+# Entries without a slash match a directory name anywhere in the
+# tree; entries with a slash match a vault-relative POSIX path
+# exactly. Remove the block to fall back to the built-in defaults;
+# set ignore_paths to an empty list to disable exclusions entirely.
+vault:
+  ignore_paths:
+    - .git
+    - node_modules
+    - .open-second-brain
+    - .obsidian
+    - .trash
+    - .stversions
+    - Brain/.snapshots
+  # Positive allowlist. Unset by default, which indexes everything
+  # the exclusions above leave. Set it and a path is walked only if
+  # it is BOTH not excluded and under one of these roots - the two
+  # keys compose, an allowlist never re-includes an exclusion.
+  # The values below are an illustration, not defaults: writing them
+  # would narrow this vault. An empty list is refused - remove the
+  # key to index the whole vault. A bare name matches at any depth
+  # here too, so `Brain` also admits a nested projects/Brain;
+  # name a path when you mean exactly one place.
+  # include_paths:
+  #   - Brain
+  #   - Notes/Daily
+
+# Tuning for the active.md body injected at SessionStart.
+# standing_rules_max_chars caps the operator-authored
+# Brain/standing-rules.md block, which is injected first and is
+# exempt from inject_budget_chars - hence its own number.
+# scoped_rules_max_chars caps the operator-authored scoped rules
+# under Brain/standing-rules/ (project, harness, host); that block
+# is charged against inject_budget_chars.
+# active:
+#   # most_applied_window_days: 30
+#   # most_applied_limit: 10
+#   # inject_budget_chars: 8000
+#   # standing_rules_max_chars: 4000
+#   # scoped_rules_max_chars: 2000
+
+# Anticipatory context cache: freshness window and size cap.
+# anticipatory:
+#   # ttl_seconds: 120
+#   # max_tokens: 2000
+
+# The host model's context window, in tokens. Sizes context packs,
+# preset suggestions and compact guidance. This key wins over the
+# OPEN_SECOND_BRAIN_MODEL_CONTEXT_WINDOW environment variable, and a
+# well-formed value is used exactly as declared - the operator knows
+# the true window - never clamped.
+# context:
+#   # window_tokens: 200000
+
+# Opt-in dream-pass promotion of a recurring cross-topic rule:
+# confirmed preferences in at least min_topics distinct topics whose
+# principles reach jaccard similarity, promoted once per owner per
+# calendar day. The whole block absent means off - the default
+# install never fires it.
+# cross_topic:
+#   # enabled: false
+#   # The value below is an illustration, not a default: the planner
+#   # ships its own floors. Set it to tune when a cluster may fire.
+#   # min_topics: 2
+#   # The similarity floor, in [0, 1]. Also an illustration, not a
+#   # default.
+#   # jaccard: 0.6
+
+# `o2b discipline report`. No defaults: the block is all-or-nothing,
+# and an absent block means the report is disabled. The values below
+# are an illustration, not defaults - every field must be supplied.
+# discipline_report:
+#   # enabled: false
+#   # timezone: "UTC"
+#   # watched_paths: []
+#   # known_agents: []
+
+# Vault-default scope stamped on feedback signals that omit one.
+# Unset by default, which leaves signals scope-less.
+# feedback:
+#   # default_scope: "coding"
+
+# Promotion floors and opt-in provenance features. The three
+# promotion floors default strictly looser than every dream-pass
+# gate, so they cannot block a promotion that already succeeded.
+# guardrails:
+#   # promotion_min_signals: 1
+#   # promotion_min_distinct_agents: 1
+#   # promotion_min_age_days: 0
+#   # instruction_file_max_lines: 200
+#   # untrusted_source_delimiting: false
+#   # derived_fact_synthesis: false
+#   # provenance_trust_ordering: false
+#   # owner_scoped_facts: false
+#   # marker_writeback: false
+#   # Consent switch for ambient fact extraction. An explicit false
+#   # withholds the whole capture behind one ambient-withheld log event.
+#   # ambient_writeback: true
+#   # Days an ambient-extracted signal stays live (created + N).
+#   # 0 stamps no expiration date, so ambient signals never expire.
+#   # ambient_ttl_days: 0
+
+# Semantic-health detectors, the remediation step cap, and the
+# wall-clock ceiling past which a materialized artifact is stale.
+# health:
+#   # contradiction_jaccard: 0.5
+#   # concept_gap_min_frequency: 3
+#   # stale_claim_max_age_days: 180
+#   # remediation_step_cap: 20
+#   # Wall-clock ceiling on a derived artifact's age for the
+#   # `--if-stale` fast-path: past this, `o2b brain clusters run`
+#   # recomputes even when no input note has moved.
+#   # materialize_max_age_days: 30
+#   # Baseline watermark: findings older than this instant are silenced.
+#   # Unset by default; `o2b brain health --silence-before` writes it.
+#   # silence_before: "2026-01-01"
+
+# Your own record of a decommission announcement you have read, for
+# the model you have configured. It layers OVER the survey compiled
+# into this build, which goes stale between releases; a declaration
+# here is reported immediately. The two keys are declared together
+# or not at all - a date with no model would re-target itself the
+# next time you switched models.
+# embeddings:
+#   # Exact model string, matched against the configured embedding_model.
+#   # sunset_model: "text-embedding-3-small"
+#   # Announced decommission date, ISO-8601 (YYYY-MM-DD) or timestamp.
+#   # sunset_at: "2027-03-01"
+
+# Continuity-hygiene pass.
+# hygiene:
+#   # External resolver invoked for hygiene conflicts. Unset by default,
+#   # which leaves conflicts for the operator.
+#   # resolver_cmd: "echo"
+
+# Context-integrity gates. Each gate is off | warn | fail.
+# pack_validity_seconds bounds how long a built context pack stays
+# servable; the provenance stamp is the primary invalidator.
+# integrity:
+#   # owner_scope_delivery: "off"
+#   # The write-side sibling: under fail, an explicit owner that
+#   # disagrees with the resolved identity refuses the write.
+#   # owner_scope_writes: "off"
+#   # embedding_abi: "warn"
+#   # pack_validity_seconds: 900
+
+# Signed, recency-scored lessons digest (Brain/lessons.md).
+# lessons:
+#   # half_life_days: 30
+#   # corroboration_min: 2
+#   # limit: 20
+
+# MOC-detection thresholds (purely structural - link counts and
+# character ratios, never vocabulary) and the vault-root instruction
+# file brain_context surfaces when present.
+# link_graph:
+#   # moc_min_outbound_links: 5
+#   # moc_min_link_ratio: 0.3
+#   # vault_instruction_file: "VAULT.md"
+
+# Quiet-window maintenance lane (`o2b brain maintenance run`).
+# The window and the busy threshold are flags on that verb - they
+# belong to the schedule that invokes it. These two belong to the
+# vault, because they answer what the cron line cannot: how much of
+# this machine a background pass may take, and how many times a task
+# may fail before re-running it stops being a retry.
+# maintenance:
+#   # Skip heavy work when the host's one-minute run queue stands at or
+#   # above this percentage of the CPUs this process may use (150 = half
+#   # again as many runnable tasks as CPUs). Unset by default, which
+#   # leaves the gate off - a number here would start refusing work on
+#   # vaults whose operator never asked for the gate.
+#   # Where the metric is degenerate - a platform whose load average is a
+#   # constant, or a cgroup with a CPU bandwidth quota, where the run
+#   # queue is the whole host's - the gate stays OPEN and the journal
+#   # carries a pressure:unmeasurable line saying which. It never reports
+#   # an unreadable host as a quiet one.
+#   # host_pressure_percent: 150
+#   # Refuse a lane task that has failed this many times in a row in the
+#   # run journal, instead of retrying it; --force runs it anyway. A
+#   # single success clears the streak. Nothing here supervises a
+#   # repeating failure, and the lane runs tasks stale-first, so a
+#   # permanently broken task would otherwise take the lease first on
+#   # every pass.
+#   # failure_streak_limit: 3
+
+# Inputs to GENERATED install and hook output (`o2b install`).
+# They live here rather than in the machine-local config.yaml
+# because install verification re-CONSTRUCTS the expected file
+# instead of storing a hash: two machines that clone this vault
+# must rebuild the same bytes, or each reports the other's correct
+# install as drift. An environment variable still wins over both.
+# install:
+#   # Seconds a generated lifecycle hook entry may run before the host
+#   # kills it. Every hook runs inside a turn the operator is waiting
+#   # on, so the ceiling is ten minutes; a larger number is a unit
+#   # error rather than an intent.
+#   # hook_timeout_seconds: 10
+#   # Named MCP tool-surface profile the generated registration
+#   # selects (full, writer, catalog, recall, minimal). Setting it
+#   # here overrides the per-host choice: a runtime that publishes a
+#   # tool ceiling (Cursor caps a workspace at 40) gets the bounded
+#   # profile its RUNTIME_FACTS row declares, and every other runtime
+#   # gets no profile at all, which advertises every tool. An unknown
+#   # name is refused here, not failed open: generating a registration
+#   # for a profile that does not exist installs a surface nobody named.
+#   # tool_profile: "full"
+
+# User-authored folders the agent may READ. Empty means it reads
+# none; the agent never writes to these paths.
+# notes:
+#   # read_paths: []
+
+# Per-entry trim strategy when a recall budget is exceeded.
+# hard-cut keeps the historical mid-sentence cut; staged walks a
+# sentence -> whole-lines -> hard ladder.
+# recall:
+#   # degradation: "hard-cut"
+
+# Fact rollup-ladder thresholds.
+# rollup:
+#   # fact_threshold: 20
+#   # identity_threshold: 5
+
+# Runtime schema-pack declarations. Every list is additive on top of
+# the built-in vocabulary, so an empty list declares nothing - the
+# default. Use `o2b schema` to inspect what is already in force
+# before adding tokens here.
+# schema:
+#   # preference_types: []
+#   # signal_types: []
+#   # page_types: []
+#   # log_event_kinds: []
+#   # aliases: []
+#   # prefixes: []
+#   # link_types: []
+#   # extractable: []
+#   # expert_routing: []
+
+# Session-capture filters. Session patterns are anchored globs;
+# message patterns are regexes. Empty lists capture everything.
+# The payload_* keys bound recalled turns: a data URI or base64 run
+# longer than payload_max_inline_chars, and turn text still longer
+# than payload_max_text_chars, move to Brain/.payloads/ and leave a
+# [payload: osb-payload://<sha256> chars=N] placeholder behind.
+# sessions:
+#   # ignore_patterns: []
+#   # stateless_patterns: []
+#   # ignore_message_patterns: []
+#   # payload_max_inline_chars: 512
+#   # payload_max_text_chars: 32000
+
+# Storage capacity policy (`o2b brain storage`). An absent cap_bytes
+# means the vault is unbounded: nothing pauses and nothing refuses.
+# Setting a cap turns on the forecast tiers and the storage-capacity
+# doctor check; the thresholds default to the constants the forecast
+# ships with, and the critical band must sit past the warn band and
+# the pause line (a larger percent, a smaller day horizon).
+# storage:
+#   # Measured vault storage to treat as full, in bytes. The value
+#   # below is an illustration, not a default - writing it would bound
+#   # this vault. An explicit null also means unbounded.
+#   # cap_bytes: 1073741824
+#   # Percent of the cap where usage forecasts as warn.
+#   # warn_percent: 80
+#   # Percent of the cap where usage forecasts as critical. Must be
+#   # greater than warn_percent.
+#   # critical_percent: 95
+#   # Percent of the cap where background production pauses: the
+#   # maintenance lane skips, while interactive ingest still works.
+#   # Defaults to the warn band, and must stay below critical_percent,
+#   # which is where writes are refused outright.
+#   # pause_percent: 80
+#   # Days to the cap, at the measured trend, where usage forecasts as
+#   # warn.
+#   # warn_days: 30
+#   # Days to the cap, at the measured trend, where usage forecasts as
+#   # critical. Must be smaller than warn_days.
+#   # critical_days: 7
+
+# Staleness windows and calendar alignment. weekly_start_dow is an
+# ISO-8601 weekday number (1 = Monday, 7 = Sunday).
+# temporal:
+#   # stale_pref_days: 90
+#   # stale_signal_days: 30
+#   # stale_log_days: 180
+#   # weekly_start_dow: 1
+#   # daily_window_offset_hours: 0
+
+# Where a CALLER-NAMED write may land: brain_create_note,
+# brain_update_note, brain_append_note and brain_write_batch, which
+# take a vault-relative path from the caller. Unset by default,
+# which leaves those surfaces unbound exactly as before.
+# 
+# This is a write boundary over caller-named paths. It is NOT a
+# security boundary and not per-agent: its authority is this file,
+# which no tool call can rewrite, and it reads no caller identity.
+# Writes whose destination is derived rather than named - daily
+# logs, dream runs, continuity records, telemetry - are outside it.
+# 
+# The values below are an illustration, not defaults. An empty list
+# is refused: remove the block to run unbound.
+# write_binding:
+#   # path_prefixes:
+#   #   - Projects
+#   #   - Journal/Weekly

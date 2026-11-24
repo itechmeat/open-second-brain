@@ -43,7 +43,13 @@ import { join } from "node:path";
 
 import { readDeviceId, resolveAgentName } from "../config.ts";
 import { shellWord } from "../shell-quote.ts";
-import { appendRecord, appendRecords, type AppendInput } from "../store/appender.ts";
+import {
+  appendedBeforeFailure,
+  appendRecord,
+  appendRecords,
+  type AppendInput,
+  type AppendResult,
+} from "../store/appender.ts";
 import {
   SETTING_TOPIC_MIN_RECORDS,
   SETTING_TOPIC_MIN_SESSIONS,
@@ -512,14 +518,25 @@ function planUnderLock(
       });
     });
     for (let start = 0; start < inputs.length; start += TOPIC_WRITE_BATCH) {
-      const results = appendRecords(
-        store,
-        inputs.slice(start, start + TOPIC_WRITE_BATCH),
-        options.now !== undefined ? { now: options.now } : {},
-      );
+      let results: ReadonlyArray<AppendResult | undefined>;
+      let failure: { readonly error: unknown } | null = null;
+      try {
+        results = appendRecords(
+          store,
+          inputs.slice(start, start + TOPIC_WRITE_BATCH),
+          options.now !== undefined ? { now: options.now } : {},
+        );
+      } catch (error) {
+        results = appendedBeforeFailure(error) ?? [];
+        failure = { error };
+      }
       // Reported batch by batch, so a later batch that fails leaves the
-      // records of the earlier ones in the report, with their undo.
-      results.forEach((result, j) => landed(held[start + j]!, result.record.id));
+      // records of the earlier ones in the report, with their undo, and
+      // those its own failed append wrote before it threw.
+      results.forEach((result, j) => {
+        if (result !== undefined) landed(held[start + j]!, result.record.id);
+      });
+      if (failure !== null) throw failure.error;
     }
   };
   const created: Array<Mutable<CreatedTopic>> = [];

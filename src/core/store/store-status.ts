@@ -14,6 +14,7 @@
  * it exists so that no agent needs a path by heart.
  */
 
+import { relocationSurface } from "../store-migration/move-into-vault.ts";
 import { ConfigReadError, readDeviceId } from "../config.ts";
 import { readStoreIndexSummary } from "../search/brain-store/index-summary.ts";
 import { resolveSearchConfig } from "../search/index.ts";
@@ -60,6 +61,25 @@ function indexBlock(source: StoreStatusSource): Record<string, unknown> | null {
 }
 
 /**
+ * The relocation part of the migration block (`move-into-vault.ts`): the
+ * store outside the vault, late writes waiting in the old root, or a
+ * marker that cannot be read, with the command that settles it. Null
+ * when there is nothing to say.
+ */
+function relocationBlock(configPath: string | undefined): Record<string, unknown> | null {
+  const surface = relocationSurface(configPath);
+  if (surface === null) return null;
+  return {
+    state: surface.code,
+    pending: surface.code === "store_outside_vault",
+    from: surface.from,
+    to: surface.to,
+    command: surface.command,
+    problem: surface.text,
+  };
+}
+
+/**
  * Whether a migration is available (`migration-availability.ts`, the same
  * answer the doctor gives): the legacy tree is in the vault and this
  * device has not recorded its switch, with the commands to run next.
@@ -91,6 +111,9 @@ function migrationBlock(source: StoreStatusSource): Record<string, unknown> {
     // stale-device-retirement): null unless this machine switched and the
     // vault still holds the legacy tree.
     cohort: cohortStatusHere(source.vault, source.configPath ?? undefined, new Date()),
+    // The store's move into the vault (patch 2.0.1): a store outside the
+    // vault, or late writes waiting, with the command a person runs.
+    relocation: relocationBlock(source.configPath ?? undefined),
     ...(m.error !== null ? { error: m.error } : {}),
   };
 }

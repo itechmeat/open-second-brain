@@ -11,8 +11,10 @@
  *  - `migration-done` `{ authority, vault_id, device, cuts, imported }`: the
  *    first machine finished; `cuts` holds, per partition it holds, the
  *    digest cut (`state-digest.ts`) of the store right after the import.
- *  - `device-switched` `{ authority, vault_id, device }`: this device moved
- *    to the store. A device holding its own record is store-only (D14).
+ *  - `device-switched` `{ authority, vault_id, device, cuts? }`: this
+ *    device moved to the store. A device holding its own record is
+ *    store-only (D14). A later machine's record carries `cuts`, the digest
+ *    cut of its own shards right before the switch.
  *
  * Every record the migration imports carries `migrated: { key, sum }` in
  * its body: the legacy item it came from (vault-relative path, and the
@@ -27,7 +29,7 @@ import {
   SETTING_SILENT_DEVICE_DAYS,
   type StorePartition,
 } from "../store/constants.ts";
-import { returnedAfterRetirement } from "../store/device-retirement.ts";
+import { latestRetirements, returnedAfterRetirement } from "../store/device-retirement.ts";
 import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { compareRecords, type StoreRecord } from "../store/envelope.ts";
@@ -265,6 +267,26 @@ export function isDeviceSwitched(
   return switchedDevices(sharedSettings(store)).has(deviceId);
 }
 
+/**
+ * Each device's newest own switch record this store holds (a human
+ * `device-switched`, or the `device-unswitched` of a rollback, written by
+ * the device about itself), in fold order. Whether it answers a migration
+ * mark found in the legacy log is a question of age (`cohort-in-flight.ts`):
+ * a record older than the mark is of an earlier migration of the device.
+ */
+export function newestSwitchRecords(
+  store: Pick<StoreHandle, "root" | "partitions">,
+): Map<string, StoreRecord> {
+  const out = new Map<string, StoreRecord>();
+  for (const record of sharedSettings(store)) {
+    if (record.kind !== DEVICE_SWITCHED_KIND && record.kind !== DEVICE_UNSWITCHED_KIND) continue;
+    if (record.body["device"] !== record.device || !isHuman(record)) continue;
+    const seen = out.get(record.device);
+    if (seen === undefined || compareRecords(record, seen) > 0) out.set(record.device, record);
+  }
+  return out;
+}
+
 /** The `legacy-tree-removed` records this machine holds. */
 export function legacyTreeRemovedRecords(store: StoreHandle): StoreRecord[] {
   return sharedSettings(store).filter((r) => r.kind === LEGACY_TREE_REMOVED_KIND && isHuman(r));
@@ -390,6 +412,128 @@ export function migrationDoneBody(input: {
   };
 }
 
-export function deviceSwitchedBody(vaultId: string | null, device: string) {
-  return { [AUTHORITY_FIELD]: "human", vault_id: vaultId, device };
+/**
+ * A later machine passes `cuts`: the digest cut of its own shards, taken
+ * right before its switch record, so a machine that removes the legacy
+ * tree can tell that the records its migration wrote have arrived, not
+ * only the switch record (`cohort-in-flight.ts`). The first machine's
+ * `migration-done` cut covers its import; a first machine whose run was
+ * resumed after that record passes its own cut too, for what it imported
+ * since. A device that switched on a release that wrote no cut records
+ * one more switch with its cut at its next start (`recordOwnSwitchCut`).
+ */
+export function deviceSwitchedBody(
+  vaultId: string | null,
+  device: string,
+  cuts?: Partial<Record<StorePartition, PartitionCut>>,
+) {
+  return {
+    [AUTHORITY_FIELD]: "human",
+    vault_id: vaultId,
+    device,
+    ...(cuts !== undefined ? { cuts } : {}),
+  };
+}
+
+/**
+ * Whether the device's current migration left no evidence of what it
+ * wrote: no switch record of its own with a cut, and no `migration-done`
+ * of its own (whose cut covers its import). Only evidence of the current
+ * migration counts: a rollback (`device-unswitched`) ends the one before,
+ * and its completion and cuts say nothing of what the switch after it
+ * wrote. A first migration never rolled back keeps all of its evidence.
+ */
+function lacksCutEvidence(settings: ReadonlyArray<StoreRecord>, device: string): boolean {
+  const own = (r: StoreRecord): boolean =>
+    r.device === device && r.body["device"] === device && isHuman(r);
+  const rollback = settings
+    .filter((r) => r.kind === DEVICE_UNSWITCHED_KIND && own(r))
+    .reduce<StoreRecord | null>(
+      (latest, r) => (latest === null || compareRecords(r, latest) > 0 ? r : latest),
+      null,
+    );
+  const current = (r: StoreRecord): boolean =>
+    own(r) && (rollback === null || compareRecords(r, rollback) > 0);
+  const cut = settings.some(
+    (r) => r.kind === DEVICE_SWITCHED_KIND && current(r) && r.body["cuts"] !== undefined,
+  );
+  const done = settings.some((r) => r.kind === MIGRATION_DONE_KIND && current(r));
+  return !cut && !done;
+}
+
+/**
+ * The devices that switched as a later machine without saying which of
+ * their records their migration wrote ({@link lacksCutEvidence}), among
+ * those still waited on ({@link deviceStillWaitedOn}). A release before
+ * 2.0.1 wrote such switch records; such a device records its cut at its
+ * first start on 2.0.1 or later ({@link deviceSwitchedBody},
+ * `recordOwnSwitchCut`, which asks {@link ownSwitchLacksCut}).
+ */
+export function devicesSwitchedWithoutCut(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  waitedOn: (device: string) => boolean = deviceStillWaitedOn(store),
+): Set<string> {
+  const settings = sharedSettings(store);
+  const out = new Set<string>();
+  for (const device of switchedDevices(settings)) {
+    if (lacksCutEvidence(settings, device) && waitedOn(device)) out.add(device);
+  }
+  return out;
+}
+
+/**
+ * Whether `store.device` itself switched without a cut of what its
+ * migration wrote. A retirement does not change the answer: the device
+ * that asks is running, and the record it writes brings it back
+ * (`device-retirement.ts`), so the other machines wait for its cut again.
+ */
+export function ownSwitchLacksCut(store: StoreHandle): boolean {
+  const settings = sharedSettings(store);
+  return switchedDevices(settings).has(store.device) && lacksCutEvidence(settings, store.device);
+}
+
+/**
+ * The one answer to "is this device still waited on" for everything that
+ * holds the legacy tree for another device's records (the wait for its
+ * switch record, the wait for the shards its cut names, and the wait for
+ * the cut itself, `cohort-in-flight.ts`): every device is, except one a
+ * human retired for good, a `device-retire` record and no record of the
+ * device after it (the one "retired, then wrote again" rule,
+ * `device-retirement.ts`; a device whose last record cannot be told counts
+ * as returned). What a device gone for good wrote arrives or never will,
+ * and waiting for it changes nothing; one that writes again is back and
+ * waited on. Reads each device's newest record only when there is a
+ * retirement to judge.
+ */
+export function deviceStillWaitedOn(
+  store: Pick<StoreHandle, "root" | "partitions">,
+  read?: NewestRecords,
+): (device: string) => boolean {
+  const settings = sharedSettings(store);
+  const retired = latestRetirements(settings);
+  if (retired.size === 0) return () => true;
+  const returned = returnedRetiredDeviceIds(settings, read ?? newestRecordOfEachDevice(store));
+  return (device) => !retired.has(device) || returned.has(device);
+}
+
+/** The latest human `device-switched` record `store.device` wrote about itself, or null. */
+export function latestOwnSwitch(store: StoreHandle): StoreRecord | null {
+  let latest: StoreRecord | null = null;
+  for (const r of sharedSettings(store)) {
+    if (r.kind !== DEVICE_SWITCHED_KIND || !isHuman(r)) continue;
+    if (r.device !== store.device || r.body["device"] !== store.device) continue;
+    if (latest === null || compareRecords(r, latest) > 0) latest = r;
+  }
+  return latest;
+}
+
+/** The human `device-switched` records, each about its own device, that carry a cut. */
+export function switchRecordsWithCuts(store: StoreHandle): StoreRecord[] {
+  return sharedSettings(store).filter(
+    (r) =>
+      r.kind === DEVICE_SWITCHED_KIND &&
+      isHuman(r) &&
+      r.body["device"] === r.device &&
+      r.body["cuts"] !== undefined,
+  );
 }

@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7075715 bytes
-# Maximum unpacked size: 24024417 bytes
+# Maximum packed size: 7140260 bytes
+# Maximum unpacked size: 24260994 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -335,6 +335,7 @@ src/cli/state.ts
 src/cli/stdin.ts
 src/cli/stdout-guard.ts
 src/cli/store-device.ts
+src/cli/store-move.ts
 src/cli/store-partition.ts
 src/cli/store-path.ts
 src/cli/store-shard.ts
@@ -1137,6 +1138,7 @@ src/core/brain/upgrade.ts
 src/core/brain/vault-dirty.ts
 src/core/brain/vault-identity.ts
 src/core/brain/vault-instruction-file.ts
+src/core/brain/vault-seed.ts
 src/core/brain/vitals.ts
 src/core/brain/watchdog.ts
 src/core/brain/wikilink.ts
@@ -1503,6 +1505,7 @@ src/core/state/state-moves.ts
 src/core/state/surfaces.ts
 src/core/store-migration/auto-claimed-writes.ts
 src/core/store-migration/auto-probe.ts
+src/core/store-migration/auto-removal.ts
 src/core/store-migration/auto-report.ts
 src/core/store-migration/auto-state.ts
 src/core/store-migration/auto-transition.ts
@@ -1511,6 +1514,7 @@ src/core/store-migration/backup.ts
 src/core/store-migration/brain-settings.ts
 src/core/store-migration/catalogue.ts
 src/core/store-migration/cohort-here.ts
+src/core/store-migration/cohort-in-flight.ts
 src/core/store-migration/cohort-status.ts
 src/core/store-migration/convert.ts
 src/core/store-migration/destinations.ts
@@ -1537,6 +1541,7 @@ src/core/store-migration/legacy-scan.ts
 src/core/store-migration/local-state.ts
 src/core/store-migration/migrate.ts
 src/core/store-migration/migration-records.ts
+src/core/store-migration/move-into-vault.ts
 src/core/store-migration/outcome.ts
 src/core/store-migration/owner-only-copy.ts
 src/core/store-migration/process-identity.ts
@@ -1548,6 +1553,7 @@ src/core/store-migration/rollback.ts
 src/core/store-migration/row-records.ts
 src/core/store-migration/sizes.ts
 src/core/store-migration/spill-map.ts
+src/core/store-migration/store-wait.ts
 src/core/store-migration/surface-map.ts
 src/core/store-migration/sync-leftovers.ts
 src/core/store-migration/transition-watermark.ts
@@ -1614,6 +1620,8 @@ src/core/store/read/stream-read.ts
 src/core/store/read/viewed-read.ts
 src/core/store/reader.ts
 src/core/store/reference-privacy.ts
+src/core/store/relocation-marker.ts
+src/core/store/relocation-target.ts
 src/core/store/removal-backlog.ts
 src/core/store/safe-fs.ts
 src/core/store/seen-shards.ts
@@ -1630,6 +1638,7 @@ src/core/store/store-only.ts
 src/core/store/store-open.ts
 src/core/store/store-paths.ts
 src/core/store/store-privacy.ts
+src/core/store/store-relocation.ts
 src/core/store/store-status.ts
 src/core/store/store-write.ts
 src/core/store/torn-line.ts

@@ -197,6 +197,13 @@ async function cmdStatus(argv: string[]): Promise<number> {
       process.stdout.write(`semantic: off (${semantic.hint})\n`);
     }
     process.stdout.write(`${storeStatusLine(store)}\n`);
+    // A store outside the vault, or late writes waiting in its old folder
+    // (patch 2.0.1): said every time, with the command a person runs.
+    const migration = store["migration"] as
+      | { relocation?: { problem?: unknown } | null }
+      | undefined;
+    const move = migration?.relocation?.problem;
+    if (typeof move === "string") process.stdout.write(`store_move: ${move}\n`);
     const topics = store["topics"] as { advice?: unknown } | null | undefined;
     if (typeof topics?.advice === "string") process.stdout.write(`topics: ${topics.advice}\n`);
   }

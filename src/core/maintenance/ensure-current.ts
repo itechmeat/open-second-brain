@@ -74,6 +74,7 @@ import {
 import type { GateNone } from "../store-migration/gate-decision.ts";
 import { gatherGate } from "../store-migration/gate-state.ts";
 import { runAutoStoreMigration } from "../store-migration/auto-worker.ts";
+import { startAutoLegacyRemoval } from "../store-migration/auto-removal.ts";
 
 /**
  * The flag that tells the child to record its own terminal outcome. It
@@ -750,6 +751,11 @@ async function ensureVaultCurrentJudged(
     };
   }
 
+  // A store 2.0.0 left at the per-user default outside the vault is never
+  // moved from here: a person runs `o2b store move-into-vault` with the
+  // agent sessions closed (`store-migration/move-into-vault.ts`), and the
+  // session line says so once a day (`runtime-notices.ts`).
+
   // 1. Brain managed-file upgrade - idempotent; only when changes are pending
   //    and the plan is clean (a half-mergeable plan is left for the operator).
   //    In the background it runs in a detached worker; a failure is recorded
@@ -813,6 +819,11 @@ async function ensureVaultCurrentJudged(
     try {
       if (background) {
         migrationSpawn = startSwitchFinish(vault, opts.configPath, new Date());
+        // 1d. Nothing left to finish: the legacy tree leaves the vault once
+        //     the cohort allows (`auto-removal.ts`), in its own worker.
+        if (migrationSpawn === null) {
+          startAutoLegacyRemoval(vault, opts.configPath, new Date());
+        }
       } else {
         runAutoStoreMigration(
           vault,

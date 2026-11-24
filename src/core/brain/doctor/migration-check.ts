@@ -35,6 +35,8 @@
  * removes the list the migration wrote.
  */
 
+import { resolveAutoLegacyRemoval } from "../../config.ts";
+import { relocationSurface } from "../../store-migration/move-into-vault.ts";
 import { pathPresent } from "../../vault-unexaminable.ts";
 import { closeSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
@@ -276,6 +278,9 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
   const cohort = cohortStatusHere(ctx.vault, ctx.configPath, ctx.now);
   if (cohort === null) return;
   const states = cohortStates(cohort);
+  // The tree leaves on its own unless this machine turned that off
+  // (`auto_legacy_removal`, `store-migration/auto-removal.ts`).
+  const automaticRemoval = resolveAutoLegacyRemoval(ctx.configPath ?? undefined);
   if (cohort.pending.length > 0) {
     const pending = cohort.pending.map((d) => d.device);
     out.uncertain.push({
@@ -286,7 +291,10 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
         `${pending.length === 1 ? "writes" : "write"} the legacy Brain/ tree, so it stays in the ` +
         `vault and their writes are imported as they arrive. Cohort devices: ${states}. Upgrade ` +
         "and migrate each pending one, or retire the ones that are gone with " +
-        "`o2b store device retire <device-id>`.",
+        "`o2b store device retire <device-id>`" +
+        (automaticRemoval
+          ? "; the tree then leaves the vault by itself."
+          : `, then run \`${REMOVE_LEGACY_COMMAND}\`.`),
     });
     return;
   }
@@ -298,8 +306,11 @@ function transitionFindings(ctx: DoctorCheckContext, out: DoctorFindings): void 
     path: brain,
     message:
       "every device of the migration cohort switched to the brain store or is retired " +
-      `(${states}), so the legacy Brain/ tree can leave the vault: run ` +
-      `\`${REMOVE_LEGACY_COMMAND}\`. Nothing is removed until you run it.`,
+      `(${states}), so the legacy Brain/ tree can leave the vault` +
+      (automaticRemoval
+        ? `; a session start moves it out by itself (at most an hour after its last try), or run \`${REMOVE_LEGACY_COMMAND}\` now.`
+        : `: run \`${REMOVE_LEGACY_COMMAND}\`. The automatic removal is off on this machine ` +
+          "(`auto_legacy_removal` or `auto_store_migration`), so nothing is removed until you run it."),
   });
 }
 
@@ -467,6 +478,37 @@ export function migrationFindingKind(report: AutoMigrationReport): "warning" | "
   return "advice";
 }
 
+/** Doctor code: the store sits outside the vault, where no other machine receives it (patch 2.0.1). */
+export const STORE_OUTSIDE_VAULT_CODE = "store-outside-vault";
+
+/** Doctor code: an older process wrote to the old root after the store moved (patch 2.0.1). */
+export const STORE_LATE_WRITES_CODE = "store-late-writes";
+
+/**
+ * A store left outside the vault by 2.0.0, or late writes waiting in its
+ * old root (`move-into-vault.ts`): a warning that counts, since no other
+ * machine receives those records until a person runs the command. A
+ * marker that cannot be read is the store check's (`store-root-invalid`).
+ */
+function relocationFinding(ctx: DoctorCheckContext, out: DoctorFindings): void {
+  const surface = relocationSurface(ctx.configPath);
+  if (surface?.code === "store_outside_vault") {
+    out.issues.push({
+      severity: "warning",
+      code: STORE_OUTSIDE_VAULT_CODE,
+      path: surface.from,
+      message: surface.text,
+    });
+  } else if (surface?.code === "store_late_writes") {
+    out.issues.push({
+      severity: "warning",
+      code: STORE_LATE_WRITES_CODE,
+      path: surface.from,
+      message: surface.text,
+    });
+  }
+}
+
 export const migrationCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
@@ -476,6 +518,7 @@ export const migrationCheck: DoctorCheck = {
       transitionFindings(ctx, out);
       keptCopiesFinding(ctx, out);
     });
+    relocationFinding(ctx, out);
     const m = migrationAvailability({ vault: ctx.vault, configPath: ctx.configPath });
     const unreadable =
       m.error !== null

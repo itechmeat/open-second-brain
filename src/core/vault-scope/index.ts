@@ -39,6 +39,7 @@
  *     a `VaultScope` with classified rules for both polarities.
  */
 
+import { STORE_VAULT_DIR } from "../store/constants.ts";
 import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { join, sep } from "node:path";
 
@@ -249,7 +250,11 @@ function buildScope(
   source: VaultScope["source"],
   declaredIgnore: boolean = source === "_brain.yaml",
 ): VaultScope {
-  const ignore = Object.freeze([...ignorePaths]);
+  // The brain store's reserved folder is never indexed or walked, whatever
+  // the operator's own `ignore_paths` (which replaces the defaults) says.
+  const ignore = Object.freeze(
+    ignorePaths.includes(STORE_VAULT_DIR) ? [...ignorePaths] : [...ignorePaths, STORE_VAULT_DIR],
+  );
   const include = includePaths === null ? null : Object.freeze([...includePaths]);
   return Object.freeze({
     ignorePaths: ignore,

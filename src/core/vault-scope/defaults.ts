@@ -16,6 +16,7 @@
  * Anchored in docs/plans/2026-05-19-vault-scope-design.md §5.
  */
 
+import { STORE_VAULT_DIR } from "../store/constants.ts";
 import { BRAIN_SNAPSHOTS_REL } from "../brain/paths.ts";
 
 /**
@@ -73,6 +74,7 @@ export const DEFAULT_VAULT_IGNORE_PATHS: ReadonlyArray<string> = Object.freeze([
   ".git",
   "node_modules",
   ".open-second-brain",
+  STORE_VAULT_DIR,
   ".obsidian",
   ".trash",
   ".stversions",

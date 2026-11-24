@@ -651,6 +651,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "dream run": w(V, ["dream", "run"]),
   "dream status": r,
   "store init": o("store"),
+  "store move-into-vault": o("store"),
   "store partition leave": o("store"),
   "store path": r,
   "store shard list": r,
@@ -886,6 +887,12 @@ export type WorkerRow =
  */
 export const WORKER_CENSUS: Readonly<Record<string, WorkerRow>> = Object.freeze({
   "automatic store migration (migrate-store --auto)": { kind: "allowed", reason: "migration" },
+  // The legacy tree's removal without a command (release 2.0.1): the
+  // `--remove-legacy` form of the same verb, which holds the migration gate.
+  "automatic removal of the legacy tree (migrate-store --auto-remove-legacy)": {
+    kind: "same-as",
+    entry: "cli:brain migrate-store",
+  },
   "self-heal upgrade of the managed files": {
     kind: "writer",
     guard: B,
@@ -948,6 +955,12 @@ export const WORKER_SPAWN_SITES: Readonly<Record<string, SpawnSite>> = Object.fr
     starts: ["dream worker (dream run --claim)"],
   },
   "src/core/search/freshen.ts": { calls: 1, starts: ["freshen-on-read search index"] },
+  // A switched machine's start asks for the legacy tree's removal
+  // (release 2.0.1, `store-migration/auto-removal.ts`).
+  "src/core/store-migration/auto-removal.ts": {
+    calls: 1,
+    starts: ["automatic removal of the legacy tree (migrate-store --auto-remove-legacy)"],
+  },
   // Starts the dream agent's session in a process group of its own, awaited
   // and ended at its deadline (change dream-launched-agent).
   "src/core/process/run-program.ts": {

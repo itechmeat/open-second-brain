@@ -20,7 +20,8 @@ import { STORE_PARTITIONS, type StorePartition } from "../store/constants.ts";
 import { forEachPartitionRecord, type CutEntry } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { partitionDir } from "../store/store-paths.ts";
-import { MIGRATION_DONE_KIND, migrationDoneRecords } from "./migration-records.ts";
+import type { StoreRecord } from "../store/envelope.ts";
+import { migrationDoneRecords, switchRecordsWithCuts } from "./migration-records.ts";
 
 export interface CutWait {
   /** `<partition>/<shard>` entries the local store does not hold yet. */
@@ -36,6 +37,8 @@ export interface CutWait {
    * second one now would import the whole vault again (`journal-scope.ts`).
    */
   readonly marker?: boolean;
+  /** Per device whose record's cut is not held in full, how many of its entries are missing. */
+  readonly missingByDevice?: ReadonlyMap<string, number>;
 }
 
 function isCutEntry(value: unknown): value is CutEntry {
@@ -70,20 +73,49 @@ function cutsOf(value: unknown): Array<[StorePartition, ReadonlyArray<CutEntry>]
 
 /** What the store still lacks of every `migration-done` cut it holds. */
 export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): CutWait {
+  return recordsCutWait(store, migrationDoneRecords(store), cache);
+}
+
+/**
+ * What the store still lacks of every migration cut it holds, in one read:
+ * the first machine's `migration-done` cut, and the cut each later
+ * machine's `device-switched` record carries (that device's own shards
+ * right before its switch). `missingByDevice` names whose records have not
+ * arrived; `firstMachines` names every device whose cut was judged.
+ */
+export function migrationCutWait(store: StoreHandle): CutWait {
+  return recordsCutWait(
+    store,
+    [...migrationDoneRecords(store), ...switchRecordsWithCuts(store)],
+    new Map(),
+  );
+}
+
+/** What the store still lacks of the cuts `records` carry in their `cuts` body field. */
+function recordsCutWait(
+  store: StoreHandle,
+  records: ReadonlyArray<StoreRecord>,
+  cache: CutShardCache,
+): CutWait {
   const missing: string[] = [];
   const skipped = new Set<StorePartition>();
   const firstMachines = new Set<string>();
+  const byDevice = new Map<string, number>();
+  const miss = (entry: string, device: string): void => {
+    missing.push(entry);
+    byDevice.set(device, (byDevice.get(device) ?? 0) + 1);
+  };
   // Every cut first: a shard is then read for its count and for only the
   // ids some cut ends on, never for every id it holds.
-  const cuts: Array<[StorePartition, ReadonlyArray<CutEntry>]> = [];
-  for (const done of migrationDoneRecords(store)) {
+  const cuts: Array<[StorePartition, ReadonlyArray<CutEntry>, string]> = [];
+  for (const done of records) {
     firstMachines.add(done.device);
     const parsed = cutsOf(done.body["cuts"]);
     if (parsed === null) {
       // A cut this release cannot read is waited on, never skipped: the
       // marks it stands for may not have arrived, and importing now would
       // import them twice. The entry names the record to look at.
-      missing.push(`${MIGRATION_DONE_KIND} ${done.id} of ${done.device} (unreadable cut)`);
+      miss(`${done.kind} ${done.id} of ${done.device} (unreadable cut)`, done.device);
       continue;
     }
     for (const [partition, cut] of parsed) {
@@ -91,7 +123,7 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
         skipped.add(partition);
         continue;
       }
-      cuts.push([partition, cut]);
+      cuts.push([partition, cut, done.device]);
     }
   }
   const wanted = new Map<StorePartition, Set<string>>();
@@ -161,12 +193,12 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
     }
     return shards;
   };
-  for (const [partition, cut] of cuts) {
+  for (const [partition, cut, device] of cuts) {
     const shards = shardsOf(partition);
     for (const entry of cut) {
       const held = shards.get(entry.shard);
       if (held === undefined || held.count < entry.count || !held.ids.has(entry.last)) {
-        missing.push(`${partition}/${entry.shard}`);
+        miss(`${partition}/${entry.shard}`, device);
       }
     }
   }
@@ -174,6 +206,7 @@ export function cutWait(store: StoreHandle, cache: CutShardCache = new Map()): C
     missing: [...new Set(missing)].toSorted(),
     skipped: [...skipped].toSorted(),
     firstMachines: [...firstMachines].toSorted(),
+    missingByDevice: byDevice,
   };
 }
 

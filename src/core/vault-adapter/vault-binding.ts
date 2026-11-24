@@ -339,6 +339,19 @@ export function unbindVaultFromStore(root: string): void {
   });
 }
 
+/**
+ * Whether `binding` names `vault`: the same root directory (volume and file
+ * id) when both are known, else the same real path. The rule
+ * {@link vaultBindingStatus} matches a vault by.
+ */
+export function bindingNamesVault(binding: VaultBinding, vault: string): boolean {
+  const current = identityOf(vault);
+  if (binding.ino !== null && current.ino !== null) {
+    return binding.dev === current.dev && binding.ino === current.ino;
+  }
+  return samePath(binding.vault, current.path);
+}
+
 /** Whether `vault` is the vault bound to the configured store on this machine. */
 export function vaultBindingStatus(
   vault: string,

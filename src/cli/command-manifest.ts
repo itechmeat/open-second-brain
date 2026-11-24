@@ -1403,6 +1403,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             command("release", "Read a quarantined line again", [flag("offset", "string")]),
           ],
         ),
+        command(
+          "move-into-vault",
+          "Move a store that 2.0.0 left outside the vault into the vault's hidden store folder (close the agent sessions first; --dry-run plans it, --carry only carries late writes)",
+          [
+            flag("dry-run", "boolean"),
+            flag("carry", "boolean"),
+            flag("config", "string"),
+            flag("json", "boolean"),
+          ],
+        ),
       ],
     ),
     command(

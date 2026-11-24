@@ -1,0 +1,42 @@
+filters:
+  and:
+    - file.inFolder("Brain/obligations")
+    - file.ext == "md"
+formulas:
+  days_until_due: if(next_due, (date(next_due) - today()).days, "")
+  overdue: if(next_due, (today() - date(next_due)).days > 0, false)
+properties:
+  formula.overdue:
+    displayName: Overdue
+  formula.days_until_due:
+    displayName: Due in (days)
+  title:
+    displayName: Title
+  cadence:
+    displayName: Cadence
+  next_due:
+    displayName: Next due
+  last_done:
+    displayName: Last done
+  agent:
+    displayName: Owner
+views:
+  - type: table
+    name: Upcoming
+    order:
+      - formula.overdue
+      - next_due
+      - title
+      - cadence
+      - formula.days_until_due
+    columnSize:
+      file.basename: 200
+      title: 240
+  - type: table
+    name: All
+    order:
+      - next_due
+      - title
+      - cadence
+      - last_done
+      - agent

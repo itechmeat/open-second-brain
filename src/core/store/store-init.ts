@@ -47,12 +47,17 @@ import { writeFormatDoc } from "./format-doc.ts";
 import { recordHeldPartitions } from "./held-ledger.ts";
 import { heldPartitions, readStoreId, StoreIdentityError, StoreOpenError } from "./store-open.ts";
 import { partitionDir } from "./store-paths.ts";
-import { newUlid } from "./ulid.ts";
+import { isUlid, newUlid } from "./ulid.ts";
 
 export interface InitStoreOptions {
   readonly root: string;
   /** Partitions this machine holds (default: all of them). */
   readonly partitions?: ReadonlyArray<StorePartition>;
+  /**
+   * The id a new store takes (default: a fresh ULID). Ignored when a
+   * partition already names the store.
+   */
+  readonly storeId?: string;
 }
 
 export interface InitStoreResult {
@@ -222,7 +227,10 @@ export function initStore(options: InitStoreOptions): InitStoreResult {
     }
   }
 
-  let storeId = heldId ?? newUlid();
+  if (options.storeId !== undefined && !isUlid(options.storeId)) {
+    throw new TypeError(`store id "${options.storeId}" is not a ULID`);
+  }
+  let storeId = heldId ?? options.storeId ?? newUlid();
   const created: StorePartition[] = [];
   for (const partition of missing) {
     let identity: { readonly id: string; readonly won: boolean };

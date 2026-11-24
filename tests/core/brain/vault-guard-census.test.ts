@@ -70,6 +70,9 @@ const GUARD_RE =
  * be wrong, never because asserting was inconvenient.
  */
 const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/runtime-notices.ts":
+    "writes no vault file. It records the day a session start showed the update's one line, " +
+    "in the vault's device-local automatic-migration state folder.",
   "src/core/brain/dream-queue/agent-check.ts":
     "writes no vault file. The dream agent check writes a throwaway store and its config " +
     "under the machine's device state directory and removes them by their exact paths.",
@@ -221,6 +224,8 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/ingest/tail-read.ts": "never writes",
   "src/core/brain/intake/source-trust.ts": "never writes",
   "src/core/brain/doctor/migration-check.ts": "never writes",
+  "src/core/brain/runtime-notices.ts":
+    "writes only outside the vault (the device-local automatic-migration state)",
   "src/core/brain/dedup-index-cache.ts": "writes only outside the vault (the user cache dir)",
   "src/core/brain/dream-owner/owner.ts":
     "writes only outside the vault (the store and its device-local state)",

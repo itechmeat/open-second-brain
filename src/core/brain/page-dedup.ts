@@ -13,6 +13,7 @@
  * wikilinks across the vault to point at the canonical page.
  */
 
+import { STORE_VAULT_DIR } from "../store/constants.ts";
 import {
   existsSync,
   readFileSync,
@@ -308,6 +309,7 @@ export interface RetargetWikilinksOptions {
  * this set is the floor under it.
  */
 const RETARGET_SKIP_DIRS: ReadonlySet<string> = new Set([
+  STORE_VAULT_DIR,
   ".git",
   ".obsidian",
   ".trash",

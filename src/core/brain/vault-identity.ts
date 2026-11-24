@@ -80,11 +80,15 @@
  * not claim to be, proof that the resolved root is the intended one.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  FileAlreadyExistsError,
+} from "../fs-atomic.ts";
 import { stampOfStats, stampVouches, type FileStamp } from "../fs-stamp.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import {
@@ -160,6 +164,22 @@ export function readVaultIdentity(vault: string): VaultIdentity | null {
 export interface WriteVaultIdentityOptions {
   /** Clock for `created_at`; injected so a test can pin the stamp. */
   readonly now?: Date;
+  /**
+   * What every machine of this vault holds alike (`vault-seed.ts`): the id
+   * a missing marker gets is derived from it, so two machines that mint
+   * the marker before they see each other's mint the same id, and a store
+   * created from the same datum before the marker existed has the id the
+   * marker leads to (`init-store.ts`). Absent: a random id.
+   */
+  readonly seed?: string | null;
+}
+
+/** The vault id a marker minted from `seed` carries (same form as a random one). */
+export function vaultIdFromSeed(seed: string): string {
+  return createHash("sha256")
+    .update(`vault-id\u0000${seed}`)
+    .digest("hex")
+    .slice(0, VAULT_ID_BYTES * 2);
 }
 
 /**
@@ -169,6 +189,13 @@ export interface WriteVaultIdentityOptions {
  * a new id: the id is what makes a synced peer's vault recognisable as
  * the same store, and rotating it on every `o2b brain init` would make
  * the identity meaningless.
+ *
+ * A missing marker is published exclusively (a whole temp file linked into
+ * place), never by a replace: two processes that both found none may hold
+ * different ids (an older log shard arrived between their seed reads), and
+ * the one that publishes second gets the first one's marker back, so a
+ * store created from that marker never meets a marker that names another
+ * id. Only a marker file that cannot be read is replaced, as before.
  */
 export function writeVaultIdentity(
   vault: string,
@@ -178,10 +205,25 @@ export function writeVaultIdentity(
   if (existing !== null) return existing;
   const identity: VaultIdentity = Object.freeze({
     schema_version: VAULT_IDENTITY_SCHEMA_VERSION,
-    vault_id: randomBytes(VAULT_ID_BYTES).toString("hex"),
+    vault_id:
+      opts.seed === undefined || opts.seed === null
+        ? randomBytes(VAULT_ID_BYTES).toString("hex")
+        : vaultIdFromSeed(opts.seed),
     created_at: (opts.now ?? new Date()).toISOString(),
   });
-  atomicWriteFileSync(vaultIdentityPath(vault), `${JSON.stringify(identity, null, 2)}\n`);
+  const path = vaultIdentityPath(vault);
+  const text = `${JSON.stringify(identity, null, 2)}\n`;
+  try {
+    atomicCreateFileSyncExclusive(path, text);
+    return identity;
+  } catch (err) {
+    if (!(err instanceof FileAlreadyExistsError)) throw err;
+  }
+  // A marker is there: another process published it first, and that one
+  // stands; or it cannot be read, and it is replaced, as before.
+  const published = readVaultIdentity(vault);
+  if (published !== null) return published;
+  atomicWriteFileSync(path, text);
   return identity;
 }
 

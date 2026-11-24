@@ -79,7 +79,7 @@ import { removalBacklog } from "../../store/removal-backlog.ts";
 import { readStoreWriteStatus, storeWriteStatusPath } from "../../store/store-write.ts";
 import {
   dualWriteStatusPath,
-  isPathInsideResolved,
+  storeRootForbiddenInVault,
   partitionDir,
   resolveConfiguredStoreRoot,
   StoreRootInsideVaultError,
@@ -604,7 +604,7 @@ export const storeCheck: StoreSideDoctorCheck = {
       root = resolveConfiguredStoreRoot(ctx.configPath);
       // The vault this pass checks may not be the configured one; a root
       // inside it is just as wrong.
-      if (ctx.vault !== null && isPathInsideResolved(root.root, ctx.vault, process.platform)) {
+      if (ctx.vault !== null && storeRootForbiddenInVault(root.root, ctx.vault, process.platform)) {
         rootError = new StoreRootInsideVaultError(root.root, ctx.vault, root.origin);
       }
     } catch (err) {

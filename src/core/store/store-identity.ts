@@ -159,6 +159,33 @@ export function bindStoreIdentity(root: string, storeId: string, device: string)
 }
 
 /**
+ * Bind the root `to` a store was relocated to (`store-relocation.ts`) as
+ * `from` is bound: the same store id and device. Never repairs an
+ * unreadable binding file (that stays `o2b init`'s), and leaves the
+ * binding of `from` as it is.
+ */
+export function bindRelocatedStoreIdentity(
+  from: string,
+  to: string,
+  storeId: string,
+  device: string,
+): void {
+  const path = storeIdentityPath();
+  const bindings = readBindingsStrict(path);
+  if (bindings === null) throw unreadableBindings(from, path);
+  const old = bindings.find((b) => b.root === from);
+  if (old !== undefined && (old.store_id !== storeId || old.device !== device)) {
+    throw new StoreIdentityMismatchError(
+      from,
+      `the store at ${from} is bound to store ${old.store_id} and device ${old.device}, not ` +
+        `${storeId} and ${device}; it is not moved`,
+    );
+  }
+  writeBinding(to, storeId, device);
+  verified.clear();
+}
+
+/**
  * Refuse a store write to the store `storeId` at `root` by `device` when
  * this machine is bound to another store or another device. See the
  * module docblock. The first write binds.

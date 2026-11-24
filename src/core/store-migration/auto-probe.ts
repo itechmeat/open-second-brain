@@ -110,6 +110,12 @@ export interface OtherDeviceMark {
   readonly device: string;
   /** The snapshot run id the event names. */
   readonly runId: string;
+  /**
+   * When the device wrote the mark (its log line's `ts`, epoch ms), or
+   * null when the line carries no readable time. A switch record of the
+   * device written before it belongs to an earlier migration.
+   */
+  readonly at: number | null;
 }
 
 /**
@@ -279,8 +285,32 @@ export function judgeMarkScan(
   device: string,
   read: (path: string) => ShardTail,
 ): MarkScan {
+  const all = judgeMarkScanAll(listing, device, read, true);
+  return { mark: all.marks[0] ?? null, incomplete: all.marks.length > 0 ? null : all.incomplete };
+}
+
+/** Every other device's mark the bounded look finds ({@link judgeMarkScan}'s rules). */
+export interface MarkScanAll {
+  readonly marks: ReadonlyArray<OtherDeviceMark>;
+  readonly incomplete: string | null;
+}
+
+/**
+ * The marks of every other device the bounded look covers (not only the
+ * newest): which devices of the cohort moved to their store. Never throws.
+ */
+export function otherDeviceMigrationMarks(vault: string, device: string): MarkScanAll {
+  return judgeMarkScanAll(listMarkShards(vault, device), device, readMarkShard, false);
+}
+
+function judgeMarkScanAll(
+  listing: MarkListing,
+  device: string,
+  read: (path: string) => ShardTail,
+  firstOnly: boolean,
+): MarkScanAll {
   if (!listing.ok) {
-    return { mark: null, incomplete: `the Brain log cannot be listed (${listing.error})` };
+    return { marks: [], incomplete: `the Brain log cannot be listed (${listing.error})` };
   }
   const byDevice = new Map<string, MarkShardFile[]>();
   for (const f of listing.files) {
@@ -299,6 +329,7 @@ export function judgeMarkScan(
     .toSorted((x, y) => byName(x.shards[0]!, y.shards[0]!) || (x.shardId < y.shardId ? -1 : 1))
     .slice(0, MARK_DEVICES);
   let incomplete: string | null = null;
+  const marks: OtherDeviceMark[] = [];
   for (const { shardId, shards } of newest) {
     for (const file of shards.slice(0, MARK_SHARDS_PER_DEVICE)) {
       const tail = read(file.path);
@@ -308,7 +339,11 @@ export function judgeMarkScan(
         continue;
       }
       const mark = markIn(tail.text, shardId);
-      if (mark !== null) return { mark, incomplete: null };
+      if (mark !== null) {
+        marks.push(mark);
+        if (firstOnly) return { marks, incomplete: null };
+        break;
+      }
       // A window cut at its start, or a last line sync is still writing,
       // may be the mark: the read says nothing about one.
       if (tail.cutStart) {
@@ -318,7 +353,7 @@ export function judgeMarkScan(
       }
     }
   }
-  return { mark: null, incomplete };
+  return { marks, incomplete };
 }
 
 /**
@@ -343,11 +378,16 @@ function markIn(text: string, shardId: string): OtherDeviceMark | null {
   for (const line of text.split("\n").toReversed()) {
     if (!line.includes(BRAIN_SNAPSHOT_REASON.storeMigration)) continue;
     try {
-      const row = JSON.parse(line) as { kind?: unknown; payload?: Record<string, unknown> };
+      const row = JSON.parse(line) as {
+        ts?: unknown;
+        kind?: unknown;
+        payload?: Record<string, unknown>;
+      };
       if (row.kind !== BRAIN_LOG_EVENT_KIND.snapshot) continue;
       if (row.payload?.["reason"] !== BRAIN_SNAPSHOT_REASON.storeMigration) continue;
       const runId = typeof row.payload["run_id"] === "string" ? row.payload["run_id"] : "";
-      return { device: shardId, runId };
+      const at = typeof row.ts === "string" ? Date.parse(row.ts) : Number.NaN;
+      return { device: shardId, runId, at: Number.isFinite(at) ? at : null };
     } catch {
       // a torn or foreign line: not the event
     }

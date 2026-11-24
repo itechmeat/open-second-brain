@@ -26,6 +26,7 @@
  * milliseconds, and a sync setup should ignore them.
  */
 
+import { STORE_VAULT_DIR } from "../store/constants.ts";
 import { sameDevIno } from "../fs-identity.ts";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -366,10 +367,16 @@ export function moveCompanions(
   }
 }
 
-/** The companion names in `dir` (none when it cannot be read): every name but `skip` and temp files. */
+/**
+ * The companion names in `dir` (none when it cannot be read): every name
+ * but `skip`, temp files and the brain store's reserved folder (a view
+ * folder at the vault root never carries the store along).
+ */
 export function listCompanions(dir: string, skip: ReadonlySet<string>): string[] {
   try {
-    return readdirSync(dir).filter((n) => !skip.has(n) && !n.startsWith(VIEW_TEMP_PREFIX));
+    return readdirSync(dir).filter(
+      (n) => !skip.has(n) && !n.startsWith(VIEW_TEMP_PREFIX) && n !== STORE_VAULT_DIR,
+    );
   } catch {
     return [];
   }

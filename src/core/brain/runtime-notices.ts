@@ -26,7 +26,11 @@
  */
 
 import { pathPresent } from "../vault-unexaminable.ts";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { relocationSurface } from "../store-migration/move-into-vault.ts";
+import { storeNotArrivedText } from "../store-migration/store-wait.ts";
 import { withGateJudge } from "../migration-gate.ts";
 import { join } from "node:path";
 
@@ -42,6 +46,7 @@ import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 import {
   AUTO_MIGRATION_LOCK_JUDGE,
   AUTO_MIGRATION_MANUAL_COMMAND,
+  autoMigrationStateDir,
   readAutoMigrationFailure,
   readLostAutoMigrationWorker,
   readAutoMigrationNotice,
@@ -51,6 +56,7 @@ import {
   reportableText,
 } from "../store-migration/auto-state.ts";
 import { isStoreOnly } from "../store/store-only.ts";
+import { peekAutoRemovalNotice } from "../store-migration/auto-removal.ts";
 import { refusalReason } from "../store-migration/auto-report.ts";
 import type { AutoMigrationFailure } from "../store-migration/auto-state.ts";
 import type { GateDecision } from "../store-migration/gate-decision.ts";
@@ -203,15 +209,57 @@ function collectRuntimeNoticesJudged(vault: string, opts: RuntimeNoticeOptions):
     // best-effort
   }
 
-  // The automatic store migration (change auto-store-migration, design
-  // D6): at most one short line, about a failure or a waiting state, and
-  // the one-time success notice when the caller is a session start. Reads
-  // three small device-local files; clears nothing.
+  // The update's own lines: the automatic store migration (change
+  // auto-store-migration, design D6), the store's move into the vault and
+  // the automatic removal of the legacy tree (patch 2.0.1). Status and
+  // doctor read them every time; a session start shows at most one of them
+  // a day (`pickUpdateLine`), so an update is told in one plain line.
+  const update: UpdateLine[] = [];
   try {
     const line = storeMigrationNotice(vault, opts.oneTime === true, opts.configPath);
-    if (line !== null) notices.push(line);
+    if (line !== null) update.push({ notice: line, commit: () => {} });
   } catch {
     // best-effort
+  }
+  try {
+    const line = storeRelocationNotice(opts.configPath);
+    if (line !== null) update.push(line);
+  } catch {
+    // best-effort
+  }
+  // After a migration that removed the tree in the same run, the two
+  // lines become one, without the rollback advice, since a rollback is no
+  // longer possible.
+  if (opts.oneTime === true) {
+    try {
+      const removal = peekAutoRemovalNotice(vault, opts.configPath);
+      if (removal !== null) {
+        const done = update.findIndex((u) => u.notice.code === STORE_MIGRATION_DONE_CODE);
+        if (removal.line.code === "legacy_tree_removed" && done >= 0) {
+          update[done] = {
+            notice: notice(
+              STORE_MIGRATION_DONE_CODE,
+              "info",
+              `Open Second Brain moved this machine's brain into the brain store and ${removal.line.clause}.`,
+            ),
+            commit: removal.commit,
+          };
+        } else {
+          update.push({
+            notice: notice(removal.line.code, removal.line.severity, removal.line.message),
+            commit: removal.commit,
+          });
+        }
+      }
+    } catch {
+      // best-effort
+    }
+  }
+  if (opts.oneTime === true) {
+    const line = pickUpdateLine(vault, update, new Date());
+    if (line !== null) notices.push(line);
+  } else {
+    notices.push(...update.map((u) => u.notice));
   }
 
   // Search index availability + semantic degradation.
@@ -295,11 +343,100 @@ const MIGRATION_REASON_CHARS = 160;
  * The reason as a session may see it: the doctor's sanitising (control
  * characters, home directories) first, then clipped.
  */
-function clipped(text: string): string {
+/** The waiting text for another device's store is read whole: what to check is its point. */
+const STORE_WAIT_CHARS = 1200;
+
+const STORE_MIGRATION_DONE_CODE = "store_migration_done";
+
+/** One line of the update and what showing it at a session start records. */
+interface UpdateLine {
+  readonly notice: RuntimeNotice;
+  readonly commit: () => void;
+}
+
+/**
+ * The order a session start picks the day's one update line in: the news
+ * that the brain moved (shown once), then what needs the person (a failure
+ * or a store that does not arrive), then the other one-time news, then a
+ * plain wait.
+ */
+const UPDATE_LINE_RANK: Readonly<Record<string, number>> = {
+  [STORE_MIGRATION_DONE_CODE]: 0,
+  store_migration_failed: 1,
+  store_outside_vault: 1,
+  store_late_writes: 1,
+  store_relocation_unreadable: 1,
+  legacy_tree_refused: 1,
+  legacy_tree_removed: 2,
+  store_migration_waiting: 3,
+  legacy_tree_waiting: 3,
+};
+
+function updateLineRank(n: RuntimeNotice): number {
+  // The waiting line for a store that does not arrive is a warning: what
+  // to check is its point.
+  if (n.code === "store_migration_waiting" && n.severity === "warning") return 1;
+  return UPDATE_LINE_RANK[n.code] ?? 4;
+}
+
+/** Device-local stamp of the day a session start last showed an update line of `vault`. */
+function updateLinePath(vault: string): string {
+  return join(autoMigrationStateDir(vault), "update-notice.json");
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** The local calendar day of `now`, `YYYY-MM-DD`. */
+function localDay(now: Date): string {
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
+/**
+ * The one update line a session start shows today, or null: none when a
+ * line was already shown today on this machine. The picked line records
+ * itself as shown; the others wait for a later day, unchanged.
+ */
+function pickUpdateLine(
+  vault: string,
+  lines: ReadonlyArray<UpdateLine>,
+  now: Date,
+): RuntimeNotice | null {
+  if (lines.length === 0) return null;
+  const today = localDay(now);
+  const path = updateLinePath(vault);
+  try {
+    const last = (JSON.parse(readFileSync(path, "utf8")) as { day?: string }).day;
+    if (last === today) return null;
+  } catch {
+    // never shown
+  }
+  const picked = lines.toSorted((x, y) => updateLineRank(x.notice) - updateLineRank(y.notice))[0];
+  if (picked === undefined) return null;
+  picked.commit();
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWriteFileSync(path, `${JSON.stringify({ day: today })}\n`);
+  } catch {
+    // shown again next time rather than never
+  }
+  return picked.notice;
+}
+
+/**
+ * The store relocation's line, or null (`move-into-vault.ts`): the store
+ * sits outside the vault, late writes wait in the old root, or the old
+ * root's marker cannot be read. A warning each time it is read; a session
+ * start shows it at most once a day, with the other update lines.
+ */
+function storeRelocationNotice(configPath: string | undefined): UpdateLine | null {
+  const surface = relocationSurface(configPath);
+  if (surface === null) return null;
+  return { notice: notice(surface.code, "warning", surface.text), commit: () => {} };
+}
+
+function clipped(text: string, limit: number = MIGRATION_REASON_CHARS): string {
   const clean = reportableText(text);
-  return clean.length <= MIGRATION_REASON_CHARS
-    ? clean
-    : `${clean.slice(0, MIGRATION_REASON_CHARS - 3)}...`;
+  return clean.length <= limit ? clean : `${clean.slice(0, limit - 3)}...`;
 }
 
 /**
@@ -372,6 +509,18 @@ function storeMigrationNotice(
     }
   }
   const waiting = readAutoMigrationWaiting(vault);
+  if (waiting !== null && waiting.awaitsStore) {
+    // A store that does not arrive is said plainly, with what to check,
+    // once a day at session start (`pickUpdateLine`), every time anywhere else.
+    return notice(
+      "store_migration_waiting",
+      "warning",
+      `The automatic store migration waits: ${clipped(
+        storeNotArrivedText(waiting.firstMachines, waiting.since),
+        STORE_WAIT_CHARS,
+      )}.`,
+    );
+  }
   if (waiting !== null) {
     return notice(
       "store_migration_waiting",

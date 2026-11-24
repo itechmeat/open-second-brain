@@ -212,7 +212,12 @@ vault:
   );
   writeFileSync(configPath, `vault: "${tmp}"\n`);
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
-  expect(cfg.scopeRules.ignore.map((r) => r.raw)).toEqual(["my-cache", "Drafts"]);
+  // The brain store's reserved folder is a floor no operator list drops (2.0.1).
+  expect(cfg.scopeRules.ignore.map((r) => r.raw)).toEqual([
+    "my-cache",
+    "Drafts",
+    ".open-second-brain-store",
+  ]);
   // The path-style entry survives classification.
   const draftsRule = cfg.scopeRules.ignore.find((r) => r.raw === "Drafts");
   expect(draftsRule?.kind).toBe("name");

@@ -12,7 +12,8 @@
  *    missing with mode `0700`, and refuses a component that is a symlink
  *    (on Windows `lstat` reports junctions and other name-surrogate
  *    reparse points the same way) or not a directory. The partition folder
- *    itself is the user's choice and may be a link.
+ *    itself is the user's choice and may be a link, except in a vault's
+ *    reserved store folder ({@link vaultStoreFolders}).
  *  - {@link openShardForAppend} refuses a shard name that is a symlink,
  *    opens it with `O_NOFOLLOW` where the platform has it (elsewhere it
  *    checks after the open that the name is still that file and no link;
@@ -27,16 +28,21 @@
 
 import { sameDevIno } from "../fs-identity.ts";
 import {
+  type BigIntStats,
   closeSync,
   constants,
   fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
-  type BigIntStats,
+  readlinkSync,
+  realpathSync,
   type Stats,
+  unlinkSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { STORE_VAULT_DIR } from "./constants.ts";
 
 /** Mode of every directory the store creates: the owner only. */
 export const STORE_DIR_MODE = 0o700;
@@ -48,11 +54,15 @@ export const STORE_FILE_MODE = 0o600;
 export class StoreUnsafePathError extends Error {
   readonly path: string;
 
-  constructor(path: string, why: string) {
+  constructor(
+    path: string,
+    why: string,
+    remedy = "remove it and let the store create the path again",
+  ) {
     super(
       `refusing to write through ${path} in the brain store: it ${why}. ` +
-        "Something other than Open Second Brain put it there (a sync peer, a restore, a manual " +
-        "edit); remove it and let the store create the path again",
+        `Something other than Open Second Brain put it there (a sync peer, a restore, a manual ` +
+        `edit); ${remedy}`,
     );
     this.name = "StoreUnsafePathError";
     this.path = path;
@@ -80,16 +90,109 @@ function assertRealDirectory(path: string): void {
   if (!stat.isDirectory()) throw new StoreUnsafePathError(path, "is not a directory");
 }
 
+/** Whether the last name of `path` is the vault's reserved store folder name. */
+function hasVaultStoreName(path: string): boolean {
+  const name = basename(path);
+  // Case is folded where the default file system ignores it, as the
+  // resolver folds it (`store-paths.ts`).
+  return process.platform === "win32" || process.platform === "darwin"
+    ? name.toLowerCase() === STORE_VAULT_DIR
+    : name === STORE_VAULT_DIR;
+}
+
+/** Most links a root configured as an alias is followed through, one by one. */
+const ALIAS_HOPS_MAX = 40;
+
+/**
+ * The names the alias `root` leads through, one link at a time: each link
+ * target in turn (relative ones resolved against the link's folder), up
+ * to the first name that is no link. Stops early at a name that cannot
+ * be read.
+ */
+function aliasHops(root: string): string[] {
+  const hops: string[] = [];
+  let at = root;
+  for (let i = 0; i < ALIAS_HOPS_MAX; i++) {
+    let target: string;
+    try {
+      if (!lstatSync(at).isSymbolicLink()) break;
+      target = readlinkSync(at);
+    } catch {
+      break;
+    }
+    at = resolve(dirname(at), target);
+    hops.push(at);
+  }
+  return hops;
+}
+
+/**
+ * The folders of the store at `root` that may not be links because `root`
+ * is a vault's reserved store folder (`.open-second-brain-store/`): there
+ * they arrive with the vault's sync, so a link is no choice of this
+ * machine's user, and a record written through it would land wherever it
+ * leads. The root itself is one when it is written by that name. A root
+ * configured as an alias (a link, or a chain of them) that leads through
+ * the reserved folder brings that folder, as named on the way: the alias
+ * is the user's choice, the reserved folder is not, so a sync that turns
+ * it into a link to a folder of another name is refused at the next write
+ * through the same, unchanged alias. Each of `partitionFolders` is one
+ * when the root is that folder as written, through an alias, or once its
+ * links are resolved. Empty for any other root: an explicit store root
+ * outside the vault may be a link, and so may its partition folders.
+ */
+export function vaultStoreFolders(root: string, partitionFolders: ReadonlyArray<string>): string[] {
+  if (hasVaultStoreName(root)) return [root, ...partitionFolders];
+  const reserved = aliasHops(root).find(hasVaultStoreName);
+  if (reserved !== undefined) return [reserved, ...partitionFolders];
+  let real: string;
+  try {
+    real = realpathSync(root);
+  } catch {
+    return [];
+  }
+  return hasVaultStoreName(real) ? [...partitionFolders] : [];
+}
+
+/** The first of `folders` that is a symbolic link (on Windows also a junction), or null. */
+export function firstLinkedFolder(folders: ReadonlyArray<string>): string | null {
+  return folders.find((folder) => lstatOrNull(folder)?.isSymbolicLink() === true) ?? null;
+}
+
+/** Why a linked folder of a vault's store is refused, for the open and the write. */
+export const VAULT_STORE_LINK_WHY =
+  "is a link (or a junction), and the vault's brain store folder and its partition folders, " +
+  "which the vault's sync fills, are never opened or written through a link: records would " +
+  "go wherever it leads";
+
+/** What to do about a linked folder of a vault's store. */
+export const VAULT_STORE_LINK_REMEDY =
+  "replace the link with a real folder holding the files it leads to, then start again";
+
+function assertNoVaultStoreLink(folders: ReadonlyArray<string>): void {
+  const linked = firstLinkedFolder(folders);
+  if (linked !== null) {
+    throw new StoreUnsafePathError(linked, VAULT_STORE_LINK_WHY, VAULT_STORE_LINK_REMEDY);
+  }
+}
+
 /**
  * Make `dir` exist under `partitionRoot` without following any symlink
  * below the partition folder. `dir` must be `partitionRoot` or inside it.
+ * In a vault's reserved store folder the store root and the partition
+ * folder may not be links either ({@link vaultStoreFolders}).
  */
 export function ensureStoreDir(partitionRoot: string, dir: string): void {
   const rel = relative(partitionRoot, dir);
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new StoreUnsafePathError(dir, "is outside the partition folder");
   }
+  const vaultFolders = vaultStoreFolders(dirname(partitionRoot), [partitionRoot]);
+  // Before the create, so nothing is made through a link; after it, as
+  // another process may have won the create.
+  assertNoVaultStoreLink(vaultFolders);
   mkdirSync(partitionRoot, { recursive: true, mode: STORE_DIR_MODE });
+  assertNoVaultStoreLink(vaultFolders);
   let current = partitionRoot;
   for (const part of rel === "" ? [] : rel.split(sep)) {
     current = join(current, part);
@@ -200,6 +303,46 @@ function assertNameIsOpenedFile(path: string, opened: BigIntStats): void {
   if (!sameDevIno(now, opened)) {
     throw new StoreUnsafePathError(path, "was replaced while it was opened");
   }
+}
+
+/**
+ * Create `path` as a new, empty store file for writing (a temp file the
+ * caller renames into place), never through a link: whatever a sync or a
+ * crash left at the name (a stale temp, a symbolic link a peer synced) is
+ * removed first, without following it, and the open is exclusive
+ * (`O_CREAT | O_EXCL`, so a link put back at the name fails it) with
+ * `O_NOFOLLOW` where defined; where not (Windows) the name is checked to be
+ * the opened file after the open. Something other than a file or a link at
+ * the name (a folder) is refused.
+ */
+export function createStoreTempFile(path: string): number {
+  const left = lstatOrNull(path);
+  if (left !== null) {
+    if (left.isDirectory() && !left.isSymbolicLink()) {
+      throw new StoreUnsafePathError(path, "is a directory");
+    }
+    unlinkSync(path);
+  }
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW,
+      STORE_FILE_MODE,
+    );
+  } catch (err) {
+    if (errnoCode(err) === "ELOOP") throw new StoreUnsafePathError(path, "is a symbolic link");
+    throw err;
+  }
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile()) throw new StoreUnsafePathError(path, "is not a regular file");
+    if (NO_FOLLOW === 0) assertNameIsOpenedFile(path, stat);
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+  return fd;
 }
 
 /**

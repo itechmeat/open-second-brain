@@ -12,11 +12,26 @@
 
 import { DAY_MS } from "../store/constants.ts";
 
-/** Machine-config key that names the human view folder. No key: no view. */
+/**
+ * Machine-config key that names the human view folder. No key: the
+ * vault's {@link VIEW_DEFAULT_DIR} when the config names a vault, else no
+ * view; `none` or `off`: no view.
+ */
 export const VIEW_TARGET_CONFIG_KEY = "view_target";
 
 /** Environment variable that names the human view folder, ahead of the config key. */
 export const VIEW_TARGET_ENV = "OPEN_SECOND_BRAIN_VIEW_TARGET";
+
+/**
+ * The view folder of a machine whose config names a vault and no
+ * `view_target`: this folder of the vault. Not `Brain/`, which stays the
+ * legacy tree's name until the legacy tree leaves, and is read by every
+ * release before the brain store.
+ */
+export const VIEW_DEFAULT_DIR = "brain-view";
+
+/** `view_target` values that turn the human view off (case-insensitive). */
+export const VIEW_TARGET_OFF_VALUES: ReadonlyArray<string> = Object.freeze(["none", "off"]);
 
 /** The profile page: what the brain knows about the user. */
 export const VIEW_ABOUT_ME_PAGE = "about-me.md";

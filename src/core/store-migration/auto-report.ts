@@ -11,6 +11,7 @@
  * files of `auto-state.ts`. It never claims, writes or clears anything.
  */
 
+import { storeNotArrivedText } from "./store-wait.ts";
 import {
   describeSelfHealUpgradeLock,
   readSelfHealUpgradeLock,
@@ -590,8 +591,11 @@ function waitingReport(
 ): AutoMigrationReport {
   return report(AUTO_MIGRATION_STATE.waiting, {
     automatic: true,
-    message:
-      waiting.reason !== null
+    message: waiting.awaitsStore
+      ? `the automatic store migration waits: ${printable(
+          storeNotArrivedText(waiting.firstMachines, waiting.since),
+        )}`
+      : waiting.reason !== null
         ? `the automatic store migration waits: ${printable(waiting.reason)}`
         : waitingForCut(waiting),
     ...(waiting.reason === null ? { manualCommand: MIGRATE_STORE_COMMAND } : {}),

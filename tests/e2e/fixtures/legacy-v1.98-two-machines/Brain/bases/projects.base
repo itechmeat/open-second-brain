@@ -1,0 +1,59 @@
+filters:
+  and:
+    - file.inFolder("Brain/entities/project")
+    - file.ext == "md"
+    - note.kind == "brain-entity"
+formulas:
+  status_icon: if(status == "active", "🟢", if(status == "archived", "📦", "❔"))
+  days_since_update: if(updated_at, (today() - date(updated_at)).days, "")
+properties:
+  formula.status_icon:
+    displayName: " "
+  formula.days_since_update:
+    displayName: Stale (days)
+  name:
+    displayName: Name
+  status:
+    displayName: Status
+  tags:
+    displayName: Tags
+  source_agent:
+    displayName: Source
+  confidence:
+    displayName: Confidence
+views:
+  - type: table
+    name: Active
+    filters:
+      and:
+        - status == "active"
+    order:
+      - formula.status_icon
+      - file.basename
+      - name
+      - tags
+      - updated_at
+      - formula.days_since_update
+    columnSize:
+      formula.status_icon: 40
+      file.basename: 200
+  - type: table
+    name: Archived
+    filters:
+      and:
+        - status == "archived"
+    order:
+      - file.basename
+      - name
+      - tags
+      - updated_at
+  - type: table
+    name: All
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - formula.status_icon
+      - file.basename
+      - name
+      - updated_at

@@ -13,12 +13,20 @@
  * replaced, or a device id changed, on purpose.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import {
   isUsableLocalDeviceId,
   readDeviceId,
   resolveAgentName,
   resolveDeviceId,
+  resolveVault,
 } from "../config.ts";
+import { ulidFromSeed } from "../store/ulid.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
+import { readVaultIdentity, writeVaultIdentity } from "./vault-identity.ts";
+import { legacyLogSeed } from "./vault-seed.ts";
 import { STORE_PARTITIONS } from "../store/constants.ts";
 import { initStore, StoreInitRefusal } from "../store/store-init.ts";
 import { bindStoreIdentity } from "../store/store-identity.ts";
@@ -63,12 +71,16 @@ export interface EnsureBrainStoreResult {
  * config, a store that cannot be read, a filesystem error.
  */
 export function ensureBrainStore(options: EnsureBrainStoreOptions = {}): EnsureBrainStoreResult {
-  const { root } = resolveConfiguredStoreRoot(options.configPath);
+  // One reading of the vault for the root and the id it seeds.
+  const vault = resolveVault(options.configPath);
+  const resolved = resolveConfiguredStoreRoot(options.configPath, vault);
+  const { root } = resolved;
   const existing = inspectStore(root);
   if (existing !== null) return bindExisting(root, existing, options.configPath);
   let created: ReturnType<typeof initStore>;
   try {
-    created = initStore({ root });
+    const storeId = resolved.placement === "vault" ? vaultStoreId(vault) : null;
+    created = initStore({ root, ...(storeId !== null ? { storeId } : {}) });
   } catch (err) {
     // Another process created the store between the inspection and the
     // create: bind to that store, as a second init would.
@@ -95,6 +107,34 @@ export function ensureBrainStore(options: EnsureBrainStoreOptions = {}): EnsureB
     viewWriter,
     dreamOwner,
   };
+}
+
+/**
+ * The id of a store created in the vault's reserved folder, the same on
+ * every machine that creates it before it has seen another's, so they
+ * create one store. It derives from the vault id: the identity marker
+ * (`Brain/vault-id.json`), a datum every machine of the vault shares
+ * however far its sync of the log has come.
+ *
+ * A vault with a legacy tree and no marker yet has its marker minted here,
+ * before the store, from the oldest legacy log line (`vault-seed.ts`; a
+ * random id when the log has none), and the store id derives from the
+ * marker as written. So the marker and the store agree for good: the seed
+ * is read once, and a log shard that arrives afterwards and would seed
+ * another id changes neither (every later marker writer finds this marker
+ * and keeps it). A process that read the seed at the same time and minted
+ * another id gets the marker published first, not its own
+ * (`writeVaultIdentity` publishes exclusively), so its store id derives
+ * from the marker that stands. A marker that another machine minted and
+ * that arrived first is used as it is. Null (a fresh id) for a vault with no legacy
+ * tree, which has no marker to agree on.
+ */
+function vaultStoreId(vault: string | null): string | null {
+  if (vault === null || vault === "") return null;
+  const marked = readVaultIdentity(vault)?.vault_id;
+  if (marked !== undefined) return ulidFromSeed(marked);
+  if (!existsSync(join(vault, BRAIN_ROOT_REL))) return null;
+  return ulidFromSeed(writeVaultIdentity(vault, { seed: legacyLogSeed(vault) }).vault_id);
 }
 
 function bindExisting(

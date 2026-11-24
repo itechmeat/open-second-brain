@@ -396,16 +396,18 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     id: "brain_store",
     label: "brain store",
     location: WINDOWS
-      ? `%OPEN_SECOND_BRAIN_STORE_ROOT%, else the store_root config key, else (${describeBaseDir("data", "win32")})\\open-second-brain\\store\\`
-      : "${OPEN_SECOND_BRAIN_STORE_ROOT:-the store_root config key, else ${XDG_DATA_HOME:-~/.local/share}/open-second-brain/store}/",
+      ? `%OPEN_SECOND_BRAIN_STORE_ROOT%, else the store_root config key, else <vault>\\.open-second-brain-store\\ with a vault, else (${describeBaseDir("data", "win32")})\\open-second-brain\\store\\`
+      : "${OPEN_SECOND_BRAIN_STORE_ROOT:-the store_root config key, else <vault>/.open-second-brain-store with a vault, else ${XDG_DATA_HOME:-~/.local/share}/open-second-brain/store}/",
     carries_memory: true,
     created_by:
       "the first brain store dual write, only while the store_dual_write setting (a phase 1 trial, off by default) is on",
     removed_by: "deleting that directory yourself; it is the store's only copy on this machine",
     note:
-      "The documented append-only store of Open Second Brain machine data (FORMAT.md inside it), " +
-      "kept outside the vault on purpose: a store root inside the vault is refused. Its shared " +
-      "and private partition folders are what a user syncs between machines.",
+      "The documented append-only store of Open Second Brain machine data (FORMAT.md inside it). " +
+      "With a vault it lives by default in the vault's reserved hidden folder, so the vault's " +
+      "sync carries it; no other root inside the vault is allowed. A root set elsewhere is " +
+      "synced partition by partition. A 2.0.0 store moved into the vault leaves its old folder " +
+      "as an inactive recovery copy with relocated.json in it.",
     sources: ["src/core/store/store-paths.ts", "src/core/store/store-location.ts"],
   },
   {

@@ -202,6 +202,20 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b store init",
         autoRepairable: false,
       },
+      // The store 2.0.0 left outside the vault (patch 2.0.1): a person runs
+      // the move with the agent sessions closed; nothing moves it by itself.
+      {
+        code: "store-outside-vault",
+        issueClass: "the brain store is outside the vault, so no other machine receives it",
+        nextCommand: "o2b store move-into-vault",
+        autoRepairable: false,
+      },
+      {
+        code: "store-late-writes",
+        issueClass: "an older process wrote to the old store folder after the move",
+        nextCommand: "o2b store move-into-vault --carry",
+        autoRepairable: false,
+      },
       {
         code: "view-writer-silent",
         issueClass: "the human view writer has published nothing for days",

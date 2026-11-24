@@ -4,6 +4,7 @@
  * Anchored in docs/plans/2026-05-19-vault-scope-design.md §5.
  */
 
+import { STORE_VAULT_DIR } from "../../src/core/store/constants.ts";
 import { afterEach, beforeEach, test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +49,7 @@ test("DEFAULT_VAULT_IGNORE_PATHS contains the v0.10.9 baseline", () => {
     ".git",
     "node_modules",
     ".open-second-brain",
+    STORE_VAULT_DIR,
     ".obsidian",
     ".trash",
     ".stversions",
@@ -382,8 +384,9 @@ vault:
 `);
   const scope = resolveVaultScope(scopeVault);
   expect(scope.source).toBe("_brain.yaml");
-  expect(scope.ignorePaths).toEqual([".git", "my-cache"]);
-  expect(scope.rules.ignore.map((r) => r.kind)).toEqual(["name", "name"]);
+  // The brain store's reserved folder is the floor under any declared list.
+  expect(scope.ignorePaths).toEqual([".git", "my-cache", STORE_VAULT_DIR]);
+  expect(scope.rules.ignore.map((r) => r.kind)).toEqual(["name", "name", "name"]);
   expect(scope.includePaths).toBeNull();
 });
 
@@ -404,15 +407,15 @@ vault:
   expect(scope.ignorePaths).toEqual([...DEFAULT_VAULT_IGNORE_PATHS]);
 });
 
-test("resolveVaultScope: explicit empty list excludes nothing", () => {
+test("resolveVaultScope: explicit empty list excludes nothing but the brain store folder", () => {
   writeBrain(`schema_version: 1
 vault:
   ignore_paths:
 `);
   const scope = resolveVaultScope(scopeVault);
   expect(scope.source).toBe("_brain.yaml");
-  expect(scope.ignorePaths).toEqual([]);
-  expect(scope.rules.ignore).toEqual([]);
+  expect(scope.ignorePaths).toEqual([STORE_VAULT_DIR]);
+  expect(scope.rules.ignore).toEqual([{ raw: STORE_VAULT_DIR, kind: "name" }]);
 });
 
 test("resolveVaultScope: absent vault block falls back to defaults", () => {

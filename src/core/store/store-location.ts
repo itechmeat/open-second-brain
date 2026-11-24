@@ -20,6 +20,7 @@ import { defaultConfigPath, discoverConfig, resolveVault } from "../config.ts";
 import { resolveViewTargetFrom, ViewTargetError } from "../view/target.ts";
 import { STORE_PARTITIONS, type StorePartition } from "./constants.ts";
 import { heldPartitions, readStoreId } from "./store-open.ts";
+import { relocationOf, relocationUnavailableReason } from "./relocation-target.ts";
 import {
   deviceStateDirFor,
   partitionDir,
@@ -57,7 +58,7 @@ export interface ViewTargetLocation {
   /** The folder the human view is rendered into, or `null` when none is configured. */
   readonly path: string | null;
   /** `none`: neither the environment nor the machine config names a folder. */
-  readonly origin: "env" | "config" | "none";
+  readonly origin: "env" | "config" | "default" | "none";
   readonly exists: boolean;
   /** Why the view writer cannot use the folder (it lies inside the store), or `null`. */
   readonly error: string | null;
@@ -133,10 +134,47 @@ export function describeStoreLocation(source: StoreRootSource): StoreLocationRep
       error = err instanceof Error ? err.message : String(err);
     }
   }
+  // A moved root whose destination does not hold the store, or whose
+  // relocation marker cannot be read: the store opens at neither root, and
+  // the report says so rather than show the old root as the store. One
+  // whose destination holds it (a `store_root` that names the recovery
+  // copy, followed to the vault folder as the open follows it) is reported
+  // at the root the store is opened at, with the partitions held there.
+  let held: ReadonlySet<StorePartition> | null = null;
+  if (error === null && storeId !== null) {
+    const moved = relocationOf(root.path, storeId);
+    if (moved.kind === "unavailable" || moved.kind === "unreadable") {
+      error = relocationUnavailableReason(root.path, moved);
+    } else if (moved.kind === "moved" && moved.to !== root.path) {
+      // The open's own rule at the destination (`heldPartitions`), so the
+      // report refuses what the open refuses there, a linked folder too.
+      try {
+        const there = heldPartitions(moved.to);
+        if (there.storeId === storeId) {
+          root = { ...root, path: moved.to };
+          held = there.held;
+        } else {
+          error = relocationUnavailableReason(root.path, {
+            kind: "unavailable",
+            to: moved.to,
+            found:
+              there.storeId === null ? "no brain store" : `another brain store (${there.storeId})`,
+          });
+        }
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
 
   const partitions = STORE_PARTITIONS.map((name): StorePartitionLocation => {
     const path = partitionDir(root.path, name);
-    return { name, path, held: error === null && holdsIdentity(path), exists: isDirectory(path) };
+    return {
+      name,
+      path,
+      held: error === null && (held !== null ? held.has(name) : holdsIdentity(path)),
+      exists: isDirectory(path),
+    };
   });
 
   // The test `stateBaseDir` uses to pick the path: set and non-empty.

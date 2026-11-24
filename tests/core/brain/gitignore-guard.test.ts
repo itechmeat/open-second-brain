@@ -407,6 +407,18 @@ function derivedStoreSites(): string[] {
  */
 const DECLARED_SITES: ReadonlyMap<string, string> = new Map([
   [
+    "core/install/ownership.ts",
+    "names the vault's reserved brain-store folder in the ownership table's brain-store row (text only); never the derived store",
+  ],
+  [
+    "core/store-migration/removal.ts",
+    "checks whether the legacy derived-state folder is still in the vault, to move it out with the legacy tree",
+  ],
+  [
+    "core/store/store-paths.ts",
+    "names the vault's reserved brain-store folder `.open-second-brain-store/`, which shares the prefix; never the derived store",
+  ],
+  [
     "core/search/brain-store/location.ts",
     "names the legacy derived-store file to place the store-aware index outside the vault",
   ],

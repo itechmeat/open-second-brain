@@ -66,7 +66,7 @@ import { valueCarriesPrivateRegion } from "./private-region.ts";
 import { NoStoreError, openStore, readStoreId, type StoreHandle } from "./store-open.ts";
 import {
   dualWriteStatusPath,
-  isPathInsideResolved,
+  storeRootForbiddenInVault,
   partitionDir,
   resolveConfiguredStoreRoot,
   StoreRootInsideVaultError,
@@ -296,7 +296,11 @@ export function storeFor(device: string, context: DualWriteContext): StoreHandle
   // The resolver checks the configured vault; the vault actually written
   // may be another one, and a root inside it is just as wrong.
   const vault = context.vault?.trim();
-  if (vault !== undefined && vault !== "" && isPathInsideResolved(root, vault, process.platform)) {
+  if (
+    vault !== undefined &&
+    vault !== "" &&
+    storeRootForbiddenInVault(root, vault, process.platform)
+  ) {
     throw new StoreRootInsideVaultError(root, vault, origin);
   }
   const key = `${root}\u0000${device}`;

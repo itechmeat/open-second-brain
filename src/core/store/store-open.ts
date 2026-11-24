@@ -12,6 +12,9 @@
  * refreshed (never downgraded).
  *
  * Partitions of two different stores under one root are refused by name.
+ * In a vault's reserved store folder, a store root or partition folder that
+ * is a link (or a junction) is refused with {@link LinkedVaultStoreFolderError}
+ * (`safe-fs.ts`, {@link vaultStoreFolders}).
  *
  * The held partitions are sticky per machine (`held-ledger.ts`): the
  * writing open records them, and a partition this machine has held whose
@@ -28,6 +31,18 @@ import { isUsableLocalDeviceId } from "../config.ts";
 import { STORE_IDENTITY_FILE, STORE_PARTITIONS, type StorePartition } from "./constants.ts";
 import { writeFormatDoc } from "./format-doc.ts";
 import { lostHeldPartitions, recordHeldPartitions } from "./held-ledger.ts";
+import {
+  followRelocation,
+  relocationOf,
+  relocationUnavailableReason,
+  type RelocationRefused,
+} from "./relocation-target.ts";
+import {
+  firstLinkedFolder,
+  VAULT_STORE_LINK_REMEDY,
+  VAULT_STORE_LINK_WHY,
+  vaultStoreFolders,
+} from "./safe-fs.ts";
 import { deviceStateDirFor, partitionDir } from "./store-paths.ts";
 import { isUlid } from "./ulid.ts";
 
@@ -57,6 +72,33 @@ export class StoreOpenError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "StoreOpenError";
+  }
+}
+
+/**
+ * The store at a root moved (`store-relocation.ts`), and the root it moved
+ * to does not hold it now, or its relocation marker cannot be read: the old
+ * root is a frozen recovery copy, so the store is not opened at either
+ * (`relocation-target.ts`).
+ */
+export class RelocatedStoreUnavailableError extends StoreOpenError {
+  constructor(
+    readonly root: string,
+    state: RelocationRefused,
+  ) {
+    super(relocationUnavailableReason(root, state));
+    this.name = "RelocatedStoreUnavailableError";
+  }
+}
+
+/**
+ * The store root or a partition folder in a vault's reserved store folder
+ * is a link (or a junction): the store is not opened through it.
+ */
+export class LinkedVaultStoreFolderError extends StoreOpenError {
+  constructor(readonly path: string) {
+    super(`${path} ${VAULT_STORE_LINK_WHY}. To use the store, ${VAULT_STORE_LINK_REMEDY}`);
+    this.name = "LinkedVaultStoreFolderError";
   }
 }
 
@@ -136,13 +178,22 @@ export function readStoreId(dir: string): string | null {
 /**
  * The partitions under `root` that carry an identity file, and the one
  * store id they share. Throws {@link StoreOpenError} when they belong to
- * different stores. The one rule of which partitions count as held, for
- * the read-only open, the writing open and `store init`.
+ * different stores, and {@link LinkedVaultStoreFolderError} when `root` is a
+ * vault's reserved store folder and it or a partition folder is a link.
+ * The one rule of which partitions count as held, for the read-only open,
+ * the writing open and `store init`.
  */
 export function heldPartitions(root: string): {
   held: Set<StorePartition>;
   storeId: string | null;
 } {
+  const linked = firstLinkedFolder(
+    vaultStoreFolders(
+      root,
+      STORE_PARTITIONS.map((partition) => partitionDir(root, partition)),
+    ),
+  );
+  if (linked !== null) throw new LinkedVaultStoreFolderError(linked);
   // A root that exists but is not a directory holds no store and never
   // will. Said here, because the partition reads below cannot: POSIX
   // answers them with ENOTDIR, but Windows answers ENOENT, which would
@@ -171,9 +222,11 @@ export function heldPartitions(root: string): {
 
 /**
  * {@link heldPartitions}, refused with {@link HeldPartitionLostError} when a
- * partition this machine has held no longer shows its identity file.
+ * partition this machine has held no longer shows its identity file. The
+ * open's rule, and the move's (`store-relocation.ts`): a store missing a
+ * partition it held is neither opened nor moved.
  */
-function heldPartitionsChecked(root: string): ReturnType<typeof heldPartitions> {
+export function heldPartitionsChecked(root: string): ReturnType<typeof heldPartitions> {
   const found = heldPartitions(root);
   const lost = lostHeldPartitions(root, found.held);
   if (lost.length > 0) throw new HeldPartitionLostError(root, lost);
@@ -195,8 +248,73 @@ export interface StoreInspection {
  * read-only callers (doctor); writers use {@link openStore}.
  */
 export function inspectStore(root: string): StoreInspection | null {
+  return inspectAt(root, null);
+}
+
+/** The root a redirect left and the store it expects to find where it goes. */
+interface Redirect {
+  readonly from: string;
+  readonly storeId: string;
+}
+
+function inspectAt(root: string, redirect: Redirect | null): StoreInspection | null {
   const { held, storeId } = heldPartitionsChecked(root);
-  return storeId === null ? null : { root, storeId, partitions: held };
+  expectRedirected(root, storeId, redirect);
+  if (storeId === null) return null;
+  // A root whose store moved into the vault (`store-relocation.ts`) is an
+  // inactive recovery copy: the store is where it moved to.
+  const moved = movedTo(root, storeId, redirect);
+  if (moved !== null) return inspectAt(moved, { from: root, storeId });
+  return { root, storeId, partitions: held };
+}
+
+/**
+ * At the end of a redirect, the store found must be the one the old root's
+ * marker moved there: what was checked before the redirect may have been
+ * replaced by a sync since. The identity read here is the one the open
+ * goes on with, so no replacement passes between a check and its use.
+ */
+function expectRedirected(root: string, found: string | null, redirect: Redirect | null): void {
+  if (redirect === null || found === redirect.storeId) return;
+  throw new RelocatedStoreUnavailableError(redirect.from, {
+    kind: "unavailable",
+    to: root,
+    found: found === null ? "no brain store" : `another brain store (${found})`,
+  });
+}
+
+/**
+ * The root the store `storeId` at `root` was relocated to, or null when it
+ * was not. Throws {@link RelocatedStoreUnavailableError} when that root does
+ * not hold the store now, or the marker cannot be read: the frozen old root
+ * is never the store again.
+ */
+function movedTo(root: string, storeId: string, redirect: Redirect | null): string | null {
+  if (redirect === null) {
+    // The first hop goes by the rule a write through an older handle goes
+    // by (`followRelocation`), so an open and a write agree; the root it
+    // leads to is checked again where it is opened, below.
+    const followed = followRelocation(root, storeId);
+    if (followed.kind === "refused") {
+      throw new RelocatedStoreUnavailableError(followed.root, followed.state);
+    }
+    return followed.kind === "moved" && followed.to !== root ? followed.to : null;
+  }
+  const state = relocationOf(root, storeId);
+  if (state.kind === "unavailable" || state.kind === "unreadable") {
+    throw new RelocatedStoreUnavailableError(root, state);
+  }
+  if (state.kind !== "moved" || state.to === root) return null;
+  // One move is followed, never a second: a relocation writes its marker
+  // into the root it leaves, and the root it moves to carries none of
+  // this store. A destination that names a move of the store again (two
+  // restored roots whose markers point at each other, or a chain) is
+  // refused rather than followed until the stack runs out.
+  throw new RelocatedStoreUnavailableError(redirect.from, {
+    kind: "unavailable",
+    to: root,
+    found: `a copy of the store whose own relocation marker points on to ${state.to}`,
+  });
 }
 
 /** Open the store at `options.root`; throws {@link NoStoreError} when it holds none. */
@@ -207,11 +325,19 @@ export function openStore(options: OpenStoreOptions): StoreHandle {
         `config or O2B_DEVICE_ID to lowercase letters, digits and hyphens`,
     );
   }
+  return openAt(options, null);
+}
+
+function openAt(options: OpenStoreOptions, redirect: Redirect | null): StoreHandle {
   const { held, storeId } = heldPartitionsChecked(options.root);
+  expectRedirected(options.root, storeId, redirect);
   if (storeId === null) throw new NoStoreError(options.root);
+  const moved = movedTo(options.root, storeId, redirect);
+  if (moved !== null) return openAt({ ...options, root: moved }, { from: options.root, storeId });
   recordHeldPartitions(options.root, held, options.dirs);
-  // The root copy is device-local (the root is never synced), so it is
-  // refreshed like every partition copy.
+  // The root copy is refreshed like every partition copy (it travels with
+  // the vault when the root is the vault's reserved folder; a refresh never
+  // downgrades it, so two machines agree on it).
   writeFormatDoc(options.root);
   for (const partition of held) writeFormatDoc(partitionDir(options.root, partition));
   return {

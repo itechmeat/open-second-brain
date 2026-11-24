@@ -3,7 +3,9 @@
  * target"): a folder inside the vault, any other folder, or none.
  *
  * The target comes from `OPEN_SECOND_BRAIN_VIEW_TARGET`, then the
- * `view_target` machine-config key; with neither there is no view, and
+ * `view_target` machine-config key, then the default: the `brain-view`
+ * folder of the vault the machine config names (`vault`). With none of
+ * them, or with `none` (or `off`) as the value, there is no view, and
  * every brain operation still works. It is device-local config because a
  * folder path differs per machine, and only the view writer reads it. A
  * relative config value anchors to the config file's directory, the way
@@ -23,9 +25,14 @@ import { posix, win32 } from "node:path";
 import { defaultConfigPath, discoverConfig } from "../config.ts";
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { isPathInsideResolved } from "../store/store-paths.ts";
-import { VIEW_TARGET_CONFIG_KEY, VIEW_TARGET_ENV } from "./constants.ts";
+import {
+  VIEW_DEFAULT_DIR,
+  VIEW_TARGET_CONFIG_KEY,
+  VIEW_TARGET_ENV,
+  VIEW_TARGET_OFF_VALUES,
+} from "./constants.ts";
 
-export type ViewTargetOrigin = "env" | "config";
+export type ViewTargetOrigin = "env" | "config" | "default";
 
 export interface ViewTarget {
   readonly dir: string;
@@ -68,9 +75,22 @@ function expandHome(value: string, source: ViewTargetSource): string {
 }
 
 function settingName(origin: ViewTargetOrigin): string {
-  return origin === "env"
-    ? `the ${VIEW_TARGET_ENV} environment variable`
-    : `\`${VIEW_TARGET_CONFIG_KEY}\` in the machine config`;
+  if (origin === "env") return `the ${VIEW_TARGET_ENV} environment variable`;
+  if (origin === "default") return `the default, the vault's ${VIEW_DEFAULT_DIR} folder`;
+  return `\`${VIEW_TARGET_CONFIG_KEY}\` in the machine config`;
+}
+
+function turnedOff(value: string): boolean {
+  return VIEW_TARGET_OFF_VALUES.includes(value.toLowerCase());
+}
+
+/** The vault the machine config names (`vault`), resolved, or null. */
+function configuredVault(source: ViewTargetSource): string | null {
+  const vault = source.config["vault"]?.trim();
+  if (!vault) return null;
+  const paths = pathsFor(source.platform);
+  const expanded = expandHome(vault, source);
+  return paths.isAbsolute(expanded) ? paths.normalize(expanded) : null;
 }
 
 /**
@@ -80,9 +100,18 @@ function settingName(origin: ViewTargetOrigin): string {
 export function configuredViewTarget(source: ViewTargetSource): ViewTarget | null {
   const paths = pathsFor(source.platform);
   const env = source.env[VIEW_TARGET_ENV]?.trim();
-  if (env) return { dir: paths.resolve(expandHome(env, source)), origin: "env" };
+  if (env) {
+    if (turnedOff(env)) return null;
+    return { dir: paths.resolve(expandHome(env, source)), origin: "env" };
+  }
   const configured = source.config[VIEW_TARGET_CONFIG_KEY]?.trim();
-  if (!configured) return null;
+  if (configured && turnedOff(configured)) return null;
+  if (!configured) {
+    // A machine with a vault and no word about the view gets one, in the
+    // vault, so the pages appear where the person already looks.
+    const vault = configuredVault(source);
+    return vault === null ? null : { dir: paths.join(vault, VIEW_DEFAULT_DIR), origin: "default" };
+  }
   const expanded = expandHome(configured, source);
   return {
     dir: paths.isAbsolute(expanded)

@@ -33,6 +33,7 @@ import {
   autoMigrationLockPath,
   recordAutoMigrationWaiting,
 } from "../../../src/core/store-migration/auto-state.ts";
+import { AUTO_LEGACY_REMOVAL_FLAG } from "../../../src/core/store-migration/auto-removal.ts";
 import { runAutoStoreMigration } from "../../../src/core/store-migration/auto-worker.ts";
 import * as processIdentity from "../../../src/core/store-migration/process-identity.ts";
 
@@ -117,7 +118,7 @@ function liveHolder(): number {
 }
 
 /** Spy on the identity query and stand in for every spawn; returns the worker spawns. */
-function watchStart(): { workers: () => number } {
+function watchStart(): { workers: () => number; removals: () => number } {
   identity = spyOn(processIdentity, "processStartIdentity");
   spawn = spyOn(Bun, "spawn").mockImplementation((() => ({
     pid: 2 ** 22 + 1,
@@ -126,9 +127,10 @@ function watchStart(): { workers: () => number } {
     exited: new Promise<number>(() => {}),
     signalCode: null,
   })) as unknown as typeof Bun.spawn);
+  const calls = (): string[][] => spawn.mock.calls.map((call) => call[0] as string[]);
   return {
-    workers: () =>
-      spawn.mock.calls.filter((call) => (call[0] as string[]).includes("migrate-store")).length,
+    workers: () => calls().filter((argv) => argv.includes("migrate-store")).length,
+    removals: () => calls().filter((argv) => argv.includes(AUTO_LEGACY_REMOVAL_FLAG)).length,
   };
 }
 
@@ -191,11 +193,15 @@ describe("a start queries no process identity", () => {
     expect(identity).not.toHaveBeenCalled();
   });
 
-  test("a switched machine whose migration finished: it starts nothing", async () => {
+  test("a switched machine whose migration finished: it starts only the removal of the legacy tree", async () => {
     expect(runAutoStoreMigration(vault, { configPath }).outcome).toBe("applied");
     const watch = watchStart();
     expect(await start()).toBeNull();
-    expect(watch.workers()).toBe(0);
+    // The legacy tree is still in the vault (the test migrated in this
+    // process, with no worker to remove it): the start asks for the
+    // automatic removal, and for nothing else.
+    expect(watch.workers()).toBe(1);
+    expect(watch.removals()).toBe(1);
     expect(identity).not.toHaveBeenCalled();
   });
 
