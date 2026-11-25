@@ -916,9 +916,15 @@ export function describeLostAutoMigrationWorker(
  * the age rule), and an unlocked removal could delete the successor's
  * claim. The claim left
  * behind is stale once this process ends.
+ *
+ * No claim file, nothing to release: the mutex is not taken, because
+ * taking it makes the folder chain again, and a worker's exit-time
+ * release that runs after the machine's state folder was removed would
+ * otherwise leave that empty chain behind.
  */
 export function releaseAutoMigrationLock(vault: string, token: string): void {
   const path = autoMigrationLockPath(vault);
+  if (!existsSync(path)) return;
   const release = (): void => {
     const decision = decideClaim(claimStateAt(path, new Date(), { who: "release", token }, "free"));
     if (decision.act !== "remove") return;
