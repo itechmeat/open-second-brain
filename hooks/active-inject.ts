@@ -102,6 +102,7 @@ import {
   SOURCE_ACTIVE_BODY,
   SOURCE_DIGEST_CUT_NOTE,
   SOURCE_LESSONS_BODY,
+  SOURCE_SESSION_NOTICES,
   type InjectionLimits,
 } from "./lib/active-context.ts";
 import { pruneHookStateFiles } from "./lib/session-state.ts";
@@ -318,7 +319,10 @@ async function main(): Promise<void> {
         : "";
     if (digestBlock.length > 0) {
       meter.sources.unshift({
-        name: "runtime-notices",
+        // Its own id: this block rides the payload beside the memory
+        // context, not inside it, so it is not one of the memory
+        // sub-bodies the injection ledger's attribution joins over.
+        name: SOURCE_SESSION_NOTICES,
         text: digestBlock,
         lane: LANE_UNBUDGETED,
         outsideBoundary: false,

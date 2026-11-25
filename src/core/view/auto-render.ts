@@ -133,6 +133,7 @@ export function runAutoViewPass(options: AutoViewOptions): AutoViewResult | null
     const budget = options.budgetMs;
     return runViewPass(store, {
       target: target?.dir ?? null,
+      ...(target !== null ? { targetOrigin: target.origin } : {}),
       vault,
       agent,
       ...(options.now !== undefined ? { now: options.now } : {}),
@@ -169,7 +170,8 @@ export function describeAutoView(result: AutoViewResult): string {
       return (
         `rendered ${result.pages.length - removed} page(s), ${written} changed` +
         (removed > 0 ? `, ${removed} removed` : "") +
-        (deferred > 0 ? `, ${deferred} deferred to the next pass` : "")
+        (deferred > 0 ? `, ${deferred} deferred to the next pass` : "") +
+        (result.notice !== undefined ? `. ${result.notice}` : "")
       );
     }
     case "released":

@@ -113,6 +113,17 @@ describe("persisted device clock", () => {
     expect(compareHlc(reply, remote)).toBeGreaterThan(0);
   });
 
+  test("observing a stamp the saved clock is already past leaves the file as it was", () => {
+    const saved = tickClock(root, "dev-o", () => 5_000);
+    observeClock(root, "dev-o", { physical: 4_000, counter: 3 }, () => 9_000);
+    expect(readClock(root, "dev-o")).toEqual(saved);
+    // A newer stamp is kept, and later ticks order after both.
+    observeClock(root, "dev-o", { physical: 7_000, counter: 2 }, () => 6_500);
+    expect(readClock(root, "dev-o")).toEqual({ physical: 7_000, counter: 2 });
+    const reply = tickClock(root, "dev-o", () => 6_000);
+    expect(compareHlc(reply, { physical: 7_000, counter: 2 })).toBeGreaterThan(0);
+  });
+
   test("a corrupt clock file falls back to the wall clock instead of failing the write", () => {
     const path = clockFilePath(root, "dev-c");
     mkdirSync(dirname(path), { recursive: true });

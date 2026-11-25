@@ -65,7 +65,7 @@ and the store self-test.
 
 An existing installation needs no setup step after an update: its next
 agent session moves the brain into the vault's store folder, writes the
-pages into `brain-view/` and, once every machine has updated, takes the
+pages into `o2b-memory/` and, once every machine has updated, takes the
 legacy `Brain/` tree out of the vault, saying so in one line a day at most
 ([updating](docs/updating.md#upgrading-to-201)). One step needs you on a
 machine that switched on 2.0.0: its store sits outside the vault, where no

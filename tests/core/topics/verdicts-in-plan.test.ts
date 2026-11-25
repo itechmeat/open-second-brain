@@ -153,6 +153,24 @@ describe("planTopics with verdicts", () => {
     expect(none.asks.groups.map((g) => [...g.members].toSorted())).toEqual([members.toSorted()]);
   });
 
+  test("a note the accepted verdicts of the pass hide never joins a group", () => {
+    const members = [
+      signal("Shard compaction notes from meeting one", "s1"),
+      signal("Shard compaction notes from meeting two", "s2"),
+      signal("Shard compaction notes from meeting three", "s3"),
+    ];
+    const hidden = members[2]!;
+    const plan = planWith({
+      ...emptyTopicVerdicts(),
+      hidden: new Map([[hidden, verdictOf("human_readable")]]),
+    });
+    // The hide is written after the plan: a group that took the note
+    // would hold it for ever.
+    const grouped = plan.asks.groups.flatMap((g) => [...g.members]);
+    expect(grouped.toSorted()).toEqual(members.slice(0, 2).toSorted());
+    expect(grouped).not.toContain(hidden);
+  });
+
   test("a verdict whose record is already assigned is ignored", () => {
     const topic = seedTopic("Shard compaction keeps monthly shard files small");
     const r1 = signal("Shard compaction thresholds were tuned today", "s1");
@@ -195,23 +213,19 @@ describe("planTopics with verdicts", () => {
     expect(plan).toEqual(deterministic);
   });
 
-  test("a veto skips only the group with exactly these members; an approval rides the create", () => {
+  test("a veto skips its group until it grows by half; an approval rides the create", () => {
     const members = [
       signal("Alley garden beds need watering notes", "s1"),
       signal("Alley garden beds watering schedule drafted", "s2"),
     ];
     const key = topicGroupKey(members);
-    const vetoed = planWith({
-      ...emptyTopicVerdicts(),
-      vetoes: new Map([[key, { verdict: verdictOf("topic_new", 0.2), veto: true }]]),
-    });
+    const veto = { verdict: verdictOf("topic_new", 0.2), veto: true, members: 2 };
+    const vetoed = planWith({ ...emptyTopicVerdicts(), vetoes: new Map([[key, veto]]) });
     expect(vetoed.creates).toEqual([]);
-    // A group that changed (a third record joined) is not the vetoed one.
+    expect(vetoed.asks.groups).toEqual([]);
+    // A group that grew by half (a third record joined) is asked again.
     members.push(signal("Alley garden beds watering review filed", "s3"));
-    const changed = planWith({
-      ...emptyTopicVerdicts(),
-      vetoes: new Map([[key, { verdict: verdictOf("topic_new", 0.2), veto: true }]]),
-    });
+    const changed = planWith({ ...emptyTopicVerdicts(), vetoes: new Map([[key, veto]]) });
     expect(changed.creates).toEqual([]);
     expect(changed.asks.groups.map((g) => g.key)).toEqual([topicGroupKey(members)]);
     // Approval with no wording: the group waits for the launched agent's

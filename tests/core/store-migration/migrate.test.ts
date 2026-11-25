@@ -47,6 +47,8 @@ import {
   vaultBindingPath,
 } from "../../../src/core/vault-adapter/vault-binding.ts";
 import { readViewWriter } from "../../../src/core/view/writer.ts";
+import { readDreamOwner } from "../../../src/core/brain/dream-owner/owner.ts";
+import { UNCONFIGURED_AGENT_NAME } from "../../../src/core/config.ts";
 import { BENCH_DEVICE, makeMigrationBench, type MigrationBench } from "./fixtures/migration-env.ts";
 import { runStateOf } from "./fixtures/run-state.ts";
 import {
@@ -203,6 +205,19 @@ describe("runMigration", () => {
     markProceduralMemoryUsed(bench.vault, id, new Date("2026-11-15T10:00:00Z"));
     expect(bench.records()).toHaveLength(before);
     expect(listProceduralMemory(bench.vault)[0]?.usedCount).toBe(4);
+  });
+
+  test("the first machine to migrate owns dream, as `o2b init` makes a new brain's creator own it", () => {
+    runMigration(bench.vault, { ...FAST, agent: "claude" });
+    expect(readDreamOwner(bench.store()).owner).toMatchObject({
+      device: BENCH_DEVICE,
+      agent: "claude",
+    });
+  });
+
+  test("a migration with no agent name configured binds no dream owner", () => {
+    runMigration(bench.vault, { ...FAST, agent: UNCONFIGURED_AGENT_NAME });
+    expect(readDreamOwner(bench.store()).owner).toBeNull();
   });
 
   test("a clean run imports every item once, backs up, archives and records the switch", () => {

@@ -18,12 +18,12 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { readDeviceId } from "../../config.ts";
+import { discoverConfig, readDeviceId } from "../../config.ts";
 import { findProgram } from "../../process/run-program.ts";
 import { initStore } from "../../store/store-init.ts";
 import { openStore } from "../../store/store-open.ts";
 import { claimDreamOwner, claimSettled, readDreamOwner } from "../dream-owner/owner.ts";
-import type { DreamAgentCommand } from "./agent-config.ts";
+import { resolveDreamAgentConfig, type DreamAgentCommand } from "./agent-config.ts";
 import { runAgentSession, type AgentSessionRun } from "./agent-executor.ts";
 import { dreamAgentStateDir, recordDreamAgentVerification } from "./agent-verified.ts";
 import { registerDreamWorkOperation } from "./operations.ts";
@@ -146,11 +146,20 @@ export async function checkDreamAgent(
         sources: ["shared"],
       }).id;
     const ids = [canary("closed"), canary("text")];
+    // The check speaks the protocol the machine's sessions will speak:
+    // the batch of a run is the batch of the configuration, capped by
+    // its item limit, as a production run's is. The check's own item
+    // budget stays 4, so both canaries can be taken.
+    const { batch, items } = resolveDreamAgentConfig({
+      config: discoverConfig(options.configPath).data,
+      env,
+    });
     const session = await runAgentSession(queue, owner, command, {
       budgetMs: options.limitMs ?? AGENT_CHECK_LIMIT_MS,
       operations: [AGENT_CHECK_OPERATION],
       privateAllowed: true,
       items: 4,
+      batch: Math.min(batch, items),
       configPath,
       env,
     });

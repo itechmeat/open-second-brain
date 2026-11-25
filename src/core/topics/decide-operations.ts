@@ -19,8 +19,14 @@ import {
   registerDreamWorkOperation,
   type DreamWorkContext,
   type DreamWorkInput,
+  type DreamWorkReads,
 } from "../brain/dream-queue/operations.ts";
-import { readDreamWork, readDreamWorkAt, type ProduceSpec } from "../brain/dream-queue/queue.ts";
+import {
+  readDreamWork,
+  readDreamWorkAt,
+  readDreamWorkLater,
+  type ProduceSpec,
+} from "../brain/dream-queue/queue.ts";
 import { dreamWorkInputHash } from "../brain/dream-queue/records.ts";
 import type { DreamWorkState } from "../brain/dream-queue/fold.ts";
 import {
@@ -42,7 +48,13 @@ import { foldSettings, settingValue } from "../store/fold-settings.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { textCarriesPrivateRegion, valueCarriesPrivateRegion } from "../store/private-region.ts";
 import type { StoreHandle } from "../store/store-open.ts";
-import { catchUpWhere, partitionRecords, type ViewCatchUp } from "../view/catch-up.ts";
+import {
+  catchUpWhere,
+  catchUpWhereKept,
+  partitionRecords,
+  type CatchUpTails,
+  type ViewCatchUp,
+} from "../view/catch-up.ts";
 import { isTopicPlanningInput, topicCandidates, type TopicCandidate } from "./candidates.ts";
 import { decisionTitlesOfCatchUp } from "./decision-titles.ts";
 import { foldTopics, type TopicFold, type TopicState } from "./fold.ts";
@@ -188,6 +200,8 @@ export interface StandingVerdicts {
   readonly none: ReadonlyMap<string, TopicVerdictBody>;
   /** Group keys a `topic-new` answer vetoed. */
   readonly vetoes: ReadonlyMap<string, TopicVerdictBody>;
+  /** Group key to how many members the group had when it was vetoed. */
+  readonly vetoSizes: ReadonlyMap<string, number>;
   /** Group keys a `topic-new` answer approved, whose topic waits for its wording. */
   readonly approvals: ReadonlyMap<string, TopicVerdictBody>;
   /** Pair hints from `topic-same` answers, the newest per pair. */
@@ -197,6 +211,7 @@ export interface StandingVerdicts {
 export const NO_STANDING: StandingVerdicts = {
   none: new Map(),
   vetoes: new Map(),
+  vetoSizes: new Map(),
   approvals: new Map(),
   same: [],
 };
@@ -240,6 +255,7 @@ export function verdictOfAnswer(
 export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
   const none = new Map<string, TopicVerdictBody>();
   const vetoes = new Map<string, TopicVerdictBody>();
+  const vetoSizes = new Map<string, number>();
   const approvals = new Map<string, TopicVerdictBody>();
   const same = new Map<string, TopicVerdicts["sameTopics"][number]>();
   for (const id of state.order) {
@@ -257,8 +273,11 @@ export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
       vetoes.delete(item.body.subject);
       approvals.delete(item.body.subject);
       const verdict = verdictOfAnswer("topic_new", value as never, conf(value));
-      if (mark === STANDING_MARK.veto) vetoes.set(item.body.subject, verdict);
-      else if (mark === STANDING_MARK.approved) approvals.set(item.body.subject, verdict);
+      if (mark === STANDING_MARK.veto) {
+        vetoes.set(item.body.subject, verdict);
+        const members = item.body.payload["members"];
+        if (Array.isArray(members)) vetoSizes.set(item.body.subject, members.length);
+      } else if (mark === STANDING_MARK.approved) approvals.set(item.body.subject, verdict);
     } else if (op === "topic-same") {
       if (mark !== STANDING_MARK.same && mark !== STANDING_MARK.different) continue;
       const [a, b] = item.body.subject.split("..") as [string, string];
@@ -273,7 +292,7 @@ export function standingVerdicts(state: DreamWorkState): StandingVerdicts {
       });
     }
   }
-  return { none, vetoes, approvals, same: [...same.values()] };
+  return { none, vetoes, vetoSizes, approvals, same: [...same.values()] };
 }
 
 function conf(value: Record<string, unknown>): number {
@@ -308,9 +327,18 @@ export function standingAsVerdicts(standing: StandingVerdicts): TopicVerdicts {
       ]),
     ),
     kinds: new Map(),
-    vetoes: new Map<string, { readonly verdict: TopicVerdictBody; readonly veto: boolean }>([
+    vetoes: new Map<
+      string,
+      { readonly verdict: TopicVerdictBody; readonly veto: boolean; readonly members?: number }
+    >([
       ...[...standing.approvals].map(([key, verdict]) => [key, { verdict, veto: false }] as const),
-      ...[...standing.vetoes].map(([key, verdict]) => [key, { verdict, veto: true }] as const),
+      ...[...standing.vetoes].map(([key, verdict]) => {
+        const members = standing.vetoSizes.get(key);
+        return [
+          key,
+          { verdict, veto: true, ...(members !== undefined ? { members } : {}) },
+        ] as const;
+      }),
     ]),
     wordings: new Map(),
     sameTopics: standing.same,
@@ -350,12 +378,13 @@ function historyNotes(
   return notes;
 }
 
-/** The question state of a planning read (`catchUpWhere(isTopicPlanningInput)`). */
-export function topicQuestionStateOf(
-  read: ViewCatchUp,
-  nowMs: number,
-  standing: StandingVerdicts,
-): TopicQuestionState {
+/** What a question state holds that depends only on the planning read. */
+type TopicQuestionBase = Pick<
+  TopicQuestionState,
+  "fold" | "candidates" | "byId" | "settings" | "notes"
+>;
+
+function topicQuestionBaseOf(read: ViewCatchUp): TopicQuestionBase {
   const privateIds = new Set(partitionRecords(read, "private").map((r) => r.id));
   const records = [...read.records.values()].flat();
   const fold = foldTopics(records, { privateIds });
@@ -373,27 +402,134 @@ export function topicQuestionStateOf(
     byId: new Map(candidates.map((c) => [c.id, c])),
     settings,
     notes: historyNotes(shared),
-    standing,
-    plan: planTopics(fold, candidates, settings, nowMs, standingAsVerdicts(standing)),
-    nowMs,
   };
+}
+
+/**
+ * The state of `base` at `nowMs` under `standing`. The plan is built on
+ * first use: a question that does not read it (the history question)
+ * never pays for it, and every reader sees the same plan.
+ */
+function topicQuestionStateFrom(
+  base: TopicQuestionBase,
+  nowMs: number,
+  standingOf: () => StandingVerdicts,
+): TopicQuestionState {
+  let plan: TopicPlan | undefined;
+  let standing: StandingVerdicts | undefined;
+  const standingNow = (): StandingVerdicts => (standing ??= standingOf());
+  return {
+    ...base,
+    nowMs,
+    get standing(): StandingVerdicts {
+      return standingNow();
+    },
+    get plan(): TopicPlan {
+      plan ??= planTopics(
+        base.fold,
+        base.candidates,
+        base.settings,
+        nowMs,
+        standingAsVerdicts(standingNow()),
+      );
+      return plan;
+    },
+  };
+}
+
+/** The question state of a planning read (`catchUpWhere(isTopicPlanningInput)`). */
+export function topicQuestionStateOf(
+  read: ViewCatchUp,
+  nowMs: number,
+  standing: StandingVerdicts,
+): TopicQuestionState {
+  return topicQuestionStateFrom(topicQuestionBaseOf(read), nowMs, () => standing);
+}
+
+/** Whether a planning read is complete: no unreadable shard, no pending body. */
+function completeRead(read: ViewCatchUp): boolean {
+  return (
+    read.unreadable.length === 0 &&
+    ![...(read.pendingKinds?.values() ?? [])].some((kinds) => [...kinds.values()].some(Boolean))
+  );
+}
+
+/**
+ * The question state of one store for a reader that asks again and again
+ * (a dream session's server rechecks an item's input on every take and
+ * answer): the planning inputs are read through kept tails
+ * (`catchUpWhereKept`), so only what was appended since the last read is
+ * parsed, and the part of the state built from them alone is kept while
+ * nothing new was read. Each read still folds the queue afresh, so the
+ * standing verdicts are always current. It answers what
+ * {@link readTopicQuestionState} answers for the same store.
+ */
+export class TopicQuestionReader {
+  readonly #store: StoreHandle;
+  readonly #reads: DreamWorkReads | undefined;
+  readonly #tails: CatchUpTails = new Map();
+  #base: TopicQuestionBase | null = null;
+  #read: ViewCatchUp | undefined;
+
+  /** `reads`: the caller's, so the queue fold of each read reads incrementally too. */
+  constructor(store: StoreHandle, reads?: DreamWorkReads) {
+    this.#store = store;
+    this.#reads = reads;
+  }
+
+  read(nowMs: number): TopicQuestionState | null {
+    const { read, fresh } = catchUpWhereKept(
+      this.#store,
+      isTopicPlanningInput,
+      this.#tails,
+      () => nowMs,
+      this.#base === null ? undefined : this.#read,
+    );
+    this.#read = read;
+    if (!completeRead(read)) {
+      this.#base = null;
+      return null;
+    }
+    // The queue is read now (an incomplete read leaves the state
+    // unavailable, as a fresh read does) and folded only when a question
+    // reads the standing verdicts: the history question never does.
+    const queue = readDreamWorkLater(this.#store, { now: nowMs, reads: this.#reads });
+    if (queue.unreadable.length > 0) {
+      // The planning read is kept, but the base is not built from it: the
+      // next read starts afresh, as after an incomplete planning read, so
+      // the base never stays one read behind what was read.
+      this.#base = null;
+      return null;
+    }
+    if (fresh || this.#base === null) this.#base = topicQuestionBaseOf(read);
+    return topicQuestionStateFrom(this.#base, nowMs, () => standingVerdicts(queue.fold()));
+  }
+}
+
+/** The memo key of a store's {@link TopicQuestionReader} in a queue's reads. */
+function questionReaderKey(store: StoreHandle): string {
+  return `topic-questions:${store.root}:${store.device}`;
 }
 
 /**
  * The question state of `store` as this device holds it now, or `null`
  * when a shard could not be read in full (a question over a partial read
- * could be asked about a subject that is settled).
+ * could be asked about a subject that is settled). With `reads` (what a
+ * long-lived caller keeps between calls), through that caller's
+ * {@link TopicQuestionReader}.
  */
 export function readTopicQuestionState(
   store: StoreHandle,
   nowMs: number,
+  reads?: DreamWorkReads,
 ): TopicQuestionState | null {
+  if (reads !== undefined) {
+    return reads
+      .memo(questionReaderKey(store), () => new TopicQuestionReader(store, reads))
+      .read(nowMs);
+  }
   const read = catchUpWhere(store, isTopicPlanningInput, () => nowMs);
-  if (
-    read.unreadable.length > 0 ||
-    [...(read.pendingKinds?.values() ?? [])].some((kinds) => [...kinds.values()].some(Boolean))
-  )
-    return null;
+  if (!completeRead(read)) return null;
   const queue = readDreamWork(store, { now: nowMs });
   if (queue.unreadable.length > 0) return null;
   return topicQuestionStateOf(read, nowMs, standingVerdicts(queue));
@@ -719,7 +855,7 @@ export function closedProduceSpec(question: ClosedQuestion): ProduceSpec {
  */
 function currentInput(operation: ClosedOperation) {
   return (item: DreamWorkItem, context: DreamWorkContext): DreamWorkInput | null => {
-    const state = readTopicQuestionState(context.store, context.now);
+    const state = readTopicQuestionState(context.store, context.now, context.reads);
     if (state === null) return { unavailable: true, input_hash: item.body.input_hash };
     const question = closedQuestion(state, operation, item.body.subject);
     if (question === null) return null;
@@ -762,7 +898,7 @@ registerDreamWorkOperation({
   text: true,
   validate: (answer) => wordingRejection(answer.value),
   currentInput(item: DreamWorkItem, context: DreamWorkContext): DreamWorkInput | null {
-    const state = readTopicQuestionState(context.store, context.now);
+    const state = readTopicQuestionState(context.store, context.now, context.reads);
     if (state === null) return { input_hash: item.body.input_hash, partition: "private" };
     const entry = wordingGroups(state).find((g) => g.group.key === item.body.subject);
     if (entry === undefined) return null;

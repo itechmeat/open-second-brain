@@ -409,12 +409,15 @@ describe("topic planning", () => {
     expect(fold().topics.size).toBe(0);
   });
 
-  test("a cluster with a private record becomes a private topic", () => {
-    cluster(["s1", "s1", "s2", "s2"]);
-    signal("Shard compaction keeps monthly shard files small too", {
-      session: "s2",
-      partition: "private",
-    });
+  test("a cluster of private records becomes a private topic", () => {
+    // Shared and private records group apart: these five private ones make
+    // their own topic, written to `private` with every assign.
+    for (const [i, session] of ["s1", "s1", "s2", "s2", "s2"].entries()) {
+      signal(`Shard compaction keeps monthly shard files small ${i}`, {
+        session,
+        partition: "private",
+      });
+    }
     const created = planned(plan()).created[0]!;
     const topicRecords = readPartition(join(m.root("dev-a"), "private"))
       .filter((s) => s.stream === "topics")

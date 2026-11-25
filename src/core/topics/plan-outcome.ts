@@ -1,15 +1,9 @@
 /**
  * What the last topic planning pass on this machine found, kept in the
- * device-local state so `o2b status` and doctor can say why no topic was
- * made without reading the store again.
- *
- * Topic planning makes a topic only from the records of one project
- * (design D17): a signal, note or decision that names no project never
- * starts a topic. The tools stamp the project of a linked project
- * directory (`brain/record-origin.ts`); records written outside one, and a
- * history migrated from a release that stamped none, carry no project. A
- * pass that created nothing while every record no topic holds names no
- * project is not "nothing to plan", and these readers say so.
+ * device-local state so `o2b status` can show it without reading the
+ * store again: the topics created, the records no topic holds, and how
+ * many of those name no project (an attribute only: topics group records
+ * by theme, whatever project they name or do not name).
  *
  * Written only by the view writer's planning pass (the one that plans),
  * atomically, after each planned pass. Never synced: it describes this
@@ -28,9 +22,6 @@ import { VIEW_STATE_DIR } from "../view/constants.ts";
 
 /** The file, under the store's device-local view state. */
 const OUTCOME_FILE = "topic-plan-last.json";
-
-/** The command that links a project directory to the vault. */
-export const PROJECT_LINK_COMMAND = "o2b brain project link";
 
 /** The counts of one planning pass. */
 export interface TopicPlanCounts {
@@ -119,20 +110,4 @@ export function topicPlanOutcomeAtReach(
   if (outcome === null || !withholdsPrivate) return outcome;
   if (outcome.shared === undefined) return null;
   return { at: outcome.at, ...outcome.shared };
-}
-
-/**
- * The advice a person reads when the last pass created no topic and some
- * records no topic holds name no project; `null` otherwise.
- */
-export function unscopedTopicsAdvice(outcome: TopicPlanOutcome | null): string | null {
-  if (outcome === null || outcome.created > 0 || outcome.withoutProject === 0) return null;
-  return (
-    `the last topic planning pass (${outcome.at}) made no topic: ${outcome.withoutProject} of ` +
-    `${outcome.unassigned} record(s) no topic holds name no project, and a topic is made only ` +
-    "from the records of one project. Records written by an agent working in a project directory " +
-    `linked to this vault (\`${PROJECT_LINK_COMMAND}\`) carry that project; older records and ` +
-    "records written elsewhere carry none and are never given one. A personal topic can be made " +
-    "by hand with `o2b topic create`."
-  );
 }

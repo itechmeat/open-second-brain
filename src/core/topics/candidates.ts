@@ -14,6 +14,8 @@
  *    a log event's body), read by the rule that wrote it
  *    (`brain/record-origin.ts` `recordProjectOf`, the scoped-rules key):
  *    a name in any script keeps its own key; `null` when it names none.
+ *    An optional attribute: it never decides whether a record groups or
+ *    routes, only the scope a topic made of one project's records gets.
  *  - **Session.** The `session` the record names, else its `session_ref`,
  *    else the device, agent and UTC day that wrote it: records of one
  *    agent on one machine on one day count as one session, so a single
@@ -41,6 +43,7 @@
 import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../redactor.ts";
 import { scopeFromFrontmatter } from "../scope-key.ts";
 import { recordProjectOf } from "../brain/record-origin.ts";
+import { BRAIN_SIGNAL_SOURCE_TYPE } from "../brain/types.ts";
 import { LOG_EVENT_KIND, SIGNAL_KIND, type StoreStream } from "../store/constants.ts";
 import type { StoreRecord } from "../store/envelope.ts";
 import { SIGNAL_REMOVED_KIND } from "../store/fold-signals.ts";
@@ -53,6 +56,9 @@ import {
   NO_DECISION_TITLES,
   type DecisionTitles,
 } from "./decision-titles.ts";
+
+/** The `source_type` of a signal the regex fact extraction wrote (`brain/fact-extract.ts`). */
+const EXTRACTED_SOURCE_TYPE = BRAIN_SIGNAL_SOURCE_TYPE.extracted;
 
 /** The record a `human_readable` verdict stores about a note (`verdict-writes.ts`). */
 const HISTORY_VERDICT_KIND = "history-verdict";
@@ -126,6 +132,19 @@ export interface TopicCandidate {
   readonly private: boolean;
   /** The envelope `topic` the record was written under, or `null`. */
   readonly topic: string | null;
+  /**
+   * A signal the regex fact extraction wrote (`source_type: extracted`:
+   * a URL, a quantity or an address mined from a session turn). It can be
+   * assigned by hand, but planning never groups or routes it: thousands of
+   * them would flood every theme.
+   */
+  readonly extracted?: boolean;
+  /**
+   * A note the history step hid (a stored `history-verdict` with `keep:
+   * false`: a machine log line, a test or a probe, not a note for a
+   * person). Planning never groups it into a new topic.
+   */
+  readonly hidden?: boolean;
 }
 
 function str(value: unknown): string | null {
@@ -204,7 +223,9 @@ function candidateOf(
   if (text !== null) text = withoutPrivateRegions(text);
   if (text === null || text === "") return null;
   const scope = scopeFromFrontmatter(meta);
+  const extracted = record.kind === SIGNAL_KIND && meta["source_type"] === EXTRACTED_SOURCE_TYPE;
   return {
+    ...(extracted ? { extracted } : {}),
     id: record.id,
     kind,
     text,
@@ -275,6 +296,11 @@ export function topicCandidates(
   const removed = new Set(
     records.filter((r) => r.kind === SIGNAL_REMOVED_KIND).map((r) => String(r.body["signal"])),
   );
+  const hidden = new Set(
+    records
+      .filter((r) => r.kind === HISTORY_VERDICT_KIND && r.body["keep"] === false)
+      .map((r) => String(r.body["record"])),
+  );
   const out: TopicCandidate[] = [];
   for (const record of records) {
     if (record.kind === SIGNAL_KIND && removed.has(String(record.body["id"]))) continue;
@@ -282,7 +308,8 @@ export function topicCandidates(
     // foreign writer) counts as private: its text must not seed a shared topic.
     const isPrivate = privateIds.has(record.id) || valueCarriesPrivateRegion(record.body);
     const candidate = candidateOf(record, isPrivate, titles);
-    if (candidate !== null) out.push(candidate);
+    if (candidate === null) continue;
+    out.push(hidden.has(record.id) ? { ...candidate, hidden: true } : candidate);
   }
   return out;
 }

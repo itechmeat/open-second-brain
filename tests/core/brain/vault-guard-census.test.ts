@@ -82,6 +82,10 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/dream-queue/agent-verified.ts":
     "writes no vault file. The verified commands and the last run of the dream agent are " +
     "machine state under the device state directory, never synced and never in a vault.",
+  "src/core/brain/dream-queue/queue.ts":
+    "writes no vault file. Its one direct write is the folder of the queue's lock under the " +
+    "store's device-local state directory, never synced and never in a vault; the queue's " +
+    "records go to the store through the store appender.",
   "src/core/brain/dream-queue/run-record.ts":
     "writes no vault file. A dream run's record and call log live in the store's device-local " +
     "state directory, mode 0600, never synced and never in a vault.",
@@ -235,6 +239,8 @@ const MIGRATION_GATE_FOR_UNGUARDED: Readonly<Record<string, string>> = Object.fr
   "src/core/brain/dream-queue/agent-check.ts": "writes only outside the vault (device state)",
   "src/core/brain/dream-queue/agent-executor.ts": "writes only outside the vault (device state)",
   "src/core/brain/dream-queue/agent-verified.ts": "writes only outside the vault (device state)",
+  "src/core/brain/dream-queue/queue.ts":
+    "writes only outside the vault (the device-local queue lock and the store's records)",
   "src/core/brain/dream-queue/run-record.ts": "writes only outside the vault (device state)",
   "src/core/brain/dream-trigger/claim.ts": "writes only outside the vault (machine state)",
   "src/core/brain/dream-trigger/due.ts": "writes only outside the vault (device state)",

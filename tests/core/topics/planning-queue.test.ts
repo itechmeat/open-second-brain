@@ -287,7 +287,7 @@ describe("standing verdicts", () => {
     expect(again.requests).toEqual([]);
     const report = plan(f);
     expect(report.status === "planned" && report.created).toEqual([]);
-    expect(report.status === "planned" && report.shortfalls[0]?.vetoed).toBe(1);
+    expect(report.status === "planned" && report.shortfall?.vetoed).toBe(1);
   });
 
   test("a none route keeps the record free in the next pass and nothing is asked again", async () => {

@@ -48,6 +48,12 @@ export interface PrepareClosedQuestionsOptions {
   readonly deadlineMs?: number;
   /** The agent the queue records name (default: the configured agent). */
   readonly agent?: string;
+  /**
+   * The launched agent's time budget for this pass, instead of
+   * `dream_agent_budget_ms` (a catch-up run's: what is left of its own
+   * budget); still clamped to the caller's deadline less the reserve.
+   */
+  readonly agentBudgetMs?: number;
 }
 
 /**
@@ -118,6 +124,7 @@ export async function prepareClosedQuestions(
     const agent = await runAgentExecutor(queue, gate.owner, {
       ...configOpt,
       ...(options.env !== undefined ? { env: options.env } : {}),
+      ...(options.agentBudgetMs !== undefined ? { budgetMs: options.agentBudgetMs } : {}),
       ...(options.deadlineMs !== undefined
         ? { callerRemainingMs: options.deadlineMs - (Date.now() - startedAt) }
         : {}),

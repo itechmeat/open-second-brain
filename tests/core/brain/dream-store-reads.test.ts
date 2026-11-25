@@ -224,7 +224,7 @@ test("a pass past its deadline stops between retires, keeps them, and the next p
   expect(next.topics?.report.status).toBe("planned");
 });
 
-test("a migrated history whose records name no project says why it made no topic", () => {
+test("a migrated history whose records name no project groups by theme into a topic question", () => {
   fleet = makeFleet(["dev-a"]);
   const a = fleet.machine("dev-a");
   a.use();
@@ -249,10 +249,12 @@ test("a migrated history whose records name no project says why it made no topic
   const topics = dream(a.vault, { now: NOW }).topics;
   expect(topics?.report.status).toBe("planned");
   if (topics?.report.status !== "planned") return;
+  // No project is no obstacle: the six notes of six days (six sessions)
+  // make one group, which waits for the dream agent's approval and wording.
   expect(topics.report.created).toEqual([]);
   expect(topics.report.unheldWithoutProject).toBe(topics.report.unheld);
-  expect(topics.report.unheld).toBeGreaterThanOrEqual(6);
-  expect(topics.summary).toContain("names a project");
+  expect(topics.report.shortfall?.asked).toBe(1);
+  expect(topics.summary).toContain("1 group that qualified waits for the dream agent's approval");
 });
 
 test("the retire evidence gate reads the loop's snapshot, not the loader once per retire", () => {

@@ -55,8 +55,24 @@ export const DREAM_EXECUTOR_TOOLS = Object.freeze([
 /**
  * The fixed task of a dream session: the session line, then one
  * paragraph. It names no file, no tool but the three and no user data.
+ * `batch` above 1 is the batch protocol (several items per take, one
+ * answer call for them); 1 is the one-item task, word for word.
  */
-export function dreamSessionTask(run: string): string {
+export function dreamSessionTask(run: string, batch = 1): string {
+  if (batch > 1) {
+    return (
+      `${dreamSessionLine(run)}\n` +
+      "You answer work items of Open Second Brain's dream queue, several at a time, using only " +
+      `the tools ${DREAM_WORK_TAKE}, ${DREAM_WORK_ANSWER} and ${DREAM_WORK_FINISH}. Call ` +
+      `${DREAM_WORK_TAKE}: it returns up to ${batch} items. For each item, read its question ` +
+      "and payload and produce the answer in its answer shape, judging each item on its own. " +
+      `Then call ${DREAM_WORK_ANSWER} once with \`answers\`, one entry per item with the ` +
+      "item's id and generation and your answer, and the name of the model you are. If an " +
+      `answer is refused, correct it once. Repeat until ${DREAM_WORK_TAKE} returns no item, ` +
+      `then call ${DREAM_WORK_FINISH} and stop. ` +
+      "Do not use any other tool, do not read or write files, do not ask questions."
+    );
+  }
   return (
     `${dreamSessionLine(run)}\n` +
     "You answer work items of Open Second Brain's dream queue, one at a time, using only the " +

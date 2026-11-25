@@ -10,21 +10,25 @@
  * them.
  */
 
+import { join } from "node:path";
+
 import type { StorePartition, StoreStream } from "../store/constants.ts";
-import { compareRecords, type StoreRecord } from "../store/envelope.ts";
+import { compareRecords, isBlobRef, type StoreRecord } from "../store/envelope.ts";
 import { prepareRecords } from "../store/fold.ts";
 import { observeClock } from "../store/clock-store.ts";
 import { parseHlc } from "../store/hlc.ts";
 import { readShard, shardReadGap } from "../store/reader.ts";
+import { readStreamRecords, type ShardTails } from "../store/read/stream-read.ts";
 import { trackSeenShards } from "../store/seen-shards.ts";
 import { listShards } from "../store/shard-list.ts";
 import {
   forEachPartitionRecord,
   readPartition,
+  streamRefs,
   type UnreadableShard,
 } from "../store/state-digest.ts";
 import type { StoreHandle } from "../store/store-open.ts";
-import { partitionDir } from "../store/store-paths.ts";
+import { partitionDir, type StreamRef } from "../store/store-paths.ts";
 
 /** What one catch-up read. */
 export interface ViewCatchUp {
@@ -106,6 +110,121 @@ export function catchUpWhere(
     observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
   }
   return { records, unreadable, pendingKinds };
+}
+
+/**
+ * What a long-lived reader kept of every stream it read through
+ * {@link catchUpWhereKept}: the kept tails of each stream's shards
+ * (`ShardTails`), keyed by partition and stream. Bound to one store and one
+ * `keep`: a tail holds only the records that `keep` passed.
+ */
+export type CatchUpTails = Map<string, ShardTails>;
+
+/** A stream's key in {@link CatchUpTails}. */
+function tailsKey(partition: StorePartition, ref: StreamRef): string {
+  return `${partition}/${ref.stream}/${ref.ledger ?? ""}`;
+}
+
+/**
+ * How many records each kept tail holds, for the tails that hold any:
+ * with the count of records read anew and kept, what tells a reread that
+ * changed the kept records from one that did not (a shard that grew, or
+ * appeared, with only records the caller does not keep, such as the
+ * queue's own writes, changes nothing kept).
+ */
+function tailsStamp(tails: CatchUpTails): string {
+  const parts: string[] = [];
+  for (const [key, shards] of tails) {
+    for (const [rel, tail] of shards) {
+      if (tail.records.length > 0) parts.push(`${key}|${rel}|${tail.records.length}`);
+    }
+  }
+  return parts.toSorted().join("\n");
+}
+
+/**
+ * {@link catchUpWhere} through `tails` a caller keeps between reads (a
+ * dream session's server, which rereads the planning inputs on every
+ * take and answer): a shard whose stamp is unchanged is not opened, one
+ * that grew is read from where the kept read ended, with the same checks
+ * as any kept-tail read (`ShardTails`, `stream-read.ts`). The records, the
+ * unreadable shards and the pending kinds are those {@link catchUpWhere}
+ * answers for the same store, and the clock is raised past the newest
+ * record read anew (what was kept had raised it when it was read).
+ *
+ * `fresh` is false only when the kept records are those of the previous
+ * read through the same tails: no record was read anew and kept, no kept
+ * tail holds another number of records, nothing is unreadable or pending.
+ * A caller may then keep what it built from the previous read; given that
+ * read as `previous`, it is answered again as it is.
+ */
+export function catchUpWhereKept(
+  store: StoreHandle,
+  keep: (record: StoreRecord, stream: StoreStream) => boolean,
+  tails: CatchUpTails,
+  now?: () => number,
+  previous?: ViewCatchUp,
+): { readonly read: ViewCatchUp; readonly fresh: boolean } {
+  const before = tailsStamp(tails);
+  const kept = new Map<StorePartition, StoreRecord[]>();
+  const unreadable: Array<UnreadableShard & { partition: StorePartition }> = [];
+  const pendingKinds = new Map<StorePartition, Map<string, number>>();
+  let newest: StoreRecord | undefined;
+  let keptAnew = 0;
+  let pendingAny = false;
+  for (const partition of store.partitions) {
+    const root = partitionDir(store.root, partition);
+    const keptHere: StoreRecord[] = [];
+    kept.set(partition, keptHere);
+    const pendingHere = new Map<string, number>();
+    pendingKinds.set(partition, pendingHere);
+    for (const ref of streamRefs(root)) {
+      const key = tailsKey(partition, ref);
+      let shards = tails.get(key);
+      if (shards === undefined) {
+        shards = new Map();
+        tails.set(key, shards);
+      }
+      const read = readStreamRecords(store.root, partition, ref, {
+        tails: shards,
+        // A pending record is kept so it is counted by kind, as
+        // `catchUpWhere` counts every pending record it meets.
+        keep: (record) => {
+          if (isBlobRef(record.body)) {
+            keptAnew += 1;
+            return true;
+          }
+          if (newest === undefined || compareRecords(record, newest) > 0) newest = record;
+          const wanted = keep(record, ref.stream);
+          if (wanted) keptAnew += 1;
+          return wanted;
+        },
+      });
+      keptHere.push(...read.records);
+      for (const rel of read.unreadable) {
+        unreadable.push({
+          rel,
+          path: join(root, ...rel.split("/")),
+          error: new Error("the shard could not be read in full"),
+          partition,
+        });
+      }
+      for (const [kind, count] of read.pendingKinds) {
+        pendingAny = true;
+        pendingHere.set(kind, (pendingHere.get(kind) ?? 0) + count);
+      }
+    }
+  }
+  if (newest !== undefined) {
+    observeClock(store.deviceStateDir, store.device, parseHlc(newest.hlc)!, now);
+  }
+  const fresh = keptAnew > 0 || unreadable.length > 0 || pendingAny || tailsStamp(tails) !== before;
+  // Nothing kept changed: the previous read through these tails holds the
+  // same records in the same order, so they are not sorted again.
+  if (!fresh && previous !== undefined) return { read: previous, fresh };
+  const records = new Map<StorePartition, ReadonlyArray<StoreRecord>>();
+  for (const [partition, list] of kept) records.set(partition, prepareRecords(list).records);
+  return { read: { records, unreadable, pendingKinds }, fresh };
 }
 
 /** Every record read, all partitions together, in fold order. */

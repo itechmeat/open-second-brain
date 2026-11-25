@@ -21,6 +21,8 @@ import {
   produceWork,
   produceWorkBatch,
   readDreamWork,
+  answerWorkBatch,
+  takeWorkBatch,
   releaseWork,
   takeWork,
   type DreamQueue,
@@ -28,7 +30,8 @@ import {
 } from "../../../../src/core/brain/dream-queue/queue.ts";
 import { registerDreamWorkOperation } from "../../../../src/core/brain/dream-queue/operations.ts";
 import * as streamRead from "../../../../src/core/store/read/stream-read.ts";
-import * as localLock from "../../../../src/core/store/local-lock.ts";
+import * as appender from "../../../../src/core/store/appender.ts";
+import * as processLock from "../../../../src/core/store/process-lock.ts";
 import { join } from "node:path";
 import type { StoreHandle } from "../../../../src/core/store/store-open.ts";
 import {
@@ -103,7 +106,7 @@ afterEach(() => {
 describe("produceWorkBatch", () => {
   test("writes every new item under one lock and confirms them on a complete reread", () => {
     const first = produceWork(q, spec("s1"));
-    const locks = spyOn(localLock, "withLocalLock");
+    const locks = spyOn(processLock, "acquireProcessLock");
     const reads = spyOn(streamRead, "readStreamRecords");
     try {
       const batch = produceWorkBatch(q, [spec("s1"), spec("s2"), spec("s3")]);
@@ -122,6 +125,79 @@ describe("produceWorkBatch", () => {
       locks.mockRestore();
       reads.mockRestore();
     }
+  });
+
+  test("writes the new items of a batch with one batch append, not one append per item", () => {
+    produceWork(q, spec("s1"));
+    const singles = spyOn(appender, "appendRecord");
+    const batches = spyOn(appender, "appendRecords");
+    try {
+      const batch = produceWorkBatch(q, [spec("s1"), spec("s2"), spec("s3"), spec("s2")]);
+      expect(batch.items.map((i) => i.created)).toEqual([false, true, true, false]);
+      expect(singles).not.toHaveBeenCalled();
+      expect(batches).toHaveBeenCalledTimes(1);
+      expect(batches.mock.calls[0]![1].map((input) => input.body["subject"])).toEqual(["s2", "s3"]);
+    } finally {
+      singles.mockRestore();
+      batches.mockRestore();
+    }
+  });
+
+  test("a take reads the queue twice: its snapshot, and once after its lease", () => {
+    produceWork(q, spec("t1"));
+    const reads = spyOn(streamRead, "readStreamRecords");
+    try {
+      expect(takeWork(q, { run: "r1" }).item).not.toBeNull();
+      const queueReads = reads.mock.calls.filter((call) => call[2]?.stream === "dream-work");
+      expect(queueReads.length).toBe(a.partitions.size * 2);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  test("takeWorkBatch takes what takes one by one take, under one lock", () => {
+    for (const x of ["b1", "b2", "b3", "b4"]) produceWork(q, spec(x));
+    const locks = spyOn(processLock, "acquireProcessLock");
+    let batch: ReturnType<typeof takeWorkBatch>;
+    try {
+      batch = takeWorkBatch(q, { run: "r1", max: 3 });
+      const queueLocks = locks.mock.calls.filter((call) =>
+        String(call[0]).endsWith(join("dream-queue", "queue")),
+      );
+      expect(queueLocks).toHaveLength(1);
+    } finally {
+      locks.mockRestore();
+    }
+    expect(batch.reason).toBeNull();
+    expect(batch.items.map((i) => i.subject)).toEqual(["b1", "b2", "b3"]);
+    for (const item of batch.items) {
+      expect(readDreamWork(a, { now: clock }).items.get(item.id)).toMatchObject({
+        state: "leased",
+        lease_token: item.lease_token,
+        generation: 1,
+      });
+    }
+    expect(takeWorkBatch(q, { run: "r2", max: 3 }).items.map((i) => i.subject)).toEqual(["b4"]);
+    expect(takeWorkBatch(q, { run: "r3", max: 3 })).toEqual({ items: [], reason: "empty" });
+  });
+
+  test("answerWorkBatch answers each as answerWork would, in order, under one lock", () => {
+    for (const x of ["c1", "c2"]) produceWork(q, spec(x));
+    const [one, two] = takeWorkBatch(q, { run: "r1", max: 2 }).items;
+    const base = { agent: "a", model: "m" };
+    // A lease token of the wrong one, assembled from parts: no line of this
+    // file carries a literal shaped like a credential for a secret scanner
+    // to read (`tests/helpers/fake-credentials.ts`).
+    const wrongToken = ["not", "-the", "-token"].join("");
+    const results = answerWorkBatch(q, [
+      { ...base, item: one!.id, generation: 1, lease_token: one!.lease_token, value: "yes" },
+      { ...base, item: one!.id, generation: 1, lease_token: one!.lease_token, value: "yes" },
+      { ...base, item: two!.id, generation: 1, lease_token: wrongToken, value: "yes" },
+      { ...base, item: "no-such-item", generation: 1, lease_token: "x", value: "yes" },
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["accepted", "accepted", "refused", "refused"]);
+    expect(readDreamWork(a, { now: clock }).items.get(one!.id)!.state).toBe("accepted");
+    expect(readDreamWork(a, { now: clock }).items.get(two!.id)!.state).toBe("leased");
   });
 
   test("equals produceWork item by item", () => {

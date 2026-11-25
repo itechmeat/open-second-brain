@@ -1,12 +1,12 @@
 /**
- * Why a dream pass made no topic of a project (field check, fourth rerun
- * item 15): twelve records of a linked project with a non-Latin name
- * (six notes, two signals, four decision events) made no topic, and the
- * pass said only that 12 of the records no topic holds name a project. The
- * rule is the documented one (a topic needs `topics.new_min_records`
- * related records from `topics.new_min_sessions` sessions, and records a
- * topic once held are never grouped again); the summary now says, per
- * project, which of them held the topic back and by how much.
+ * Why a dream pass made no topic (field check, fourth rerun item 15):
+ * twelve records of a linked project with a non-Latin name (six notes,
+ * two signals, four decision events) made no topic, and the pass said
+ * only that 12 of the records no topic holds name a project. The rule is
+ * the documented one (a topic needs `topics.new_min_records` related
+ * records from `topics.new_min_sessions` sessions, and records a topic
+ * once held are never grouped again); the summary says which of them held
+ * the topic back and by how much.
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync } from "node:fs";
@@ -93,18 +93,15 @@ test("twelve records of one session make no topic, and the pass says it lacks a 
   await fieldRecords(server);
   const { summary, report } = planned(a);
   expect(report["created"]).toEqual([]);
-  expect(report["shortfalls"]).toEqual([
-    {
-      project: PROJECT,
-      free: 12,
-      closest: { records: 12, sessions: 1, kinds: { note: 6, signal: 2, decision: 4 } },
-      heldBack: 0,
-      vetoed: 0,
-      asked: 0,
-    },
-  ]);
+  // The machine fixture's own unrelated records are free too.
+  expect(report["shortfall"]).toMatchObject({
+    closest: { records: 12, sessions: 1, kinds: { note: 6, signal: 2, decision: 4 } },
+    heldBack: 0,
+    vetoed: 0,
+    asked: 0,
+  });
   expect(summary).toContain(
-    `no topic was made: project ${PROJECT}: of its 12 records no topic holds, the group of related ` +
+    "records no topic holds, the group of related " +
       "records closest to a topic has 12 records (6 notes, 2 signals and 4 decisions) from 1 session, " +
       "1 more session short of a topic, which needs 5 records from 2 sessions " +
       "(topics.new_min_records, topics.new_min_sessions)",
@@ -123,7 +120,7 @@ test("too few related records: the pass says how many more a topic needs", async
   await note(server, "один файл", "two");
   const { summary } = planned(a);
   expect(summary).toContain(
-    `project ${PROJECT}: of its 2 records no topic holds, the group of related records ` +
+    "records no topic holds, the group of related records " +
       "closest to a topic has 2 records (2 notes) from 2 sessions, 3 more records short of a topic",
   );
 });
@@ -138,7 +135,7 @@ test("records a topic held once are named as held back, not as missing", async (
   const { summary, report } = planned(a);
   expect(report["created"]).toEqual([]);
   expect(summary).toContain(
-    `project ${PROJECT}: 13 records a topic once held (an undone topic or assignment) are routed ` +
+    "13 records a topic once held (an undone topic or assignment) are routed " +
       "to a fitting topic but never grouped again",
   );
 });
@@ -160,7 +157,7 @@ test("the group named is the one closest to a topic, not the largest", () => {
   );
   const plan = planTopics(foldTopics([]), [...big, ...near], settings, 0);
   expect(plan.creates).toEqual([]);
-  expect(plan.shortfalls[0]!.closest).toEqual({
+  expect(plan.shortfall!.closest).toEqual({
     records: 4,
     sessions: 3,
     kinds: { note: 4, signal: 0, decision: 0 },
@@ -168,10 +165,10 @@ test("the group named is the one closest to a topic, not the largest", () => {
   // Equally close (six of one session and three of three sessions are each
   // 2 short): the group with more records is named.
   const tie = planTopics(foldTopics([]), [...big, ...near.slice(0, 3)], settings, 0);
-  expect(tie.shortfalls[0]!.closest.records).toBe(6);
+  expect(tie.shortfall!.closest.records).toBe(6);
   const even = planTopics(foldTopics([]), [...big.slice(0, 4), ...near], settings, 0);
   // 4 of 1 session (3 short) against 4 of 3 sessions (1 short).
-  expect(even.shortfalls[0]!.closest.sessions).toBe(3);
+  expect(even.shortfall!.closest.sessions).toBe(3);
 });
 
 test("a group a decision model vetoed is named as vetoed", () => {
@@ -185,16 +182,13 @@ test("a group a decision model vetoed is named as vetoed", () => {
   };
   const plan = planTopics(foldTopics([]), members, SETTINGS, 0, verdicts);
   expect(plan.creates).toEqual([]);
-  expect(plan.shortfalls).toEqual([
-    {
-      project: PROJECT,
-      free: 5,
-      closest: { records: 5, sessions: 2, kinds: { note: 5, signal: 0, decision: 0 } },
-      heldBack: 0,
-      vetoed: 1,
-      asked: 0,
-    },
-  ]);
+  expect(plan.shortfall).toEqual({
+    free: 5,
+    closest: { records: 5, sessions: 2, kinds: { note: 5, signal: 0, decision: 0 } },
+    heldBack: 0,
+    vetoed: 1,
+    asked: 0,
+  });
 });
 
 test("a planned topic whose record would be refused is named with the cause", () => {
@@ -212,7 +206,7 @@ test("a planned topic whose record would be refused is named with the cause", ()
     merges: [],
     splits: [],
     quiet: [],
-    shortfalls: [],
+    shortfall: null,
     thresholds: { minRecords: 5, minSessions: 2 },
     skipped: 0,
     invalid: 1,

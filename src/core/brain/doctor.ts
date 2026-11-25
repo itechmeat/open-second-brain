@@ -114,7 +114,6 @@ import { dreamOwnerCheck } from "./doctor/dream-owner-check.ts";
 import { dreamQueueCheck } from "./doctor/dream-queue-check.ts";
 import { dreamTriggerCheck } from "./doctor/dream-trigger-check.ts";
 import { dreamReplayCheck } from "./doctor/dream-replay-check.ts";
-import { topicPlanCheck } from "./doctor/topic-plan-check.ts";
 import { gitTrackedStateCheck } from "./doctor/git-tracked-state-check.ts";
 import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
@@ -297,8 +296,6 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   dreamReplayCheck,
   // The dream day (dream-session-trigger): silent unless a dream owner is bound.
   dreamTriggerCheck,
-  // Topic planning made nothing: the unassigned records name no project.
-  topicPlanCheck,
   // The store migration (task 2.12): another device's entries in this
   // machine's device-local state, and a migration this machine has not run.
   deviceStateCheck,

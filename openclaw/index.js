@@ -4352,11 +4352,14 @@ function sendHlc(local, wallMs) {
 }
 function receiveHlc(local, remote, wallMs) {
   const wall = Math.max(0, Math.floor(wallMs));
-  const adoptable = remote.physical - wall <= HLC_MAX_DRIFT_MS;
-  const known = adoptable ? maxHlc(local, remote) : local;
+  const known = receiveRaises(local, remote, wall) ? remote : local;
   if (wall > known.physical)
     return { physical: wall, counter: 0 };
   return known;
+}
+function receiveRaises(local, remote, wallMs) {
+  const wall = Math.max(0, Math.floor(wallMs));
+  return remote.physical - wall <= HLC_MAX_DRIFT_MS && compareHlc(remote, local) > 0;
 }
 var HLC_MAX_DRIFT_MS, HLC_ZERO, HLC_RE;
 var init_hlc = __esm(() => {
@@ -4497,11 +4500,13 @@ function readClock(deviceStateDir, device) {
     return null;
   }
 }
-function update(deviceStateDir, device, step) {
+function update(deviceStateDir, device, step, keep = () => true) {
   const path = clockFilePath(deviceStateDir, device);
   return withLocalLock(path, () => {
-    const next = step(readClock(deviceStateDir, device) ?? HLC_ZERO);
-    atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}
+    const local = readClock(deviceStateDir, device) ?? HLC_ZERO;
+    const next = step(local);
+    if (keep(local))
+      atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}
 `);
     return next;
   });

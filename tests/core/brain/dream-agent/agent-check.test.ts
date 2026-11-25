@@ -3,10 +3,11 @@
  * `dream-launched-agent`, design D5; spec "The command is verified by a
  * real call"; task 4.1). The session is the fake agent.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 
 import { checkDreamAgent } from "../../../../src/core/brain/dream-queue/agent-check.ts";
+import * as agentExecutor from "../../../../src/core/brain/dream-queue/agent-executor.ts";
 import { runAgentExecutor } from "../../../../src/core/brain/dream-queue/agent-executor.ts";
 import {
   dreamAgentStateDir,
@@ -69,6 +70,31 @@ describe("checkDreamAgent", () => {
       env: x.env(changed),
     });
     expect(refused).toEqual({ status: "skipped", reason: "unverified" });
+  }, 60_000);
+
+  test("speaks the protocol of the machine's item limit: a limit of 1 is the one-item protocol", async () => {
+    const command = x.command("check");
+    const original = agentExecutor.runAgentSession;
+    const sessions: Array<{ items: number; batch: number | undefined }> = [];
+    const spy = spyOn(agentExecutor, "runAgentSession").mockImplementation(
+      (queue, owner, cmd, input) => {
+        sessions.push({ items: input.items, batch: input.batch });
+        return original(queue, owner, cmd, input);
+      },
+    );
+    let result;
+    try {
+      result = await checkDreamAgent(command, {
+        configPath: x.f.configPath,
+        env: { ...x.env(command), OPEN_SECOND_BRAIN_DREAM_AGENT_ITEMS: "1" },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(result.ok).toBe(true);
+    // A production run with an item limit of 1 caps its batch at 1; the
+    // check still takes both canaries.
+    expect(sessions).toEqual([{ items: 4, batch: 1 }]);
   }, 60_000);
 
   for (const [mode, reason, seen] of [

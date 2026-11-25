@@ -18,6 +18,9 @@
  *     the server's config file are removed.
  *  6. A session that ended badly or answered nothing: the next fallback,
  *     once, with a fresh run.
+ *  7. A session that answered and stopped at its item budget: another
+ *     session of the same command, while ready work and the run's time
+ *     budget last (at least {@link DREAM_AGENT_NEXT_MIN_MS}).
  */
 
 import { renameSync, rmSync, writeFileSync } from "node:fs";
@@ -34,6 +37,7 @@ import {
   DREAM_EXECUTOR_SERVER_NAME,
   DREAM_RUN_ENV,
   DREAM_TOKEN_ENV,
+  DREAM_WORK_TAKE,
   dreamSessionTask,
   insideDreamSession,
 } from "./dream-session.ts";
@@ -60,6 +64,8 @@ export const DREAM_AGENT_RESERVE_MS = 90_000;
 export const DREAM_AGENT_MIN_MS = 30_000;
 /** Below this, what is left of a run's budget starts no fallback. */
 export const DREAM_AGENT_FALLBACK_MIN_MS = 10_000;
+/** Below this, what is left of a run's budget starts no next session after one that met its item budget. */
+export const DREAM_AGENT_NEXT_MIN_MS = 20_000;
 
 export interface AgentExecutorOptions {
   readonly configPath?: string;
@@ -74,6 +80,7 @@ export interface AgentExecutorOptions {
   /** Overrides of the run's bounds (the check). */
   readonly budgetMs?: number;
   readonly items?: number;
+  readonly batch?: number;
 }
 
 export interface AgentSessionRun {
@@ -84,6 +91,8 @@ export interface AgentSessionRun {
   readonly models: ReadonlyArray<string>;
   readonly calls: ReadonlyArray<DreamRunCall>;
   readonly failed: boolean;
+  /** Why the leases the session still held could not be released at its end (they expire). */
+  readonly release_error?: string;
 }
 
 export type AgentExecutorResult =
@@ -138,6 +147,8 @@ export async function runAgentSession(
     readonly operations: ReadonlyArray<string>;
     readonly privateAllowed: boolean;
     readonly items: number;
+    /** Items per take and per answer call (default 1, the one-item protocol). */
+    readonly batch?: number;
     readonly configPath?: string;
     readonly env: Readonly<Record<string, string | undefined>>;
   },
@@ -150,6 +161,7 @@ export async function runAgentSession(
     operations: input.operations,
     privateAllowed: input.privateAllowed,
     itemBudget: input.items,
+    ...(input.batch !== undefined ? { batch: input.batch } : {}),
     agent: command.label,
   });
   const run = record.run;
@@ -189,7 +201,7 @@ export async function runAgentSession(
     { mode: 0o600 },
   );
   const values = {
-    "{prompt}": dreamSessionTask(run),
+    "{prompt}": dreamSessionTask(run, record.batch),
     "{mcp_config}": mcpConfigPath,
     "{mcp_command}": serverProgram!,
     "{mcp_args_json}": JSON.stringify(serverArgs),
@@ -197,6 +209,7 @@ export async function runAgentSession(
   const program = findProgram(command.program, input.env);
   let result: RunProgramResult;
   let calls: DreamRunCall[] = [];
+  let releaseError: string | null = null;
   try {
     result =
       program === null
@@ -209,15 +222,22 @@ export async function runAgentSession(
             logPath,
           });
   } finally {
+    // The cleanup never throws past here: a release that cannot be made
+    // leaves the leases to expire, and the session is still reported (and
+    // the last run recorded) with what it did.
     try {
       withDreamRunLock(dsd, run, () => {
         calls = readDreamRunCalls(dsd, run);
         try {
           releaseRunWork(queue, run);
+        } catch (err) {
+          releaseError = err instanceof Error ? err.message : String(err);
         } finally {
           removeDreamRunUnderLock(dsd, run);
         }
       });
+    } catch (err) {
+      releaseError ??= err instanceof Error ? err.message : String(err);
     } finally {
       rmSync(mcpConfigPath, { force: true });
     }
@@ -238,7 +258,13 @@ export async function runAgentSession(
     models,
     calls,
     failed: !(result.status === "exited" && result.code === 0) || answered.length === 0,
+    ...(releaseError !== null ? { release_error: releaseError } : {}),
   };
+}
+
+/** Whether `session` stopped because a take met its item budget (work may be left). */
+function endedAtItemBudget(session: AgentSessionRun): boolean {
+  return session.calls.some((c) => c.tool === DREAM_WORK_TAKE && c.outcome === "item-budget");
 }
 
 /** Answer what only an agent may answer, within the bounds of this pass. */
@@ -277,16 +303,18 @@ export async function runAgentExecutor(
     options.commands ?? (cfg.command === null ? [] : [cfg.command, ...cfg.fallbacks]);
   const operations = options.operations ?? agentOperations(options.configPath, env);
   const allowed = new Set(operations);
-  const state = readDreamWork(queue.store);
-  const now = Date.now();
-  const ready = [...state.items.values()].some(
-    (item) =>
-      item.ready &&
-      allowed.has(item.body.operation) &&
-      (cfg.privateAllowed || item.partition !== "private") &&
-      (item.retry_at === null || Date.parse(item.retry_at) <= now),
-  );
-  if (!ready) return { status: "skipped", reason: "no-work" };
+  const readyWork = (): boolean => {
+    const state = readDreamWork(queue.store);
+    const now = Date.now();
+    return [...state.items.values()].some(
+      (item) =>
+        item.ready &&
+        allowed.has(item.body.operation) &&
+        (cfg.privateAllowed || item.partition !== "private") &&
+        (item.retry_at === null || Date.parse(item.retry_at) <= now),
+    );
+  };
+  if (!readyWork()) return { status: "skipped", reason: "no-work" };
   if (configured.length === 0) return skip("no-command");
   const commands =
     options.commands ?? configured.filter((c) => dreamAgentVerification(c, stateDir) !== null);
@@ -298,21 +326,32 @@ export async function runAgentExecutor(
   if (budget < DREAM_AGENT_MIN_MS) return skip("no-time");
   const started = Date.now();
   const runs: AgentSessionRun[] = [];
-  // The first command, then one fallback at most.
-  for (const command of commands.slice(0, 2)) {
+  // The first command, then one fallback at most. A session that answered
+  // and ended at its item budget is followed by another of the same
+  // command while ready work and the time budget last: the item budget
+  // bounds one session (its context), the time budget the whole run.
+  let index = 0;
+  for (;;) {
+    const command = commands[index]!;
     const left = budget - (Date.now() - started);
-    if (runs.length > 0 && left < DREAM_AGENT_FALLBACK_MIN_MS) break;
-    // oxlint-disable-next-line no-await-in-loop -- the fallback runs only after the first failed
+    // oxlint-disable-next-line no-await-in-loop -- sessions run one after another
     const session = await runAgentSession(queue, owner, command, {
       budgetMs: left,
       operations,
       privateAllowed: cfg.privateAllowed,
       items: options.items ?? cfg.items,
+      batch: options.batch ?? cfg.batch,
       ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
       env,
     });
     runs.push(session);
-    if (!session.failed) break;
+    const leftAfter = budget - (Date.now() - started);
+    if (session.failed) {
+      if (index > 0 || commands.length < 2 || leftAfter < DREAM_AGENT_FALLBACK_MIN_MS) break;
+      index = 1;
+      continue;
+    }
+    if (!endedAtItemBudget(session) || leftAfter < DREAM_AGENT_NEXT_MIN_MS || !readyWork()) break;
   }
   const last = runs[runs.length - 1]!;
   recordDreamAgentLastRun(

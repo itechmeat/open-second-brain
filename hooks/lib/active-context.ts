@@ -76,6 +76,15 @@ import type { BrainConfig } from "../../src/core/brain/types.ts";
 /** Sub-body identifiers recorded per injection. Structural, not content-derived. */
 export const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 export const SOURCE_RUNTIME_NOTICES = "runtime-notices";
+/**
+ * The session start's own notices block: the pending dream digest and the
+ * dream day note. It rides the payload OUTSIDE the memory context, so it
+ * carries its own id: the memory sub-bodies are the ones named in
+ * {@link MEMORY_SOURCES}, and a second block under that name would count
+ * as one of them, shifting the join the injection ledger's attribution
+ * reads - the session would show its digests and record none of them.
+ */
+export const SOURCE_SESSION_NOTICES = "session-notices";
 /** The one truncation note a cut payload ends in. */
 export const SOURCE_DIGEST_CUT_NOTE = "digest-cut-note";
 export const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;

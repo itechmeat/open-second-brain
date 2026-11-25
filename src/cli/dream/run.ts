@@ -53,7 +53,10 @@ import { describeErrorChain } from "../brain/helpers.ts";
 import { sortedReplacer } from "../helpers.ts";
 
 export const DREAM_RUN_USAGE =
-  "usage: o2b dream run [--claim <token>] [--vault <path> | --no-vault] [--config <file>] [--json]";
+  "usage: o2b dream run [--claim <token>] [--catch-up <minutes>] [--vault <path> | --no-vault] [--config <file>] [--json]";
+
+/** Below this, what is left of a catch-up budget starts no further pass. */
+export const DREAM_CATCH_UP_NEXT_MIN_MS = 120_000;
 
 const EXIT = Object.freeze({ ok: 0, failed: 1 } as const);
 
@@ -81,8 +84,13 @@ function dayLine(record: DreamTriggerRecord | null): string {
   return `day: ${record.day} open (${record.reason}); next attempt after ${record.retry_at}`;
 }
 
-function refuse(json: boolean, message: string, extra: Record<string, unknown> = {}): number {
-  if (json) writeJson({ ok: false, ...extra, error: message });
+function refuse(
+  json: boolean,
+  message: string,
+  extra: Record<string, unknown> = {},
+  quiet = false,
+): number {
+  if (json && !quiet) writeJson({ ok: false, ...extra, error: message });
   process.stderr.write(`error: ${message}\n`);
   return EXIT.failed;
 }
@@ -94,8 +102,17 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
     "no-vault": { type: "boolean" },
     config: { type: "string" },
     json: { type: "boolean" },
+    "catch-up": { type: "string" },
   });
   if (positional.length > 0) throw new CliError(`unexpected argument: ${positional[0]}`);
+  const catchUpRaw = flags["catch-up"] as string | undefined;
+  const catchUpMinutes = catchUpRaw === undefined ? undefined : Number(catchUpRaw);
+  if (
+    catchUpMinutes !== undefined &&
+    (!Number.isFinite(catchUpMinutes) || catchUpMinutes <= 0 || catchUpMinutes > 24 * 60)
+  ) {
+    throw new CliError("--catch-up needs a number of minutes, above 0 and at most 1440");
+  }
   const configPath = flags["config"] as string | undefined;
   const json = flags["json"] === true;
   const token = flags["claim"] as string | undefined;
@@ -135,12 +152,14 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
   // recorded: the next day check finds it lost and backs off.
   let keepClaim = false;
   try {
-    const ran = await runPass(
-      noVault ? null : ((flags["vault"] as string | undefined) ?? resolveVault(configPath)),
-      configOpt,
-      json,
-      token !== undefined ? "worker" : "cli",
-    );
+    const target = noVault
+      ? null
+      : ((flags["vault"] as string | undefined) ?? resolveVault(configPath));
+    const by = token !== undefined ? "worker" : "cli";
+    const ran =
+      catchUpMinutes !== undefined
+        ? await runCatchUp(target, configOpt, json, by, Math.round(catchUpMinutes * 60_000))
+        : await runPass(target, configOpt, json, by);
     keepClaim = ran.unrecorded;
     return ran.code;
   } finally {
@@ -172,35 +191,112 @@ function recorded(recording: DreamOutcomeRecording): DreamTriggerRecord | null {
   return recording.kind === "recorded" ? recording.record : null;
 }
 
+/**
+ * A catch-up run (`--catch-up <minutes>`): passes one after another, each
+ * giving the launched agent what is left of the catch-up budget (its
+ * sessions follow one another while ready work lasts), while the budget
+ * lasts and the previous pass's agent answered something. For a backlog
+ * (the first passes after a migration) instead of one session a day.
+ */
+async function runCatchUp(
+  vault: string | null,
+  configOpt: { readonly configPath?: string },
+  json: boolean,
+  by: "worker" | "cli",
+  budgetMs: number,
+): Promise<PassRun> {
+  const until = Date.now() + budgetMs;
+  const passes: Array<Record<string, unknown>> = [];
+  let last: PassRun = done(EXIT.ok);
+  for (;;) {
+    const left = until - Date.now();
+    const started = Date.now();
+    // oxlint-disable-next-line no-await-in-loop -- passes run one after another
+    const pass = await runOnePass(vault, configOpt, json, by, left);
+    last = pass.run;
+    passes.push({ ms: Date.now() - started, ...pass.report });
+    if (pass.run.code !== EXIT.ok) break;
+    if (until - Date.now() < DREAM_CATCH_UP_NEXT_MIN_MS) break;
+    if (pass.agentAnswered === 0) break;
+  }
+  if (json) {
+    writeJson({ ok: last.code === EXIT.ok, catch_up: { budget_ms: budgetMs, passes } });
+  } else {
+    const answered = passes.reduce((n, p) => n + Number(p["agent_answered"] ?? 0), 0);
+    process.stdout.write(
+      `catch-up: ${passes.length} pass(es), ${answered} item(s) answered by the dream agent\n`,
+    );
+  }
+  return last;
+}
+
 async function runPass(
   vault: string | null,
   configOpt: { readonly configPath?: string },
   json: boolean,
   by: "worker" | "cli",
 ): Promise<PassRun> {
+  return (await runOnePass(vault, configOpt, json, by, undefined)).run;
+}
+
+/** One pass; with `catchUpLeftMs`, the model work gets that much (a catch-up pass). */
+async function runOnePass(
+  vault: string | null,
+  configOpt: { readonly configPath?: string },
+  json: boolean,
+  by: "worker" | "cli",
+  catchUpLeftMs: number | undefined,
+): Promise<{ run: PassRun; agentAnswered: number; report: Record<string, unknown> }> {
+  const out = (run: PassRun, agentAnswered = 0, report: Record<string, unknown> = {}) => ({
+    run,
+    agentAnswered,
+    report,
+  });
+  // A catch-up run writes one JSON document, the aggregate of its passes:
+  // the refusal of a pass is in that pass's report, not a document of its
+  // own before the aggregate.
+  const quiet = catchUpLeftMs !== undefined;
+  const refusal = (
+    message: string,
+    extra: Record<string, unknown>,
+  ): { readonly code: number; readonly report: Record<string, unknown> } => ({
+    code: refuse(json, message, extra, quiet),
+    report: { error: message, ...extra },
+  });
   const startedAt = new Date();
   try {
     assertDreamOwner(vault, { live: true, ...configOpt });
   } catch (err) {
     if (err instanceof DreamNotOwnerError) {
-      return done(refuse(json, err.message, { code: err.code, reason: err.reason }));
+      const r = refusal(err.message, { code: err.code, reason: err.reason });
+      return out(done(r.code), 0, r.report);
     }
     throw err;
   }
-  // One deadline for the whole run: the model work spends it first,
-  // never more than its own budget, and the pass gets what is left.
-  const safeguard = createSafeguard({
-    operation: OPERATION.dream,
-    timeoutMs: resolveSafeguardTimeoutMs(OPERATION.dream, configOpt.configPath),
-  });
-  const deadlineMs = decideBudgetWithin(safeguard.timeoutMs, 0);
+  // One deadline for the whole run: the safeguard starts before the
+  // model work, which spends the deadline first, never more than its own
+  // budget, and the pass gets what is left. A catch-up pass gives the
+  // model work what is left of the catch-up budget instead, and the pass
+  // its own safeguard after it.
+  const timeoutMs = resolveSafeguardTimeoutMs(OPERATION.dream, configOpt.configPath);
+  const runSafeguard =
+    catchUpLeftMs === undefined ? createSafeguard({ operation: OPERATION.dream, timeoutMs }) : null;
+  const deadlineMs = catchUpLeftMs !== undefined ? catchUpLeftMs : decideBudgetWithin(timeoutMs, 0);
   const closedQuestions =
     deadlineMs === 0
       ? undefined
       : await prepareClosedQuestions(vault, {
           ...configOpt,
           ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+          ...(catchUpLeftMs !== undefined ? { agentBudgetMs: catchUpLeftMs } : {}),
         });
+  const safeguard = runSafeguard ?? createSafeguard({ operation: OPERATION.dream, timeoutMs });
+  const agentAnswered = closedQuestions?.agent?.answered ?? 0;
+  const report = {
+    produced: closedQuestions?.produced ?? 0,
+    left: closedQuestions?.left ?? 0,
+    agent_answered: agentAnswered,
+  };
   let summary: ReturnType<typeof dream>;
   try {
     summary = dream(vault, {
@@ -217,10 +313,12 @@ async function runPass(
     });
     const day = recorded(recording);
     if (err instanceof DreamNotOwnerError) {
-      return done(refuse(json, err.message, { code: err.code, reason: err.reason }), recording);
+      const r = refusal(err.message, { code: err.code, reason: err.reason });
+      return out(done(r.code, recording), agentAnswered, { ...report, ...r.report });
     }
     const message = `dream failed: ${describeErrorChain(err)}`;
-    return done(refuse(json, message, { day: dayJson(day) }), recording);
+    const r = refusal(message, { day: dayJson(day) });
+    return out(done(r.code, recording), agentAnswered, { ...report, ...r.report });
   }
   const recording = recordDreamOutcomeResult(vault, {
     ...configOpt,
@@ -232,18 +330,23 @@ async function runPass(
   for (const w of summary.warnings ?? []) {
     process.stderr.write(`warning: ${w.code}: ${w.message}\n`);
   }
+  const passJson = {
+    ok: true,
+    run_id: summary.run_id,
+    changed: summary.changed,
+    ...(summary.model_work !== undefined ? { model_work: summary.model_work } : {}),
+    day: dayJson(day),
+  };
+  // A catch-up pass is reported in the catch-up's own output.
+  if (catchUpLeftMs !== undefined) {
+    return out(done(EXIT.ok, recording), agentAnswered, { ...report, ...passJson });
+  }
   if (json) {
-    writeJson({
-      ok: true,
-      run_id: summary.run_id,
-      changed: summary.changed,
-      ...(summary.model_work !== undefined ? { model_work: summary.model_work } : {}),
-      day: dayJson(day),
-    });
+    writeJson(passJson);
   } else {
     process.stdout.write(
       [`run_id: ${summary.run_id}`, `changed: ${summary.changed}`, dayLine(day)].join("\n") + "\n",
     );
   }
-  return done(EXIT.ok, recording);
+  return out(done(EXIT.ok, recording), agentAnswered, { ...report, run_id: summary.run_id });
 }

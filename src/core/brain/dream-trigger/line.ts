@@ -16,6 +16,7 @@
 import { parseHlc } from "../../store/hlc.ts";
 import { DREAM_OWNER_HERE_COMMAND } from "../dream-owner/constants.ts";
 import type { DreamOwner } from "../dream-owner/fold.ts";
+import { resolveDreamAgentConfig } from "../dream-queue/agent-config.ts";
 import { readConfiguredReplay } from "../dream-replay/behind.ts";
 import { DREAM_TRIGGER_SILENT_OWNER_DAYS } from "./constants.ts";
 
@@ -64,4 +65,40 @@ export function silentOwnerLineFor(
   return now - held > DREAM_TRIGGER_SILENT_OWNER_DAYS * DAY_MS
     ? silentOwnerLine(owner, null)
     : null;
+}
+
+/** The command that names the dream agent, as the lines below give it. */
+const DREAM_AGENT_SET_COMMAND = "o2b dream agent set <preset>";
+
+/**
+ * The line of a brain no device owns (a brain migrated before the
+ * migration bound one): nothing starts a dream pass until a device takes
+ * the role. Names the dream agent too when it is not set.
+ */
+export function noOwnerLine(agentUnset: boolean): string {
+  return (
+    "Dream has no owner, so no session starts a dream pass. On the machine that should run " +
+    `it: ${DREAM_OWNER_HERE_COMMAND} --agent <name>` +
+    (agentUnset ? `. ${agentUnsetLine()}` : "")
+  );
+}
+
+/** The line of a machine whose dream agent is not set. */
+export function agentUnsetLine(): string {
+  return (
+    "The dream agent is not set, so topics and readable history are not written: " +
+    DREAM_AGENT_SET_COMMAND
+  );
+}
+
+/** Whether no dream agent command is set for this machine (unknown: set). */
+export function dreamAgentUnset(
+  config: Readonly<Record<string, string | undefined>> | null,
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  try {
+    return resolveDreamAgentConfig({ config: config ?? {}, env }).command === null;
+  } catch {
+    return false;
+  }
 }

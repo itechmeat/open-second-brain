@@ -57,7 +57,7 @@ import {
   DREAM_RUN_NO_VAULT_FLAG,
   DREAM_TRIGGER_CLAIM_GRACE_MS,
 } from "./constants.ts";
-import { silentOwnerLineFor } from "./line.ts";
+import { dreamAgentUnset, noOwnerLine, silentOwnerLineFor } from "./line.ts";
 import { retryDelayMs } from "./outcome.ts";
 import {
   dreamDayRecordWaits,
@@ -202,7 +202,12 @@ export function dueDreamDayCheck(input: DueCheckInput): DreamDayCheckResult {
   }
   const mine = owner !== null && owner.device === store.device;
   if (!mine) {
-    const text = owner === null ? null : silentOwnerLineFor(vault, config.path, owner, nowMs);
+    // A brain no device owns (migrated before the migration bound one)
+    // says so once a day, with the command, and names an unset dream agent.
+    const text =
+      owner === null
+        ? noOwnerLine(dreamAgentUnset(config.data, input.env))
+        : silentOwnerLineFor(vault, config.path, owner, nowMs);
     let note: string | undefined;
     let unshow: (() => void) | undefined;
     update((r) => {

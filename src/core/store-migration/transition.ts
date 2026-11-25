@@ -15,11 +15,13 @@
  * hooks, `migrate-store`, the removal and the rollback all call it, and
  * two concurrent imports would both find an item missing and both append
  * it. A device-local lock in the migration folder serialises them. An
- * import is one synchronous run that can take minutes on a large vault,
- * and the lock's age is never refreshed while it runs, so it counts as
- * abandoned only after {@link TRANSITION_LOCK_STALE_MS}. A hook waits the
- * short shared budget for it; the removal and the rollback, which hold
- * the migration gate and need the import, wait {@link GATED_IMPORT_WAIT_MS}.
+ * import is one synchronous run that can take minutes on a large vault, so
+ * the lock is held for as long as its holder's process runs, and a holder
+ * whose process is gone (a session killed during the import) is taken over
+ * at once (`store/process-lock.ts`), its scratch file removed with it. A
+ * hook waits the short shared budget for a live holder; the removal and
+ * the rollback, which hold the migration gate and need the import, wait
+ * {@link GATED_IMPORT_WAIT_MS}.
  */
 
 import { dirname, join } from "node:path";
@@ -27,11 +29,11 @@ import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 
 import { resolveLockWaitBudgetMs } from "../brain/sync-lockfile.ts";
-import { acquireDirLock } from "../store/local-lock.ts";
+import { acquireProcessLock } from "../store/process-lock.ts";
 import type { StoreHandle } from "../store/store-open.ts";
 import { convertPass, dualWritePool, type ConvertHooks } from "./convert.ts";
 import { loadJournalAndUnmarked, migrationDir } from "./journal.ts";
-import { MigrationScratch } from "./spill-map.ts";
+import { MigrationScratch, SCRATCH_DIR, sweepDeadScratch } from "./spill-map.ts";
 import { gcHint } from "../store/gc-hint.ts";
 import { journalScopeFor } from "./backup.ts";
 import type { JournalScope } from "./journal-scope.ts";
@@ -41,9 +43,6 @@ import { legacyFileStamps, recordImportWatermark } from "./transition-watermark.
 
 /** The most passes one transition import takes. */
 const TRANSITION_MAX_PASSES = 20;
-
-/** Age after which the import lock counts as abandoned by a crashed holder. */
-export const TRANSITION_LOCK_STALE_MS = 30 * 60 * 1000;
 
 /** How long a run holding the migration gate waits for an import in progress. */
 export const GATED_IMPORT_WAIT_MS = 10 * 60 * 1000;
@@ -93,14 +92,7 @@ export function importLateLegacyWrites(
   options: TransitionImportOptions = {},
 ): TransitionResult {
   const dir = migrationDir(store);
-  const lockTarget = join(dir, TRANSITION_LOCK);
-  mkdirSync(dirname(lockTarget), { recursive: true });
-  const release = acquireDirLock(lockTarget, {
-    staleMs: TRANSITION_LOCK_STALE_MS,
-    budgetMs: options.waitMs ?? resolveLockWaitBudgetMs(),
-    label: "transition import lock",
-    remedy: "another import of late legacy writes is running on this machine; retry once it ends",
-  });
+  const release = acquireTransitionImportLock(dir, options.waitMs);
   try {
     // `vaultId` is the vault's marker id, read by the caller before the
     // removal moved the marker into its archive with the rest of the tree.
@@ -124,6 +116,25 @@ export function importLateLegacyWrites(
 
 /** The lock target that serialises transition imports on this machine. */
 const TRANSITION_LOCK = "transition-import";
+
+/**
+ * Take the transition import lock of the migration folder `dir`, waiting
+ * up to `waitMs` (the shared lock budget by default) for a live holder.
+ * A holder whose process is gone is taken over at once, and the scratch
+ * files of processes that are gone are removed first: a killed import's
+ * file can be hundreds of megabytes.
+ */
+export function acquireTransitionImportLock(dir: string, waitMs?: number): () => void {
+  const lockTarget = join(dir, TRANSITION_LOCK);
+  mkdirSync(dirname(lockTarget), { recursive: true });
+  const release = acquireProcessLock(lockTarget, {
+    budgetMs: waitMs ?? resolveLockWaitBudgetMs(),
+    label: "transition import lock",
+    remedy: "another import of late legacy writes is running on this machine; retry once it ends",
+  });
+  sweepDeadScratch(join(dir, SCRATCH_DIR));
+  return release;
+}
 
 function importUnderLock(
   vault: string,

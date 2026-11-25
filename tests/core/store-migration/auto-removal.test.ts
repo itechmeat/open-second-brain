@@ -7,7 +7,15 @@
  * archive and every refusal are `removal.ts`'s and tested there.
  */
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +37,12 @@ import {
   type AutoRemovalState,
 } from "../../../src/core/store-migration/auto-removal.ts";
 import { autoMigrationStateDir } from "../../../src/core/store-migration/auto-state.ts";
+import { migrationDir } from "../../../src/core/store-migration/journal.ts";
+import {
+  LEGACY_ARCHIVE_DIR,
+  readRemovalInProgress,
+  removeEmptyLegacyRoots,
+} from "../../../src/core/store-migration/removal.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
 import { makeFleet, type Fleet, type Machine } from "./fixtures/fleet.ts";
 import { setSilenceDays } from "./fixtures/silence.ts";
@@ -39,6 +53,8 @@ const FAST = { settleMs: 0 } as const;
 const HOUR = 60 * 60 * 1000;
 const T0 = new Date("2026-11-24T09:00:00Z");
 const at = (ms: number): Date => new Date(T0.getTime() + ms);
+/** A moment `ms` after this machine's clock, the one store records carry. */
+const after = (ms: number): Date => new Date(Date.now() + ms);
 
 let fleet: Fleet | null = null;
 let saved: Record<string, string | undefined> = {};
@@ -210,6 +226,102 @@ describe("a vault whose cohort is two machines", () => {
       "legacy_tree_removed",
     );
     expect(takeAutoRemovalNotice(a.vault, undefined, at(3 * HOUR))).toBeNull();
+  });
+
+  test("an empty legacy root that sync left is removed while the cohort still waits", () => {
+    fleet = makeFleet(["dev-a", "dev-b"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    setSilenceDays(a, 0);
+    retire(a, "dev-c");
+    // Another machine's removal took the files and sync deleted them here,
+    // leaving the folders; dev-b still counts as on the legacy layout.
+    const emptyOfFiles = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) emptyOfFiles(path);
+        else rmSync(path);
+      }
+    };
+    emptyOfFiles(join(a.vault, "Brain"));
+    mkdirSync(join(a.vault, "Brain", "log"), { recursive: true });
+    rmSync(join(a.vault, ".open-second-brain"), { recursive: true, force: true });
+    const state = runAutoLegacyRemoval(a.vault, { now: T0 });
+    expect(state?.outcome).toBe("nothing");
+    expect(existsSync(join(a.vault, "Brain"))).toBe(false);
+    expect(shouldStartAutoLegacyRemoval(a.vault, undefined, at(2 * HOUR))).toBe(false);
+  });
+
+  test("a legacy root that still holds a file is not removed as empty", () => {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-empty-root-"));
+    try {
+      mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+      writeFileSync(join(vault, "Brain", "log", "kept.jsonl"), "{}\n");
+      mkdirSync(join(vault, ".open-second-brain", "cache"), { recursive: true });
+      expect(removeEmptyLegacyRoots(vault)).toEqual([".open-second-brain"]);
+      expect(existsSync(join(vault, "Brain", "log", "kept.jsonl"))).toBe(true);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("after another machine's removal, the leftovers go even though sync took a silent device's files", () => {
+    fleet = makeFleet(["dev-a", "dev-b"]);
+    const [a, b] = [fleet.machine("dev-a"), fleet.machine("dev-b")];
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    fleet.syncVaultFile("dev-a", "dev-b", "Brain/vault-id.json");
+    fleet.syncStore("dev-a", "dev-b");
+    b.use();
+    expect(migrateStore(b.vault, FAST).ok).toBe(true);
+    fleet.syncStore("dev-b", "dev-a");
+    // dev-c last wrote two months ago: dev-a's removal retires it by silence.
+    a.use();
+    setSilenceDays(a, 30);
+    // The store records carry this machine's clock: the removals run after them.
+    expect(runAutoLegacyRemoval(a.vault, { now: after(HOUR) })?.outcome).toBe("removed");
+    fleet.syncStore("dev-a", "dev-b");
+    // Sync has deleted dev-c's files on dev-b so far, not yet the rest.
+    const dropDevice = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) dropDevice(path);
+        else if (entry.name.includes(".dev-c.")) rmSync(path);
+      }
+    };
+    dropDevice(join(b.vault, "Brain"));
+    b.use();
+    const state = runAutoLegacyRemoval(b.vault, { now: after(2 * HOUR) });
+    expect(state?.outcome).toBe("removed");
+    expect(existsSync(join(b.vault, "Brain"))).toBe(false);
+  });
+
+  test("a removal interrupted after it moved the tree is finished by the next attempt", () => {
+    fleet = makeFleet(["dev-a"]);
+    const a = fleet.machine("dev-a");
+    a.use();
+    expect(runMigration(a.vault, FAST).ok).toBe(true);
+    setSilenceDays(a, 0);
+    // The removal moved the roots out of the vault and died before its
+    // final import: the journal and the archive are what it left.
+    const archive = join(a.store().deviceStateDir, LEGACY_ARCHIVE_DIR, "2026-11-25T10-00-00-000Z");
+    mkdirSync(archive, { recursive: true });
+    renameSync(join(a.vault, "Brain"), join(archive, "Brain"));
+    if (existsSync(join(a.vault, ".open-second-brain"))) {
+      renameSync(join(a.vault, ".open-second-brain"), join(archive, ".open-second-brain"));
+    }
+    writeFileSync(
+      join(migrationDir(a.store()), "removal.json"),
+      `${JSON.stringify({ vault: a.vault, at: "2026-11-25T10:00:00.000Z", archive })}\n`,
+    );
+    // The vault holds no legacy root any more: the attempt must not stop
+    // at "nothing", it must finish the removal that was interrupted.
+    expect(existsSync(join(a.vault, "Brain"))).toBe(false);
+
+    const state = runAutoLegacyRemoval(a.vault, { now: after(HOUR) });
+    expect(state?.outcome).toBe("removed");
+    expect(readRemovalInProgress(a.store())).toBeNull();
   });
 
   test("a lock a worker left without its claim is taken over, not waited on forever", () => {

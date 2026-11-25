@@ -51,9 +51,9 @@ describe("o2b status store block", () => {
     expect(store["root"]).toEqual({ path: root, origin: "env", exists: false });
     expect(store["initialized"]).toBe(false);
     expect(store["device_id"]).toBe("dev-a");
-    // With a vault in the config, the view goes to its `brain-view/` folder (2.0.1).
+    // With a vault in the config, the view goes to its `o2b-memory/` folder.
     expect(store["view_target"]).toEqual({
-      path: join(vault, "brain-view"),
+      path: join(vault, "o2b-memory"),
       origin: "default",
       exists: false,
       error: null,

@@ -222,7 +222,7 @@ describe("the closed questions on the planner's topic rules", () => {
           splits: [],
           merges: [],
           quiet: [],
-          shortfalls: [],
+          shortfall: null,
           asks: { routes: [], groups: [], wordings: [] },
         },
         candidatesById: new Map(),
@@ -292,9 +292,10 @@ describe("side texts and private records against a hosted provider", () => {
     expect(JSON.stringify(calls)).not.toContain(secret);
   });
 
-  test("a group with a private member beyond the shown ones waits for a local executor", async () => {
-    // Eleven members: the ten oldest are shown, the newest is private and
-    // its words count toward the drafted title all the same.
+  test("a private record of the same theme never joins a shared group or its question", async () => {
+    // Private records group apart from shared ones: the ten shared records
+    // are asked about without the private one, whose words never reach the
+    // drafted title or the provider.
     for (let i = 0; i < 10; i++) {
       f.signal(`Deprecation windows for the public API, step ${i}`, { session: `s${i % 2}` });
     }
@@ -304,8 +305,9 @@ describe("side texts and private records against a hosted provider", () => {
     });
     const fake = new FakeDecisionProvider({});
     await ask(f, "topic_new:shadow", fake);
-    expect(fake.requests).toEqual([]);
-    expect(refused("topic-new")).toEqual(["egress-refused"]);
+    expect(fake.requests).toHaveLength(1);
+    expect(JSON.stringify(fake.requests)).not.toContain("PRIVATE-TEXT");
+    expect(refused("topic-new")).toEqual([]);
   });
 
   test("a word only inside a <private> region never reaches a drafted title, goal or the provider", async () => {

@@ -230,3 +230,29 @@ describe("dream work readiness", () => {
     }
   });
 });
+
+describe("a large queue", () => {
+  test("is ordered in about linear time: 60,000 waiting items sharing resources", () => {
+    const c = claim("dev-a");
+    const items: StoreRecord[] = [];
+    for (let i = 0; i < 60_000; i++) {
+      items.push(
+        item("dev-a", {
+          subject: `s${i}`,
+          occurrence: `2026-11-20/${String(i).padStart(6, "0")}`,
+          resources: [`topic:t${i % 50}`],
+          ...(i > 0 && i % 7 === 0 ? { after: [idOf(items[i - 1]!)] } : {}),
+        }),
+      );
+    }
+    const started = performance.now();
+    const state = fold([c, ...items]);
+    const ms = performance.now() - started;
+    // The first item of each resource holds it; the rest wait behind it.
+    expect(state.items.get(idOf(items[0]!))!.ready).toBe(true);
+    expect(state.items.get(idOf(items[50]!))!.blocked_by).toEqual([idOf(items[0]!)]);
+    expect(state.items.get(idOf(items[7]!))!.blocked_by).toEqual([idOf(items[6]!)]);
+    // Ordering by a scan from the head for every placed item took about 29 s here.
+    expect(ms).toBeLessThan(4_000);
+  }, 120_000);
+});

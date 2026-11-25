@@ -78,6 +78,19 @@ describe("runAgentExecutor", () => {
     });
   }, 60_000);
 
+  test("a session that stops at its item budget is followed by another while work and time last", async () => {
+    for (const s of ["a", "b", "c", "d", "e"]) x.text(s);
+    const result = await run("answer-all", {
+      OPEN_SECOND_BRAIN_DREAM_AGENT_ITEMS: "2",
+      OPEN_SECOND_BRAIN_DREAM_AGENT_BATCH: "2",
+    });
+    expect(result.status === "ran" && result.runs.map((r) => r.answered)).toEqual([2, 2, 1]);
+    expect(result).toMatchObject({ status: "ran", answered: 5 });
+    expect(states()).toEqual(["accepted", "accepted", "accepted", "accepted", "accepted"]);
+    expect(leftovers()).toEqual([]);
+    expect(readDreamAgentLastRun()).toMatchObject({ status: "ran", answered: 5, failed: false });
+  }, 90_000);
+
   test("a session that exits early: its lease is released and the item is offered again", async () => {
     x.text("a");
     const result = await run("exit-early");

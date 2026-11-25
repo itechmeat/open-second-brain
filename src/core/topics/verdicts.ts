@@ -52,9 +52,31 @@ export function verdictBody(
   };
 }
 
-/** The key of a create group: its member record ids, sorted, joined by commas. */
+/**
+ * The key of a create group: its leader, the first of its member record
+ * ids in record order. A group keeps its leader while other records join
+ * or leave it (a topic created elsewhere takes some, new records come), so
+ * an approval or a veto stands through those changes; it ends only when
+ * the leader itself leaves the pool.
+ */
 export function topicGroupKey(memberIds: ReadonlyArray<string>): string {
+  return memberIds[0] ?? "";
+}
+
+/** The key 2.0.1 gave a group (its sorted member ids): an answer stored under it still counts. */
+export function legacyTopicGroupKey(memberIds: ReadonlyArray<string>): string {
   return [...memberIds].toSorted().join(",");
+}
+
+/**
+ * A vetoed group is asked again once it holds this many times the members
+ * it had when vetoed: unrelated small changes never reopen a veto.
+ */
+export const TOPIC_VETO_REGROWTH = 1.5;
+
+/** Whether a group of `members` records grew enough past a veto given at `vetoedAt` records. */
+export function grewPastVeto(vetoedAt: number | undefined, members: number): boolean {
+  return vetoedAt !== undefined && members >= Math.ceil(vetoedAt * TOPIC_VETO_REGROWTH);
 }
 
 /**
@@ -99,7 +121,12 @@ export interface TopicVerdicts {
    */
   readonly vetoes: ReadonlyMap<
     string,
-    { readonly verdict: TopicVerdictBody; readonly veto: boolean }
+    {
+      readonly verdict: TopicVerdictBody;
+      readonly veto: boolean;
+      /** How many members the group had when the answer was given. */
+      readonly members?: number;
+    }
   >;
   /**
    * Model merge verdicts for `topic_same` (the dream report lists

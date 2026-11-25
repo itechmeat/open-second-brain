@@ -52,9 +52,10 @@ function refusedPrivate(operation: string): Array<string | undefined> {
 }
 
 /** Five near-identical signals of one project: one `topic_new` group. */
+/** Five related signals of a theme of their own (`project` names it), from two sessions. */
 function signalGroup(project: string, partition: StorePartition, tag: string): void {
   for (let i = 0; i < 5; i++) {
-    f.signal(`${tag} deprecation windows for the public API ${i}`, {
+    f.signal(`${tag} ${project}deprecation ${project}windows ${project}api ${i}`, {
       partition,
       project,
       session: `s${i % 2}`,
@@ -125,11 +126,11 @@ describe("private items never keep a shareable one from being asked", () => {
     for (let g = 0; g < TOPIC_DECISION_LIMITS.groupsPerPass; g++) {
       signalGroup(`a${String(g).padStart(2, "0")}`, "private", "Private");
     }
-    // Projects plan in name order: this group comes after every private one.
+    // Groups plan in record order: this group comes after every private one.
     signalGroup("zz", "shared", "SHARED-ONE");
     const sent = await sentFor("topic_new");
     expect(sent).toContain("SHARED-ONE");
-    expect(sent).not.toContain("Private deprecation");
+    expect(sent).not.toContain("Private a");
   });
 
   test("topic_new: private members make the group's item wait for a local executor", async () => {

@@ -177,7 +177,7 @@ vault: <absolute-path-to-Obsidian-vault>
 agent_name: <chosen-agent-name>
 timezone: UTC
 store_root: ~/brain-store
-view_target: ~/brain-view
+view_target: ~/views
 ```
 
 It is a plain `key: value` file. `o2b setup` and `o2b init` write the

@@ -86,9 +86,19 @@ describe("dream_agent_command", () => {
     expect(resolveDreamAgentConfig({ config: {}, env: {} })).toMatchObject({
       command: null,
       budgetMs: 300_000,
-      items: 50,
+      items: 100,
+      batch: 10,
       privateAllowed: true,
     });
+    expect(
+      resolveDreamAgentConfig({
+        config: { dream_agent_batch: "1" },
+        env: { OPEN_SECOND_BRAIN_DREAM_AGENT_ITEMS: "40" },
+      }),
+    ).toMatchObject({ batch: 1, items: 40, errors: [] });
+    expect(
+      resolveDreamAgentConfig({ config: { dream_agent_batch: "zero" }, env: {} }).errors,
+    ).toHaveLength(1);
   });
 
   test("the hash follows the program and the arguments", () => {

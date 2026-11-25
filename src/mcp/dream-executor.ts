@@ -37,13 +37,18 @@ import {
   dreamSessionTask,
 } from "../core/brain/dream-queue/dream-session.ts";
 import type { DreamWorkItem } from "../core/brain/dream-queue/fold.ts";
+import { dreamWorkReads, type DreamWorkReads } from "../core/brain/dream-queue/operations.ts";
 import {
   answerWork,
+  answerWorkBatch,
   dreamQueueOn,
   readDreamWork,
   releaseRunWork,
   takeWork,
+  takeWorkBatch,
+  type AnswerInput,
   type DreamQueue,
+  type TakenItem,
 } from "../core/brain/dream-queue/queue.ts";
 import {
   appendDreamRunCallUnderLock,
@@ -99,6 +104,64 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
 ] as const;
+
+/**
+ * The tools of a run with `batch` items per take: the one-item tools as
+ * they are for 1, else a take that hands out up to `batch` items and an
+ * answer that carries a list.
+ */
+function toolsFor(batch: number): ReadonlyArray<(typeof TOOLS)[number] | Record<string, unknown>> {
+  if (batch <= 1) return TOOLS;
+  return [
+    {
+      name: DREAM_WORK_TAKE,
+      description: `Take up to ${batch} ready work items at once, or learn that none is left.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          max: {
+            type: "integer",
+            minimum: 1,
+            maximum: batch,
+            description: `Take at most this many (default ${batch}).`,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: DREAM_WORK_ANSWER,
+      description:
+        "Answer taken items, each in its answer shape (`value` or `text`), in one call, with your model.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          answers: {
+            type: "array",
+            minItems: 1,
+            maxItems: batch,
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                generation: { type: "integer" },
+                value: { description: "The answer value of a closed question." },
+                text: { type: "string", description: "The answer text of a text item." },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
+              },
+              required: ["id", "generation"],
+              additionalProperties: false,
+            },
+          },
+          model: { type: "string", description: "The model that wrote the answers." },
+        },
+        required: ["answers", "model"],
+        additionalProperties: false,
+      },
+    },
+    TOOLS[2],
+  ];
+}
 
 /** What a closed question asks, by operation. */
 const QUESTIONS: Readonly<Record<string, string>> = {
@@ -184,6 +247,12 @@ export class DreamExecutorServer {
   readonly #run: string;
   readonly #token: string;
   readonly #options: DreamExecutorOptions;
+  /**
+   * The reads the server keeps for the life of the session: every take
+   * and answer rechecks its item's input, and through these only what was
+   * written since the previous call is read.
+   */
+  readonly #reads: DreamWorkReads = dreamWorkReads();
 
   constructor(store: StoreHandle, run: string, token: string, options: DreamExecutorOptions) {
     this.#store = store;
@@ -201,6 +270,12 @@ export class DreamExecutorServer {
     return owner !== null && owner.device === this.#store.device ? owner.revision : null;
   }
 
+  /** Items per take of the run (1 when its record cannot be read: the one-item protocol). */
+  #batch(): number {
+    const check = this.check();
+    return check.ok ? check.record.batch : 1;
+  }
+
   /** The run, checked against its record, the token and the owner's revision now. */
   check(): { ok: true; record: DreamRunRecord } | { ok: false; reason: string } {
     return checkDreamRun(this.#store.deviceStateDir, {
@@ -215,18 +290,31 @@ export class DreamExecutorServer {
     return dreamQueueOn(this.#store, {
       vault: this.#options.vault,
       writer: record.agent,
+      reads: this.#reads,
       ...(this.#options.configPath !== undefined ? { configPath: this.#options.configPath } : {}),
       ...(this.#options.now !== undefined ? { now: this.#options.now } : {}),
     });
   }
+
+  /** When the tool call being served began (`performance.now()`), or null between calls. */
+  #callStarted: number | null = null;
 
   #log(tool: string, outcome: string, model?: string): void {
     appendDreamRunCallUnderLock(this.#store.deviceStateDir, this.#run, {
       tool,
       outcome,
       ...(model !== undefined ? { model } : {}),
+      ...(this.#callStarted !== null ? { ms: this.#slice() } : {}),
       now: this.#now(),
     });
+  }
+
+  /** The ms since the call began or since its previous log line (a batch logs a line per item). */
+  #slice(): number {
+    const at = performance.now();
+    const ms = Math.round(at - (this.#callStarted ?? at));
+    this.#callStarted = at;
+    return ms;
   }
 
   /** Log a protocol step while the run is live (a refused run logs nothing). */
@@ -265,14 +353,14 @@ export class DreamExecutorServer {
           protocolVersion: typeof requested === "string" ? requested : PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: DREAM_EXECUTOR_SERVER_NAME, version: SERVER_VERSION },
-          instructions: dreamSessionTask(this.#run),
+          instructions: dreamSessionTask(this.#run, this.#batch()),
         });
       }
       case "ping":
         return ok({});
       case "tools/list":
         this.#logIfLive("tools/list");
-        return ok({ tools: TOOLS });
+        return ok({ tools: toolsFor(this.#batch()) });
       case "resources/list":
         return ok({ resources: [] });
       case "resources/templates/list":
@@ -297,6 +385,7 @@ export class DreamExecutorServer {
     if (!(DREAM_EXECUTOR_TOOLS as ReadonlyArray<string>).includes(name)) {
       return result({ refused: `unknown tool ${name}` }, true);
     }
+    this.#callStarted = performance.now();
     try {
       const called = withAuthorizedDreamRun(
         this.#store.deviceStateDir,
@@ -308,7 +397,7 @@ export class DreamExecutorServer {
         },
         (record, leases) => {
           try {
-            if (name === DREAM_WORK_TAKE) return this.#take(record, leases);
+            if (name === DREAM_WORK_TAKE) return this.#take(record, leases, args);
             if (name === DREAM_WORK_ANSWER) return this.#answer(record, leases, args);
             return this.#finish(record, leases);
           } catch (err) {
@@ -320,33 +409,43 @@ export class DreamExecutorServer {
       return called.ok ? called.value : result({ refused: called.reason }, true);
     } catch (err) {
       return result({ refused: err instanceof Error ? err.message : String(err) }, true);
+    } finally {
+      this.#callStarted = null;
     }
   }
 
-  #take(record: DreamRunRecord, leases: Map<string, DreamRunLease>): ToolResult {
-    const taken = readDreamRunCalls(this.#store.deviceStateDir, this.#run).filter(
+  /**
+   * Take one item (batch 1), or up to the run's batch (or `max`, when
+   * smaller) under one queue entry (`takeWorkBatch`): each item rechecked
+   * and leased as one take of the one-item protocol, with its own call log
+   * line.
+   */
+  #take(
+    record: DreamRunRecord,
+    leases: Map<string, DreamRunLease>,
+    args: Record<string, unknown>,
+  ): ToolResult {
+    let taken = readDreamRunCalls(this.#store.deviceStateDir, this.#run).filter(
       (c) => c.tool === DREAM_WORK_TAKE && c.outcome === "item",
     ).length;
-    if (taken >= record.item_budget) {
-      this.#log(DREAM_WORK_TAKE, "item-budget");
-      return result({ item: null, reason: "item-budget" });
-    }
+    const max = args["max"];
+    const want =
+      record.batch <= 1
+        ? 1
+        : typeof max === "number" && Number.isInteger(max) && max >= 1
+          ? Math.min(max, record.batch)
+          : record.batch;
     const operations = new Set(record.operations);
-    const got = takeWork(this.#queue(record), {
-      run: this.#run,
-      filter: (item: DreamWorkItem) =>
-        operations.has(item.body.operation) &&
-        (record.private_allowed || item.partition !== "private"),
-    });
-    if (got.item === null) {
-      this.#log(DREAM_WORK_TAKE, got.reason);
-      return result({ item: null, reason: got.reason });
-    }
-    const item = got.item;
-    leases.set(item.id, { generation: item.generation, lease_token: item.lease_token });
-    this.#log(DREAM_WORK_TAKE, "item");
-    return result({
-      item: {
+    const filter = (item: DreamWorkItem): boolean =>
+      operations.has(item.body.operation) &&
+      (record.private_allowed || item.partition !== "private");
+    const items: Array<Record<string, unknown>> = [];
+    let reason: string | null = null;
+    const keep = (item: TakenItem): void => {
+      leases.set(item.id, { generation: item.generation, lease_token: item.lease_token });
+      this.#log(DREAM_WORK_TAKE, "item");
+      taken += 1;
+      items.push({
         id: item.id,
         generation: item.generation,
         operation: item.operation,
@@ -354,8 +453,29 @@ export class DreamExecutorServer {
         payload: item.payload,
         evidence: item.evidence,
         answer_shape: answerShape(item.operation, item.answer_schema),
-      },
-    });
+      });
+    };
+    if (taken >= record.item_budget) {
+      reason = "item-budget";
+    } else if (record.batch <= 1) {
+      const got = takeWork(this.#queue(record), { run: this.#run, filter });
+      if (got.item === null) reason = got.reason;
+      else keep(got.item);
+    } else {
+      // The batch under one queue entry: each item taken as one take takes it.
+      const got = takeWorkBatch(this.#queue(record), {
+        run: this.#run,
+        max: Math.min(want, record.item_budget - taken),
+        filter,
+      });
+      for (const item of got.items) keep(item);
+      reason = got.reason;
+    }
+    if (items.length === 0) this.#log(DREAM_WORK_TAKE, reason ?? "empty");
+    if (record.batch <= 1) {
+      return result(items.length === 0 ? { item: null, reason } : { item: items[0] });
+    }
+    return result(items.length === 0 ? { items, reason } : { items });
   }
 
   #answer(
@@ -363,6 +483,73 @@ export class DreamExecutorServer {
     leases: Map<string, DreamRunLease>,
     args: Record<string, unknown>,
   ): ToolResult {
+    const list = args["answers"];
+    if (!Array.isArray(list)) return this.#answerOne(record, leases, args);
+    const model = args["model"];
+    if (typeof model !== "string" || model.trim() === "" || list.length === 0) {
+      this.#log(DREAM_WORK_ANSWER, "invalid");
+      return result({ refused: "answers (a non-empty list) and model are required" }, true);
+    }
+    // The run's batch is how many answers one call may carry: an agent
+    // that took more items than its batch keeps the queue work of a
+    // call under the configured limit.
+    if (list.length > record.batch) {
+      this.#log(DREAM_WORK_ANSWER, "invalid");
+      return result({ refused: `answers (at most ${record.batch} per call) are required` }, true);
+    }
+    // Each entry gets the checks of one answer of the one-item protocol,
+    // with the call's model, over one read of the queue; those that pass
+    // are answered under one queue entry, each recheck, validation and
+    // record as one answer's.
+    const state = this.#workOnce();
+    const results: Array<Record<string, unknown>> = [];
+    const passed: Array<{ readonly at: number; readonly input: AnswerInput }> = [];
+    list.forEach((entry: unknown, at: number) => {
+      const one =
+        typeof entry === "object" && entry !== null && !Array.isArray(entry)
+          ? (entry as Record<string, unknown>)
+          : {};
+      const prepared = this.#prepareAnswer(record, leases, { ...one, model }, state);
+      if ("refusal" in prepared) {
+        results.push({ id: one["id"] ?? null, ...prepared.refusal });
+      } else {
+        results.push({ id: one["id"] ?? null });
+        passed.push({ at, input: prepared.input });
+      }
+    });
+    const outcomes = answerWorkBatch(
+      this.#queue(record),
+      passed.map((p) => p.input),
+    );
+    outcomes.forEach((outcome, k) => {
+      const at = passed[k]!.at;
+      results[at] = { ...results[at], ...outcome };
+      this.#log(DREAM_WORK_ANSWER, outcome.status, model);
+    });
+    return result(
+      { results },
+      results.every((r) => r["status"] !== "accepted"),
+    );
+  }
+
+  /** The queue as this session's reads hold it now, folded once, on first use. */
+  #workOnce(): () => ReturnType<typeof readDreamWork> {
+    let state: ReturnType<typeof readDreamWork> | undefined;
+    return () => (state ??= readDreamWork(this.#store, { now: this.#now(), reads: this.#reads }));
+  }
+
+  /**
+   * The checks of one answer before the queue sees it: its fields, that
+   * this session holds the lease (in the run's record and in the queue),
+   * and the answer value of its operation. A refusal is logged as the
+   * one-item protocol logs it.
+   */
+  #prepareAnswer(
+    record: DreamRunRecord,
+    leases: Map<string, DreamRunLease>,
+    args: Record<string, unknown>,
+    work: () => ReturnType<typeof readDreamWork>,
+  ): { readonly refusal: Record<string, unknown> } | { readonly input: AnswerInput } {
     const id = args["id"];
     const generation = args["generation"];
     const model = args["model"];
@@ -373,18 +560,16 @@ export class DreamExecutorServer {
       model.trim() === ""
     ) {
       this.#log(DREAM_WORK_ANSWER, "invalid");
-      return result({ status: "refused", reason: "id, generation and model are required" }, true);
+      return { refusal: { status: "refused", reason: "id, generation and model are required" } };
     }
-    const queue = this.#queue(record);
     const lease = leases.get(id);
     if (lease === undefined || lease.generation !== generation) {
       this.#log(DREAM_WORK_ANSWER, "not-this-run");
-      return result(
-        { status: "refused", reason: "this session holds no lease on that item" },
-        true,
-      );
+      return {
+        refusal: { status: "refused", reason: "this session holds no lease on that item" },
+      };
     }
-    const item = readDreamWork(this.#store, { now: this.#now() }).items.get(id);
+    const item = work().items.get(id);
     if (
       item === undefined ||
       item.lease === null ||
@@ -392,7 +577,7 @@ export class DreamExecutorServer {
       item.lease.lease_token !== lease.lease_token
     ) {
       leases.delete(id);
-      return result({ status: "refused", reason: "this session no longer holds the lease" }, true);
+      return { refusal: { status: "refused", reason: "this session no longer holds the lease" } };
     }
     const operation = item.body.operation;
     let answer: { value?: unknown; text?: string };
@@ -403,15 +588,27 @@ export class DreamExecutorServer {
     } else {
       answer = { value: args["value"] };
     }
-    const outcome = answerWork(queue, {
-      item: id,
-      generation,
-      lease_token: lease.lease_token,
-      ...answer,
-      agent: record.agent,
-      model,
-    });
-    this.#log(DREAM_WORK_ANSWER, outcome.status, model);
+    return {
+      input: {
+        item: id,
+        generation,
+        lease_token: lease.lease_token,
+        ...answer,
+        agent: record.agent,
+        model,
+      },
+    };
+  }
+
+  #answerOne(
+    record: DreamRunRecord,
+    leases: Map<string, DreamRunLease>,
+    args: Record<string, unknown>,
+  ): ToolResult {
+    const prepared = this.#prepareAnswer(record, leases, args, this.#workOnce());
+    if ("refusal" in prepared) return result(prepared.refusal, true);
+    const outcome = answerWork(this.#queue(record), prepared.input);
+    this.#log(DREAM_WORK_ANSWER, outcome.status, String(args["model"]));
     return result(outcome, outcome.status !== "accepted");
   }
 

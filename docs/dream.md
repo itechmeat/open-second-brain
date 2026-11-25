@@ -224,6 +224,23 @@ waits. A brain whose records still live in the legacy `Brain/` tree runs
 its single pass as before; its first live pass after the move to the
 store starts the replay.
 
+## A backlog of questions
+
+A brain that has just moved to the store can hold hundreds or thousands of
+questions for the dream agent at once (one per shared note in its history),
+more than one pass a day answers. Answer them in one sitting with
+
+```bash
+o2b dream run --catch-up 30
+```
+
+It runs passes one after another, each giving the dream agent what is left
+of the 30 minutes (its sessions follow one another while ready work lasts),
+while at least two minutes are left and the previous pass's agent answered
+something. Each pass is a whole pass: it produces the questions still to
+ask, applies the answers and records the day. `--json` prints one document
+listing the passes.
+
 ## Setting the agent
 
 The command is a machine setting, never shared between machines:
@@ -234,9 +251,18 @@ The command is a machine setting, never shared between machines:
 2. `dream_agent_fallbacks`: a JSON array of preset names or such arrays,
    tried in order when a session fails to start, exits with an error or
    answers nothing (one fallback per run).
-3. `dream_agent_budget_ms` (default 300000) and `dream_agent_items`
-   (default 50): the bounds of one run.
-4. `dream_agent_private` (default on): off keeps items built from private
+3. `dream_agent_budget_ms` (default 300000): the agent's time in one pass.
+4. `dream_agent_items` (default 100): the items one session may take. A
+   session that answered and stopped there is followed by another session
+   of the same command while ready work and the pass's agent time last, so
+   this bounds one session's context, not the pass.
+5. `dream_agent_batch` (default 10): how many items one `dream_work_take`
+   hands the session and one `dream_work_answer` call carries. Each item is
+   still taken, rechecked, leased, validated and recorded on its own. `1`
+   is the one-item protocol (one take and one answer per item, the task
+   text and tools of earlier releases); set it when you want the session to
+   see one item at a time.
+6. `dream_agent_private` (default on): off keeps items built from private
    records away from the session.
 
 Each key has an environment twin (`OPEN_SECOND_BRAIN_DREAM_AGENT_COMMAND`
