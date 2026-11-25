@@ -5,12 +5,14 @@
  * the brain store takes its default place in the vault. A session start
  * runs the real hook as a child process; the worker it starts is real, and
  * a test waits for the worker's log to name its last step (a file watch
- * with a deadline, no timed sleep). The only thing two machines share is
- * the vault, through {@link copyVault}.
+ * with a deadline, no timed sleep), then for the worker to have ended
+ * ({@link workerExited}) before anything removes the machine's folders.
+ * The only thing two machines share is the vault, through {@link copyVault}.
  */
 import { expect } from "bun:test";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -24,8 +26,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  SELF_HEAL_REINDEX_SURFACE,
+  SELF_HEAL_SPAWN,
+} from "../../../src/core/maintenance/self-heal-reindex.ts";
+import { STORE_VAULT_DIR } from "../../../src/core/store/constants.ts";
 import { autoLegacyRemovalLogPath } from "../../../src/core/store-migration/auto-removal.ts";
 import {
+  autoMigrationLockPath,
   autoMigrationStateDir,
   autoMigrationWorkerLogPath,
 } from "../../../src/core/store-migration/auto-state.ts";
@@ -230,6 +238,163 @@ export function logFinished(path: string, done: (text: string) => boolean): Prom
 }
 
 /**
+ * Resolve once the migration worker of `m` has ended. The worker holds the
+ * claim the start handed it until its process ends and releases it there
+ * (`auto-worker.ts`, a `process.once("exit")` hook). While its claim file
+ * is there, that release takes its mutex by making the machine's state
+ * folder chain: it is the worker's last write, and it comes after the last
+ * line of the worker's log, which is all {@link logFinished} waits for. A
+ * test that removes its scratch before this resolves races that release,
+ * and when the release lands last the scratch is back (`tests/setup.ts`
+ * fails the run on it).
+ * The lock file's removal is the release's last write that can make a
+ * folder (what follows only removes the mutex and the emptied folder), so
+ * its absence is the sign; a file watch with a deadline, no timed sleep.
+ * The watch starts before the first look, so a removal in between is
+ * still seen; a folder already gone when the watch starts means the lock
+ * went with it.
+ */
+export function workerExited(m: Machine): Promise<void> {
+  const lock = asMachine(m, () => autoMigrationLockPath(m.vault));
+  const read = (): string => {
+    try {
+      return readFileSync(lock, "utf8");
+    } catch {
+      return "";
+    }
+  };
+  return new Promise((resolveGone, reject) => {
+    let watcher: ReturnType<typeof watch> | null = null;
+    let deadline: ReturnType<typeof setTimeout> | null = null;
+    const end = (): void => {
+      if (deadline !== null) clearTimeout(deadline);
+      watcher?.close();
+    };
+    const check = (): void => {
+      if (existsSync(lock)) return;
+      end();
+      resolveGone();
+    };
+    try {
+      watcher = watch(dirname(lock), check);
+      watcher.on("error", check);
+    } catch (err) {
+      // The folder is gone already, and so is the lock in it; anything
+      // else ends the wait at once rather than leaving it unwatched.
+      if (existsSync(lock)) reject(err);
+      else resolveGone();
+      return;
+    }
+    deadline = setTimeout(() => {
+      end();
+      reject(new Error(`the migration worker did not release its claim:\n${read()}`));
+    }, WORKER_DEADLINE_MS);
+    check();
+  });
+}
+
+/**
+ * Resolve once every index rebuild that a session start of `m` at or after
+ * `since` handed to a detached child has recorded its end. Such a start,
+ * finding the machine's search index missing or behind, spawns `o2b search
+ * reindex --self-heal <run-id>` and records the spawn on the
+ * `self_heal_reindex` metrics surface (`ensure-current.ts`); the child
+ * appends its own records to the store (an `index` row, then its outcome
+ * under the same run id) after the start has returned, and nothing else
+ * the test waits on covers them. A vault copy taken before the outcome
+ * lands leaves the newest record of the machine behind. The outcome is the
+ * child's last record; a file watch with a deadline, no timed sleep.
+ *
+ * `since` keeps out a spawn whose child can record no end: a start that
+ * also starts the store migration may hand a rebuild to a child whose rows
+ * the migration's gate refuses (`self-heal-reindex.ts`, case 4).
+ */
+export function selfHealsSettled(m: Machine, since: Date): Promise<void> {
+  const device = m.env["O2B_DEVICE_ID"];
+  const from = since.toISOString();
+  // A run seen spawned stays pending until a complete look at the store
+  // shows its outcome: a look that had to leave a file or a line out
+  // (`unread`) may have missed that outcome, so it never counts as the end.
+  const spawned = new Set<string>();
+  const scan = (): { pending: string[]; watch: string[]; complete: boolean } => {
+    const ended = new Set<string>();
+    const dirs = new Set<string>();
+    const look = storeRecords(join(m.vault, STORE_VAULT_DIR), true);
+    for (const { file, record } of look.records) {
+      if (record.kind !== "ledger-row" || record.device !== device) continue;
+      const row = (
+        record.body as {
+          row?: { surface?: unknown; run_at?: unknown; payload?: Record<string, unknown> };
+        }
+      ).row;
+      if (row?.surface !== SELF_HEAL_REINDEX_SURFACE) continue;
+      const runId = row.payload?.["run_id"];
+      if (typeof runId !== "string") continue;
+      dirs.add(dirname(file));
+      if (row.payload?.["decision"] === SELF_HEAL_SPAWN.spawned) {
+        if (typeof row.run_at === "string" && row.run_at >= from) spawned.add(runId);
+      } else if (row.payload?.["outcome"] !== undefined) ended.add(runId);
+    }
+    for (const dir of look.unread) dirs.add(dir);
+    return {
+      pending: [...spawned].filter((id) => !ended.has(id)),
+      watch: [...dirs],
+      complete: look.unread.length === 0,
+    };
+  };
+  const settled = (look: ReturnType<typeof scan>): boolean =>
+    look.complete && look.pending.length === 0;
+  if (settled(scan())) return Promise.resolve();
+  return new Promise((resolveSettled, reject) => {
+    // The child writes its outcome into the shard folder its parent wrote
+    // the spawn into (one ledger per device); a folder where a look left
+    // something out is watched too, since the write that completes it
+    // lands there.
+    const watchers = new Map<string, ReturnType<typeof watch>>();
+    let done = false;
+    const watchNew = (dirs: string[]): boolean => {
+      let added = false;
+      for (const dir of dirs) {
+        if (watchers.has(dir)) continue;
+        try {
+          const w = watch(dir, () => check());
+          w.on("error", () => check());
+          watchers.set(dir, w);
+          added = true;
+        } catch {
+          // Gone already: the next look does not list it.
+        }
+      }
+      return added;
+    };
+    const close = (): void => {
+      for (const w of watchers.values()) w.close();
+    };
+    const deadline = setTimeout(() => {
+      done = true;
+      close();
+      const look = scan();
+      const left = look.pending.join(", ") || "none seen";
+      const partial = look.complete ? "" : " (the last look at the store was incomplete)";
+      reject(new Error(`index rebuilds never recorded their end: ${left}${partial}`));
+    }, WORKER_DEADLINE_MS);
+    function check(): void {
+      if (done) return;
+      let look = scan();
+      // A folder first named by this look is watched and then looked at
+      // once more, so a write into it before its watch started is seen.
+      while (watchNew(look.watch)) look = scan();
+      if (!settled(look)) return;
+      done = true;
+      clearTimeout(deadline);
+      close();
+      resolveSettled();
+    }
+    check();
+  });
+}
+
+/**
  * Copy the vault of `from` over the vault of `to`, as a sync tool would:
  * every file, hidden folders too, the newer copy wins, nothing deleted.
  * The device-local `.open-second-brain/` folder never travels.
@@ -266,25 +431,71 @@ export function recordIds(m: Machine): string[] {
 /** Every record id in the store at `root`, sorted. */
 export function recordIdsUnder(root: string): string[] {
   const ids = new Set<string>();
+  for (const { record } of storeRecords(root).records) ids.add(record.id);
+  return [...ids].toSorted();
+}
+
+interface StoreRecord {
+  readonly id: string;
+  readonly kind?: string;
+  readonly device?: string;
+  readonly body?: unknown;
+}
+
+/**
+ * Every record line in the store at `root`, with the shard file it is in.
+ * `live`: writers may still be at work, so a file or folder that goes while
+ * it is read and a line not yet whole are left out (the write that
+ * completes them is seen by the next look), and `unread` names the folder
+ * each was left out of; otherwise either fails the read. A store not made
+ * yet is an empty store.
+ */
+function storeRecords(
+  root: string,
+  live = false,
+): { records: Array<{ file: string; record: StoreRecord }>; unread: string[] } {
+  const records: Array<{ file: string; record: StoreRecord }> = [];
+  const unread = new Set<string>();
   const walk = (dir: string): void => {
     let names: string[];
     try {
       names = readdirSync(dir);
-    } catch {
+    } catch (err) {
+      if (live && !(dir === root && (err as NodeJS.ErrnoException).code === "ENOENT")) {
+        unread.add(dir === root ? root : dirname(dir));
+      }
       return;
     }
     for (const name of names) {
       const p = join(dir, name);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (name.endsWith(".jsonl")) {
-        for (const line of readFileSync(p, "utf8").split("\n")) {
-          if (line.trim() !== "") ids.add((JSON.parse(line) as { id: string }).id);
+      let text: string | null = null;
+      try {
+        if (statSync(p).isDirectory()) {
+          walk(p);
+          continue;
         }
+        if (name.endsWith(".jsonl")) text = readFileSync(p, "utf8");
+      } catch (err) {
+        if (!live) throw err;
+        unread.add(dir);
+      }
+      if (text === null) continue;
+      for (const line of text.split("\n")) {
+        if (line.trim() === "") continue;
+        let record: StoreRecord;
+        try {
+          record = JSON.parse(line) as StoreRecord;
+        } catch (err) {
+          if (!live) throw err;
+          unread.add(dir);
+          continue;
+        }
+        records.push({ file: p, record });
       }
     }
   };
   walk(root);
-  return [...ids].toSorted();
+  return { records, unread: [...unread] };
 }
 
 /** Entries under the machine's per-user data folder. */

@@ -17,7 +17,8 @@
  *     and nothing in the per-user data folder.
  *
  * The hour is stood for by moving A's last attempt record back in time;
- * every wait is a watch on a worker log with a deadline.
+ * every wait is a watch on a worker log, or on the store for the end of
+ * an index rebuild a start handed off, with a deadline.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -38,6 +39,7 @@ import {
   removalWorkerDone,
   removeScratch,
   scratch,
+  selfHealsSettled,
   sessionStart,
   workerLog,
 } from "./fixtures/update-machine.ts";
@@ -85,9 +87,14 @@ describe("two machines updated from 1.98.0 by vault copy", () => {
     // 3. Writes on both sides travel back; an hour later A's tree leaves.
     copyVault(b, a);
     ageRemovalAttempt(a, 61);
+    const third = new Date();
     await sessionStart(a, "run");
     const removal = await logFinished(removalLog(a), removalWorkerDone);
     expect(removal).toContain("the automatic removal of the legacy tree: removed");
+    // The start may also hand an index rebuild to a detached child, which
+    // records its end in the store after the start returned: the last
+    // copies wait for it, as a sync tool would carry that record later.
+    await selfHealsSettled(a, third);
     copyVault(a, b);
     copyVault(b, a);
 

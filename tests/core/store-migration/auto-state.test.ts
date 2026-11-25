@@ -146,6 +146,27 @@ describe("the worker lock", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  test("a release after the state folder is gone makes no folder again", () => {
+    // A state root of this test's own, so removing it touches nothing else.
+    const state = join(root, "state");
+    const saved = process.env["XDG_STATE_HOME"];
+    process.env["XDG_STATE_HOME"] = state;
+    forgetMachineStateCache();
+    try {
+      const token = claimAutoMigrationLock(vault, new Date(), EXACT);
+      expect(token).not.toBeNull();
+      expect(autoMigrationLockPath(vault).startsWith(state)).toBe(true);
+      // The machine's state was removed under a worker that still holds
+      // the claim: its exit-time release finds nothing and leaves nothing.
+      rmSync(state, { recursive: true, force: true });
+      releaseAutoMigrationLock(vault, token!);
+      expect(existsSync(state)).toBe(false);
+    } finally {
+      process.env["XDG_STATE_HOME"] = saved;
+      forgetMachineStateCache();
+    }
+  });
+
   test("a second claim while one is live is refused", () => {
     const now = new Date();
     const token = claimAutoMigrationLock(vault, now, EXACT);

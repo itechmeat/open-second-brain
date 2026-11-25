@@ -67,7 +67,8 @@ export class SqliteFileSetMoveError extends Error {
  * the moves already made are undone siblings first and the main file last,
  * and the main file only when every sibling came back: a sibling that
  * cannot be moved back keeps the main file at the destination with it,
- * and the error names what stayed there.
+ * and the error names what stayed there. A sibling that is gone by the
+ * time it is moved is skipped ({@link siblingWentAway}).
  */
 function moveInOrder(
   from: string,
@@ -84,6 +85,7 @@ function moveInOrder(
       renameWithRetry(from + suffix, to + suffix, seams);
       moved.push(suffix);
     } catch (err) {
+      if (siblingWentAway(from + suffix, suffix, err)) continue;
       const stranded = undoMoves(from, to, moved, seams, beforeRename);
       const strandedText = stranded.map((s) => `${to + s.suffix} (${s.reason})`);
       throw new SqliteFileSetMoveError(
@@ -99,6 +101,22 @@ function moveInOrder(
       );
     }
   }
+}
+
+/**
+ * True when the move of sibling `path` failed only because the sibling is
+ * gone: SQLite deletes a database's `-shm` and `-wal` when its last
+ * connection closes, after checkpointing every commit in the log into the
+ * main file (through the handle it holds, so into the main file wherever
+ * it was renamed), and a rollback `-journal` when its transaction ends. A
+ * reader in another process closing between the presence check and the
+ * rename is that case: nothing is left to move and no commit is lost. The
+ * main file is never skipped this way.
+ */
+function siblingWentAway(path: string, suffix: string, err: unknown): boolean {
+  return (
+    suffix !== "" && (err as NodeJS.ErrnoException | null)?.code === "ENOENT" && !existsSync(path)
+  );
 }
 
 /** Undo `moved` (suffixes moved from `from` to `to`); returns what stayed at `to`. */

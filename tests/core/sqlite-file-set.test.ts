@@ -6,9 +6,12 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 import {
   discardSqliteFileSet,
@@ -111,6 +114,53 @@ test("a lost owner stops later moves and leaves the moved file named as stranded
   expect(err.stranded).toEqual([parked]);
   expect(existsSync(live + "-wal")).toBe(true);
   expect(existsSync(parked)).toBe(true);
+});
+
+// POSIX only: Windows SQLite opens the database without delete sharing, so
+// the open reader below makes the main file's rename fail with a sharing
+// violation before the -wal is reached, and the case cannot arise there.
+test.skipIf(IS_WINDOWS)(
+  "a log its last reader deletes while the set is parked is not a failure, and no commit is lost",
+  () => {
+    const reader = new Database(live);
+    reader.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    reader.exec("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('committed in the log');");
+    expect(existsSync(live + "-wal")).toBe(true);
+    // A reader in another process closes its last connection as the set is
+    // parked: SQLite checks the file has not moved, then checkpoints and
+    // deletes the -shm and -wal, so its deletes can land after the main file
+    // moved and after the -wal was seen. Played here between the -wal's
+    // presence check and its rename: the checkpoint goes through the
+    // reader's handle, into the main file at its parked name.
+    let renames = 0;
+    const readerClosesMidway = (): void => {
+      renames += 1;
+      if (renames !== 2) return;
+      reader.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      unlinkSync(live + "-shm");
+      unlinkSync(live + "-wal");
+    };
+    parkSqliteFileSet(live, parked, undefined, readerClosesMidway);
+    reader.close();
+    for (const s of ["", "-wal", "-shm"]) expect(existsSync(live + s)).toBe(false);
+    expect(existsSync(parked + "-wal")).toBe(false);
+    const db = new Database(parked, { readonly: true });
+    expect(db.query("SELECT x FROM t").all()).toEqual([{ x: "committed in the log" }]);
+    db.close();
+  },
+);
+
+test("a missing destination folder still fails a sibling move and moves the main file back", () => {
+  makeSet(live);
+  const elsewhere = join(dir, "gone", "brain.sqlite");
+  const seams = {
+    platform: "linux" as NodeJS.Platform,
+    rename: (from: string, to: string) =>
+      renameSync(from, from === live ? to : to.replace(parked, elsewhere)),
+  };
+  expect(() => parkSqliteFileSet(live, parked, seams)).toThrow(SqliteFileSetMoveError);
+  for (const s of ["", "-wal", "-shm"]) expect(existsSync(live + s)).toBe(true);
+  expect(existsSync(parked)).toBe(false);
 });
 
 test("an unpark whose main file cannot move leaves the siblings it moved back with their main file", () => {

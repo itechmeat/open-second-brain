@@ -17,6 +17,7 @@ import {
   removeScratch,
   sessionStart,
   v198Machine,
+  workerExited,
   workerLog,
 } from "./fixtures/update-machine.ts";
 
@@ -37,6 +38,9 @@ describe("an update from 1.98.0", () => {
 
     await sessionStart(m, "run");
     const log = await logFinished(workerLog(m), migrationWorkerDone);
+    // The worker's last write is the release of its claim as it exits,
+    // after the log's last line: the scratch must not go before it.
+    await workerExited(m);
     expect(log).toContain("outcome applied");
     expect(log).not.toContain("the automatic removal of the legacy tree");
 
