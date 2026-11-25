@@ -205,7 +205,7 @@ test("a decision recorded after the topic was made is routed to it by the next p
   expect(decisionLines(String(runTopicAction({ action: "show", topic })["page"]))).toHaveLength(2);
 });
 
-test("a decision of another project is never routed to this project's topic", async () => {
+test("a decision of another project is offered this project's topic by theme and routed", async () => {
   const p = project();
   await notes(p);
   const first = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
@@ -223,7 +223,9 @@ test("a decision of another project is never routed to this project's topic", as
   });
   const second = dreamAnswered(p.a.vault, p.a.store()).topics?.report;
   if (second?.status !== "planned") throw new Error(`not planned: ${second?.status}`);
-  expect(second.routed).toHaveLength(0);
+  // Topics group by theme, not by project: the decision of the other
+  // project shares the topic's subject words, so the answered question routes it.
+  expect(second.routed).toHaveLength(1);
 });
 
 test("a decision event written before events carried a title reads its title from the page slug", async () => {

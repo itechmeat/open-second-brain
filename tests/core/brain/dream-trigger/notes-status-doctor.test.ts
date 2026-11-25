@@ -125,6 +125,38 @@ describe("a machine that is not the owner", () => {
   });
 });
 
+describe("a brain no device owns", () => {
+  beforeEach(() => {
+    f.cleanup();
+    f = makeTriggerFixture({ owner: null });
+  });
+
+  test("says once a day that dream has no owner, with the command, and that the dream agent is not set", () => {
+    const first = check(NOW);
+    expect(first.started).toBe(false);
+    expect(first.note).toBe(
+      "Dream has no owner, so no session starts a dream pass. On the machine that should run " +
+        "it: o2b dream owner --here --agent <name>. The dream agent is not set, so topics and " +
+        "readable history are not written: o2b dream agent set <preset>",
+    );
+    expect(check(NOW + HOUR).note).toBeUndefined();
+    expect(check(NOW + 24 * HOUR).note).toContain("Dream has no owner");
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
+  test("a set dream agent is not named", () => {
+    process.env["OPEN_SECOND_BRAIN_DREAM_AGENT_COMMAND"] = '["claude","-p"]';
+    try {
+      expect(check(NOW).note).toBe(
+        "Dream has no owner, so no session starts a dream pass. On the machine that should run " +
+          "it: o2b dream owner --here --agent <name>",
+      );
+    } finally {
+      delete process.env["OPEN_SECOND_BRAIN_DREAM_AGENT_COMMAND"];
+    }
+  });
+});
+
 describe("the owner's note for a day closed with work nobody here answers", () => {
   test("is written by the outcome, shown once a day and reported by doctor", () => {
     const x = agentFixture();

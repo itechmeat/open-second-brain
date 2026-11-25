@@ -36,7 +36,8 @@
 import { existsSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { resolveAgentName } from "../config.ts";
+import { resolveAgentName, UNCONFIGURED_AGENT_NAME } from "../config.ts";
+import { claimDreamOwner } from "../brain/dream-owner/owner.ts";
 import { resolveAppendShardId } from "../brain/ledger-shards.ts";
 import { readVaultIdentity, writeVaultIdentity } from "../brain/vault-identity.ts";
 import { legacyLogSeed } from "../brain/vault-seed.ts";
@@ -484,7 +485,22 @@ function finishSwitch(
     ? claimViewWriter(store, { agent })
     : { claimed: false as const, writer: readViewWriter(store).writer };
   hooks?.atStep?.(MIGRATION_STEP.viewWriter);
+  // The first machine to migrate an existing brain also owns dream, as
+  // `o2b init` makes the creating machine own a new one: without an owner
+  // no session ever starts a pass. A claim that fails leaves the switch
+  // done; the session start then names the command that binds it.
+  if (first) claimDreamOwnerAfterSwitch(store, agent);
   return claim.claimed ? store.device : claim.writer;
+}
+
+/** The dream owner claim of the first migrating machine, when its agent is named. */
+function claimDreamOwnerAfterSwitch(store: StoreHandle, agent: string): void {
+  if (agent === UNCONFIGURED_AGENT_NAME || agent === FALLBACK_MIGRATION_AGENT) return;
+  try {
+    claimDreamOwner(store, agent, { writer: agent, authority: "human" });
+  } catch {
+    // best-effort: `o2b dream owner --here` binds it later
+  }
 }
 
 /**
@@ -1070,10 +1086,13 @@ export function recordOwnSwitchCut(store: StoreHandle, agent: string): boolean {
   return true;
 }
 
+/** The writer a migration names when no agent name resolves. */
+const FALLBACK_MIGRATION_AGENT = "o2b-migrate-store";
+
 export function safeAgent(configPath?: string): string {
   try {
     return resolveAgentName(configPath);
   } catch {
-    return "o2b-migrate-store";
+    return FALLBACK_MIGRATION_AGENT;
   }
 }

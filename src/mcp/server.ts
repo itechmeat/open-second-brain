@@ -30,6 +30,7 @@ import {
   UNRESOLVED_AGENT,
   vaultFrozenRefusal,
 } from "./frozen-refusal.ts";
+import { StaleServerGuard } from "./stale-server.ts";
 import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
 import { withPrivateWithheld } from "../core/store/caller-reach.ts";
 import { configuredVaultMissing, servedVault, type ServedVault } from "../core/store/store-only.ts";
@@ -138,6 +139,12 @@ export interface MCPServerRuntimeOptions {
    */
   readonly artifactRunId?: string;
   /**
+   * The check that refuses writes once the install or the machine's
+   * layout changed under this server (`stale-server.ts`); injectable so
+   * tests drive its clock and its look.
+   */
+  readonly staleGuard?: StaleServerGuard;
+  /**
    * How this transport writes a frame nobody asked for.
    *
    * Supplied by stdio, which owns a duplex newline-delimited stream and
@@ -224,6 +231,7 @@ function vaultUnreachable(tool: string | undefined, reason: Error): MCPError {
 export class MCPServer {
   readonly vault: string | null;
   readonly configPath: string | null;
+  private readonly staleGuard: StaleServerGuard;
   readonly repoRoot: string | null;
   readonly tools: ReadonlyArray<ToolDefinition>;
   private readonly serverName: string;
@@ -271,6 +279,12 @@ export class MCPServer {
     this.capabilityReport = evaluated.report;
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
     this.machineConfig = loadMachineConfig(this.configPath ?? undefined);
+    this.staleGuard =
+      runtimeOpts.staleGuard ??
+      new StaleServerGuard({
+        vault: this.vault,
+        ...(this.configPath !== null ? { configPath: this.configPath } : {}),
+      });
     this.sendNotification = runtimeOpts.sendNotification;
     this.reach = resolvedTransportReach(runtimeOpts.reach);
     this.ruleScope = Object.freeze({
@@ -500,6 +514,10 @@ export class MCPServer {
     // cannot see.
     assertNoCallerSuppliedReach(tool, args);
     assertKnownArguments(tool, args);
+    // A server older than the install, or than the machine's layout,
+    // writes nothing (`stale-server.ts`): it would write what its old code
+    // knows, the legacy tree on a switched machine included.
+    if (tool.kind !== "read") this.staleGuard.assertMayWrite(tool.name);
     // A refusal of the migration gate is recorded wherever it is met, so a
     // handler that wraps it in an error of its own still answers with the
     // structured refusal (`mapFrozen`).
@@ -730,6 +748,12 @@ export class MCPServer {
     if (this.machineConfig === null) {
       this.machineConfig = loadMachineConfig(this.configPath ?? undefined);
     }
+    // A server the stale guard refuses must not start a dream pass: the
+    // check starts a detached worker that writes the brain, and a server
+    // older than the install writes it with the code it started with. The
+    // guard is asked first, so the refusal is seen before any worker is
+    // started - for a read call as much as for a write.
+    if (this.staleGuard.reason() !== null) return null;
     // The vault this server serves, which may not be the configured one.
     const note = dreamDayCheck(this.machineConfig, { notes, vault: this.servedVault().vault }).note;
     this.dayChecked = { day: today, stamp: dreamDayRecordStamp(this.machineConfig) };

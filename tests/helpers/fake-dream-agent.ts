@@ -4,7 +4,8 @@
  * config the worker wrote, starts the one server in it, speaks MCP over
  * that server's standard input and output, and behaves as its mode says:
  *
- *  - `answer-all`: take, answer, repeat until no item, finish;
+ *  - `answer-all`: take, answer, repeat until no item, finish (one item
+ *    per take, or the batch protocol's list when the take hands out one);
  *  - `no-finish`: as `check`, but never calls finish;
  *  - `check`: answers the canaries of `o2b dream agent check` correctly;
  *  - `wrong`: answers every item with a value of the wrong shape, then finishes;
@@ -75,9 +76,22 @@ if (mode === "hang-before") await new Promise(() => {});
 await request("tools/list");
 for (;;) {
   const taken = await tool("dream_work_take");
-  if (taken.item === null || taken.item === undefined) break;
+  // The batch protocol hands out `items` and takes `answers`; one item is `item`.
+  const items: any[] = Array.isArray(taken.items) ? taken.items : taken.item ? [taken.item] : [];
+  if (items.length === 0) break;
   if (mode === "exit-early") process.exit(1);
   if (mode === "hang") await new Promise(() => {});
+  if (Array.isArray(taken.items)) {
+    await tool("dream_work_answer", {
+      model: "fake-model-1",
+      answers: items.map((item) => ({
+        id: item.id,
+        generation: item.generation,
+        ...answerFor(item),
+      })),
+    });
+    continue;
+  }
   await tool("dream_work_answer", {
     id: taken.item.id,
     generation: taken.item.generation,

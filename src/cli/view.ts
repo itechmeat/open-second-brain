@@ -187,6 +187,7 @@ function cmdRender(argv: ReadonlyArray<string>): number {
   const target = resolveViewTarget(store.root, configPath, vault);
   const report = runViewPass(store, {
     target: target?.dir ?? null,
+    ...(target !== null ? { targetOrigin: target.origin } : {}),
     vault,
     agent: resolveAgentName(configPath),
   });
@@ -220,9 +221,11 @@ function renderMessage(report: ViewPassReport): string {
             (p.ingested > 0 ? `, ${p.ingested} edit(s) stored` : "") +
             (p.detail !== undefined ? ` (${p.detail})` : ""),
         );
-      return lines.length === 0
-        ? `Rendered ${report.pages.length} page(s); none changed.`
-        : `Rendered ${report.pages.length} page(s):\n${lines.join("\n")}`;
+      const body =
+        lines.length === 0
+          ? `Rendered ${report.pages.length} page(s); none changed.`
+          : `Rendered ${report.pages.length} page(s):\n${lines.join("\n")}`;
+      return report.notice !== undefined ? `${body}\n${report.notice}` : body;
     }
   }
 }

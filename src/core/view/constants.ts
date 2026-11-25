@@ -28,7 +28,14 @@ export const VIEW_TARGET_ENV = "OPEN_SECOND_BRAIN_VIEW_TARGET";
  * legacy tree's name until the legacy tree leaves, and is read by every
  * release before the brain store.
  */
-export const VIEW_DEFAULT_DIR = "brain-view";
+export const VIEW_DEFAULT_DIR = "o2b-memory";
+
+/**
+ * The default view folder of release 2.0.1 and before. The view writer
+ * renames it to {@link VIEW_DEFAULT_DIR} on update, on the machine that
+ * writes the view, and only when the folder holds pages the view wrote.
+ */
+export const LEGACY_VIEW_DEFAULT_DIR = "brain-view";
 
 /** `view_target` values that turn the human view off (case-insensitive). */
 export const VIEW_TARGET_OFF_VALUES: ReadonlyArray<string> = Object.freeze(["none", "off"]);

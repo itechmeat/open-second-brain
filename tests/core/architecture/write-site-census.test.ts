@@ -344,12 +344,14 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/store-migration/removal.ts": {
     categories: [C.archiveTransfer, C.lifecycleMove],
-    calls: ["cpSync", "renameSync", "rmSync"],
+    calls: ["cpSync", "renameSync", "rmSync", "rmdirSync"],
     reason:
       "removing the legacy tree moves Brain/ and the derived store folder out of the vault into a " +
       "dated device-local archive by rename, or by copy, verify and remove across filesystems; " +
       "nothing is deleted without a verified archive copy. Its journal naming the archive is a " +
-      "device-local file, removed once the removal is recorded.",
+      "device-local file, removed once the removal is recorded. A legacy root that holds no file " +
+      "(what sync leaves after another machine's removal) is removed folder by folder with rmdir, " +
+      "which refuses any folder a file is in.",
   },
   "src/core/store-migration/transition-watermark.ts": {
     categories: [C.machineArtifact],

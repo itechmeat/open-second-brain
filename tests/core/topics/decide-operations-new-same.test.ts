@@ -42,11 +42,11 @@ function garden(n: number): string[] {
 }
 
 describe("topic-new", () => {
-  test("a qualifying group is asked about, keyed by its members", () => {
+  test("a qualifying group is asked about, keyed by its leader", () => {
     const records = garden(5);
     const asked = questionsOf("topic-new");
     expect(asked).toHaveLength(1);
-    expect(asked[0]!.subject).toBe(records.toSorted().join(","));
+    expect(asked[0]!.subject).toBe(records[0]!);
     expect(asked[0]!.input["title"]).toBeDefined();
   });
 
@@ -62,15 +62,17 @@ describe("topic-new", () => {
     );
   });
 
-  test("currentInput is stable, changes with a new member, and is null once the group is gone", () => {
+  test("currentInput is stable and changes with a new member, the group keeping its subject", () => {
     garden(5);
     const item = produced("topic-new", questionsOf("topic-new")[0]!.subject);
     const op = dreamWorkOperation("topic-new")!;
     const context = { store: f.a, vault: null, now: f.still() };
     expect(op.currentInput(item, context)?.input_hash).toBe(item.body.input_hash);
-    // A sixth member makes another group: this one's subject is gone.
+    // A sixth member joins the group: its leader, and so its subject, stay.
     garden(1);
-    expect(op.currentInput(item, context)).toBeNull();
+    const input = op.currentInput(item, context);
+    expect(input).not.toBeNull();
+    expect(input!.input_hash).not.toBe(item.body.input_hash);
   });
 
   test("a group under the thresholds is not asked about", () => {

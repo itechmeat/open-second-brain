@@ -157,9 +157,10 @@ describe("topic planning in a dream pass", () => {
   });
 
   test("a failed batch of assignments keeps the earlier batches in the report", () => {
-    // More members than one write batch takes, so the topic's assigns go
-    // in two batches; the second fails.
-    const n = 1100;
+    // Two themes of eight records, each with words of its own (a word
+    // every record says joins nothing): each topic's assigns are one
+    // batch, and the second topic's batch fails.
+    const n = 16;
     appendRecords(
       store,
       Array.from({ length: n }, (_, i) => ({
@@ -172,7 +173,7 @@ describe("topic planning in a dream pass", () => {
           path: `Brain/inbox/b${i}.md`,
           staged: false,
           frontmatter: {
-            principle: `Release notes list every migration step ${i}`,
+            principle: `Notes alpha${i >> 3} bravo${i >> 3} delta${i >> 3}`,
             project: "o2b",
             session: i % 2 === 0 ? "s1" : "s2",
           },
@@ -201,9 +202,8 @@ describe("topic planning in a dream pass", () => {
     }
     expect(report?.status).toBe("error");
     if (report?.status !== "error") return;
-    expect(report.created).toHaveLength(1);
     // Before: 0, as if none of the first batch's assigns had landed.
-    expect(report.created[0]!.members).toBe(1024);
+    expect(report.created.reduce((sum, t) => sum + t.members, 0)).toBe(8);
   });
 
   test("a pass whose deadline has passed plans no topic", () => {

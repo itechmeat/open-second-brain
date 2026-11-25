@@ -189,7 +189,7 @@ function removeScratchFile(path: string): void {
 }
 
 /** Delete the scratch files of processes that are gone (a run killed before its end). */
-function sweepDeadScratch(folder: string): void {
+export function sweepDeadScratch(folder: string): void {
   let names: string[];
   try {
     names = readdirSync(folder);

@@ -21,7 +21,7 @@ After dream and recorded use:   Confirmed rule: Expand internal abbreviations in
 ```
 
 On hosts with a session-start hook, such as Claude Code and Codex, each new session receives the confirmed rules; on other hosts the agent asks for them through a tool.
-The rules are also written as plain Markdown pages into your vault's `brain-view/` folder (or the folder `view_target` names): `about-me.md` with the confirmed rules, a page per week of history, decisions and topics.
+The rules are also written as plain Markdown pages into your vault's `o2b-memory/` folder (or the folder `view_target` names): `about-me.md` with the confirmed rules, a page per week of history, decisions and topics.
 Rewrite a rule on `about-me.md` and your wording becomes the rule; delete its line and the rule is retired. Your edit is stored the next time the pages are rendered, and it wins over anything an agent or a model recorded.
 
 ## Install

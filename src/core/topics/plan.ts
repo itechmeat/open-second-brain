@@ -7,23 +7,29 @@
  * question is decided only by an answer; the plan lists what it still
  * asks.
  *
- *  - **Route.** An unassigned record of a project is routed only by a
- *    model's answer (change `dream-closed-questions`): the active topics of
- *    its scope whose head (title, description, goal and item texts) shares
- *    the most subject words with it - at least two words and a fifth of the
+ *  - **Route.** An unassigned record is routed only by a model's answer
+ *    (change `dream-closed-questions`): the active topics, of any scope,
+ *    whose head (title, description, goal and item texts) shares the most
+ *    subject words with it - at least two words and a fifth of the
  *    record's - are the options of its routing question (`asks.routes`),
  *    and until an answer names one of them the record stays as it is. A
  *    route the user took back (`blockedRoutes`) is never offered.
- *  - **Create.** The records of one project that no topic holds, none ever
- *    held (`touched`) and no routing question waits for are grouped by
- *    shared subject words; a group of at least `minRecords` records from
- *    at least `minSessions` sessions is asked about (`asks.groups`) and
- *    becomes a topic only with an approval and a wording (the title and
- *    goal the launched agent wrote, `asks.wordings` while it waits; the
- *    title drafted from its most frequent words is only part of the
- *    approval question). Records with no
- *    project never make a topic on their own; a personal topic is made on
- *    request.
+ *  - **Create.** The records no topic holds, none ever held (`touched`)
+ *    and no routing question waits for are grouped by theme across
+ *    projects, sessions, machines and directories ({@link groups}); a
+ *    group of at least `minRecords` records from at least `minSessions`
+ *    sessions is asked about (`asks.groups`) and becomes a topic only with
+ *    an approval and a wording (the title and goal the launched agent
+ *    wrote, `asks.wordings` while it waits; the title drafted from its
+ *    most frequent words is only part of the approval question). A
+ *    record's project is an attribute, never a condition: a topic made of
+ *    records that name one project (and records that name none) is scoped
+ *    to it, any other is `personal` (no project). Shared and private
+ *    records group apart, so a private record never shapes a shared
+ *    topic; a topic of private records is private.
+ *  - **Leave out.** A signal the regex fact extraction wrote (`extracted`)
+ *    is never routed or grouped; a note the history step hid (`hidden`)
+ *    is never grouped.
  *  - **Propose.** Two active topics of one scope whose heads share half
  *    their words are proposed for a merge; a topic whose records fall into
  *    two groups that would each make a topic is proposed for a split.
@@ -38,16 +44,32 @@ import { TOPIC_PERSONAL_SCOPE, TOPIC_PROJECT_SCOPE_PREFIX } from "./constants.ts
 import { subjectTokens, type TopicCandidate, type TopicCandidateKind } from "./candidates.ts";
 import { TOPIC_TITLE_MAX } from "./records.ts";
 import { routeKey, type TopicFold, type TopicHeadField, type TopicState } from "./fold.ts";
-import { topicGroupKey, type TopicVerdictBody, type TopicVerdicts } from "./verdicts.ts";
+import {
+  grewPastVeto,
+  legacyTopicGroupKey,
+  topicGroupKey,
+  type TopicVerdictBody,
+  type TopicVerdicts,
+} from "./verdicts.ts";
 
-/** At least this many shared subject words route a record or join it to a group. */
+/** At least this many shared subject words route a record to a topic. */
 const MIN_SHARED = 2;
 /** And at least this share of the record's words. */
 const MIN_ROUTE_SHARE = 0.2;
+/** At least this many shared signature words join a record to a group. */
+const MIN_JOIN = 3;
+/** At least this many shared core words fold a group into an earlier one. */
+const MIN_FOLD = 2;
+/** A word more than this share of the grouped records say is common: it joins nothing. */
+const COMMON_SHARE = 0.01;
+/** A word at most this many records say is never common: a small pool cannot tell. */
+const COMMON_FLOOR = 20;
 /** Two topic heads that share this much (Jaccard) are proposed for a merge. */
 const MERGE_JACCARD = 0.5;
 /** Words in a drafted title. */
 const TITLE_WORDS = 3;
+/** The rarest words of a record that relate it to a group (its signature). */
+const SIGNATURE_WORDS = 20;
 
 export interface PlanSettings {
   readonly minRecords: number;
@@ -102,13 +124,12 @@ export interface TopicReview {
 }
 
 /**
- * Why a project whose records no topic holds got no topic this pass: the
- * counts a person needs to tell a threshold not yet reached from records
- * held back, without reading the store.
+ * Why the records no topic holds got no topic this pass: the counts a
+ * person needs to tell a threshold not yet reached from records held
+ * back, without reading the store.
  */
-export interface ProjectShortfall {
-  readonly project: string;
-  /** Records of the project that no topic holds, none ever held and no route took. */
+export interface TopicShortfall {
+  /** Records no topic holds, none ever held and no route took. */
   readonly free: number;
   /**
    * The group of those records closest to a topic (the fewest records and
@@ -121,14 +142,14 @@ export interface ProjectShortfall {
     readonly kinds: Readonly<Record<TopicCandidateKind, number>>;
   };
   /**
-   * Records of the project no topic holds that an `assign`, `unassign` or
-   * `split` once named (an undone topic, a record taken back): routed when
-   * a topic fits, never grouped again.
+   * Records no topic holds that an `assign`, `unassign` or `split` once
+   * named (an undone topic, a record taken back): routed when a topic
+   * fits, never grouped again.
    */
   readonly heldBack: number;
-  /** Groups of the project that qualified and a decision model vetoed (`topic_new`). */
+  /** Groups that qualified and a decision model vetoed (`topic_new`). */
   readonly vetoed: number;
-  /** Groups of the project that qualified and wait for an answer (`topic_new`). */
+  /** Groups that qualified and wait for an answer (`topic_new`). */
   readonly asked: number;
 }
 
@@ -157,8 +178,8 @@ export interface TopicPlan extends TopicReview {
   readonly routes: ReadonlyArray<PlannedRoute>;
   readonly creates: ReadonlyArray<PlannedCreate>;
   readonly splits: ReadonlyArray<SplitProposal>;
-  /** The projects with records no topic holds that got no topic this pass, most free records first. */
-  readonly shortfalls: ReadonlyArray<ProjectShortfall>;
+  /** Why the records no topic holds got no topic, when this pass made none and some are free; else `null`. */
+  readonly shortfall: TopicShortfall | null;
   /** What the plan asks and cannot decide without an answer. */
   readonly asks: PlanAsks;
 }
@@ -190,10 +211,17 @@ function shared(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
   return n;
 }
 
-function scopeOf(candidate: TopicCandidate): string {
-  return candidate.project === null
-    ? TOPIC_PERSONAL_SCOPE
-    : `${TOPIC_PROJECT_SCOPE_PREFIX}${candidate.project}`;
+/**
+ * The scope of a topic made of `members`: the project every member that
+ * names one names (a record that names none does not change it), else
+ * `personal` (no project, or records of several). Never a condition of
+ * grouping: only the attribute the topic carries.
+ */
+function scopeOfGroup(members: ReadonlyArray<TopicCandidate>): string {
+  const projects = new Set(members.flatMap((m) => (m.project === null ? [] : [m.project])));
+  return projects.size === 1
+    ? `${TOPIC_PROJECT_SCOPE_PREFIX}${[...projects][0]!}`
+    : TOPIC_PERSONAL_SCOPE;
 }
 
 /** The canonical topic that holds `candidate`, or `null`. */
@@ -204,8 +232,9 @@ function holder(fold: TopicFold, candidate: TopicCandidate): string | null {
 
 /**
  * The topics a routing question may offer for `candidate` (design D10,
- * `topic_route`): the active topics of its scope that the deterministic
- * rule would not refuse - never a blocked route - the deterministic best
+ * `topic_route`): the active topics, of any scope (a topic groups a theme,
+ * not a project), that the deterministic rule would not refuse - never a
+ * blocked route - the deterministic best
  * first, then by shared-word count, then by creation. Empty when the
  * deterministic rule routes nowhere.
  */
@@ -214,7 +243,6 @@ export function rankedRouteTopics(fold: TopicFold, candidate: TopicCandidate): s
   if (words.size === 0) return [];
   return [...fold.topics.values()]
     .filter(isActive)
-    .filter((topic) => topic.scope === scopeOf(candidate))
     .filter((topic) => !fold.blockedRoutes.has(routeKey(candidate.id, topic.id)))
     .map((topic) => ({
       id: topic.id,
@@ -234,18 +262,114 @@ export interface Group {
   readonly words: Map<string, number>;
 }
 
-/** Greedy grouping by shared subject words, in record order: deterministic. */
+/**
+ * The words of `tokens` that can relate records: said by at least two of
+ * them and by no more than a common word's count. A word a large share of
+ * the records say (`merged`, `branch`, `ready`, a busy project's name) is
+ * workflow or setting, not a subject, so it joins nothing; the share is
+ * read from the records themselves, in whatever language they are
+ * written. A small pool cannot tell a common word from its subject:
+ * below {@link COMMON_FLOOR} records a word is never common.
+ */
+function relatingWords(tokens: ReadonlyArray<ReadonlySet<string>>): Map<string, number> {
+  const df = new Map<string, number>();
+  for (const words of tokens) for (const w of words) df.set(w, (df.get(w) ?? 0) + 1);
+  const common = Math.max(COMMON_FLOOR, tokens.length * COMMON_SHARE);
+  for (const [w, n] of df) if (n < 2 || n > common) df.delete(w);
+  return df;
+}
+
+/**
+ * Grouping by theme, in record order: deterministic, and linear in the
+ * records for a brain of any size. A record's signature is its
+ * {@link SIGNATURE_WORDS} rarest relating words ({@link relatingWords}).
+ * A record joins the earliest group whose first record (its leader)
+ * shares the most signature words with it, at least {@link MIN_JOIN}
+ * (all of them when either has fewer, never fewer than {@link MIN_SHARED});
+ * else it leads a new group. A group is judged by its leader's words,
+ * never by the union of its members', so a group does not drift from
+ * theme to theme as it grows. Last, a group whose core (the words half
+ * its members say) shares {@link MIN_FOLD} words with an earlier group's
+ * core is folded into it: one theme, one group.
+ */
 export function groups(candidates: ReadonlyArray<TopicCandidate>): Group[] {
+  const tokens = candidates.map((c) => subjectTokens(c.text));
+  const df = relatingWords(tokens);
   const out: Group[] = [];
-  for (const candidate of candidates) {
-    const words = subjectTokens(candidate.text);
-    const home = out.find((g) => shared(words, new Set(g.words.keys())) >= MIN_SHARED);
-    const group = home ?? { members: [], words: new Map<string, number>() };
-    if (home === undefined) out.push(group);
+  /** Signature word -> the groups whose leader has it, earliest first. */
+  const leaders = new Map<string, number[]>();
+  /** The size of each group's leader signature. */
+  const leads: number[] = [];
+  candidates.forEach((candidate, i) => {
+    const words = tokens[i]!;
+    const signature = [...words]
+      .filter((w) => df.has(w))
+      .toSorted((a, b) => df.get(a)! - df.get(b)! || compareCodeUnits(a, b))
+      .slice(0, SIGNATURE_WORDS);
+    const hits = new Map<number, number>();
+    for (const w of signature)
+      for (const g of leaders.get(w) ?? []) hits.set(g, (hits.get(g) ?? 0) + 1);
+    let home = -1;
+    let best = 0;
+    for (const [g, n] of hits) {
+      // A record or leader with fewer relating words (a short line, a
+      // script written without spaces) must share all of them.
+      const need = Math.max(MIN_SHARED, Math.min(MIN_JOIN, signature.length, leads[g]!));
+      if (n >= need && (n > best || (n === best && g < home))) [home, best] = [g, n];
+    }
+    if (home === -1) {
+      home = out.length;
+      out.push({ members: [], words: new Map<string, number>() });
+      leads.push(signature.length);
+      for (const w of signature) {
+        const list = leaders.get(w) ?? [];
+        list.push(home);
+        leaders.set(w, list);
+      }
+    }
+    const group = out[home]!;
     group.members.push(candidate);
     for (const w of words) group.words.set(w, (group.words.get(w) ?? 0) + 1);
+  });
+  return foldDuplicates(out, df);
+}
+
+/**
+ * `made` with every group whose core (its relating words at least half
+ * its members say) shares {@link MIN_FOLD} words with the core of an
+ * earlier group folded into the earliest such group: the same theme led
+ * twice is proposed once.
+ */
+function foldDuplicates(made: Group[], df: ReadonlyMap<string, number>): Group[] {
+  const kept: Group[] = [];
+  /** Core word -> the kept groups whose core has it, earliest first. */
+  const cores = new Map<string, number[]>();
+  for (const group of made) {
+    const core = coreWords(group, df);
+    const hits = new Map<number, number>();
+    for (const w of core) for (const k of cores.get(w) ?? []) hits.set(k, (hits.get(k) ?? 0) + 1);
+    let into = -1;
+    for (const [k, n] of hits) if (n >= MIN_FOLD && (into === -1 || k < into)) into = k;
+    if (into === -1) {
+      for (const w of core) {
+        const list = cores.get(w) ?? [];
+        list.push(kept.length);
+        cores.set(w, list);
+      }
+      kept.push(group);
+      continue;
+    }
+    const target = kept[into]!;
+    target.members.push(...group.members);
+    for (const [w, n] of group.words) target.words.set(w, (target.words.get(w) ?? 0) + n);
   }
-  return out;
+  return kept;
+}
+
+/** The relating words at least half of `group`'s members say (two at least). */
+function coreWords(group: Group, df: ReadonlyMap<string, number>): Set<string> {
+  const half = Math.max(2, group.members.length / 2);
+  return new Set([...group.words].filter(([w, n]) => n >= half && df.has(w)).map(([w]) => w));
 }
 
 /**
@@ -258,7 +382,7 @@ export function groups(candidates: ReadonlyArray<TopicCandidate>): Group[] {
 function closestGroup(
   made: ReadonlyArray<Group>,
   settings: PlanSettings,
-): ProjectShortfall["closest"] {
+): TopicShortfall["closest"] {
   let best: { short: number; records: number; sessions: number; group: Group | null } = {
     short: Number.POSITIVE_INFINITY,
     records: 0,
@@ -514,7 +638,7 @@ export function reviewTopics(
  * planning holds (accepted ones and standing ones, design D2): a verdict
  * is applied only when its subject still matches this fold - the record
  * is still unassigned, the topic still exists and is active, the route is
- * not blocked, the group has exactly the same members. Without a verdict
+ * not blocked, the group has the same leader. Without a verdict
  * a routing question or a qualifying group waits: it is listed in `asks`
  * and nothing is decided for it.
  */
@@ -535,9 +659,9 @@ export function planTopics(
   const askedGroups: PlanAskedGroup[] = [];
   const awaitingWording: PlanAskedGroup[] = [];
   const free: TopicCandidate[] = [];
-  const heldBack = new Map<string, number>();
+  let heldBack = 0;
   for (const candidate of ordered) {
-    if (holder(fold, candidate) !== null) continue;
+    if (candidate.extracted === true || holder(fold, candidate) !== null) continue;
     // The model's route (D10): a verdict that no longer matches this
     // fold - the record assigned meanwhile, the topic merged, closed or
     // of another scope, the route blocked - is ignored here, and the
@@ -555,7 +679,6 @@ export function planTopics(
         if (
           target !== undefined &&
           isActive(target) &&
-          target.scope === scopeOf(candidate) &&
           !fold.blockedRoutes.has(routeKey(candidate.id, target.id))
         ) {
           topic = routeVerdict.topic;
@@ -581,89 +704,98 @@ export function planTopics(
         private: candidate.private || target.private || privateInput,
         ...(verdict !== undefined ? { verdict } : {}),
       });
-    } else if (candidate.project !== null && !fold.touched.has(candidate.id)) {
+    } else if (!fold.touched.has(candidate.id)) {
       // A model `none` verdict also leaves the record free for grouping.
       free.push(candidate);
-    } else if (candidate.project !== null) {
-      heldBack.set(candidate.project, (heldBack.get(candidate.project) ?? 0) + 1);
+    } else {
+      heldBack += 1;
     }
   }
   const creates: PlannedCreate[] = [];
-  const shortfalls: ProjectShortfall[] = [];
-  const projects = [...new Set([...free.map((c) => c.project!), ...heldBack.keys()])].toSorted(
-    compareCodeUnits,
-  );
-  for (const project of projects) {
-    const own = free.filter((c) => c.project === project);
-    const made = groups(own);
-    let createdHere = 0;
-    let vetoed = 0;
-    let asked = 0;
-    for (const group of made) {
-      if (!qualifies(group, settings)) continue;
-      // `topic_new`: a group becomes a topic only with an approval, which
-      // rides the create record as its verdict; a veto holds while the
-      // group keeps its members, and a group with no answer waits. The
-      // count and session thresholds hold either way: the model can
-      // never create a group that does not qualify.
-      const key = topicGroupKey(group.members.map((m) => m.id));
-      const verdictEntry = verdicts?.vetoes.get(key);
-      if (verdictEntry !== undefined && verdictEntry.veto) {
+  // Shared and private records group apart: a private record's words
+  // never decide which shared records make a shared topic.
+  // A note the history step hid (a machine line, a test) never groups,
+  // and neither does one the accepted verdicts of this pass hide: the
+  // hide is written after the plan, so the note would be in the topic
+  // for ever.
+  const grouped = free.filter((c) => c.hidden !== true && verdicts?.hidden.has(c.id) !== true);
+  const made = [
+    ...groups(grouped.filter((c) => !c.private)),
+    ...groups(grouped.filter((c) => c.private)),
+  ];
+  let vetoed = 0;
+  let asked = 0;
+  for (const group of made) {
+    if (!qualifies(group, settings)) continue;
+    // `topic_new`: a group becomes a topic only with an approval, which
+    // rides the create record as its verdict; a veto holds while the
+    // group keeps its members, and a group with no answer waits. The
+    // count and session thresholds hold either way: the model can
+    // never create a group that does not qualify.
+    // The group is known by its leader ({@link topicGroupKey}): an answer
+    // stands while records join or leave it, and a veto holds until the
+    // group grows by half.
+    const ids = group.members.map((m) => m.id);
+    const key = topicGroupKey(ids);
+    const scope = scopeOfGroup(group.members);
+    const isPrivate = group.members.some((m) => m.private);
+    let verdictEntry = verdicts?.vetoes.get(key) ?? verdicts?.vetoes.get(legacyTopicGroupKey(ids));
+    if (verdictEntry !== undefined && verdictEntry.veto) {
+      if (!grewPastVeto(verdictEntry.members, group.members.length)) {
         vetoed += 1;
         continue;
       }
-      if (verdictEntry === undefined) {
-        asked += 1;
-        askedGroups.push({
-          key,
-          members: group.members.map((m) => m.id),
-          title: draftTitle(group),
-          scope: `${TOPIC_PROJECT_SCOPE_PREFIX}${project}`,
-          private: group.members.some((m) => m.private),
-        });
-        continue;
-      }
-      // The title and goal are the launched agent's (change
-      // `dream-launched-agent`, design D6): an approved group with no
-      // wording yet waits; no rule names it.
-      const wording = verdicts?.wordings.get(key);
-      if (wording === undefined) {
-        asked += 1;
-        awaitingWording.push({
-          key,
-          members: group.members.map((m) => m.id),
-          title: draftTitle(group),
-          scope: `${TOPIC_PROJECT_SCOPE_PREFIX}${project}`,
-          private: group.members.some((m) => m.private),
-        });
-        continue;
-      }
-      createdHere += 1;
-      creates.push({
-        title: wording.title,
-        goal: wording.goal,
-        scope: `${TOPIC_PROJECT_SCOPE_PREFIX}${project}`,
-        private: group.members.some((m) => m.private),
-        members: group.members.map((m) => m.id),
-        sessions: new Set(group.members.map((m) => m.session)).size,
-        verdict: verdictEntry.verdict,
-        author: { agent: wording.agent, model: wording.model, item: wording.item },
-      });
+      verdictEntry = undefined;
     }
-    if (createdHere === 0) {
-      shortfalls.push({
-        project,
-        free: own.length,
-        closest: closestGroup(made, settings),
-        heldBack: heldBack.get(project) ?? 0,
-        vetoed,
-        asked,
-      });
+    const asking = {
+      key,
+      members: group.members.map((m) => m.id),
+      title: draftTitle(group),
+      scope,
+      private: isPrivate,
+    };
+    if (verdictEntry === undefined) {
+      asked += 1;
+      askedGroups.push(asking);
+      continue;
     }
+    // The title and goal are the launched agent's (change
+    // `dream-launched-agent`, design D6): an approved group with no
+    // wording yet waits; no rule names it.
+    const wording = verdicts?.wordings.get(key);
+    if (wording === undefined) {
+      asked += 1;
+      awaitingWording.push(asking);
+      continue;
+    }
+    creates.push({
+      title: wording.title,
+      goal: wording.goal,
+      scope,
+      private: isPrivate,
+      members: group.members.map((m) => m.id),
+      sessions: new Set(group.members.map((m) => m.session)).size,
+      verdict: verdictEntry.verdict,
+      author: { agent: wording.agent, model: wording.model, item: wording.item },
+    });
   }
+  const shortfall: TopicShortfall | null =
+    creates.length === 0 && (free.length > 0 || heldBack > 0)
+      ? {
+          free: free.length,
+          closest: closestGroup(made, settings),
+          heldBack,
+          vetoed,
+          asked,
+        }
+      : null;
   const splits: SplitProposal[] = [];
   for (const { topic } of active) {
     const members = ordered.filter((c) => holder(fold, c) === topic.id);
+    // A topic holding only what it was made from (nothing newer than its
+    // creation) is one group by construction: regrouping its own records
+    // by their own word rarity would split what was just approved.
+    if (!members.some((c) => c.at > topic.createdAt)) continue;
     const parts = groups(members).filter((g) => qualifies(g, settings));
     if (parts.length >= 2) {
       splits.push({ topic: topic.id, groups: parts.map((g) => g.members.map((m) => m.id)) });
@@ -674,10 +806,7 @@ export function planTopics(
     routes,
     creates,
     splits,
-    shortfalls: shortfalls.toSorted(
-      (a, b) =>
-        b.free - a.free || b.heldBack - a.heldBack || compareCodeUnits(a.project, b.project),
-    ),
+    shortfall,
     merges: applySameVerdicts(fold, [...review.merges], verdicts?.sameTopics),
     quiet: review.quiet,
     asks: { routes: askedRoutes, groups: askedGroups, wordings: awaitingWording },

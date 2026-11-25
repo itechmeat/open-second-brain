@@ -78,12 +78,13 @@ import {
   planTopics,
   type MergeProposal,
   type PlanSettings,
-  type ProjectShortfall,
+  type TopicShortfall,
   type QuietPrompt,
   type SplitProposal,
 } from "./plan.ts";
 import {
   emptyTopicVerdicts,
+  legacyTopicGroupKey,
   topicGroupKey,
   type TopicVerdictBody,
   type TopicVerdicts,
@@ -167,9 +168,8 @@ export type TopicPlanningReport =
       readonly status: "planned";
       /**
        * The records no topic holds that planning read (signals, notes,
-       * decisions), and how many of them name no project: topics are made
-       * only from the records of one project, so a history whose records
-       * name none plans nothing, and the summary says why.
+       * decisions), and how many of them name no project (an attribute
+       * only: such records group and route like any other).
        */
       readonly unheld: number;
       readonly unheldWithoutProject: number;
@@ -191,10 +191,10 @@ export type TopicPlanningReport =
       readonly splits: ReadonlyArray<SplitProposal>;
       readonly quiet: ReadonlyArray<QuietPrompt>;
       /**
-       * The projects whose records no topic holds that got no topic, and
-       * why (`plan.ts`), with the thresholds the pass applied.
+       * Why the records no topic holds got no topic, when the pass made
+       * none (`plan.ts`), with the thresholds the pass applied.
        */
-      readonly shortfalls: ReadonlyArray<ProjectShortfall>;
+      readonly shortfall: TopicShortfall | null;
       readonly thresholds: Pick<PlanSettings, "minRecords" | "minSessions">;
       /** Planned records skipped: private ones on a machine without `private`. */
       readonly skipped: number;
@@ -626,7 +626,7 @@ function planUnderLock(
     merges: plan.merges,
     splits: plan.splits,
     quiet: plan.quiet,
-    shortfalls: plan.shortfalls,
+    shortfall: plan.shortfall,
     thresholds: { minRecords: settings.minRecords, minSessions: settings.minSessions },
     skipped,
     invalid,
@@ -681,6 +681,7 @@ function planUnderLock(
       };
       created.push(entry);
       wrote(`topic-new:${topicGroupKey(plannedTopic.members)}`, record);
+      wrote(`topic-new:${legacyTopicGroupKey(plannedTopic.members)}`, record);
       if (!plannedTopic.private) createdShared += 1;
       appendMany(
         plannedTopic.members.map((member) => ({
@@ -821,7 +822,12 @@ function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): Ac
     }
     if (item.state !== "accepted" || item.answer === null || !isClosedOperation(op)) continue;
     const current = closedQuestion(question, op, item.body.subject);
-    if (current === null || closedInputHash(current) !== item.body.input_hash) {
+    // A `topic-new` answer is about the group its leader leads (its
+    // subject): records joining or leaving the group do not end it.
+    if (
+      current === null ||
+      (op !== "topic-new" && closedInputHash(current) !== item.body.input_hash)
+    ) {
       stale.push(id);
       continue;
     }
@@ -860,7 +866,12 @@ function acceptedAnswers(work: DreamWorkState, question: TopicQuestionState): Ac
       case "topic-new": {
         if (p === null) break;
         const veto = p < threshold;
-        v.vetoes.set(subject, { verdict: verdictOfAnswer(use, author, p), veto });
+        const members = item.body.payload["members"];
+        v.vetoes.set(subject, {
+          verdict: verdictOfAnswer(use, author, p),
+          veto,
+          ...(Array.isArray(members) ? { members: members.length } : {}),
+        });
         // An approval whose topic is not created this pass (its wording
         // waits) stands as `approved`.
         decided.push({
@@ -1051,30 +1062,10 @@ export function describeTopicPlanning(
         `${report.merges.length} merge and ${report.splits.length} split proposal(s)` +
         `${modelMergeNote(report.merges)}, ${report.quiet.length} quiet topic(s)` +
         decidedNote(report) +
-        unscopedNote(report) +
         invalidNote(report) +
         shortfallNote(report)
       );
   }
-}
-
-/**
- * Why a pass that created nothing created nothing, when the reason is that
- * the records no topic holds name no project: planning makes a topic only
- * from the records of one project (a signal's or log event's `project`
- * field), and the notes and signals the tools write (and a migrated
- * history of them) carry none. Without this the summary read as if there
- * were nothing to plan. No decision model is involved: the deterministic
- * rule is the whole of it.
- */
-function unscopedNote(report: Extract<TopicPlanningReport, { status: "planned" }>): string {
-  if (report.created.length > 0 || report.unheldWithoutProject === 0) return "";
-  const all = report.unheldWithoutProject === report.unheld;
-  return (
-    `; ${all ? "none" : `${report.unheld - report.unheldWithoutProject}`} of the ` +
-    `${report.unheld} record(s) no topic holds name${all ? "s" : ""} a project, and a topic is ` +
-    "made only from the records of one project (a personal topic only on request: o2b topic create)"
-  );
 }
 
 /**
@@ -1104,7 +1095,7 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /** "2 notes, 1 signal and 1 decision": the kinds a group holds. */
-function kindsText(kinds: ProjectShortfall["closest"]["kinds"]): string {
+function kindsText(kinds: TopicShortfall["closest"]["kinds"]): string {
   const parts = [
     ...(kinds.note > 0 ? [plural(kinds.note, "note", "notes")] : []),
     ...(kinds.signal > 0 ? [plural(kinds.signal, "signal", "signals")] : []),
@@ -1115,9 +1106,9 @@ function kindsText(kinds: ProjectShortfall["closest"]["kinds"]): string {
     : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
-/** Why one project got no topic. */
+/** Why the records no topic holds got no topic. */
 function shortfallText(
-  s: ProjectShortfall,
+  s: TopicShortfall,
   thresholds: Pick<PlanSettings, "minRecords" | "minSessions">,
 ): string {
   const reasons: string[] = [];
@@ -1132,13 +1123,19 @@ function shortfallText(
         : []),
     ];
     reasons.push(
-      `of its ${plural(s.free, "record", "records")} no topic holds, the group of related records closest to a topic ` +
+      `of the ${plural(s.free, "record", "records")} no topic holds, the group of related records closest to a topic ` +
         `has ${plural(records, "record", "records")} (${kindsText(kinds)}) from ` +
         `${plural(sessions, "session", "sessions")}` +
         (more.length > 0
           ? `, ${more.join(" and ")} short of a topic, which needs ${thresholds.minRecords} records ` +
             `from ${thresholds.minSessions} sessions (topics.new_min_records, topics.new_min_sessions)`
           : ""),
+    );
+  }
+  if (s.asked > 0) {
+    reasons.push(
+      `${plural(s.asked, "group that qualified waits", "groups that qualified wait")} for the ` +
+        "dream agent's approval and wording",
     );
   }
   if (s.vetoed > 0) {
@@ -1152,24 +1149,19 @@ function shortfallText(
         "are routed to a fitting topic but never grouped again",
     );
   }
-  return `project ${s.project}: ${reasons.join("; ")}`;
+  return reasons.join("; ");
 }
 
 /**
- * Why a pass that created nothing made no topic of the projects whose
- * records no topic holds: per project (the most such records first), the
- * group of related records closest to a topic, with how many
+ * Why a pass that created nothing made no topic of the records no topic
+ * holds: the group of related records closest to a topic, with how many
  * more records or sessions a topic needs, the groups a decision model
  * vetoed, and the records held back because a topic held them once.
  */
 function shortfallNote(report: Extract<TopicPlanningReport, { status: "planned" }>): string {
-  if (report.created.length > 0 || report.shortfalls.length === 0) return "";
-  const named = report.shortfalls.slice(0, SHORTFALLS_NAMED);
-  const rest = report.shortfalls.length - named.length;
-  return (
-    `; no topic was made: ${named.map((s) => shortfallText(s, report.thresholds)).join("; ")}` +
-    (rest > 0 ? `; and ${plural(rest, "more project", "more projects")}` : "")
-  );
+  if (report.created.length > 0 || report.shortfall === null) return "";
+  const text = shortfallText(report.shortfall, report.thresholds);
+  return text === "" ? "" : `; no topic was made: ${text}`;
 }
 
 /** ", N decided by a decision model" when records of the pass carry a verdict (design D10). */

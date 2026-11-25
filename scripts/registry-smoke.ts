@@ -41,6 +41,9 @@ export function bunInstallError(output: string): Error & { code?: string } {
   return error;
 }
 
+/** How long the smoke waits for the registry to serve the version (npm took seven minutes once). */
+export const REGISTRY_WAIT_MS = 15 * 60_000;
+
 export async function retryRegistryInstall<T>(
   install: (timeoutMs: number) => Promise<T> | T,
   clock: RetryClock = {
@@ -48,13 +51,13 @@ export async function retryRegistryInstall<T>(
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   },
 ): Promise<T> {
-  const deadline = clock.now() + 300_000;
+  const deadline = clock.now() + REGISTRY_WAIT_MS;
   let lastMissingVersionError: unknown;
   for (;;) {
     // Whole milliseconds: the spawn timeout refuses a fractional value.
     const remaining = Math.floor(deadline - clock.now());
     if (remaining < 1)
-      throw new Error("registry version was not served within five minutes", {
+      throw new Error("registry version was not served within fifteen minutes", {
         cause: lastMissingVersionError,
       });
     try {
@@ -66,7 +69,7 @@ export async function retryRegistryInstall<T>(
       lastMissingVersionError = error;
       const afterAttempt = deadline - clock.now();
       if (afterAttempt <= 0)
-        throw new Error("registry version was not served within five minutes", { cause: error });
+        throw new Error("registry version was not served within fifteen minutes", { cause: error });
       // Wait between attempts so the registry can propagate the version.
       // oxlint-disable-next-line no-await-in-loop
       await clock.sleep(Math.min(10_000, afterAttempt));

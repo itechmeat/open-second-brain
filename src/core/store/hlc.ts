@@ -84,8 +84,19 @@ export function sendHlc(local: Hlc, wallMs: number): Hlc {
  */
 export function receiveHlc(local: Hlc, remote: Hlc, wallMs: number): Hlc {
   const wall = Math.max(0, Math.floor(wallMs));
-  const adoptable = remote.physical - wall <= HLC_MAX_DRIFT_MS;
-  const known = adoptable ? maxHlc(local, remote) : local;
+  const known = receiveRaises(local, remote, wall) ? remote : local;
   if (wall > known.physical) return { physical: wall, counter: 0 };
   return known;
+}
+
+/**
+ * Whether observing `remote` raises the local clock past `local` by more
+ * than the wall clock would: the remote stamp is ahead of `local` and
+ * within {@link HLC_MAX_DRIFT_MS} of the wall clock. When it does not, every
+ * later {@link sendHlc} already orders after it, so nothing about it needs
+ * keeping.
+ */
+export function receiveRaises(local: Hlc, remote: Hlc, wallMs: number): boolean {
+  const wall = Math.max(0, Math.floor(wallMs));
+  return remote.physical - wall <= HLC_MAX_DRIFT_MS && compareHlc(remote, local) > 0;
 }

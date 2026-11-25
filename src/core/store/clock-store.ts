@@ -4,10 +4,11 @@
  *
  * Without persistence a process that starts while the wall clock is behind
  * the last stamp it issued (a clock step, a suspended VM) would issue
- * stamps that order before its own earlier records. Every tick and every
- * observation is a read, a rule from `hlc.ts` and an atomic write, under a
- * device-local lock so concurrent processes on one device never issue the
- * same stamp.
+ * stamps that order before its own earlier records. Every tick is a read,
+ * a rule from `hlc.ts` and an atomic write, under a device-local lock so
+ * concurrent processes on one device never issue the same stamp; an
+ * observation is the same, with the write only when the observed stamp
+ * raises the saved clock.
  *
  * The file is `<device-state-dir>/clock/<device>.json`, holding
  * `{ "hlc": "<physical_ms>.<counter>" }`. A missing file, or one whose
@@ -33,7 +34,15 @@ import { join } from "node:path";
 
 import { atomicWriteText } from "../fs-atomic.ts";
 import { STORE_CLOCK_DIR } from "./constants.ts";
-import { formatHlc, HLC_ZERO, parseHlc, receiveHlc, sendHlc, type Hlc } from "./hlc.ts";
+import {
+  formatHlc,
+  HLC_ZERO,
+  parseHlc,
+  receiveHlc,
+  receiveRaises,
+  sendHlc,
+  type Hlc,
+} from "./hlc.ts";
 import { withLocalLock } from "./local-lock.ts";
 
 /** Wall clock in milliseconds; injectable so tests can move time. */
@@ -66,11 +75,17 @@ export function readClock(deviceStateDir: string, device: string): Hlc | null {
   }
 }
 
-function update(deviceStateDir: string, device: string, step: (local: Hlc) => Hlc): Hlc {
+function update(
+  deviceStateDir: string,
+  device: string,
+  step: (local: Hlc) => Hlc,
+  keep: (local: Hlc) => boolean = () => true,
+): Hlc {
   const path = clockFilePath(deviceStateDir, device);
   return withLocalLock(path, () => {
-    const next = step(readClock(deviceStateDir, device) ?? HLC_ZERO);
-    atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}\n`);
+    const local = readClock(deviceStateDir, device) ?? HLC_ZERO;
+    const next = step(local);
+    if (keep(local)) atomicWriteText(path, `${JSON.stringify({ hlc: formatHlc(next) })}\n`);
     return next;
   });
 }
@@ -120,12 +135,28 @@ export function tickClockMany(
   return out;
 }
 
-/** Receive rule, persisted: raise the local clock after ingesting `remote`. */
+/**
+ * Receive rule, persisted: raise the local clock after ingesting `remote`.
+ * The file is written only when `remote` raises the saved clock
+ * (`receiveRaises`): a stamp at or behind it is already ordered before
+ * every later tick, and a reader that observes the same newest record on
+ * every read (a dream session's server) then pays a lock and a read, not
+ * an atomic write, per read.
+ */
 export function observeClock(
   deviceStateDir: string,
   device: string,
   remote: Hlc,
   now: WallClock = systemWallClock,
 ): Hlc {
-  return update(deviceStateDir, device, (local) => receiveHlc(local, remote, now()));
+  let wall = 0;
+  return update(
+    deviceStateDir,
+    device,
+    (local) => {
+      wall = now();
+      return receiveHlc(local, remote, wall);
+    },
+    (local) => receiveRaises(local, remote, wall),
+  );
 }

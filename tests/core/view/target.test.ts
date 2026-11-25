@@ -2,8 +2,8 @@
  * The human view folder: a folder inside the vault is a valid target, its
  * `Brain/` tree and the store are not, and a source of another platform
  * is resolved with that platform's path rules. A machine whose config
- * names a vault and no folder gets the vault's `brain-view/` (release
- * 2.0.1); `none` or `off` turns the view off.
+ * names a vault and no folder gets the vault's `o2b-memory/` (release
+ * 2.0.2); `none` or `off` turns the view off.
  */
 import { describe, expect, test } from "bun:test";
 
@@ -38,7 +38,7 @@ describe("resolveViewTargetFrom", () => {
     expect(resolveViewTargetFrom(home, "D:\\Store", null)?.dir).toBe("C:\\Users\\u\\brain-view");
   });
 
-  test("a config with a vault and no view_target gets the vault's brain-view folder", () => {
+  test("a config with a vault and no view_target gets the vault's o2b-memory folder", () => {
     const base = {
       platform: "linux",
       home: "/home/u",
@@ -46,7 +46,7 @@ describe("resolveViewTargetFrom", () => {
       configPath: "/home/u/.config/o2b/config.yaml",
     };
     expect(resolveViewTargetFrom({ ...base, config: { vault: "~/vault" } }, "/s", null)).toEqual({
-      dir: "/home/u/vault/brain-view",
+      dir: "/home/u/vault/o2b-memory",
       origin: "default",
     });
     expect(resolveViewTargetFrom({ ...base, config: {} }, "/s", null)).toBeNull();

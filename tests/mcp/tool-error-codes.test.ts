@@ -62,6 +62,7 @@ import {
   PARSE_ERROR,
 } from "../../src/mcp/protocol.ts";
 import { REACH_REFUSAL } from "../../src/mcp/reach-refusal.ts";
+import { STALE_SERVER_REFUSAL } from "../../src/mcp/stale-server.ts";
 import {
   GENERIC_TOOL_ERROR_CODES,
   TOOL_ERROR_CODE,
@@ -227,6 +228,7 @@ describe("TOOL_ERROR_CODES", () => {
       ...Object.values(WRITE_REFUSAL_CODES),
       PENDING_STAGE_CONFLICT_CODE,
       REACH_REFUSAL,
+      STALE_SERVER_REFUSAL,
       ...OWNER_SCOPE_REFUSALS,
       ...TYPE_ONLY_MEMBERS,
     ]);

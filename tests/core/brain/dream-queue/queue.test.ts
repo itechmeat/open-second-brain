@@ -43,7 +43,7 @@ import {
   DREAM_WORK_LEASE_MS,
 } from "../../../../src/core/brain/dream-queue/constants.ts";
 import { dreamWorkOperation } from "../../../../src/core/brain/dream-queue/operations.ts";
-import * as localLock from "../../../../src/core/store/local-lock.ts";
+import * as processLock from "../../../../src/core/store/process-lock.ts";
 import * as appender from "../../../../src/core/store/appender.ts";
 import { STORE_ROOT_ENV } from "../../../../src/core/store/constants.ts";
 import { readStreamRecords } from "../../../../src/core/store/read/stream-read.ts";
@@ -202,22 +202,17 @@ describe("takeWork", () => {
   test("ownership is rechecked after acquiring the queue lock", () => {
     const b = m.open("dev-b");
     m.sync();
-    const original = localLock.withLocalLock;
-    const lock = spyOn(localLock, "withLocalLock");
+    const original = processLock.acquireProcessLock;
+    const lock = spyOn(processLock, "acquireProcessLock");
     const target = join(a.deviceStateDir, DREAM_QUEUE_STATE_DIR, DREAM_QUEUE_LOCK);
-    lock.mockImplementation((...args) =>
-      args[0] === target
-        ? original(
-            args[0],
-            () => {
-              takeDreamOwner(b, "codex", { ...human, force: true });
-              m.sync();
-              return args[1]();
-            },
-            args[2],
-          )
-        : original(...args),
-    );
+    lock.mockImplementation((...args) => {
+      const release = original(...args);
+      if (args[0] === target) {
+        takeDreamOwner(b, "codex", { ...human, force: true });
+        m.sync();
+      }
+      return release;
+    });
     try {
       expect(() => produceWork(q, spec("after-transfer"))).toThrow(DreamNotOwnerError);
     } finally {
@@ -328,7 +323,13 @@ describe("takeWork", () => {
   test("a take while the lock is held returns nothing with the reason busy", () => {
     produceWork(q, spec("s1"));
     const target = join(a.deviceStateDir, DREAM_QUEUE_STATE_DIR, DREAM_QUEUE_LOCK);
-    const result = localLock.withLocalLock(target, () => takeWork(q, { run: "r", budgetMs: 50 }));
+    const release = processLock.acquireProcessLock(target);
+    let result: ReturnType<typeof takeWork>;
+    try {
+      result = takeWork(q, { run: "r", budgetMs: 50 });
+    } finally {
+      release();
+    }
     expect(result).toEqual({ item: null, reason: "busy" });
   });
 
@@ -765,7 +766,7 @@ describe("the queue lock", () => {
   test("no entry point takes the lock twice", () => {
     const lockTarget = join(a.deviceStateDir, DREAM_QUEUE_STATE_DIR, DREAM_QUEUE_LOCK);
     const counts: number[] = [];
-    const spy = spyOn(localLock, "withLocalLock");
+    const spy = spyOn(processLock, "acquireProcessLock");
     try {
       const count = (fn: () => unknown): void => {
         const before = spy.mock.calls.filter((c) => c[0] === lockTarget).length;

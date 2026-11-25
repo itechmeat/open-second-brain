@@ -413,12 +413,12 @@ describe("docs/brain-store.md", () => {
     for (const m of machines) {
       appendFileSync(
         m.configPath,
-        `vault: "${legacy.vault}"\nstore_root: ~/brain-store\nview_target: ~/brain-view\n`,
+        `vault: "${legacy.vault}"\nstore_root: ~/brain-store\nview_target: ~/views\n`,
       );
     }
     runScenario("migration", machines);
     expect(existsSync(join(legacy.vault, "Brain"))).toBe(false);
     expect(existsSync(join(legacy.vault, ".open-second-brain"))).toBe(false);
-    expect(existsSync(join(machines[0]!.home, "brain-view", "about-me.md"))).toBe(true);
+    expect(existsSync(join(machines[0]!.home, "views", "about-me.md"))).toBe(true);
   });
 });

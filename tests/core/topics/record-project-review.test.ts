@@ -15,8 +15,6 @@ import { join } from "node:path";
 import { buildAgentContextBlocks } from "../../../hooks/lib/agent-context-blocks.ts";
 import { createInjectionMeter, resolveInjectionLimits } from "../../../hooks/lib/active-context.ts";
 import { dreamAnswered } from "../../helpers/closed-answers.ts";
-import { runDoctor } from "../../../src/core/brain/doctor.ts";
-import { TOPICS_WITHOUT_PROJECT_CODE } from "../../../src/core/brain/doctor/topic-plan-check.ts";
 import { withPrivateWithheld } from "../../../src/core/store/caller-reach.ts";
 import { buildStoreStatusBlock } from "../../../src/core/store/store-status.ts";
 import { readTopicPlanOutcome } from "../../../src/core/topics/plan-outcome.ts";
@@ -148,12 +146,7 @@ test("a caller below local reach gets no project stamped, a local one does", asy
   expect(stamped.find((r) => r.text === "Local caller note")?.project).toBe("release-tool");
 });
 
-/** The message of the topic planning advice a doctor pass gave, if any. */
-function advice(r: ReturnType<typeof runDoctor>): string | undefined {
-  return (r.uncertain ?? []).find((u) => u.code === TOPICS_WITHOUT_PROJECT_CODE)?.message;
-}
-
-test("below local reach the topic counts of status and doctor leave the private records out", async () => {
+test("below local reach the topic counts of status leave the private records out", async () => {
   const made = switchedMachine();
   fleet = made.fleet;
   const a = made.machine;
@@ -171,7 +164,7 @@ test("below local reach the topic counts of status and doctor leave the private 
   await callTool(s, "brain_note", { text: "Shared planning words", agent: "agent-one" });
   dreamAnswered(a.vault, a.store());
 
-  type Topics = { created: number; unassigned: number; without_project: number; advice: string };
+  type Topics = { created: number; unassigned: number; without_project: number };
   const local = (buildStoreStatusBlock({ vault: a.vault, configPath: null }) as { topics: Topics })
     .topics;
   const remote = withPrivateWithheld(
@@ -180,15 +173,6 @@ test("below local reach the topic counts of status and doctor leave the private 
   ).topics;
   expect(local.unassigned - remote.unassigned).toBe(3);
   expect(local.without_project - remote.without_project).toBe(3);
-  expect(remote.advice).toContain(`${remote.without_project} of ${remote.unassigned} record(s)`);
-
-  expect(advice(runDoctor(a.vault))).toContain(`${local.without_project} of ${local.unassigned}`);
-  for (const below of [
-    runDoctor(a.vault, { reach: TRANSPORT_REACH.remote }),
-    runDoctor(a.vault, { withholdsPrivate: true }),
-  ]) {
-    expect(advice(below)).toContain(`${remote.without_project} of ${remote.unassigned}`);
-  }
 });
 
 test("a shared record a private topic record assigns is unheld in the shared counts, held in the local ones", async () => {

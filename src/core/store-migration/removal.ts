@@ -53,7 +53,15 @@
 
 import { pathPresent } from "../vault-unexaminable.ts";
 import { createHash } from "node:crypto";
-import { cpSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
@@ -101,6 +109,45 @@ export function legacyRootPresent(vault: string): boolean {
     pathPresent(vault, join(vault, BRAIN_ROOT_REL)) ||
     pathPresent(vault, join(vault, DERIVED_STORE_DIR))
   );
+}
+
+/** Whether `dir` holds no file at any depth: only folders, every one empty of files. */
+function holdsNoFile(dir: string): boolean {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (!lstatSync(path).isDirectory() || !holdsNoFile(path)) return false;
+  }
+  return true;
+}
+
+/** Remove the empty folder `dir` bottom-up; `rmdir` refuses a folder a file appeared in. */
+function removeEmptyFolders(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (lstatSync(path).isDirectory()) removeEmptyFolders(path);
+  }
+  rmdirSync(dir);
+}
+
+/**
+ * Remove each legacy root (`Brain/`, `.open-second-brain/`) that holds no
+ * file: what is left when sync deleted the files another machine's removal
+ * took, and what sync would otherwise carry to every machine again. A root
+ * that holds a file, or cannot be read, stays. Returns the roots removed.
+ */
+export function removeEmptyLegacyRoots(vault: string): string[] {
+  const removed: string[] = [];
+  for (const top of [BRAIN_ROOT_REL, DERIVED_STORE_DIR]) {
+    const path = join(vault, top);
+    try {
+      if (!lstatSync(path).isDirectory() || !holdsNoFile(path)) continue;
+      removeEmptyFolders(path);
+      removed.push(top);
+    } catch {
+      // absent, unreadable, or a file appeared: the root stays
+    }
+  }
+  return removed;
 }
 
 /** Where archives of removed legacy trees go, inside the device-local state. */
@@ -501,8 +548,15 @@ function removeUnderGate(
   // the sync never carried (the index, caches). No cohort device writes
   // into them, so the cohort keeps nothing in place.
   // A resumed removal is what it was when it began, as its journal says.
+  // So is a tree another machine's removal already took out, while sync
+  // still deletes this machine's copy: what is left here (a silent
+  // device's files gone, others not yet) says nothing of the cohort; a
+  // device's own life is in the records it wrote, which the removal that
+  // judged the cohort read.
   const treeLeft =
-    resumed === null ? !roots.includes(BRAIN_ROOT_REL) : resumed.tree_already_left === true;
+    resumed === null
+      ? !roots.includes(BRAIN_ROOT_REL) || removedByAnotherMachine(store, vaultId)
+      : resumed.tree_already_left === true;
   // With the tree gone this machine reads no legacy evidence, so it cannot
   // judge silence itself: the devices retired by silence are the ones the
   // removal that took the tree out recorded, as in both branches the
@@ -692,6 +746,17 @@ function silenceOfEarlierRemoval(
     silence_threshold_days: typeof days === "number" ? days : own.silence_threshold_days,
     as_of: typeof asOf === "string" ? asOf : own.as_of,
   };
+}
+
+/** Whether another machine's removal (not a cleanup of leftovers) took the tree of vault `vaultId` out. */
+function removedByAnotherMachine(store: StoreHandle, vaultId: string | null): boolean {
+  if (vaultId === null) return false;
+  return legacyTreeRemovedRecords(store).some(
+    (r) =>
+      r.body["vault_id"] === vaultId &&
+      r.body["tree_already_left"] !== true &&
+      r.device !== store.device,
+  );
 }
 
 /**

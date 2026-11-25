@@ -45,7 +45,13 @@ import { STORE_VAULT_DIR } from "../store/constants.ts";
 import { cohortRecordsInFlight } from "./cohort-in-flight.ts";
 import { openMigrationStore, recordOwnSwitchCut, safeAgent } from "./migrate.ts";
 import { removeLegacy } from "./outcome.ts";
-import { legacyRootPresent, type RemovalResult } from "./removal.ts";
+import {
+  legacyRootPresent,
+  readRemovalInProgress,
+  removeEmptyLegacyRoots,
+  type RemovalResult,
+} from "./removal.ts";
+import { sameVaultPath } from "./removal-marker.ts";
 
 /** The worker's entry flag on `o2b brain migrate-store`. Not an operator flag. */
 export const AUTO_LEGACY_REMOVAL_FLAG = "--auto-remove-legacy";
@@ -406,6 +412,22 @@ export interface RunAutoLegacyRemovalOptions {
 }
 
 /**
+ * Whether a removal this machine began is unfinished: its journal names an
+ * archive that still holds what it moved out of the vault. The removal is
+ * then resumed, even though the vault holds no legacy root any more: the
+ * final import and the completion steps are what is left of it.
+ */
+function unfinishedRemoval(vault: string, configPath?: string): boolean {
+  try {
+    const store = openMigrationStore(vault, configPath);
+    const resumed = readRemovalInProgress(store);
+    return resumed !== null && sameVaultPath(resumed.vault, vault);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One automatic removal attempt in this process: under the removal lock,
  * through the same removal as `--remove-legacy` (never `--force`). This
  * device's own migration cut is published first, whatever the setting
@@ -437,13 +459,23 @@ export function runAutoLegacyRemoval(
     writeState(vault, { ...carried(last), at, outcome: "attempt" });
     options.progress?.("removing the legacy tree from the vault, if every device has switched");
     let state: AutoRemovalState;
+    // A legacy root that holds no file is what sync left when another
+    // machine's removal took the files: it holds nothing to wait for or
+    // archive, whatever the cohort says, and sync would carry it on.
+    const emptied = removeEmptyLegacyRoots(vault);
+    if (emptied.length > 0) {
+      options.progress?.(`removed the empty legacy folder(s) ${emptied.join(", ")}`);
+    }
     try {
       // Records another device wrote to the store that have not arrived
       // here: the tree is the only place both machines' records still
       // meet, so the removal waits, as for a device still on the legacy
       // layout (asked again at the hourly retry, never forced).
-      const held = recordsInFlight(vault, options.configPath);
-      if (held !== null) {
+      const left = !legacyRootPresent(vault);
+      const held = left ? null : recordsInFlight(vault, options.configPath);
+      if (left && !unfinishedRemoval(vault, options.configPath)) {
+        state = { at, outcome: "nothing" };
+      } else if (held !== null) {
         state = { at, ...held };
         options.progress?.(
           `the legacy tree waits for records still in flight: ${held.reason ?? ""}`,

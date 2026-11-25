@@ -3,7 +3,8 @@
  * installation that creates the brain becomes its owner. Shared by the
  * two creating paths, `ensureBrainStore` (`o2b init`, `o2b brain init`)
  * and `o2b store init`. Attaching to an existing store, initialising
- * again, the store migration and another agent's plugin never call it.
+ * again and another agent's plugin never call it; the store migration
+ * claims the role on the first migrating machine itself (`migrate.ts`).
  */
 
 import { resolveDeviceId } from "../../config.ts";

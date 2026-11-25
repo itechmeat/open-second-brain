@@ -19,11 +19,7 @@ import { ConfigReadError, readDeviceId } from "../config.ts";
 import { readStoreIndexSummary } from "../search/brain-store/index-summary.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { isDualWriteEnabled } from "./dual-write.ts";
-import {
-  readTopicPlanOutcome,
-  topicPlanOutcomeAtReach,
-  unscopedTopicsAdvice,
-} from "../topics/plan-outcome.ts";
+import { readTopicPlanOutcome, topicPlanOutcomeAtReach } from "../topics/plan-outcome.ts";
 import { privateWithheld } from "./caller-reach.ts";
 import { migrationAvailability } from "./migration-availability.ts";
 import { autoMigrationReport, autoMigrationReportJson } from "../store-migration/auto-report.ts";
@@ -119,9 +115,8 @@ function migrationBlock(source: StoreStatusSource): Record<string, unknown> {
 }
 
 /**
- * What this machine's last topic planning pass found (`topics/plan-outcome.ts`),
- * with the advice when it made no topic because the records no topic holds
- * name no project; `null` before the first pass on this machine. A caller
+ * What this machine's last topic planning pass found (`topics/plan-outcome.ts`);
+ * `null` before the first pass on this machine. A caller
  * below local reach (`privateWithheld`, `caller-reach.ts`) reads the
  * counts a machine that holds only `shared` would compute.
  */
@@ -136,7 +131,6 @@ function topicsBlock(source: StoreStatusSource): Record<string, unknown> | null 
     created: outcome.created,
     unassigned: outcome.unassigned,
     without_project: outcome.withoutProject,
-    advice: unscopedTopicsAdvice(outcome),
   };
 }
 

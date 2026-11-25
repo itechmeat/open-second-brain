@@ -25,9 +25,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { atomicWriteText } from "../../fs-atomic.ts";
-import { withLocalLock } from "../../store/local-lock.ts";
+import { acquireProcessLock } from "../../store/process-lock.ts";
 
 /** Subdirectory of the device state directory holding the run records. */
 export const DREAM_RUNS_DIR = join("dream", "runs");
@@ -46,6 +46,11 @@ export interface DreamRunRecord {
   readonly private_allowed: boolean;
   /** Most items one session may take. */
   readonly item_budget: number;
+  /**
+   * Most items one take hands out and one answer call carries; 1 is the
+   * one-item protocol (a record written before batches has none: 1).
+   */
+  readonly batch: number;
   /** The name of the command the worker started: the agent its answers name. */
   readonly agent: string;
 }
@@ -100,6 +105,8 @@ export function createDreamRun(
     readonly operations: ReadonlyArray<string>;
     readonly privateAllowed: boolean;
     readonly itemBudget: number;
+    /** Items per take and per answer call (default 1, the one-item protocol). */
+    readonly batch?: number;
     readonly agent: string;
     readonly now?: number;
   },
@@ -117,6 +124,7 @@ export function createDreamRun(
     operations: [...input.operations],
     private_allowed: input.privateAllowed,
     item_budget: input.itemBudget,
+    batch: Math.max(1, Math.min(input.batch ?? 1, input.itemBudget)),
     agent: input.agent,
   };
   const stored: StoredDreamRun = { ...record, leases: {} };
@@ -153,7 +161,9 @@ function readStoredDreamRun(deviceStateDir: string, run: string): StoredDreamRun
     !Array.isArray(r["operations"]) ||
     typeof r["private_allowed"] !== "boolean" ||
     typeof r["item_budget"] !== "number" ||
-    typeof r["agent"] !== "string"
+    typeof r["agent"] !== "string" ||
+    (r["batch"] !== undefined &&
+      (typeof r["batch"] !== "number" || !Number.isInteger(r["batch"]) || r["batch"] < 1))
   ) {
     throw new Error("invalid run record");
   }
@@ -185,14 +195,31 @@ function publicRecord(record: StoredDreamRun): DreamRunRecord {
     operations: [...record.operations],
     private_allowed: record.private_allowed,
     item_budget: record.item_budget,
+    batch: record.batch ?? 1,
     agent: record.agent,
   };
 }
 
-/** Serialize all changes made by processes serving one run. */
+/**
+ * Serialize all changes made by processes serving one run. The lock is
+ * judged by its holder's process (`process-lock.ts`): the session's
+ * server holds it through every call, and one killed in a call (a session
+ * ended at its budget) must not keep the worker's cleanup waiting out an
+ * age rule.
+ */
 export function withDreamRunLock<T>(deviceStateDir: string, run: string, fn: () => T): T {
   if (!isDreamRunId(run)) throw new Error("invalid dream run id");
-  return withLocalLock(lockPath(deviceStateDir, run), fn);
+  const target = lockPath(deviceStateDir, run);
+  mkdirSync(dirname(target), { recursive: true });
+  const release = acquireProcessLock(target, {
+    label: "dream run lock",
+    remedy: "retry once the session's call finishes",
+  });
+  try {
+    return fn();
+  } finally {
+    release();
+  }
 }
 
 /** Run one operation with the run credential validated and private leases available. */
@@ -299,6 +326,8 @@ export interface DreamRunCall {
   readonly outcome: string;
   /** The model an answer named (an answer's call only). */
   readonly model?: string;
+  /** How long the server took to serve the call, in ms (tool calls only). */
+  readonly ms?: number;
 }
 
 /** Append one call to the run's call log (the tool and the outcome, no content). */
@@ -326,6 +355,7 @@ export function appendDreamRunCallUnderLock(
     readonly tool: string;
     readonly outcome: string;
     readonly model?: string;
+    readonly ms?: number;
     readonly now?: number;
   },
 ): void {
@@ -335,6 +365,7 @@ export function appendDreamRunCallUnderLock(
     tool: call.tool,
     outcome: call.outcome,
     ...(call.model !== undefined ? { model: call.model } : {}),
+    ...(call.ms !== undefined ? { ms: call.ms } : {}),
   };
   appendFileSync(callsPath(deviceStateDir, run), JSON.stringify(line) + "\n", { mode: 0o600 });
 }

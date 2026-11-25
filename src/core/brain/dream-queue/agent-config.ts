@@ -8,8 +8,13 @@
  *    program and its arguments (nothing is split or quoted);
  *  - `dream_agent_fallbacks`: a JSON array whose entries are preset names
  *    or such arrays, tried in order;
- *  - `dream_agent_budget_ms` (default 300 000) and `dream_agent_items`
- *    (default 50): the bounds of one run;
+ *  - `dream_agent_budget_ms` (default 300 000): the agent's time in one
+ *    pass, and `dream_agent_items` (default 100): the items one session may
+ *    take (a session that meets it is followed by another while work and
+ *    time last);
+ *  - `dream_agent_batch` (default {@link DREAM_AGENT_BATCH}): how many
+ *    items one take hands the session and one answer call may carry; `1`
+ *    is the one-item protocol (one take, one answer per item);
  *  - `dream_agent_private` (default on): whether the session is shown
  *    items of the private partition.
  *
@@ -25,10 +30,22 @@ export const DREAM_AGENT_COMMAND_KEY = "dream_agent_command";
 export const DREAM_AGENT_FALLBACKS_KEY = "dream_agent_fallbacks";
 export const DREAM_AGENT_BUDGET_KEY = "dream_agent_budget_ms";
 export const DREAM_AGENT_ITEMS_KEY = "dream_agent_items";
+export const DREAM_AGENT_BATCH_KEY = "dream_agent_batch";
 export const DREAM_AGENT_PRIVATE_SETTING = "dream_agent_private";
 
 export const DREAM_AGENT_BUDGET_MS = 300_000;
-export const DREAM_AGENT_ITEMS = 50;
+/**
+ * Items one session may take: a session that meets it is followed by
+ * another while work and the time budget last, so it bounds one session's
+ * context, not the pass.
+ */
+export const DREAM_AGENT_ITEMS = 100;
+/**
+ * Items per take and per answer call. A batch shows the session several
+ * items in one tool result; `1` keeps the one-item protocol, whose
+ * answers the quality benchmark measured.
+ */
+export const DREAM_AGENT_BATCH = 10;
 
 /** The environment twin of a machine key (`dream_agent_command` -> `OPEN_SECOND_BRAIN_DREAM_AGENT_COMMAND`). */
 export function dreamAgentEnvName(key: string): string {
@@ -49,6 +66,7 @@ export interface DreamAgentConfig {
   readonly fallbacks: ReadonlyArray<DreamAgentCommand>;
   readonly budgetMs: number;
   readonly items: number;
+  readonly batch: number;
   readonly privateAllowed: boolean;
   readonly errors: ReadonlyArray<string>;
 }
@@ -164,6 +182,12 @@ export function resolveDreamAgentConfig(input: {
       setting(input.env, input.config, DREAM_AGENT_ITEMS_KEY),
       DREAM_AGENT_ITEMS,
       DREAM_AGENT_ITEMS_KEY,
+      errors,
+    ),
+    batch: positiveInt(
+      setting(input.env, input.config, DREAM_AGENT_BATCH_KEY),
+      DREAM_AGENT_BATCH,
+      DREAM_AGENT_BATCH_KEY,
       errors,
     ),
     privateAllowed,

@@ -3,7 +3,7 @@
  * target"): a folder inside the vault, any other folder, or none.
  *
  * The target comes from `OPEN_SECOND_BRAIN_VIEW_TARGET`, then the
- * `view_target` machine-config key, then the default: the `brain-view`
+ * `view_target` machine-config key, then the default: the `o2b-memory`
  * folder of the vault the machine config names (`vault`). With none of
  * them, or with `none` (or `off`) as the value, there is no view, and
  * every brain operation still works. It is device-local config because a

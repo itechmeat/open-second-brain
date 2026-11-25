@@ -427,20 +427,29 @@ function finish(
       dependants.set(predecessorId, [...(dependants.get(predecessorId) ?? []), item.id]);
     }
   }
+  // Each step takes the earliest active item (in queue order) whose
+  // predecessors are all placed: a min-heap of queue positions of the
+  // items ready to place, so a large queue is ordered in n log n.
   const holderOrder: Building[] = [];
-  const remaining = new Set(active.map((item) => item.id));
-  while (remaining.size > 0) {
-    const next = active.find((item) => remaining.has(item.id) && indegree.get(item.id) === 0);
-    if (next === undefined) {
-      // A cycle in resolved predecessors cannot be made runnable by resource ordering.
-      holderOrder.push(...active.filter((item) => remaining.has(item.id)));
-      break;
-    }
-    remaining.delete(next.id);
+  const position = new Map(active.map((item, i) => [item.id, i]));
+  const placed = new Set<string>();
+  const heap = new PositionHeap();
+  active.forEach((item, i) => {
+    if (indegree.get(item.id) === 0) heap.push(i);
+  });
+  while (heap.size > 0) {
+    const next = active[heap.pop()]!;
+    placed.add(next.id);
     holderOrder.push(next);
     for (const dependant of dependants.get(next.id) ?? []) {
-      indegree.set(dependant, indegree.get(dependant)! - 1);
+      const left = indegree.get(dependant)! - 1;
+      indegree.set(dependant, left);
+      if (left === 0) heap.push(position.get(dependant)!);
     }
+  }
+  // A cycle in resolved predecessors cannot be made runnable by resource ordering.
+  if (holderOrder.length < active.length) {
+    holderOrder.push(...active.filter((item) => !placed.has(item.id)));
   }
   const held = new Map<string, string>();
   for (const item of holderOrder) {
@@ -513,4 +522,46 @@ function finish(
     });
   }
   return { items: out, order: ordered.map((i) => i.id), rejected, owner };
+}
+
+/** A binary min-heap of non-negative integers (queue positions). */
+class PositionHeap {
+  readonly #a: number[] = [];
+
+  get size(): number {
+    return this.#a.length;
+  }
+
+  push(value: number): void {
+    const a = this.#a;
+    a.push(value);
+    let i = a.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (a[parent]! <= a[i]!) break;
+      [a[parent], a[i]] = [a[i]!, a[parent]!];
+      i = parent;
+    }
+  }
+
+  pop(): number {
+    const a = this.#a;
+    const top = a[0]!;
+    const last = a.pop()!;
+    if (a.length > 0) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && a[l]! < a[m]!) m = l;
+        if (r < a.length && a[r]! < a[m]!) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i]!, a[m]!];
+        i = m;
+      }
+    }
+    return top;
+  }
 }

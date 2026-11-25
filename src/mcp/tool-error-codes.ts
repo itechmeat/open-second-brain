@@ -101,6 +101,7 @@ import {
 } from "./protocol.ts";
 import { OutputContractError } from "./output-contract.ts";
 import { REACH_REFUSAL } from "./reach-refusal.ts";
+import { STALE_SERVER_REFUSAL } from "./stale-server.ts";
 import { VaultUnexaminableError } from "../core/vault-unexaminable.ts";
 
 /** The `_meta` key an `isError` result carries its code under. */
@@ -365,6 +366,8 @@ export const TOOL_ERROR_CODES = Object.freeze([
     // `WriteRefusedError` handlers that answer it.
     PENDING_STAGE_CONFLICT_CODE,
     REACH_REFUSAL,
+    // A server older than the install or the machine's layout writes nothing.
+    STALE_SERVER_REFUSAL,
     ...OWNER_SCOPE_REFUSALS,
     ...WRITE_BATCH_CODES,
     ...CREATE_NOTE_CODES,

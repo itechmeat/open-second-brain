@@ -67,7 +67,7 @@ test("Bun missing-version diagnostic is retryable but age policy is not", async 
   ).resolves.toBe("installed");
   expect(attempts).toBe(2);
   expect(clock).toBe(10_000);
-  expect(budgets).toEqual([300_000, 290_000]);
+  expect(budgets).toEqual([900_000, 890_000]);
 
   attempts = 0;
   await expect(
@@ -79,7 +79,7 @@ test("Bun missing-version diagnostic is retryable but age policy is not", async 
   expect(attempts).toBe(1);
 });
 
-test("registry version retry stops at five minutes using the injected clock", async () => {
+test("registry version retry stops at fifteen minutes using the injected clock", async () => {
   let clock = 0;
   let calls = 0;
   await expect(
@@ -96,9 +96,9 @@ test("registry version retry stops at five minutes using the injected clock", as
         },
       },
     ),
-  ).rejects.toThrow("five minutes");
-  expect(clock).toBe(300_000);
-  expect(calls).toBe(30);
+  ).rejects.toThrow("fifteen minutes");
+  expect(clock).toBe(900_000);
+  expect(calls).toBe(90);
 });
 
 test("registry retry does not start an attempt after the injected deadline", async () => {
@@ -120,11 +120,11 @@ test("registry retry does not start an attempt after the injected deadline", asy
       },
     ),
   ).rejects.toMatchObject({
-    message: "registry version was not served within five minutes",
+    message: "registry version was not served within fifteen minutes",
     cause: missing,
   });
-  expect(budgets).toEqual([300_000]);
-  expect(clock).toBe(300_000);
+  expect(budgets).toEqual([900_000]);
+  expect(clock).toBe(900_000);
 });
 
 test("registry version specs ending in .tgz are not treated as local tarballs", () => {

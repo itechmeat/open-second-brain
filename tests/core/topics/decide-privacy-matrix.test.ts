@@ -460,8 +460,9 @@ const KINDS: ReadonlyArray<Kind> = [
     use: "topic_new",
     threshold: { veto_below: 0.3 },
     writes: TOPIC_CREATE_KIND,
-    // A group that holds a private record waits for a local executor:
-    // its item is private as a whole (change dream-closed-questions D3.7).
+    // A group of private records waits for a local executor: its item is
+    // private as a whole (change dream-closed-questions D3.7). Private
+    // records group apart from shared ones, so every member is private here.
     hosted: { subject: [], region: [] },
     variants: ["none", "subject", "region"],
     seed(variant) {
@@ -473,7 +474,7 @@ const KINDS: ReadonlyArray<Kind> = [
         "Deprecation windows for the public API announced today",
       ];
       texts.forEach((text, i) => {
-        const [body, partition] = marked(text, i === 4 && variant !== "none", variant);
+        const [body, partition] = marked(text, variant !== "none", variant);
         signal(body, partition, i < 2 ? "s1" : "s2");
       });
     },

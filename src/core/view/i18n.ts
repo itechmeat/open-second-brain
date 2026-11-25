@@ -61,6 +61,12 @@ export interface ViewStrings {
   readonly archiveLink: string;
   /** The related line naming how many records a topic holds and the command that lists them. */
   readonly heldRecords: (count: number, command: string) => string;
+  /** The related line naming how many held records a page that lists them could not fit. */
+  readonly heldMore: (count: number, command: string) => string;
+  /** The heading of the held rules a topic page lists. */
+  readonly topicRules: string;
+  /** The kind a held record's line names. */
+  readonly heldKind: Readonly<Record<"rule" | "note", string>>;
   readonly archiveTitle: (title: string) => string;
   readonly archiveIntro: string;
   readonly archiveBack: string;
@@ -128,6 +134,9 @@ const EN: ViewStrings = {
   archiveLink: "Older entries",
   heldRecords: (count, command) =>
     `Holds ${count} record(s) (notes, signals, decisions): \`${command}\` lists them`,
+  heldMore: (count, command) => `${count} more record(s) not shown: \`${command}\` lists them all`,
+  topicRules: "Rules and facts",
+  heldKind: { rule: "rule", note: "note" },
   archiveTitle: (title) => `${title}: archive`,
   archiveIntro: "Entries that moved off the topic page, newest first.",
   archiveBack: "Back to the topic",
@@ -195,6 +204,10 @@ const RU: ViewStrings = {
   archiveLink: "Старые записи",
   heldRecords: (count, command) =>
     `Записей в теме: ${count} (заметки, сигналы, решения): их список выводит \`${command}\``,
+  heldMore: (count, command) =>
+    `Не показано записей: ${count}; полный список выводит \`${command}\``,
+  topicRules: "Правила и факты",
+  heldKind: { rule: "правило", note: "заметка" },
   archiveTitle: (title) => `${title}: архив`,
   archiveIntro: "Записи, ушедшие со страницы темы, сначала новые.",
   archiveBack: "Назад к теме",

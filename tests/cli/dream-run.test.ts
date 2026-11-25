@@ -6,7 +6,16 @@
  * the outcome is recorded. The last test starts one real detached worker
  * through the day check, keeps its handle and awaits its exit.
  */
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,6 +25,7 @@ import { dreamTriggerClaimPath } from "../../src/core/brain/dream-trigger/record
 import * as gate from "../../src/core/brain/dream-owner/gate.ts";
 import * as ownerModule from "../../src/core/brain/dream-owner/owner.ts";
 import * as outcomeModule from "../../src/core/brain/dream-trigger/outcome.ts";
+import { OPERATION, resolveSafeguardTimeoutMs } from "../../src/core/brain/safeguard.ts";
 import * as o2bCommand from "../../src/core/maintenance/o2b-command.ts";
 import { WORKER_LOG_ATTEMPT_PREFIX } from "../../src/core/store-migration/worker-log.ts";
 import * as decideAuto from "../../src/core/topics/decide-auto.ts";
@@ -71,6 +81,82 @@ describe("o2b dream run", () => {
     expect(res.stdout).toContain(`day: ${r.day} closed`);
   });
 
+  test("--catch-up runs passes while the agent answers and the budget lasts, in one document", async () => {
+    const budgets: Array<number | undefined> = [];
+    let n = 0;
+    const front = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation(
+      async (_vault, options) => {
+        budgets.push(options?.agentBudgetMs);
+        n += 1;
+        return {
+          produced: 0,
+          left: 0,
+          asked: {},
+          answered: 0,
+          agent:
+            n === 1
+              ? { status: "ran", answered: 3 }
+              : { status: "skipped", reason: "no-work", answered: 0 },
+        };
+      },
+    );
+    let res;
+    try {
+      res = await cli(["--catch-up", "30", "--json"]);
+    } finally {
+      front.mockRestore();
+    }
+    expect(res.returncode).toBe(0);
+    const doc = JSON.parse(res.stdout) as {
+      ok: boolean;
+      catch_up: { budget_ms: number; passes: Array<Record<string, unknown>> };
+    };
+    expect(doc.ok).toBe(true);
+    expect(doc.catch_up.budget_ms).toBe(1_800_000);
+    expect(doc.catch_up.passes.map((p) => p["agent_answered"])).toEqual([3, 0]);
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]!).toBeLessThanOrEqual(1_800_000);
+    expect(budgets[0]!).toBeGreaterThan(1_700_000);
+    expect(budgets[1]!).toBeLessThan(budgets[0]!);
+    expect(f.record()!.closed).toBe(true);
+  });
+
+  // An ordinary run has one deadline: the model work spends it first and
+  // the pass gets what is left. The clock is moved past the whole dream
+  // timeout while the model work runs, so the pass has nothing left and
+  // stops at its first checkpoint; a catch-up pass gets its own timeout
+  // after the model work and completes.
+  for (const catchUp of [false, true]) {
+    test(`${catchUp ? "a catch-up pass gets its own timeout" : "an ordinary run's pass gets what the model work left"} after the model work`, async () => {
+      const timeoutMs = resolveSafeguardTimeoutMs(OPERATION.dream, f.configPath)!;
+      const front = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation(async () => {
+        setSystemTime(Date.now() + timeoutMs + 1000);
+        return undefined;
+      });
+      let res;
+      try {
+        res = await cli(catchUp ? ["--catch-up", "30", "--json"] : ["--json"]);
+      } finally {
+        setSystemTime();
+        front.mockRestore();
+      }
+      if (catchUp) {
+        expect(res.returncode).toBe(0);
+        return;
+      }
+      expect(res.returncode).not.toBe(0);
+      expect(res.stdout + res.stderr).toContain("exceeded its safeguard timeout");
+    });
+  }
+
+  test("--catch-up needs a number of minutes", async () => {
+    for (const bad of ["0", "-5", "soon", "2000"]) {
+      const res = await cli(["--catch-up", bad]);
+      expect(res.returncode).toBe(2);
+      expect(res.stderr).toContain("--catch-up");
+    }
+  });
+
   test("--json is one document", async () => {
     const res = await cli(["--json"]);
     expect(res.returncode).toBe(0);
@@ -106,6 +192,19 @@ describe("o2b dream run", () => {
     expect(res.returncode).toBe(1);
     expect(JSON.parse(res.stdout)).toMatchObject({ ok: false, code: "dream_not_owner" });
     expect(existsSync(f.recordPath)).toBe(false);
+  });
+
+  test("a refused --catch-up --json pass is in the one document, not a document of its own", async () => {
+    process.env["O2B_DEVICE_ID"] = "dev-b";
+    const res = await cli(["--catch-up", "30", "--json"]);
+    expect(res.returncode).toBe(1);
+    const doc = JSON.parse(res.stdout) as {
+      ok: boolean;
+      catch_up: { passes: Array<Record<string, unknown>> };
+    };
+    expect(doc.ok).toBe(false);
+    expect(doc.catch_up.passes).toHaveLength(1);
+    expect(doc.catch_up.passes[0]).toMatchObject({ code: "dream_not_owner" });
   });
 });
 

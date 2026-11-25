@@ -28,7 +28,7 @@ the commands should exit; a Markdown viewer does not show it.
 | `private/` partition | `<store root>/private` | Yes, but only to machines you trust with private records |
 | Store root | `<vault>/.open-second-brain-store/` by default; `store_root` in the machine config moves it | With the vault, when it is the default; otherwise never as a whole |
 | Device-local state | the platform state directory, keyed by store id | Never |
-| Human view | `view_target` in the machine config; by default the vault's `brain-view/` folder | Its own folder, to the view writer and to phones |
+| Human view | `view_target` in the machine config; by default the vault's `o2b-memory/` folder | Its own folder, to the view writer and to phones |
 
 - **The store root** is a plain folder that holds the two partition folders
   and a copy of `FORMAT.md`. The default root inside the vault travels
@@ -72,7 +72,7 @@ folders you will sync have stable names. Add to the machine config:
 <!-- doc-test: scenario=setup machine=laptop config -->
 ```yaml
 store_root: ~/brain-store
-view_target: ~/brain-view
+view_target: ~/views
 ```
 
 Then initialise. With no vault the brain works from the store alone:
@@ -96,7 +96,7 @@ o2b store path
 
 The view target line reads `view target:  <folder> (config, missing)` until
 the first render creates the folder. With no `view_target`, a machine whose
-config names a vault shows that vault's `brain-view/` folder with the origin
+config names a vault shows that vault's `o2b-memory/` folder with the origin
 `default`; it reads `none` when there is no vault either, or when
 `view_target` is `none`. It creates nothing, so it is safe to run at
 any time; `--json` gives the same answer to scripts, and agents read it from
@@ -135,7 +135,7 @@ through sync and joins them:
    <!-- doc-test: scenario=setup machine=desktop config -->
    ```yaml
    store_root: ~/brain-store
-   view_target: ~/brain-view
+   view_target: ~/views
    ```
 
 2. Point your sync tool at `~/brain-store/shared` and
@@ -377,12 +377,15 @@ the ones it has; a regional tag of one (`ru-RU`) is accepted.
 `o2b brain settings unset view.language` goes back to English.
 
 With no `view_target`, a machine whose machine config names a vault
-(`vault`) writes the view into that vault's `brain-view/` folder, so the
+(`vault`) writes the view into that vault's `o2b-memory/` folder, so the
 pages appear where you already look, beside your notes. Set `view_target`
 to another folder to move it, or to `none` (or `off`) to write no page
 anywhere; the brain works the same without a view. The default folder is
 never `Brain/`: that name stays the legacy tree's while machines on 1.x
-still write it.
+still write it. The default folder of 2.0.1, `brain-view/`, is renamed to
+`o2b-memory/` by the machine that writes the view, on the update; a folder
+of your own that holds a file of yours keeps its name, and one line says
+so once.
 
 A view folder inside the vault belongs to the view writer: the note tools
 (`brain_create_note`, `brain_update_note`, `brain_append_note`, the write
@@ -1472,7 +1475,7 @@ Doctor names them (`legacy-local-files-left`, with their sizes), and
 `o2b brain migrate-store --remove-legacy` run on that machine clears them
 the same way (the cohort no longer matters there: the tree is gone). Where
 nothing of the tree is left at all (the sync also deleted that folder), the
-command says so, lists the cohort as above, moves nothing and exits 0. Afterwards the vault holds your notes, the view folder (`brain-view/` by
+command says so, lists the cohort as above, moves nothing and exits 0. Afterwards the vault holds your notes, the view folder (`o2b-memory/` by
 default, or wherever `view_target` points), and the managed block of the
 vault's `.gitignore` that names `.open-second-brain/` (kept, so a returning
 1.x machine's index is never committed). A rollback is no longer
@@ -1541,7 +1544,7 @@ update.
   A line held back is shown on a later day; `o2b status` and doctor show
   every one of them every time.
 - The removal touches only `Brain/` and `.open-second-brain/`; the store
-  folder `.open-second-brain-store/` and the view folder `brain-view/`
+  folder `.open-second-brain-store/` and the view folder `o2b-memory/`
   stay, and neither one's walkers read the other.
 
 The worker's record (`legacy-removal.json`), its lock and its error log

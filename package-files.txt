@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7140260 bytes
-# Maximum unpacked size: 24260994 bytes
+# Maximum packed size: 7167702 bytes
+# Maximum unpacked size: 24357687 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -541,7 +541,6 @@ src/core/brain/doctor/store-gap-check.ts
 src/core/brain/doctor/store-integrity.ts
 src/core/brain/doctor/store-side-pass.ts
 src/core/brain/doctor/store-trust-check.ts
-src/core/brain/doctor/topic-plan-check.ts
 src/core/brain/doctor/uncertain-stream.ts
 src/core/brain/doctor/uncertainty-probes.ts
 src/core/brain/doctor/unreadable-path.ts
@@ -1695,6 +1694,7 @@ src/core/view/auto-render.ts
 src/core/view/catch-up.ts
 src/core/view/constants.ts
 src/core/view/corrections.ts
+src/core/view/default-folder.ts
 src/core/view/edit-record.ts
 src/core/view/i18n.ts
 src/core/view/lane-view-pages.ts
@@ -1708,6 +1708,7 @@ src/core/view/render.ts
 src/core/view/retire.ts
 src/core/view/target.ts
 src/core/view/topic-edits.ts
+src/core/view/topic-held.ts
 src/core/view/topic-pages.ts
 src/core/view/vault-guard.ts
 src/core/view/view-records.ts
@@ -1826,6 +1827,7 @@ src/mcp/schema-tools.ts
 src/mcp/search-tools.ts
 src/mcp/server.ts
 src/mcp/skill-tools.ts
+src/mcp/stale-server.ts
 src/mcp/stdio.ts
 src/mcp/token-source.ts
 src/mcp/tool-contract.ts

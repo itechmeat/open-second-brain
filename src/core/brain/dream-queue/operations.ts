@@ -21,6 +21,30 @@ export interface DreamWorkContext {
   readonly configPath?: string;
   /** The queue's clock reading the entry point runs at (ms). */
   readonly now: number;
+  /** What a long-lived caller keeps between entry points ({@link DreamWorkReads}). */
+  readonly reads?: DreamWorkReads;
+}
+
+/**
+ * What a caller that calls the queue again and again keeps between its
+ * calls (a dream session's server, which rechecks an item's input on every
+ * take and answer): one memo per key, made on first use, that an
+ * operation's reread keeps its own incremental read in. Opaque to the
+ * queue; a memo must answer exactly what a fresh read answers.
+ */
+export interface DreamWorkReads {
+  memo<T>(key: string, make: () => T): T;
+}
+
+/** A fresh {@link DreamWorkReads}: lives as long as its caller keeps it. */
+export function dreamWorkReads(): DreamWorkReads {
+  const memos = new Map<string, unknown>();
+  return {
+    memo<T>(key: string, make: () => T): T {
+      if (!memos.has(key)) memos.set(key, make());
+      return memos.get(key) as T;
+    },
+  };
 }
 
 /** The item's input as the store holds it now. */

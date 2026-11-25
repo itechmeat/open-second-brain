@@ -89,7 +89,7 @@ function seedFull(): void {
 }
 
 describe("topic pages", () => {
-  test("a new topic: title, description, Status: Active, the goal and related, no empty section", () => {
+  test("a new topic: title, the goal in the description's place, Status: Active, related, no empty section", () => {
     createTopic();
     render();
     expect(page(`${topicDir}/topic.md`)).toBe(
@@ -98,13 +98,9 @@ describe("topic pages", () => {
         "",
         "# Brain store",
         "",
-        "No description yet.",
+        "Move machine data out of the vault",
         "",
         "Status: Active",
-        "",
-        "## Goal",
-        "",
-        "Move machine data out of the vault",
         "",
         "## Related",
         "",
@@ -274,7 +270,7 @@ describe("topic pages", () => {
       ["agent", "Ship everything at once", topic],
     ]);
     const text = page(`${topicDir}/topic.md`);
-    expect(text).toContain("## Goal\n\nShip phase 3\n");
+    expect(text).toContain("# Brain store\n\nShip phase 3\n");
     expect(text).toContain("- Goal proposed by planner: Ship everything at once");
   });
 

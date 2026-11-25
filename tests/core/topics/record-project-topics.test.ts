@@ -1,19 +1,17 @@
 /**
- * Records carry the project they were written in, so topic planning can
- * make topics from them (design D17, "What planning reads"). A note, a
- * signal and a decision written through the MCP handlers of a server
- * launched inside a linked project carry that project, and on the next
- * dream pass records of two sessions of that project form a topic; a
- * server launched outside every linked project writes no project, never a
- * guess, and its records join no topic.
+ * Records carry the project they were written in (design D17, "What
+ * planning reads"). A note, a signal and a decision written through the
+ * MCP handlers of a server launched inside a linked project carry that
+ * project, and on the next dream pass records of two sessions of that
+ * project form a topic scoped to it; a server launched outside every
+ * linked project writes no project, never a guess. The project is an
+ * attribute only: records that name none form a topic by theme too.
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { dreamAnswered } from "../../helpers/closed-answers.ts";
-import { runDoctor } from "../../../src/core/brain/doctor.ts";
-import { TOPICS_WITHOUT_PROJECT_CODE } from "../../../src/core/brain/doctor/topic-plan-check.ts";
 import { buildStoreStatusBlock } from "../../../src/core/store/store-status.ts";
 import { readTopicPlanOutcome } from "../../../src/core/topics/plan-outcome.ts";
 import { recordDecision } from "../../../src/core/brain/decisions/record.ts";
@@ -69,7 +67,7 @@ test("notes, signals and decisions written in a linked project carry it and form
     principle: `${SUBJECT} in order`,
     agent: "agent-two",
   });
-  // Outside every linked project: no project, and no topic from it.
+  // Outside every linked project: no project; it joins by theme when it fits.
   const outside = server(a, elsewhere);
   await call(outside, "brain_note", { text: `${SUBJECT} outside`, agent: "agent-three" });
 
@@ -80,8 +78,12 @@ test("notes, signals and decisions written in a linked project carry it and form
   const report = dreamAnswered(a.vault, a.store()).topics?.report;
   expect(report?.status).toBe("planned");
   if (report?.status !== "planned") return;
+  // The note written outside every linked project names no project and
+  // joins by theme; the topic keeps the one project its other records name.
   expect(report.created).toHaveLength(1);
-  expect(report.created[0]!.members).toBe(5);
+  expect(report.created[0]!.members).toBe(6);
+  const topic = a.records().find((r) => r.kind === "topic-create")!;
+  expect(topic.body["scope"]).toBe("project:release-tool");
 });
 
 test("on a machine not yet switched the project rides the legacy day file and page, and the migration keeps it", () => {
@@ -117,7 +119,7 @@ test("on a machine not yet switched the project rides the legacy day file and pa
   ]);
 });
 
-test("status and doctor say why the last pass made no topic when no unassigned record names a project", async () => {
+test("records that name no project, from two sessions, form a topic with no project", async () => {
   const a = machine();
   // Written outside every linked project: no project.
   const elsewhere = join(fleet!.parent, "work", "scratch");
@@ -129,19 +131,18 @@ test("status and doctor say why the last pass made no topic when no unassigned r
     ),
   );
   expect(readTopicPlanOutcome()).toBeNull();
-  const summary = dreamAnswered(a.vault, a.store()).topics?.summary;
-  expect(summary).toContain("names a project");
+  const report = dreamAnswered(a.vault, a.store()).topics?.report;
+  expect(report?.status).toBe("planned");
+  if (report?.status !== "planned") return;
+  expect(report.created.map((c) => c.members)).toEqual([5]);
+  const topic = a.records().find((r) => r.kind === "topic-create")!;
+  expect(topic.body["scope"]).toBe("personal");
+  // Made of shared records, the topic is shared: the human view shows it.
+  expect(report.shared.created).toBe(1);
 
   const block = buildStoreStatusBlock({ vault: a.vault, configPath: null }) as {
-    topics: { created: number; unassigned: number; without_project: number; advice: string };
+    topics: { created: number; unassigned: number; without_project: number };
   };
-  expect(block.topics.created).toBe(0);
-  expect(block.topics.without_project).toBe(block.topics.unassigned);
-  expect(block.topics.unassigned).toBeGreaterThanOrEqual(5);
-  expect(block.topics.advice).toContain("name no project");
-  expect(block.topics.advice).toContain("o2b brain project link");
-
-  const doctor = runDoctor(a.vault);
-  const finding = (doctor.uncertain ?? []).find((u) => u.code === TOPICS_WITHOUT_PROJECT_CODE);
-  expect(finding?.message).toContain("name no project");
+  expect(block.topics.created).toBe(1);
+  expect(block.topics).not.toHaveProperty("advice");
 });

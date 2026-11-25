@@ -49,6 +49,11 @@ import {
 import { foldTopics } from "../topics/fold.ts";
 import { VIEW_RENDER_ATTEMPTS } from "./constants.ts";
 import { applyCorrections, foldCorrections, pageLines, reviewedEdits } from "./corrections.ts";
+import {
+  finishDefaultFolder,
+  prepareDefaultFolder,
+  takeDefaultFolderNotice,
+} from "./default-folder.ts";
 import { viewStrings } from "./i18n.ts";
 import { matchLines, mergeLines } from "./line-diff.ts";
 import { lanePages } from "./lane-view-pages.ts";
@@ -99,13 +104,20 @@ import {
 import { pageFileInside } from "./page-path.ts";
 import { retirePages, type RetireContext } from "./retire.ts";
 import { topicPages } from "./topic-pages.ts";
+import { viewHeldRecords } from "./topic-held.ts";
 import { withHeldDecisions } from "../topics/held-decisions.ts";
 import { decisionTitlesOfCatchUp } from "../topics/decision-titles.ts";
 import { foldViewWriter } from "./writer-fold.ts";
+import type { ViewTargetOrigin } from "./target.ts";
 
 export interface ViewPassOptions extends RecordOptions {
   /** The view folder; `null` when none is configured (nothing is written). */
   readonly target: string | null;
+  /**
+   * Where the target came from: `default` is the vault's own default
+   * folder, the only one the release's rename may touch.
+   */
+  readonly targetOrigin?: ViewTargetOrigin;
   readonly hooks?: ReplaceHooks;
   /**
    * Asked before each page: `true` stops the pass there and reports the
@@ -138,7 +150,12 @@ export type ViewPassReport =
   | { readonly status: "released"; readonly to: string }
   | { readonly status: "waiting-for-claim" }
   | { readonly status: "no-target" }
-  | { readonly status: "rendered"; readonly pages: ReadonlyArray<PageReport> };
+  | {
+      readonly status: "rendered";
+      readonly pages: ReadonlyArray<PageReport>;
+      /** One line the user reads once (the old view folder keeps a file of their own). */
+      readonly notice?: string;
+    };
 
 /** Every page the store renders to now, with the user's corrections applied. */
 export function buildPages(store: StoreHandle, read: ViewCatchUp): Map<string, PageModel> {
@@ -159,11 +176,13 @@ export function buildPages(store: StoreHandle, read: ViewCatchUp): Map<string, P
   // A topic shows the decisions it holds as decision items, derived from
   // the same shared records (`topics/held-decisions.ts`).
   const topics = withHeldDecisions(foldTopics(plain), plain, new Set(), titles);
+  // A topic page lists the notes and signals it holds (`topic-held.ts`).
+  const records = viewHeldRecords(read, topics);
   const models = [
     aboutMePage(store.storeId, prefs, strings),
     decisionsPage(store.storeId, entries, strings),
     ...historyPages(store.storeId, entries, strings),
-    ...topicPages(store.storeId, topics, strings),
+    ...topicPages(store.storeId, topics, strings, { records }),
     ...lanePages(store.storeId, shared, strings),
   ];
   return new Map(models.map((m) => [m.page, applyCorrections(m, corrections)]));
@@ -463,7 +482,32 @@ export function runViewPass(store: StoreHandle, options: ViewPassOptions): ViewP
     }
     const ctx: PageContext = { store, options, read, stats: readPageStats(store) };
     const target = options.target;
+    // The default folder of an earlier release is renamed by the machine
+    // that writes the view, before the pages are rendered (the pages go
+    // into the new folder) and settled after it (an old folder that
+    // arrived by sync is removed then).
+    const defaultFolder = target !== null && options.targetOrigin === "default" ? target : null;
+    if (defaultFolder !== null) prepareDefaultFolder(defaultFolder);
     const pages = target === null ? [] : renderPages(ctx, target);
+    let notice: string | undefined;
+    if (defaultFolder !== null) {
+      // Only a page that is on disk (written, unchanged, or removed on
+      // purpose) proves that the new folder holds it. A page that failed
+      // (its merge base has not synced, the file is busy, the write was
+      // refused) or was deferred is not there, and the legacy copy of it
+      // must not be deleted for a page that was never written.
+      const rendered = new Set(
+        pages
+          .filter(
+            (p) => p.status === "written" || p.status === "unchanged" || p.status === "removed",
+          )
+          .map((p) => p.page),
+      );
+      const oldFolder = finishDefaultFolder(defaultFolder, rendered, (page, bytes) =>
+        ownSums(ctx.read, page).has(bytesSum(bytes)),
+      );
+      notice = takeDefaultFolderNotice(store.deviceStateDir, oldFolder, defaultFolder) ?? undefined;
+    }
     writePageStats(store, ctx.stats);
     // The daily "alive" record only for a genuinely idle pass: a view
     // folder to render to, and every page already as rendered. A writer
@@ -471,6 +515,8 @@ export function runViewPass(store: StoreHandle, options: ViewPassOptions): ViewP
     // silent, so the doctor's silent-writer check can say so.
     const idle = target !== null && pages.every((p) => p.status === "unchanged");
     if (idle) heartbeat(store, ctx.read, options);
-    return target === null ? { status: "no-target" } : { status: "rendered", pages };
+    return target === null
+      ? { status: "no-target" }
+      : { status: "rendered", pages, ...(notice !== undefined ? { notice } : {}) };
   });
 }
