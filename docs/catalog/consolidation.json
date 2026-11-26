@@ -16,7 +16,9 @@
         "Queues a model-written rollup when 20 new facts or 5 new rollups gather (rollup thresholds)",
         "Replays each missed UTC day as its own window, so a pass after a silence ends where daily passes would",
         "Starts at the first session of a day on the owner's device (`dream.auto`)",
-        "Previews a pass by dry run, staged bundle, intent review, review candidates or retention review"
+        "Previews a pass by dry run, staged bundle, intent review, review candidates or retention review",
+        "Waits up to 2 minutes for a busy store lock (its session's take and answer too); hooks and tools keep 5 s",
+        "Ends incomplete (exit 0) if a busy lock stops it after it queued work; with none, or twice in a row, fails"
       ],
       "limits": [
         "Once a store brain has a dream owner, only that device runs live passes; other machines run dry runs only",

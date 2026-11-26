@@ -372,6 +372,8 @@
         "Checks a path carried by a synced record before it names a file: it must stay relative and inside its folder",
         "Writes a file as a sibling temp file, fsyncs it, renames it over the target and fsyncs the folder",
         "Takes each lock as an exclusively created name and waits out a held one within that lock's budget",
+        "Records each store lock's holder (process, command, time) beside it and names it when a wait runs out",
+        "Retries the longest-waiting store writer soonest, and takes over a lock directory older than 60 s by age",
         "Treats a name Windows still holds as delete pending as a held lock, not as an error",
         "Refuses state in `.open-second-brain/` when a folder on the way is a symbolic link; never follows a leaf link",
         "Stops the vault's writers on this machine while a brain store migration of that vault runs there",
