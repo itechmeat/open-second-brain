@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2026-11-26
+
+### Fixed
+
+- **A dream catch-up no longer drowns in questions it asked before.** Every new or reworded topic changes the input of every routing question that waits, and each pass queued a second item for every such record while the first one still waited: one night of ten-minute catch-up runs on a 450 MB brain queued 20,518 routing items for 4,569 records (55 MB of the 70 MB the queue wrote that night, 14,993 of them still open in the morning), and the work ahead grew from 1,755 to 3,210 items while the agent answered. A question is now asked once at a time: while an item of the same operation, subject and question version is still open (waiting, out on a lease, or answered and not yet applied), no second item is produced for a changed input; the take rechecks the open item and replaces it then, once, with the input of that moment. An item asked in shadow or refused by egress for its own input does not hold its subject, so a changed input is still asked. The duplicates an older version left behind are closed by the next pass, all at once and as superseded by the newest open item of their question, which is kept.
+- **The first take of a dream session takes seconds, not minutes.** Each take and answer rechecks its item's input, and for a topic question that rebuilt the whole topic plan (12 s on that brain) per item, so a batch of ten took 40 to 140 s and the agent's client gave up with "Request timed out". A session's server now keeps the plan while nothing it is built from changes (the planning inputs, the applied and owner records of the queue, at most an hour), a topic's head words are computed once per fold instead of once per record asked about it (the plan itself: 12.4 s to 0.15 s), and a take that passes stale items folds the queue once per round instead of once per item. On a copy of that brain the first take of a session went from 111 s to 11 s and later ones to under 3 s.
+
 ## [2.0.2] - 2026-11-25
 
 ### Changed
@@ -9114,7 +9121,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...HEAD
+[2.0.3]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/itechmeat/open-second-brain/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/itechmeat/open-second-brain/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/itechmeat/open-second-brain/compare/v1.98.0...v2.0.0

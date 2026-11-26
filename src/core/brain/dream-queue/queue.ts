@@ -278,14 +278,41 @@ export function readDreamWork(
 export function readDreamWorkLater(
   store: StoreHandle,
   options: { readonly now?: number; readonly reads?: DreamWorkReads } = {},
-): { readonly unreadable: ReadonlyArray<string>; fold(): DreamWorkState } {
+): {
+  readonly unreadable: ReadonlyArray<string>;
+  /**
+   * Changes whenever what the queue has finished can change: the applied
+   * records and the owner records read (their count and ids). Leases,
+   * answers, attempts and closes leave it as it is.
+   */
+  readonly finishedKey: string;
+  fold(): DreamWorkState;
+} {
   const snapshot = readSnapshot(store, store.partitions, options.reads);
   const now = options.now ?? Date.now();
   let state: DreamWorkState | undefined;
   return {
     unreadable: snapshot.unreadable,
+    finishedKey: finishedKeyOf(snapshot),
     fold: () => (state ??= foldSnapshot(snapshot, now)),
   };
+}
+
+/** FNV-1a over the ids of the applied and owner records of a snapshot, with their count. */
+function finishedKeyOf(snapshot: Snapshot): string {
+  let hash = 0x811c9dc5;
+  let count = 0;
+  const mix = (id: string): void => {
+    count += 1;
+    for (let i = 0; i < id.length; i++) {
+      hash ^= id.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+  };
+  for (const { record } of snapshot.work)
+    if (record.kind === DREAM_WORK_APPLIED_KIND) mix(record.id);
+  for (const record of snapshot.owner) mix(record.id);
+  return `${count}:${hash.toString(16)}`;
 }
 
 /**
@@ -722,14 +749,19 @@ class Step {
       evidence: [...(input.evidence ?? item.body.evidence)],
       payload: { ...(input.payload ?? item.body.payload) },
     };
-    if (this.fold().items.get(successor.id)?.state === "closed") {
+    // The fold as last made (or as read): a recheck does not fold the
+    // queue again for what this step wrote, so closing many stale items
+    // in one take costs one fold, not one per item. What this step wrote
+    // as items is known by id.
+    const known = this.#state ?? this.#base();
+    if (known.items.get(successor.id)?.state === "closed") {
       for (let attempt = 1; ; attempt += 1) {
         const reopened = {
           ...identity,
           occurrence: `${item.body.occurrence}/return-${attempt}`,
         };
         const id = dreamWorkItemId(reopened);
-        if (!this.fold().items.has(id)) {
+        if (!known.items.has(id) && !this.#produced.has(id)) {
           successor = { ...successor, ...reopened, id };
           break;
         }
@@ -977,15 +1009,23 @@ function takeMany(
     readonly body: Record<string, unknown>;
     readonly item: TakenItem;
   }> = [];
+  // One fold per round: an item a recheck closes is passed over and the
+  // scan goes on in the same fold (closing an item never makes another
+  // one ready in it: its successor, or the next item holding its
+  // resources, waits for the next round). Only when the round closed
+  // something and the batch is not full is the queue folded again.
+  const passed = new Set<string>();
   pick: for (let guard = 0; picked.length < max && guard < 10_000; guard++) {
     const state = step.fold();
     const now = step.now;
+    let closedAny = false;
     for (const id of state.order) {
       if (picked.length >= max) break pick;
       const next = state.items.get(id)!;
       if (
         chosen.has(id) ||
         unavailable.has(id) ||
+        passed.has(id) ||
         !next.ready ||
         !takeEligible(next, step.store.partitions) ||
         (next.retry_at !== null && Date.parse(next.retry_at) > now) ||
@@ -998,8 +1038,13 @@ function takeMany(
         unavailable.add(id);
         continue;
       }
-      // A recheck that closed the item may have written its successor: fold again.
-      if (checked.status !== "current") continue pick;
+      // A recheck that closed the item may have written its successor:
+      // it is offered in the next round's fold.
+      if (checked.status !== "current") {
+        passed.add(id);
+        closedAny = true;
+        continue;
+      }
       chosen.add(id);
       const generation = next.generation + 1;
       const lease_token = randomUUID();
@@ -1029,7 +1074,7 @@ function takeMany(
         },
       });
     }
-    break;
+    if (!closedAny) break;
   }
   if (picked.length === 0) return { items: [], reason: "empty" };
   // The leases as one batch append, then one reread confirms every lease,
@@ -1062,26 +1107,44 @@ function take(
 ): TakeResult {
   step.settle();
   const unavailable = new Set<string>();
+  // One fold per round, as in a batch: an item a recheck closes is passed
+  // over in the same fold; the queue is folded again only after a round
+  // that closed something and found nothing to take.
+  const passed = new Set<string>();
   for (let guard = 0; guard < 10_000; guard++) {
     const state = step.fold();
     const now = step.now;
-    const next = state.order
-      .map((id) => state.items.get(id)!)
-      .find(
-        (item) =>
-          item.ready &&
-          !unavailable.has(item.id) &&
-          takeEligible(item, step.store.partitions) &&
-          (item.retry_at === null || Date.parse(item.retry_at) <= now) &&
-          (filter === undefined || filter(item)),
-      );
-    if (next === undefined) return { item: null, reason: "empty" };
-    const checked = step.recheck(next);
-    if (checked.status === "unavailable") {
-      unavailable.add(next.id);
-      continue;
+    let closedAny = false;
+    let next: DreamWorkItem | undefined;
+    for (const id of state.order) {
+      const item = state.items.get(id)!;
+      if (
+        !item.ready ||
+        unavailable.has(item.id) ||
+        passed.has(item.id) ||
+        !takeEligible(item, step.store.partitions) ||
+        (item.retry_at !== null && Date.parse(item.retry_at) > now) ||
+        (filter !== undefined && !filter(item))
+      ) {
+        continue;
+      }
+      const checked = step.recheck(item);
+      if (checked.status === "unavailable") {
+        unavailable.add(item.id);
+        continue;
+      }
+      if (checked.status !== "current") {
+        passed.add(item.id);
+        closedAny = true;
+        continue;
+      }
+      next = item;
+      break;
     }
-    if (checked.status !== "current") continue;
+    if (next === undefined) {
+      if (closedAny) continue;
+      return { item: null, reason: "empty" };
+    }
     const generation = next.generation + 1;
     const lease_token = randomUUID();
     const expires = new Date(now + DREAM_WORK_LEASE_MS).toISOString();
@@ -1527,6 +1590,60 @@ export function rejectWork(queue: DreamQueue, id: string, reason: string): void 
 }
 
 /** Close an item as cancelled (a person's call). */
+/**
+ * Close the open items that ask a question again: of every operation in
+ * `operations`, the waiting items about a subject (same question version)
+ * that has a newer open item are closed as superseded by the newest one,
+ * in one entry and one append. A take would close each of them when it
+ * reached it (its input changed); closing them at once keeps the queue's
+ * counts true and its takes short. An item out on a lease, answered, or
+ * set aside for its own input (`setAside`) is never closed here, and the
+ * newest open item is always kept. Returns how many were closed.
+ */
+export function closeDuplicateWork(
+  queue: DreamQueue,
+  operations: ReadonlySet<string>,
+  setAside: (item: DreamWorkItem) => boolean = () => false,
+): number {
+  return entry(queue, (step) => {
+    const state = step.fold();
+    const groups = new Map<string, DreamWorkItem[]>();
+    for (const id of state.order) {
+      const item = state.items.get(id)!;
+      if (!operations.has(item.body.operation)) continue;
+      if (!step.store.partitions.has(item.partition)) continue;
+      const open =
+        item.state === "waiting" ||
+        item.state === "leased" ||
+        item.state === "accepted" ||
+        item.state === "awaiting-review";
+      if (!open || setAside(item)) continue;
+      const key = [
+        item.body.operation,
+        item.body.subject,
+        item.body.prompt_version,
+        item.body.schema_version,
+      ].join("\u0000");
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [item]);
+      else group.push(item);
+    }
+    let closed = 0;
+    step.gather(() => {
+      for (const group of groups.values()) {
+        if (group.length < 2) continue;
+        const newest = group.reduce((a, b) => (b.place > a.place ? b : a));
+        for (const item of group) {
+          if (item === newest || item.state !== "waiting" || item.lease !== null) continue;
+          step.close(item, "superseded", "asked again", newest.id, "agent");
+          closed += 1;
+        }
+      }
+    });
+    return closed;
+  });
+}
+
 export function cancelWork(queue: DreamQueue, id: string, reason: string): void {
   entry(queue, (step) => {
     const item = step.item(id);

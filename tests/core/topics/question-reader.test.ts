@@ -91,6 +91,7 @@ describe("readTopicQuestionState with kept reads", () => {
         const result = read(store, options);
         return {
           unreadable: [...result.unreadable, "injected-unreadable-shard"],
+          finishedKey: result.finishedKey,
           fold: result.fold,
         };
       },

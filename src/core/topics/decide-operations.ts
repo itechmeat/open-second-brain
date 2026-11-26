@@ -414,10 +414,9 @@ function topicQuestionStateFrom(
   base: TopicQuestionBase,
   nowMs: number,
   standingOf: () => StandingVerdicts,
+  kept: { standing?: StandingVerdicts; plan?: TopicPlan } = {},
 ): TopicQuestionState {
-  let plan: TopicPlan | undefined;
-  let standing: StandingVerdicts | undefined;
-  const standingNow = (): StandingVerdicts => (standing ??= standingOf());
+  const standingNow = (): StandingVerdicts => (kept.standing ??= standingOf());
   return {
     ...base,
     nowMs,
@@ -425,17 +424,24 @@ function topicQuestionStateFrom(
       return standingNow();
     },
     get plan(): TopicPlan {
-      plan ??= planTopics(
+      kept.plan ??= planTopics(
         base.fold,
         base.candidates,
         base.settings,
         nowMs,
         standingAsVerdicts(standingNow()),
       );
-      return plan;
+      return kept.plan;
     },
   };
 }
+
+/**
+ * How long a reader keeps a plan built while neither the planning inputs
+ * nor what the queue finished changed. The plan's clock only decides
+ * which topics went quiet (the review), which no question reads.
+ */
+export const TOPIC_PLAN_KEEP_MS = 60 * 60_000;
 
 /** The question state of a planning read (`catchUpWhere(isTopicPlanningInput)`). */
 export function topicQuestionStateOf(
@@ -460,8 +466,9 @@ function completeRead(read: ViewCatchUp): boolean {
  * answer): the planning inputs are read through kept tails
  * (`catchUpWhereKept`), so only what was appended since the last read is
  * parsed, and the part of the state built from them alone is kept while
- * nothing new was read. Each read still folds the queue afresh, so the
- * standing verdicts are always current. It answers what
+ * nothing new was read. The standing verdicts and the plan are kept
+ * while the queue's applied and owner records stay the same (and for at
+ * most {@link TOPIC_PLAN_KEEP_MS}), so they are always current. It answers what
  * {@link readTopicQuestionState} answers for the same store.
  */
 export class TopicQuestionReader {
@@ -470,6 +477,19 @@ export class TopicQuestionReader {
   readonly #tails: CatchUpTails = new Map();
   #base: TopicQuestionBase | null = null;
   #read: ViewCatchUp | undefined;
+  /**
+   * The standing verdicts and the plan built over `base` while the
+   * queue's finished items read as `key`: a session rechecks the input of
+   * every item it takes and answers, and building the plan of a large
+   * brain takes seconds, so it is built once until something it is built
+   * from changes.
+   */
+  #kept: {
+    readonly base: TopicQuestionBase;
+    readonly key: string;
+    standing?: StandingVerdicts;
+    plan?: TopicPlan;
+  } | null = null;
 
   /** `reads`: the caller's, so the queue fold of each read reads incrementally too. */
   constructor(store: StoreHandle, reads?: DreamWorkReads) {
@@ -502,7 +522,16 @@ export class TopicQuestionReader {
       return null;
     }
     if (fresh || this.#base === null) this.#base = topicQuestionBaseOf(read);
-    return topicQuestionStateFrom(this.#base, nowMs, () => standingVerdicts(queue.fold()));
+    const key = `${queue.finishedKey}/${Math.floor(nowMs / TOPIC_PLAN_KEEP_MS)}`;
+    if (this.#kept?.base !== this.#base || this.#kept.key !== key) {
+      this.#kept = { base: this.#base, key };
+    }
+    return topicQuestionStateFrom(
+      this.#base,
+      nowMs,
+      () => standingVerdicts(queue.fold()),
+      this.#kept,
+    );
   }
 }
 

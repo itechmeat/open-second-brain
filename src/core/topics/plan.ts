@@ -194,6 +194,20 @@ const isActive = (t: TopicState): boolean => t.mergedInto === null && t.status =
  * topic by a shared assign.
  */
 function headTokens(topic: TopicState, withPrivate: boolean): Set<string> {
+  // A topic's head is tokenized once per fold, not once per record asked
+  // about it: a plan over 14,680 records and 65 topics spent its twelve
+  // seconds here.
+  const kept = HEAD_TOKENS.get(topic) ?? {};
+  HEAD_TOKENS.set(topic, kept);
+  return withPrivate
+    ? (kept.withPrivate ??= headTokensOf(topic, true))
+    : (kept.shared ??= headTokensOf(topic, false));
+}
+
+/** The head words of a fold's topic state (states are not changed once folded). */
+const HEAD_TOKENS = new WeakMap<TopicState, { shared?: Set<string>; withPrivate?: Set<string> }>();
+
+function headTokensOf(topic: TopicState, withPrivate: boolean): Set<string> {
   const field = (name: TopicHeadField, value: string | null): string =>
     topic.privateFields[name] && !withPrivate ? "" : (value ?? "");
   const parts = [
