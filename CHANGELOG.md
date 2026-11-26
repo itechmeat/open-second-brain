@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **CI checks the lockfiles for known vulnerabilities.** A new `osv-scanner` job runs Google's OSV-Scanner (action v2.7.1, pinned by commit) over `bun.lock` and `uv.lock` on every pull request and on pushes to `main`, and fails on a known vulnerability; it holds only `contents: read`, uses no secrets and uploads nothing.
+- **The maintainers are named.** `MAINTAINERS.md` lists the maintainers of Open Second Brain and `.github/CODEOWNERS` asks them for review on every pull request.
+
 ## [2.0.3] - 2026-11-26
 
 ### Fixed
