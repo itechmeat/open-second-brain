@@ -5,8 +5,11 @@
  * the brain store takes its default place in the vault. A session start
  * runs the real hook as a child process; the worker it starts is real, and
  * a test waits for the worker's log to name its last step (a file watch
- * with a deadline, no timed sleep), then for the worker to have ended
- * ({@link workerExited}) before anything removes the machine's folders.
+ * with a deadline, no timed sleep), then for the worker to have released
+ * its claim ({@link workerExited}). Every process a machine starts carries
+ * the scratch parent in its environment (`tests/helpers/process-mark.ts`),
+ * detached ones included, and {@link removeScratch} removes the folders
+ * only once none of them is alive.
  * The only thing two machines share is the vault, through {@link copyVault}.
  */
 import { expect } from "bun:test";
@@ -38,6 +41,7 @@ import {
   autoMigrationWorkerLogPath,
 } from "../../../src/core/store-migration/auto-state.ts";
 import { homeEnv } from "../../helpers/platform.ts";
+import { markedProcessesEnded, PROCESS_MARK_ENV } from "../../helpers/process-mark.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOOK = resolve(HERE, "..", "..", "..", "hooks", "active-inject.ts");
@@ -45,6 +49,12 @@ const CLI = resolve(HERE, "..", "..", "..", "src", "cli", "main.ts");
 const PRELOAD = resolve(HERE, "..", "..", "hooks", "fixtures", "record-spawns-preload.ts");
 /** How long a worker may take before a test gives up (a deadline, not a wait). */
 const WORKER_DEADLINE_MS = 90_000;
+/**
+ * The timeout an `afterEach` that calls {@link removeScratch} passes: the
+ * wait for the test's processes runs to {@link WORKER_DEADLINE_MS}, past
+ * bun's 5 s hook default, and the removal comes after it.
+ */
+export const REMOVE_SCRATCH_TIMEOUT_MS = WORKER_DEADLINE_MS + 30_000;
 
 export const REMOVE_TREE = {
   recursive: true,
@@ -95,6 +105,9 @@ export function machine(
     OPEN_SECOND_BRAIN_AUTO_STORE_MIGRATION: "",
     OPEN_SECOND_BRAIN_STORE_ROOT: "",
     OPEN_SECOND_BRAIN_DREAM_AUTO: "false",
+    // Every process of this test, the detached ones its children start
+    // included, inherits it: {@link removeScratch} waits for all of them.
+    [PROCESS_MARK_ENV]: parent,
   };
   return { root, vault, env };
 }
@@ -507,6 +520,21 @@ export function dataFolderEntries(m: Machine): string[] {
   }
 }
 
-export function removeScratch(parent: string | null): void {
-  if (parent !== null) rmSync(parent, REMOVE_TREE);
+/**
+ * Remove a test's scratch once every process its machines started has
+ * ended. A detached child (the migration worker, an index rebuild) runs on
+ * after anything the test waits on: the migration worker outlives the
+ * release of its claim, and even the test file, by its exit work. While
+ * one of them lives it can still write under the scratch, and a folder it
+ * makes after the removal is the leftover `tests/setup.ts` fails the run
+ * on. The scratch goes even when the wait gives up, which then fails the
+ * test with the processes still running.
+ */
+export async function removeScratch(parent: string | null): Promise<void> {
+  if (parent === null) return;
+  try {
+    await markedProcessesEnded(parent, WORKER_DEADLINE_MS);
+  } finally {
+    rmSync(parent, REMOVE_TREE);
+  }
 }

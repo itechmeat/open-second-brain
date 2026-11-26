@@ -31,6 +31,7 @@ import {
   migrationWorkerDone,
   recordIds,
   recordIdsUnder,
+  REMOVE_SCRATCH_TIMEOUT_MS,
   removeScratch,
   runO2b,
   scratch,
@@ -51,10 +52,11 @@ const DEVICE_A = "aaaa0001";
 const DEVICE_B = "bbbb0002";
 
 let parent: string | null = null;
-afterEach(() => {
-  removeScratch(parent);
+afterEach(async () => {
+  const done = parent;
   parent = null;
-});
+  await removeScratch(done);
+}, REMOVE_SCRATCH_TIMEOUT_MS);
 
 /** The 2.0.0 default store root of a machine: its per-user data folder. */
 function externalStore(m: Machine): string {

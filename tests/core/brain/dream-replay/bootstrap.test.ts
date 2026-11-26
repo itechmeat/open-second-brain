@@ -12,6 +12,8 @@ import { BOOTSTRAP_PAGE_SIZE } from "../../../../src/core/brain/dream-replay/boo
 import { appendLogEvent } from "../../../../src/core/brain/log.ts";
 import type { Safeguard } from "../../../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../../../src/core/brain/signal.ts";
+import { appendRecords } from "../../../../src/core/store/appender.ts";
+import { openStore } from "../../../../src/core/store/store-open.ts";
 import { partitionDir } from "../../../../src/core/store/store-paths.ts";
 import { makeStoreEnv, type StoreEnv } from "../../store/fixtures/store-env.ts";
 import {
@@ -61,31 +63,33 @@ function bootstraps(f: DreamReplayFixture): Array<Record<string, unknown>> {
     .map((r) => r.body as Record<string, unknown>);
 }
 
+/** The body of a raw signal capture, as a migrated history holds it. */
+function signalBody(stem: string, topic: string, day: number): Record<string, unknown> {
+  const id = `sig-${dateOf(day)}-${stem}-0b0b0b`;
+  return {
+    id,
+    path: `Brain/inbox/${id}.md`,
+    frontmatter: {
+      kind: "brain-signal",
+      id,
+      created_at: at(day, 9),
+      topic,
+      signal: "positive",
+      agent: "claude",
+      principle: `Follow the rule of ${topic}.`,
+      scope: "coding",
+      tags: ["brain", "brain/signal"],
+    },
+    raw: null,
+    staged: false,
+  };
+}
+
 /** A raw signal capture in a given state, as a migrated history holds it. */
 function storedSignal(f: DreamReplayFixture, stem: string, topic: string, day: number): string {
-  const id = `sig-${dateOf(day)}-${stem}-0b0b0b`;
-  f.append(
-    "signal",
-    {
-      id,
-      path: `Brain/inbox/${id}.md`,
-      frontmatter: {
-        kind: "brain-signal",
-        id,
-        created_at: at(day, 9),
-        topic,
-        signal: "positive",
-        agent: "claude",
-        principle: `Follow the rule of ${topic}.`,
-        scope: "coding",
-        tags: ["brain", "brain/signal"],
-      },
-      raw: null,
-      staged: false,
-    },
-    "events",
-  );
-  return id;
+  const body = signalBody(stem, topic, day);
+  f.append("signal", body, "events");
+  return String(body["id"]);
 }
 
 describe("dream replay: the first replay on an existing brain", () => {
@@ -127,7 +131,19 @@ describe("dream replay: the first replay on an existing brain", () => {
   test("an interrupted inventory continues from the page it reached", () => {
     fx = makeDreamReplayFixture();
     const total = BOOTSTRAP_PAGE_SIZE * 2 + 7;
-    for (let i = 0; i < total; i++) storedSignal(fx, `n${String(i).padStart(4, "0")}`, `t${i}`, 2);
+    // One batch (one write and fsync) instead of an append per signal: the
+    // records are the same, and a slow runner no longer spends the test's
+    // budget on a thousand fsyncs.
+    appendRecords(
+      openStore({ root: fx.storeRoot, device: "dev-a" }),
+      Array.from({ length: total }, (_, i) => ({
+        partition: "shared" as const,
+        stream: "events" as const,
+        kind: "signal",
+        agent: "o2b",
+        body: signalBody(`n${String(i).padStart(4, "0")}`, `t${i}`, 2),
+      })),
+    );
     // Stop at the checkpoint before the second page.
     let pages = 0;
     const guard: Safeguard = {
