@@ -803,6 +803,7 @@ describe("buildCounterpartyBrief items", () => {
     expect(pledgeAsks.some((rel) => rel.endsWith(pastCapSlug))).toBe(false);
   });
 
+  // The fixture writes 97 pledges through the writer; a slow runner needs more than the default.
   test("the pledge scan ceiling bounds the pages the walk parses", () => {
     const adaId = seedPerson("Ada Lovelace");
     // The kept window and the scan ceiling are two ceilings: the window
@@ -829,7 +830,7 @@ describe("buildCounterpartyBrief items", () => {
       buildCounterpartyBrief(vault, { text: PROMPT, triggers: TRIGGERS, now: NOW }),
     );
     expect(capped.items).toEqual([]);
-  });
+  }, 30_000);
 
   test("the character budget stops the walk when the next item would not fit whole", () => {
     const id = seedPerson("Ada Lovelace");
