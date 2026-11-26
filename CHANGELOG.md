@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- **A dream pass no longer fails because a live session held a store lock for a few seconds.** The store work of a pass (`o2b dream run`, the automatic worker, a catch-up: its production, its apply step, and the take and answer calls of its session's server) waits up to two minutes for a busy store lock instead of five seconds, scoped to each synchronous call so no other lock of the process inherits it (a longer `OPEN_SECOND_BRAIN_LOCK_WAIT_MS` still wins; hooks and tool calls of a live session keep five seconds, and the dream pass lock's mutex keeps its own bound); a lock held past that is refused with its holder named (`held by process <pid> (<command>) since <time>`), which every store lock now records beside itself, written through a rename, tied to its lock directory and removed on release only by its own holder (a lock directory older than 60 seconds is still taken over by its age alone, whether or not its holder runs; when the recorded holder no longer runs, the refusal says so and names that age); a pass that had left work in the queue (items produced, answers recorded) and then met such a lock ends as an incomplete pass (exit 0, a `dream-store-lock-busy` warning, the day record `incomplete` naming the work kept), while one that met it before leaving any work, or met it again in the next pass, fails (non-zero exit, day record `failed`); and the device clock lock is no longer held across the directory flush of its write: the clock file is still flushed before it is renamed into place under the lock, every clock update (an observation that only reads the clock included) makes the entry it leaves durable before it returns unless this process already did, and a waiter that has waited longer retries sooner, so under eight writers ticking for eight seconds the longest wait fell from 5009 ms with refusals to under half a second with none.
+
 ## [2.0.4] - 2026-11-26
 
 ### Fixed

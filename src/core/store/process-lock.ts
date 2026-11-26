@@ -152,26 +152,37 @@ export function acquireProcessLock(
     token: randomBytes(16).toString("hex"),
   });
   const started = Date.now();
+  // The mutex around the holder record is held for one file create or
+  // read: it waits within this lock's own budget, never the longer wait
+  // of a background pass that may be taking this lock.
   for (let attempt = 0; ; attempt++) {
-    const answer = withLocalLock(lockTarget, (): { token: string } | HolderSeen => {
-      const mine = record();
-      const write = (fd: number): void => {
-        writeSync(fd, JSON.stringify(mine));
-      };
-      if ("created" in tryCreateLockFile(holderPath, write)) return { token: mine.token };
-      const seen = readHolder(holderPath);
-      if (!abandoned(seen, now())) return seen;
-      removeIfMissing(holderPath);
-      if ("created" in tryCreateLockFile(holderPath, write)) return { token: mine.token };
-      return readHolder(holderPath);
-    });
+    const answer = withLocalLock(
+      lockTarget,
+      (): { token: string } | HolderSeen => {
+        const mine = record();
+        const write = (fd: number): void => {
+          writeSync(fd, JSON.stringify(mine));
+        };
+        if ("created" in tryCreateLockFile(holderPath, write)) return { token: mine.token };
+        const seen = readHolder(holderPath);
+        if (!abandoned(seen, now())) return seen;
+        removeIfMissing(holderPath);
+        if ("created" in tryCreateLockFile(holderPath, write)) return { token: mine.token };
+        return readHolder(holderPath);
+      },
+      budgetMs,
+    );
     if ("token" in answer) {
       const token = answer.token;
       return () => {
-        withLocalLock(lockTarget, () => {
-          const seen = readHolder(holderPath);
-          if (seen.kind === "record" && seen.holder.token === token) removeIfMissing(holderPath);
-        });
+        withLocalLock(
+          lockTarget,
+          () => {
+            const seen = readHolder(holderPath);
+            if (seen.kind === "record" && seen.holder.token === token) removeIfMissing(holderPath);
+          },
+          budgetMs,
+        );
       };
     }
     const waited = Date.now() - started;
