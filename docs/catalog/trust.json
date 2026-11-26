@@ -441,7 +441,7 @@
     {
       "slug": "remote-read-reservation",
       "name": "Remote read reservation",
-      "summary": "Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument.",
+      "summary": "Private pages and private-partition lane entries are withheld from remote callers; reach is a transport fact.",
       "status": "stable",
       "capabilities": [
         "Sets reach in the transport: stdio, the CLI and a loopback HTTP bind are local; other HTTP requests are remote",
@@ -450,11 +450,16 @@
         "Refuses a reach argument in any spelling, by name, instead of reading or ignoring it",
         "Refuses an owner scope that disagrees with the server's identity under `integrity.owner_scope_delivery: fail`",
         "Gives a remote caller vault-relative paths and named placeholders, never an absolute path of the host",
-        "Counts reserved pages and the note-returning surfaces that do not yet consult the field (`search check`)"
+        "Counts reserved pages and the note-returning surfaces that do not yet consult the field (`search check`)",
+        "Withholds lane entries of the private partition from remote lists, shows, counts and names",
+        "Refuses a remote write that would meet a private entry with one fixed answer that names nothing",
+        "Keeps new receipts, log events and ledger rows that name a private lane entry in the private partition"
       ],
       "limits": [
         "Local reach proves file-equivalent access or a request from this host, not the operator's intent",
-        "A vault that never writes the reserved token behaves as before"
+        "A vault that never writes the reserved token behaves as before",
+        "While the store cannot be read whole, a remote caller's lane reads answer as empty",
+        "Older records that named a private entry keep their shared copies on peers that already synced them"
       ],
       "surfaces": {},
       "docs": [

@@ -76,7 +76,8 @@
       ],
       "limits": [
         "brain_entity only reads; set, relate, archive, prune and merge run from the CLI",
-        "Runs no entity-recognition model: extraction comes from the calling agent through brain_intake_entities"
+        "Runs no entity-recognition model: extraction comes from the calling agent through brain_intake_entities",
+        "A remote entity write that would land the entity in the private partition is refused"
       ],
       "surfaces": {
         "cli": ["brain entity", "brain diarize"],
@@ -162,7 +163,8 @@
       ],
       "limits": [
         "Runs no model: panel steps and design-note text come from the calling agent and are only validated",
-        "Rated-decision recall stays off until decision_recall.max_per_session is set"
+        "Rated-decision recall stays off until decision_recall.max_per_session is set",
+        "An older review obligation of a private decision keeps a shared copy that carries its title"
       ],
       "surfaces": {
         "cli": ["brain decision", "brain panel", "brain design-note"],
@@ -338,7 +340,8 @@
         "Suggests edges between entities linked from the same notes by a PMI score (2+ shared notes, top 100)",
         "Audits a hub rule's linked set as well-covered, fragile or missing; a hub needs 5+ links and 30% link text",
         "Proposes missing edges by identity strength; `--apply` needs a confirm phrase, a holdout gate, max 25 writes",
-        "Rewrites wikilinks to full, short or preserved path forms (`brain links normalize`)"
+        "Rewrites wikilinks to full, short or preserved path forms (`brain links normalize`)",
+        "Refuses a remote bridge dismissal with the fixed answer while the dismissal list is private"
       ],
       "limits": [
         "Backlinks read Brain rules, signals and logs; unlinked mentions, explorer and hubs cover rules; no plain notes",

@@ -235,7 +235,8 @@
         "Biases recall toward a query and path prefix for 120 minutes, globally or per session (`search focus set`)",
         "Scores focus +0.06 or -0.015 on the path prefix, up to +0.04 or -0.01 on terms, clamped to -0.03..+0.08",
         "Grid-searches pool multiplier, traversal depth, learned weights and expansion by MRR (`brain tune run`)",
-        "Reports the access activation that ranking boosts by: event, path and co-access counts (`brain activation`)"
+        "Reports the access activation that ranking boosts by: event, path and co-access counts (`brain activation`)",
+        "Answers a remote tuning run without saving its winner; a remote tuning reset keeps the saved tuning"
       ],
       "limits": [
         "Learned weights and the tuning winner (`Brain/search/tuning.json`) apply only under their flags, default off",

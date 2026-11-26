@@ -60,7 +60,8 @@
       "limits": [
         "Runs no model: drafts and rewrite transcripts come from the calling agent through envelopes",
         "Rewrite checks look at tools, paths, order and output fields, never at prose",
-        "Rewrite rounds are scored and staged only from the CLI; MCP reads their status"
+        "Rewrite rounds are scored and staged only from the CLI; MCP reads their status",
+        "An interrupted accept of a private proposal is left to a local recovery; a remote one does not name it"
       ],
       "surfaces": {
         "cli": [

@@ -307,7 +307,8 @@
       "limits": [
         "Scans are read-only, but `brain refresh --stale` and `brain tiers accept` write with no `--apply` flag",
         "Contested slots resolve by themselves only through an operator-set `hygiene.resolver_cmd`; else they wait",
-        "The digest line reaches only hosts with a non-blocking Stop channel (Claude Code)"
+        "The digest line reaches only hosts with a non-blocking Stop channel (Claude Code)",
+        "A remote hygiene apply or refresh is refused while any lane holds a private entry; dry runs pass"
       ],
       "surfaces": {
         "cli": [

@@ -116,7 +116,7 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `secret-redaction` — Masks secret-shaped values in what is written, logged or reported; every export path passes one egress guard. | kw: secret redaction, data loss prevention, egress control, credential scrubbing, log sanitization
 - `write-safety` — Keeps every write inside the vault and atomic, serializes writers with locks and refuses links planted in local state. | kw: path traversal protection, atomic file writes, file locking, symlink attack protection, crash safety
 - `agent-identity` — Names the agent behind signals, evidence and log lines from an argument, a token or the config; stamps the process kind. | kw: agent identity, write attribution, origin tracking, subagent attribution, identity binding
-- `remote-read-reservation` — Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument. | kw: private notes, remote access restriction, data classification, visibility labels, access control
+- `remote-read-reservation` — Private pages and private-partition lane entries are withheld from remote callers; reach is a transport fact. | kw: private notes, remote access restriction, data classification, visibility labels, access control
 
 ## vault - Vault notes and the human view (vault.json)
 
