@@ -116,7 +116,7 @@ Brain verbs (observing memory):
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
-  secret              Capability-gated secret custody: set, list, rm, run, lock, unlock, export, import (use w/o exposure)
+  secret              Capability-gated secret custody: set, list, rm, run, lock, unlock, unwrap, export, import (use w/o exposure)
   maintenance         Quiet-window, lease-guarded lane (dream, reindex, bridges, clusters, custom tasks)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes

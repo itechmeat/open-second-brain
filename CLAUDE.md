@@ -75,8 +75,11 @@ file per area (`docs/catalog/<area>.json`, contract
 `docs/catalog/feature-catalog.schema.json`) and a generated `INDEX.md`. Every
 coverable CLI verb, MCP tool, hook script and skill belongs to exactly
 one feature, every declared setting to at least one, and every MCP tool
-is named in backticks in `docs/mcp.md`. After adding,
-renaming or removing any of them, or after editing an area file, run:
+is named in backticks in `docs/mcp.md`. A command with subcommands that
+also runs by itself carries `runnable` in `src/cli/command-manifest.ts`
+(`tests/cli/manifest-runnable.test.ts` holds it to what the command does).
+After adding, renaming or removing any of them, or after editing an area
+file, run:
 
 ```
 bun run catalog:build
@@ -85,7 +88,7 @@ bun run catalog:check
 
 CI gates on `bun run catalog:check` (the `validate` job), and the
 pre-commit hook runs the same check. Never hand-edit `INDEX.md`; it
-stays within 20000 bytes. The catalog and its schema are repository
+stays within 22000 bytes. The catalog and its schema are repository
 documentation under `docs/`, which the npm package does not ship.
 `docs/catalog/README.md` holds the field and slug rules.
 

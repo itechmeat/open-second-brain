@@ -43,12 +43,17 @@ setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 
 /** Every leaf verb of a manifest, space-joined. */
+/**
+ * Every verb that runs: each leaf, and each command with subcommands the
+ * manifest marks `runnable` (it also runs by itself, as `o2b doctor` and
+ * `o2b dream queue` do), so a writer is never hidden behind a subcommand.
+ */
 function leafVerbs(commands: ReadonlyArray<CliCommandManifest>, prefix: string[] = []): string[] {
   return commands.flatMap((command) => {
     const path = [...prefix, command.name];
-    return command.commands !== undefined && command.commands.length > 0
-      ? leafVerbs(command.commands, path)
-      : [path.join(" ")];
+    if (command.commands === undefined || command.commands.length === 0) return [path.join(" ")];
+    const own = command.runnable === true ? [path.join(" ")] : [];
+    return [...own, ...leafVerbs(command.commands, path)];
   });
 }
 
@@ -87,8 +92,15 @@ function hookPairs(): string[] {
 const SPAWN_RE =
   /detached:\s*(?:true|process\.platform|platform\s*!==)|\b(?:child|proc|worker)\.unref\(\)|\bspawnSelfDetached\(/;
 
-/** A file that runs the CLI's `main()` as a process of its own. */
-const ENTRY_RE = /process\.exit\(await main\(|import\.meta\.main/;
+/**
+ * A file that runs the CLI's `main()` as a process of its own: it exits
+ * with `main()`'s code, straight (`process.exit(await main(`) or through
+ * the final flush every entry point exits by (`exitWhenFlushed(`, any call
+ * but the definition in `src/cli/stdout-guard.ts`), or it is a module run
+ * as the program (`import.meta.main`).
+ */
+const ENTRY_RE =
+  /process\.exit\(await main\(|(?<!function\s)\bexitWhenFlushed\(|import\.meta\.main/;
 
 function sourceFiles(pattern: RegExp): string[] {
   const out: string[] = [];

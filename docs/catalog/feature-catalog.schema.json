@@ -7,10 +7,26 @@
   "required": ["area", "name", "summary", "features"],
   "additionalProperties": false,
   "properties": {
-    "area": { "$ref": "#/$defs/slug" },
-    "name": { "type": "string", "minLength": 1, "maxLength": 60 },
-    "summary": { "type": "string", "minLength": 1, "maxLength": 160 },
-    "features": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/feature" } }
+    "area": {
+      "$ref": "#/$defs/slug"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/feature"
+      }
+    }
   },
   "$defs": {
     "slug": {
@@ -18,22 +34,27 @@
       "type": "string",
       "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
     },
-    "line": { "type": "string", "minLength": 1 },
-    "repo_path": {
-      "description": "A repository-relative path: no leading slash, no parent segment.",
+    "line": {
       "type": "string",
-      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^#\\s]+$"
+      "minLength": 1
+    },
+    "repo_path": {
+      "description": "A repository-relative path with forward slashes: no leading slash, no drive letter, no backslash, no parent segment.",
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^#\\s\\\\]+$"
     },
     "doc_ref": {
-      "description": "A repository-relative doc path with an optional #anchor.",
+      "description": "A repository-relative doc path as repo_path, with an optional #anchor.",
       "type": "string",
-      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^#\\s]+(#[^#\\s]+)?$"
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^#\\s\\\\]+(#[^#\\s\\\\]+)?$"
     },
     "surface_list": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/line" }
+      "items": {
+        "$ref": "#/$defs/line"
+      }
     },
     "feature": {
       "type": "object",
@@ -51,9 +72,19 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "slug": { "$ref": "#/$defs/slug" },
-        "name": { "type": "string", "minLength": 1, "maxLength": 60 },
-        "summary": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "slug": {
+          "$ref": "#/$defs/slug"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
         "status": {
           "type": "string",
           "enum": ["stable", "experimental", "optional", "deprecated"]
@@ -62,38 +93,56 @@
           "description": "Former slugs or names of this feature.",
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/line" }
+          "items": {
+            "$ref": "#/$defs/line"
+          }
         },
         "capabilities": {
           "description": "One behavior per line.",
           "type": "array",
           "minItems": 3,
           "maxItems": 8,
-          "items": { "$ref": "#/$defs/line" }
+          "items": {
+            "$ref": "#/$defs/line"
+          }
         },
         "limits": {
           "description": "Neutral facts of scope that are already true.",
           "type": "array",
           "maxItems": 4,
-          "items": { "$ref": "#/$defs/line" }
+          "items": {
+            "$ref": "#/$defs/line"
+          }
         },
         "surfaces": {
           "description": "A key is omitted when its list would be empty.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "cli": { "$ref": "#/$defs/surface_list" },
-            "mcp": { "$ref": "#/$defs/surface_list" },
-            "hooks": { "$ref": "#/$defs/surface_list" },
-            "skills": { "$ref": "#/$defs/surface_list" },
-            "config": { "$ref": "#/$defs/surface_list" }
+            "cli": {
+              "$ref": "#/$defs/surface_list"
+            },
+            "mcp": {
+              "$ref": "#/$defs/surface_list"
+            },
+            "hooks": {
+              "$ref": "#/$defs/surface_list"
+            },
+            "skills": {
+              "$ref": "#/$defs/surface_list"
+            },
+            "config": {
+              "$ref": "#/$defs/surface_list"
+            }
           }
         },
         "docs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/doc_ref" }
+          "items": {
+            "$ref": "#/$defs/doc_ref"
+          }
         },
         "code": {
           "description": "Entry points of the feature in the code.",
@@ -101,7 +150,9 @@
           "minItems": 1,
           "maxItems": 3,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/repo_path" }
+          "items": {
+            "$ref": "#/$defs/repo_path"
+          }
         },
         "keywords": {
           "description": "Words outsiders use for this feature, the most useful first.",
@@ -109,7 +160,9 @@
           "minItems": 4,
           "maxItems": 8,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/line" }
+          "items": {
+            "$ref": "#/$defs/line"
+          }
         }
       }
     },
@@ -118,7 +171,12 @@
       "required": ["features"],
       "additionalProperties": false,
       "properties": {
-        "features": { "type": "array", "items": { "$ref": "#/$defs/removed_feature" } }
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/removed_feature"
+          }
+        }
       }
     },
     "removed_feature": {
@@ -126,10 +184,24 @@
       "required": ["slug", "name", "status", "replaced_by"],
       "additionalProperties": false,
       "properties": {
-        "slug": { "$ref": "#/$defs/slug" },
-        "name": { "type": "string", "minLength": 1 },
-        "status": { "type": "string", "enum": ["removed", "merged"] },
-        "replaced_by": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/slug" } }
+        "slug": {
+          "$ref": "#/$defs/slug"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": ["removed", "merged"]
+        },
+        "replaced_by": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/slug"
+          }
+        }
       }
     }
   }

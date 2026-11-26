@@ -1466,8 +1466,10 @@ function cmdHelp(argv: ReadonlyArray<string>): number {
 function cmdCompletions(argv: ReadonlyArray<string>): number {
   // The shell is named either way: `--shell zsh`, the form the manifest
   // declares and the reference shows, or the positional `zsh`.
-  const { flags, positional } = parseFlags(argv, { shell: { type: "string" } });
-  const named = typeof flags["shell"] === "string" ? [flags["shell"]] : [];
+  // A list, so a second `--shell` is counted and refused rather than
+  // silently replacing the first.
+  const { flags, positional } = parseFlags(argv, { shell: { type: "string-array" } });
+  const named = Array.isArray(flags["shell"]) ? flags["shell"] : [];
   const shells = [...named, ...positional];
   if (shells.length !== 1) {
     process.stderr.write(

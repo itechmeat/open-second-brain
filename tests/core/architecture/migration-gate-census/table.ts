@@ -143,6 +143,9 @@ export const OUTSIDE = Object.freeze({
   server:
     "starts a long-running server or watcher whose index lives outside the vault; a census run " +
     "never starts one, and what it writes passes the same guards as the driven verbs.",
+  scratch:
+    "works on a throwaway vault, config and search store it creates in the temp directory and " +
+    "removes; it never opens the configured vault.",
 } as const);
 
 export type OutsideReason = keyof typeof OUTSIDE;
@@ -201,7 +204,9 @@ function o(reason: OutsideReason): CliRow {
 }
 
 /**
- * Every CLI leaf verb (`CLI_COMMAND_MANIFEST`). `{vault}` and `{dir}` in an
+ * Every CLI verb that runs (`CLI_COMMAND_MANIFEST`): each leaf, and each
+ * command with subcommands that the manifest marks `runnable` because it
+ * also runs by itself (`o2b dream queue`). `{vault}` and `{dir}` in an
  * argv are the run's vault and its scratch directory outside the vault.
  */
 export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
@@ -263,6 +268,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
     "--reason",
     "did not work",
   ]),
+  "brain dead-letters": r,
   "brain dead-letters list": r,
   "brain dead-letters recover": u("fixtureState"),
   "brain dead-letters show": r,
@@ -429,6 +435,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "brain scaffold-stub": w(V, ["brain", "scaffold-stub", "write", "[[Census Stub]]", "--apply"]),
   "brain scan-citations": u("fixtureState"),
   "brain scan-inline": { kind: "recorder", records: /^Brain\/log\// },
+  "brain schema": r,
   "brain schema apply": u("inputs"),
   "brain schema explain": r,
   "brain schema graph": r,
@@ -467,6 +474,9 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
     "--reason",
     "census",
   ]),
+  // Its operations are positional: list and usage read, accept, learn,
+  // reject, recover and page-draft need a proposal the fixture does not build.
+  "brain skill-proposals": u("inputs"),
   "brain skill-proposals rewrite-plan": r,
   "brain skill-proposals rewrite-score": u("inputs"),
   "brain snapshot diff": r,
@@ -516,6 +526,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "brain vitals": { kind: "recorder", records: /^Brain\/metrics\// },
   "brain watchdog": w(V, ["brain", "watchdog"]),
   "brain weekly": r,
+  "brain writes": r,
   "brain writes destinations": r,
   "brain writes list": r,
   "brain writes prune-images": u("fixtureState"),
@@ -530,12 +541,15 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   "decision-model thresholds set": o("dmState"),
   "discipline report": r,
   doctor: r,
+  "doctor selftest": o("scratch"),
   "export-config": o("outPath"),
   help: r,
   index: w(V, ["index", "--vault", "{vault}"]),
   init: o("config"),
   install: u("host"),
   "install-cli": o("hostBin"),
+  // Serves the MCP tools until stopped; the MCP section drives every tool.
+  mcp: o("server"),
   "mcp token list": r,
   "mcp token mint": w(V, [
     "mcp",
@@ -559,6 +573,8 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   onboarding: r,
   "partner codegraph report": r,
   "partner codegraph resync": o("stdout"),
+  // `search <query>` is `search query <query>`.
+  search: r,
   "search check": r,
   "search event-anchor-backfill": u("index"),
   "search expand": r,
@@ -640,10 +656,12 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   status: r,
   "store device list": r,
   "store device retire": o("store"),
+  "dream agent": r,
   "dream agent check": o("deviceState"),
   "dream agent set": o("config"),
   "dream agent show": r,
   "dream owner": o("store"),
+  "dream queue": r,
   "dream queue approve": o("store"),
   "dream queue cancel": o("store"),
   "dream queue reject": o("store"),

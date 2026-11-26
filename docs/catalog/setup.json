@@ -158,7 +158,7 @@
     {
       "slug": "mcp-server",
       "name": "MCP server and tool profiles",
-      "summary": "Serves the tools over stdio or HTTP, with tool profiles and a two-pass catalog for hosts with tool limits.",
+      "summary": "Serves the tools over stdio or HTTP with tool profiles, a two-pass catalog, parked large results and latency metrics.",
       "status": "stable",
       "capabilities": [
         "Serves MCP over stdio by default or Streamable HTTP on 127.0.0.1 with a Host/Origin DNS-rebinding guard",
@@ -195,8 +195,8 @@
         "model context protocol",
         "tool filtering",
         "lazy tool loading",
-        "streamable http",
-        "result truncation"
+        "result truncation",
+        "streamable http"
       ]
     },
     {
@@ -263,7 +263,7 @@
         "Readiness probes run only with `--readiness`; a probe that times out reports unknown, not failed"
       ],
       "surfaces": {
-        "cli": ["status", "doctor", "version", "help", "export-config"],
+        "cli": ["status", "doctor", "doctor selftest", "version", "help", "export-config"],
         "mcp": ["second_brain_status", "vault_health"]
       },
       "docs": [
@@ -279,6 +279,44 @@
         "self-test",
         "readiness probe",
         "status report"
+      ]
+    },
+    {
+      "slug": "mcp-server-safeguards",
+      "name": "MCP server safeguards",
+      "summary": "The MCP server refuses unknown arguments, survives stray faults, drains on shutdown and stops writing once outdated.",
+      "status": "stable",
+      "capabilities": [
+        "Refuses a top-level argument a tool does not declare and names the closest declared one, if any",
+        "Names and counts an unhandled promise rejection and keeps serving; HTTP `/health` shows the count",
+        "Rate-limits fault lines to a burst per window, then one summary line; the count is never limited",
+        "Exits on an uncaught exception, letting its exit hooks checkpoint the search index and release locks",
+        "On SIGINT or SIGTERM stops accepting, finishes in-flight calls within a deadline, names any it abandons, exits 130 or 143",
+        "Refuses writes with `server_outdated` once the installed version or the machine's store layout changed since start"
+      ],
+      "limits": [
+        "The argument gate is top-level only; unknown keys inside nested objects still reach the handler.",
+        "What the outdated check cannot read counts as unchanged, so it never refuses on an unknown.",
+        "The outdated refusal lasts until the agent session restarts the server."
+      ],
+      "surfaces": {},
+      "docs": [
+        "docs/mcp.md#argument-contract-since-v1460",
+        "docs/mcp.md#shutdown-and-draining-since-v1500",
+        "docs/mcp.md#background-faults-since-v1650"
+      ],
+      "code": [
+        "src/mcp/argument-guard.ts",
+        "src/cli/mcp-fault-guard.ts",
+        "src/mcp/stale-server.ts"
+      ],
+      "keywords": [
+        "graceful shutdown",
+        "input validation",
+        "fault tolerance",
+        "crash resilience",
+        "version skew",
+        "request draining"
       ]
     }
   ]

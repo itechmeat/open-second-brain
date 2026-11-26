@@ -28,12 +28,9 @@
         "cli": [
           "store init",
           "store path",
-          "store device",
           "store device list",
           "store device retire",
-          "store partition",
           "store partition leave",
-          "store shard",
           "store shard quarantine",
           "store shard list",
           "store shard release",
@@ -69,7 +66,7 @@
         "Restores the legacy tree and replays the records written since (`--rollback`)",
         "Moves the legacy tree to a local archive once every cohort device switched or retired (`--remove-legacy`)",
         "Counts an unswitched cohort device silent for `migration.silent_device_days` (30, 0 off) as retired",
-        "Merges missing keys into `_brain.yaml`, refreshes `_BRAIN.md` and repairs corrupted principles (`brain upgrade`)",
+        "Merges missing keys into `_brain.yaml`, refreshes `_BRAIN.md` and repairs corrupted principles (`brain upgrade`), also by itself after an update",
         "Moves a store that 2.0.0 left outside the vault into `.open-second-brain-store/` by copy, verify, bind, commit"
       ],
       "limits": [
@@ -104,6 +101,7 @@
         "schema migration",
         "dry run",
         "rollback",
+        "automatic upgrade",
         "backfill",
         "storage relocation"
       ]
@@ -128,7 +126,6 @@
       ],
       "surfaces": {
         "cli": [
-          "brain settings",
           "brain settings get",
           "brain settings set",
           "brain settings unset",

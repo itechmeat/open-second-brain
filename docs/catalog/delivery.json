@@ -10,7 +10,7 @@
       "status": "stable",
       "capabilities": [
         "Injects confirmed rules, topic heads, pinned context, active.md and lessons.md at session start, compact included",
-        "Renders active.md from confirmed and quarantined preferences, a 30-day most-applied top 10 and 3 retirements",
+        "Renders active.md from confirmed and quarantined preferences, a 30-day most-applied top 10 and 3 retirements; `guardrails.provenance_trust_ordering` (off) puts stated rules before deduced and inferred ones",
         "Charges memory to `active.inject_budget_chars` (8000), cutting sections to headlines, then dropping them",
         "Keeps one hook payload under 9000 chars (UTF-8 bytes on Codex), ending it in one truncation note",
         "Adds up to 12 project topic heads (1600 chars) and the pinned context (1200 chars) inside that budget",
@@ -38,6 +38,7 @@
         "custom instructions",
         "session bootstrap",
         "system prompt",
+        "provenance trust ordering",
         "core memory",
         "context priming"
       ]
@@ -92,7 +93,6 @@
       ],
       "surfaces": {
         "cli": [
-          "brain standing-rules",
           "brain standing-rules show",
           "brain standing-rules set",
           "brain standing-rules clear"

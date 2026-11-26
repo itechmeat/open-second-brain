@@ -17,16 +17,17 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `dream-pass` — Promotes repeated signals to rules, confirms, quarantines and retires them by evidence, and replays missed days. | kw: memory consolidation, sleep-time compute, reflection, preference learning, rule induction
 - `cross-topic-rules` [optional] — Optionally promotes one rule a day per owner from confirmed rules that repeat across topics, citing each source. | kw: rule generalization, pattern mining, cross-domain transfer, knowledge abstraction, inductive learning
 - `dream-owner` — One device and agent run the live dream passes for a brain; other machines preview, and the role can move. | kw: leader election, single writer, job ownership, failover, multi-device sync
-- `dream-agent` — Model work of a dream pass waits in a queue for the operator's own agent command, which is set and verified per machine. | kw: job queue, background agent, work leasing, headless agent, task queue
+- `dream-agent` — Model work of a dream pass waits in a queue for the operator's own agent command, which is set and verified per machine. | kw: job queue, background agent, work leasing, headless agent, process supervision
 - `dream-drafts` [optional] — Model-written text from a dream pass records its agent and model and can be held for operator approval. | kw: human-in-the-loop, approval workflow, draft review, provenance, authorship attribution
 - `preference-lifecycle` — Reads, pins, rejects, merges and expires preferences, with their evidence trail and full mutation audit. | kw: memory management, audit trail, rule pinning, memory expiry, deduplication
 - `memory-corrections` — Tombstones, supersedes or time-replaces any memory and reports the blast radius of a correction first. | kw: memory correction, soft delete, belief revision, bi-temporal validity, fact invalidation
 - `lessons` — Scores outcome-tagged lessons into a digest and promotes approved ones into managed blocks of agent rule files. | kw: lessons learned, outcome tracking, experience replay, self-improving agent, agent rules file
 - `decision-models` [optional] — An optional typed judgment model that reranks, filters and checks candidates, with evaluation and thresholds per use. | kw: llm as judge, reranking, classifier, shadow mode, decision threshold
+- `judgment-commands` — Hands a judgment call to an operator-configured command as JSON on stdin and reads its JSON verdict back. | kw: llm as judge, external evaluator, command hook, pluggable judge, json over stdio
 
 ## delivery - Context delivery (delivery.json)
 
-- `active-preferences` — Each session, and each subagent, starts with the confirmed rules, recent retirements, topic heads and pinned context. | kw: memory injection, custom instructions, session bootstrap, system prompt, core memory
+- `active-preferences` — Each session, and each subagent, starts with the confirmed rules, recent retirements, topic heads and pinned context. | kw: memory injection, custom instructions, session bootstrap, system prompt, provenance trust ordering
 - `pinned-context` — A current-task scratchpad that survives context rotation without becoming a permanent preference. | kw: working memory, scratchpad, memory block, task notes, sticky context
 - `standing-rules` — Operator-written rules, vault-wide or scoped to a project, harness or host, delivered to every session. | kw: custom instructions, system prompt, project rules, agent rules file, constitution
 - `context-packs` — Returns preference and retired-rule pages by tier and recency under a token budget, with presets and a size report. | kw: context packing, token budget, context window management, context engineering, retrieval budget
@@ -73,9 +74,10 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `host-install` — Writes, checks, updates and removes the integration for each supported agent host; Aider runs inside a memory wrapper. | kw: mcp client configuration, editor integration, plugin installer, config merge, uninstaller
 - `hermes-memory-provider` — Runs Open Second Brain as the Hermes Agent memory provider and stores Hermes built-in memory writes in the brain. | kw: memory provider, memory plugin, agent memory backend, context prefetch, memory hooks
 - `openclaw-plugin` — A native OpenClaw plugin with status, page listing and health tools and a per-turn agent identity reminder. | kw: native plugin, agent plugin, tool registration, prompt hook, identity reminder
-- `mcp-server` — Serves the tools over stdio or HTTP, with tool profiles and a two-pass catalog for hosts with tool limits. | kw: mcp server, model context protocol, tool filtering, lazy tool loading, streamable http
+- `mcp-server` — Serves the tools over stdio or HTTP with tool profiles, a two-pass catalog, parked large results and latency metrics. | kw: mcp server, model context protocol, tool filtering, lazy tool loading, result truncation
 - `mcp-access-tokens` [optional] — Named per-agent tokens for the HTTP transport, and one-command provisioning of a host with its token. | kw: api tokens, bearer authentication, per-agent credentials, token rotation, credential provisioning
 - `install-health` — Reports configuration, vault and plugin health, the installed version and a redacted config snapshot. | kw: health check, diagnostics, doctor command, self-test, readiness probe
+- `mcp-server-safeguards` — The MCP server refuses unknown arguments, survives stray faults, drains on shutdown and stops writing once outdated. | kw: graceful shutdown, input validation, fault tolerance, crash resilience, version skew
 
 ## skills - Skills and procedural memory (skills.json)
 
@@ -94,7 +96,7 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 ## store - Brain store and maintenance (store.json)
 
 - `brain-store` — Append-only shared and private record partitions that several machines can sync, with device, partition and shard care. | kw: local-first sync, append-only log, event sourcing, hybrid logical clock, crdt
-- `store-migration` — Moves a legacy brain into the store, upgrades release-owned files and relocates vault state, with dry runs. | kw: data migration, schema migration, dry run, rollback, backfill
+- `store-migration` — Moves a legacy brain into the store, upgrades release-owned files and relocates vault state, with dry runs. | kw: data migration, schema migration, dry run, rollback, automatic upgrade
 - `shared-settings` — Settings every machine of a brain agrees on, read and changed by name, with operator values protected from agents. | kw: shared configuration, config sync, last-writer-wins register, settings management, access policy
 - `storage-report` — Per-surface storage census with a growth forecast against a cap, and compaction of expired receipt records. | kw: disk usage, capacity planning, storage quota, log compaction, growth forecast
 - `maintenance-lane` — A lease-guarded quiet-window lane that runs dream, reindex, links and custom tasks, or prints a cron recipe. | kw: background jobs, scheduled maintenance, job scheduler, cron, distributed lease
@@ -111,6 +113,10 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `snapshots-rollback` — Recovery points before brain mutations, with diff and restore; on a store-switched machine rollback refuses. | kw: backup, restore point, point-in-time recovery, rollback, versioning
 - `agent-provenance` — Shows which agent contributed which signals and notes, compares agents, and groups signals by source. | kw: data provenance, multi-agent attribution, lineage, contribution tracking, source tracking
 - `answer-quote-check` — At the end of a turn, checks the agent's quoted spans against the notes the turn actually had. | kw: citation verification, hallucination detection, grounding check, quote verification, answer faithfulness
+- `secret-redaction` — Masks secret-shaped values in what is written, logged or reported; every export path passes one egress guard. | kw: secret redaction, data loss prevention, egress control, credential scrubbing, log sanitization
+- `write-safety` — Keeps every write inside the vault and atomic, serializes writers with locks and refuses links planted in local state. | kw: path traversal protection, atomic file writes, file locking, symlink attack protection, crash safety
+- `agent-identity` — Names the agent behind each write from its argument, its MCP token or the configured name, and stamps its process kind. | kw: agent identity, write attribution, origin tracking, subagent attribution, identity binding
+- `remote-read-reservation` — Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument. | kw: private notes, remote access restriction, data classification, visibility labels, access control
 
 ## vault - Vault notes and the human view (vault.json)
 

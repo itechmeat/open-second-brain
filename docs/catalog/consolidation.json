@@ -147,7 +147,7 @@
         "Starts the configured command without a shell, filling {prompt}, {mcp_config}, {mcp_command}, {mcp_args_json}",
         "Gives the session one MCP server with take, answer and finish tools, bound to the run by a hashed token",
         "Uses a command only after agent check answered two canary items in a throwaway store within 120 s",
-        "Bounds a session by dream_agent_budget_ms (300 s), dream_agent_items (100) and dream_agent_batch (10)",
+        "Bounds a session by dream_agent_budget_ms (300 s), dream_agent_items (100) and dream_agent_batch (10); at the bound it ends the session's whole process tree",
         "Tries one dream_agent_fallbacks entry when a session fails to start, exits with an error or answers nothing",
         "Marks the session process so hooks capture nothing and no dream pass starts inside it"
       ],
@@ -166,7 +166,8 @@
           "dream queue",
           "dream queue retry",
           "dream queue cancel"
-        ]
+        ],
+        "mcp": ["dream_work_take", "dream_work_answer", "dream_work_finish"]
       },
       "docs": [
         "docs/dream.md#setting-the-agent",
@@ -183,6 +184,7 @@
         "background agent",
         "work leasing",
         "headless agent",
+        "process supervision",
         "task queue",
         "sleep-time agent"
       ]
@@ -338,7 +340,6 @@
       ],
       "surfaces": {
         "cli": [
-          "brain lessons",
           "brain lessons candidates",
           "brain lessons approve",
           "brain lessons deny",
@@ -416,6 +417,36 @@
         "decision threshold",
         "provider fallback",
         "cost cap"
+      ]
+    },
+    {
+      "slug": "judgment-commands",
+      "name": "Judgment commands",
+      "summary": "Hands a judgment call to an operator-configured command as JSON on stdin and reads its JSON verdict back.",
+      "status": "stable",
+      "capabilities": [
+        "Sends one question as JSON on stdin to a configured shell command and reads one JSON answer from stdout",
+        "Serves the benchmark judge (`bench_judge_cmd`), the hygiene conflict resolver (`hygiene.resolver_cmd`) and the skill rewrite judge (`skill_rewrite_judge_cmd`)",
+        "Treats an unset command as skipped, and a nonzero exit, a signal, a timeout or malformed JSON as an error result",
+        "Ends a command after 60 seconds by default"
+      ],
+      "limits": [
+        "Verdicts are advisory: the deterministic result stands whatever the command answers.",
+        "Open Second Brain runs no model here; every command is the operator's own."
+      ],
+      "surfaces": {},
+      "docs": ["docs/cli-reference.md#memory-observability-since-v0390"],
+      "code": [
+        "src/core/reliability/command-bridge.ts",
+        "src/core/bench/judge.ts",
+        "src/core/brain/hygiene/resolve-conflicts.ts"
+      ],
+      "keywords": [
+        "llm as judge",
+        "external evaluator",
+        "command hook",
+        "pluggable judge",
+        "json over stdio"
       ]
     }
   ]

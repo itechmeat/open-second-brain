@@ -25,7 +25,7 @@
         "Lane weights, `--source` and `--expand` are CLI-only; the served MCP schema omits them"
       ],
       "surfaces": {
-        "cli": ["search query", "search expand", "search plan", "brain sgrep"],
+        "cli": ["search", "search query", "search expand", "search plan", "brain sgrep"],
         "mcp": ["brain_search", "brain_search_expand", "brain_recall_gate"],
         "hooks": ["pretool-orient"]
       },
@@ -53,7 +53,7 @@
       "capabilities": [
         "Indexes vault Markdown into SQLite FTS5 (BM25) in 800-token chunks with 100 overlap; frontmatter is chunk 0",
         "Updates the index incrementally and skips files whose content did not change (`search index`)",
-        "Rebuilds the index from scratch, parking the previous one as `.bak` or `.old` (`search reindex`)",
+        "Rebuilds the index from scratch, parking the previous one as `.bak` or `.old` (`search reindex`); after an update that changes the index format, the next server or session start rebuilds it in a detached run",
         "Re-indexes edited `.md` files 800 ms after a change while `search watch` runs",
         "Starts one detached index run when a read finds the index older than `search_freshen_interval_s` (60 s)",
         "Upgrades an index on an older schema in place, keeping stored embeddings, before reporting it (`search status`)",
@@ -346,6 +346,7 @@
           "brain payload list",
           "brain payload gc",
           "brain authored-at-backfill",
+          "brain dead-letters",
           "brain dead-letters list",
           "brain dead-letters show",
           "brain dead-letters recover"

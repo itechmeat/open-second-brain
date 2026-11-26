@@ -126,10 +126,17 @@ export function cliWriterSuite(shard: number, shards: number): void {
 
 /**
  * The outside rows driven here: their writes land in the store, the
- * decision-model state or a path outside the vault, so they run in this
- * process with no host configuration in reach.
+ * decision-model state, a path outside the vault or a throwaway vault in
+ * the temp directory, so they run in this process with no host
+ * configuration in reach.
  */
-const DRIVEN_OUTSIDE: ReadonlySet<string> = new Set(["store", "view", "dmState", "outPath"]);
+const DRIVEN_OUTSIDE: ReadonlySet<string> = new Set([
+  "store",
+  "view",
+  "dmState",
+  "outPath",
+  "scratch",
+]);
 
 /** The CLI rows driven with their default argv: never a change under the gate. */
 export function cliRestSuite(shard: number, shards: number): void {

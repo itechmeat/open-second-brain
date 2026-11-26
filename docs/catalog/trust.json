@@ -163,7 +163,6 @@
       ],
       "surfaces": {
         "cli": [
-          "brain attest",
           "brain attest keygen",
           "brain attest sign",
           "brain attest list",
@@ -194,7 +193,7 @@
         "Stores each value as AES-256-GCM ciphertext in a 0600 file beside a 0600 keyfile in the vault-local state dir.",
         "Takes a value from stdin or `--from-env`, never from the command line",
         "Injects a secret as its env var into a command that matches its glob allowlist (`secret run`), redacting output.",
-        "Wraps the keyfile under a scrypt passphrase on the first `unlock`",
+        "Wraps the keyfile under a scrypt passphrase on the first `unlock`; `unwrap` writes the raw key back.",
         "Exports every entry as one passphrase-encrypted bundle and restores it (`secret export`, `secret import`).",
         "Resolves `$secret:NAME` config references from the store first, then the environment; a locked entry raises.",
         "Reports which config references are available or missing without decrypting (`secrets list`, `secrets status`).",
@@ -323,6 +322,150 @@
         "grounding check",
         "quote verification",
         "answer faithfulness"
+      ]
+    },
+    {
+      "slug": "secret-redaction",
+      "name": "Secret redaction and egress guard",
+      "summary": "Masks secret-shaped values in what is written, logged or reported; every export path passes one egress guard.",
+      "status": "stable",
+      "capabilities": [
+        "Masks the values of secret-named keys (api_key, token, password, private_key and more) as `***REDACTED***`, keeping the key",
+        "Finds them in env assignments, YAML and log lines, JSON entries and `Authorization: Bearer` headers",
+        "Strips `<private>...</private>` regions from signal fields first; an unclosed tag strips to the end of the field",
+        "Marks text past its 1 MiB scan window as only partly scanned instead of passing the tail as clean",
+        "Passes every export verb through one egress guard that redacts each string leaf and refuses a field it could not scan whole",
+        "Declares every path that sends vault bytes outside the vault in one registry; a census test fails on an undeclared one",
+        "Scrubs public IP addresses, URL credentials, host:port endpoints and internal host names from parked MCP results",
+        "Replaces the vault root in MCP error messages, and the home and temp roots too for a remote caller"
+      ],
+      "limits": [
+        "The raw quote field of a signal is kept verbatim and is not redacted.",
+        "Five network paths (two embedding providers, the reranker, the Telegram reply, research) send their payload unscanned; each is declared.",
+        "Redaction is pattern-based and narrow; output meant for other people still needs a look first."
+      ],
+      "surfaces": {},
+      "docs": [
+        "docs/architecture.md#security-rules",
+        "docs/cli-reference.md#what-leaves-the-machine-unscanned-network-egress",
+        "docs/how-it-works.md#hygiene-sanitisation-and-lints"
+      ],
+      "code": ["src/core/redactor.ts", "src/core/egress/guard.ts", "src/core/egress/registry.ts"],
+      "keywords": [
+        "secret redaction",
+        "data loss prevention",
+        "egress control",
+        "credential scrubbing",
+        "log sanitization",
+        "export filtering"
+      ]
+    },
+    {
+      "slug": "write-safety",
+      "name": "Safe file writes",
+      "summary": "Keeps every write inside the vault and atomic, serializes writers with locks and refuses links planted in local state.",
+      "status": "stable",
+      "capabilities": [
+        "Routes every vault write through one boundary check; a `..` segment, an absolute path or a link out of the vault is refused",
+        "Checks a path carried by a synced record before it names a file: it must stay relative and inside its folder",
+        "Writes a file as a sibling temp file, fsyncs it, renames it over the target and fsyncs the folder",
+        "Takes each lock as an exclusively created name and waits out a held one within that lock's budget",
+        "Treats a name Windows still holds as delete pending as a held lock, not as an error",
+        "Refuses machine-local state under `.open-second-brain/` when a folder on the way is a symbolic link, and never follows a leaf link",
+        "Stops every writer of a vault on this machine while a brain store migration of it runs there",
+        "Reports a vault it cannot examine as one `vault_unreadable` error over MCP and one line with exit 1 on the CLI"
+      ],
+      "limits": [
+        "An atomic write covers one file; a write of several files is not rolled back across them.",
+        "The migration gate is device-local and stops writers on the migrating machine only."
+      ],
+      "surfaces": {},
+      "docs": [
+        "docs/how-it-works.md#safety-properties",
+        "docs/cli-reference.md#lock-and-cache-overrides-since-v1610"
+      ],
+      "code": [
+        "src/core/path-safety.ts",
+        "src/core/fs-atomic.ts",
+        "src/core/derived-store-guard.ts"
+      ],
+      "keywords": [
+        "path traversal protection",
+        "atomic file writes",
+        "file locking",
+        "symlink attack protection",
+        "crash safety",
+        "write serialization"
+      ]
+    },
+    {
+      "slug": "agent-identity",
+      "name": "Agent identity",
+      "summary": "Names the agent behind each write from its argument, its MCP token or the configured name, and stamps its process kind.",
+      "status": "stable",
+      "capabilities": [
+        "Strips a leading `@` from a caller-named agent and drops generic guesses such as `assistant` or `model`",
+        "Falls back to the identity a per-agent MCP token binds, then to the configured `agent_name`",
+        "Refuses a named agent that differs from the one a per-agent token binds; the shared key may name any agent",
+        "Derives a host-qualified name per runtime from an operator name of the form `<vendor>-<host>-agent`",
+        "Names a dispatched subagent after its delegator plus the subagent id the host gives it",
+        "Reminds the agent of its name and the fitting writer tool every turn: a prompt hook on OpenClaw and Hermes, a post-write hook on Claude Code and Codex",
+        "Stamps each record with the kind of process that wrote it (`origin_channel`: `mcp-tool`, `cli`, `import`), never from an argument"
+      ],
+      "limits": [
+        "Without a per-agent token the agent name is what the caller asserted; it is not authenticated.",
+        "Records written before the origin stamp carry none and are not backfilled."
+      ],
+      "surfaces": {},
+      "docs": ["docs/observability.md#note-writes", "docs/architecture.md#runtime-adapters"],
+      "code": [
+        "src/core/agent-identity.ts",
+        "src/core/identity-reminder.ts",
+        "src/core/origin-channel.ts"
+      ],
+      "keywords": [
+        "agent identity",
+        "write attribution",
+        "origin tracking",
+        "subagent attribution",
+        "identity binding",
+        "multi-agent identity"
+      ]
+    },
+    {
+      "slug": "remote-read-reservation",
+      "name": "Remote read reservation",
+      "summary": "Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument.",
+      "status": "stable",
+      "capabilities": [
+        "Sets reach in the transport: stdio, the CLI and a loopback HTTP bind are local, any other HTTP request is remote",
+        "Withholds pages declaring the reserved `private` visibility token from remote reads in search, page walks and path reads",
+        "Lets `--visibility` only narrow results; the reserved token outranks the other tokens on the same page",
+        "Refuses a reach argument in any spelling, by name, instead of reading or ignoring it",
+        "Refuses, under `integrity.owner_scope_delivery: fail`, an owner scope that disagrees with the server's identity",
+        "Gives a remote caller vault-relative paths and named placeholders, never an absolute path of the host",
+        "Counts reserved pages and the note-returning surfaces that do not yet consult the field (`search check`)"
+      ],
+      "limits": [
+        "Local reach proves file-equivalent access or a request from this host, not the operator's intent.",
+        "A vault that never writes the reserved token behaves as before."
+      ],
+      "surfaces": {},
+      "docs": [
+        "docs/cli-reference.md#the-reserved-visibility-token-since-v1540",
+        "docs/mcp.md#vault-relative-paths-are-forward-slash-on-every-host"
+      ],
+      "code": [
+        "src/core/graph/transport-reach.ts",
+        "src/core/graph/visibility.ts",
+        "src/mcp/reach-refusal.ts"
+      ],
+      "keywords": [
+        "private notes",
+        "remote access restriction",
+        "data classification",
+        "visibility labels",
+        "access control"
       ]
     }
   ]

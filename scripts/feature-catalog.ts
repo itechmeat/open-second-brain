@@ -28,7 +28,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -37,6 +37,10 @@ import {
   type CliFlagManifest,
 } from "../src/cli/command-manifest.ts";
 import { BOOTSTRAP_TARGETS } from "../src/cli/bootstrap/targets.ts";
+import {
+  DREAM_EXECUTOR_SERVER_NAME,
+  DREAM_EXECUTOR_TOOLS,
+} from "../src/core/brain/dream-queue/dream-session.ts";
 import { BRAIN_YAML_KEYS } from "../src/core/brain/policy/settings-keys.ts";
 import { STORE_NATIVE_SETTINGS } from "../src/core/brain/policy/settings-names.ts";
 import { brainConfigKnownKeys } from "../src/core/brain/policy/validate.ts";
@@ -70,6 +74,11 @@ function readText(path: string): string {
   return readFileSync(join(ROOT, path), "utf8");
 }
 
+/** Order by UTF-16 code units, the same on every host whatever its locale. */
+export function byCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 // ---------- CLI ----------
 
 interface CliVerb {
@@ -77,9 +86,9 @@ interface CliVerb {
   readonly path: string;
   readonly summary: string;
   /**
-   * `leaf`: no modelled subcommands. `group`: subcommands and no flags of
-   * its own, a namespace. `runnable-group`: subcommands and flags of its
-   * own, so it also runs by itself (`o2b mcp`).
+   * `leaf`: no modelled subcommands. `runnable-group`: subcommands, and the
+   * manifest marks it `runnable` because it also runs by itself (`o2b
+   * mcp`). `group`: subcommands and no `runnable`, a namespace.
    */
   readonly kind: "leaf" | "group" | "runnable-group";
   readonly flags: ReadonlyArray<string>;
@@ -107,7 +116,7 @@ function walkCli(
     out.push({
       path: parts.join(" "),
       summary: c.summary,
-      kind: hasChildren ? (ownFlags.length > 0 ? "runnable-group" : "group") : "leaf",
+      kind: hasChildren ? (c.runnable === true ? "runnable-group" : "group") : "leaf",
       flags: ownFlags,
       positional_operations: [],
     });
@@ -241,6 +250,39 @@ function profileSurface(name: string): ProfileSurface {
   };
 }
 
+/**
+ * The source files whose code answers `tools/list`: every MCP server of the
+ * product. The catalog reads the tools of each one below; a new server is a
+ * check failure until its registry is read here too.
+ */
+export const TOOL_SERVER_FILES: ReadonlyArray<string> = Object.freeze([
+  "src/mcp/server.ts",
+  "src/mcp/dream-executor.ts",
+]);
+
+/** Files under `src/` with a `tools/list` handler (`case "tools/list"` or `=== "tools/list"`). */
+export function scanToolServerFiles(root: string = ROOT): string[] {
+  const out: string[] = [];
+  const handler = /(?:case\s+|method\s*===\s*)"tools\/list"/;
+  const visit = (dir: string): void => {
+    for (const name of readdirSync(dir).toSorted(byCodeUnits)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) visit(p);
+      else if (p.endsWith(".ts") && handler.test(readFileSync(p, "utf8"))) {
+        out.push(relative(root, p).split("\\").join("/"));
+      }
+    }
+  };
+  visit(join(root, "src"));
+  return out;
+}
+
+/** The tools OpenClaw's native plugin registers by name (`src/openclaw/index.ts`). */
+export function openclawNativeTools(root: string = ROOT): string[] {
+  const text = readFileSync(join(root, "src/openclaw/index.ts"), "utf8");
+  return [...text.matchAll(/registerTool\(\{\s*name: "([a-z_]+)"/g)].map((m) => m[1] ?? "");
+}
+
 function collectMcp() {
   // The full registry: every tool any scope can serve. The full scope is a
   // superset of the writer scope and holds the same definitions as the
@@ -267,6 +309,13 @@ function collectMcp() {
       advertised: writerServer.advertised,
       hidden: writerServer.hidden,
     },
+    {
+      name: DREAM_EXECUTOR_SERVER_NAME,
+      scope: "dream-executor",
+      registered_as: "a dream session's own server (`o2b mcp --tool-profile dream-executor`)",
+      advertised: [...DREAM_EXECUTOR_TOOLS].toSorted(byCodeUnits),
+      hidden: [] as string[],
+    },
   ];
   const tools = registry.map((t) => {
     const on = (pick: (p: ProfileSurface) => ReadonlyArray<string>): string[] =>
@@ -282,11 +331,24 @@ function collectMcp() {
       has_output_schema: t.outputSchema !== undefined,
     };
   });
+  for (const name of DREAM_EXECUTOR_TOOLS) {
+    tools.push({
+      name,
+      kind: "write",
+      group: "dream-executor",
+      description: "A tool of the dream executor server; see src/mcp/dream-executor.ts.",
+      advertised_by: [DREAM_EXECUTOR_SERVER_NAME],
+      hidden_on_profiles: [],
+      withheld_on_profiles: [],
+      has_output_schema: false,
+    });
+  }
   const hiddenAnywhere = tools.filter((t) => t.hidden_on_profiles.length > 0).length;
   return {
     source:
-      "src/mcp/tools.ts (buildToolTable), src/mcp/profiles.ts (TOOL_SURFACE_PROFILES), src/mcp/capabilities.ts (evaluateToolCapabilities)",
+      "src/mcp/tools.ts (buildToolTable), src/mcp/profiles.ts (TOOL_SURFACE_PROFILES), src/mcp/capabilities.ts (evaluateToolCapabilities), src/core/brain/dream-queue/dream-session.ts (DREAM_EXECUTOR_TOOLS)",
     method: "import",
+    tool_server_files: scanToolServerFiles(),
     counts: {
       registry: tools.length,
       advertised_by_full_server: fullServer.advertised.length,
@@ -331,7 +393,7 @@ function collectRemoved() {
         replacement: r.target,
         view: r.view,
       }))
-      .toSorted((a, b) => a.name.localeCompare(b.name)),
+      .toSorted((a, b) => byCodeUnits(a.name, b.name)),
     cli_verbs: [] as string[],
   };
 }
@@ -509,7 +571,7 @@ function collectHosts() {
           ? RUNTIME_FACTS[id as keyof typeof RUNTIME_FACTS].toolCeiling.kind
           : null,
     }))
-    .toSorted((a, b) => a.id.localeCompare(b.id));
+    .toSorted((a, b) => byCodeUnits(a.id, b.id));
   const claude = jsonIfExists(".claude-plugin/plugin.json");
   const codex = jsonIfExists(".codex-plugin/plugin.json");
   const codexMirror = jsonIfExists("plugins/codex/.codex-plugin/plugin.json");
@@ -579,7 +641,7 @@ function addHit(map: Map<string, Set<string>>, name: string, file: string): void
 function hits(map: Map<string, Set<string>>): ScanHit[] {
   return [...map]
     .map(([name, files]) => ({ name, files: [...files].toSorted() }))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => byCodeUnits(a.name, b.name));
 }
 
 /**
@@ -752,7 +814,7 @@ export const SCHEMA_NAME = "feature-catalog.schema.json";
 /** Repository-relative location of the contract the catalog files follow. */
 export const SCHEMA_FILE = `${CATALOG_DIR}/${SCHEMA_NAME}`;
 /** The index is read whole before any area file, so it stays small. */
-export const INDEX_MAX_BYTES = 20_000;
+export const INDEX_MAX_BYTES = 22_000;
 /** The reference that must name every MCP tool, in backticks. */
 export const MCP_DOC = "docs/mcp.md";
 /** An index line shows the first keywords only; writers put the most useful first. */
@@ -804,6 +866,10 @@ export interface CodeFacts {
   readonly skills: ReadonlySet<string>;
   readonly configKeys: ReadonlySet<string>;
   readonly requiredConfigKeys: ReadonlySet<string>;
+  /** Source files that answer `tools/list` (see {@link TOOL_SERVER_FILES}). */
+  readonly toolServerFiles: ReadonlySet<string>;
+  /** Tools a host plugin registers natively; each must be a tool of {@link CodeFacts.tools}. */
+  readonly hostNativeTools: ReadonlySet<string>;
 }
 
 /**
@@ -822,7 +888,9 @@ export function codeFacts(): CodeFacts {
   return {
     verbs: new Set(walked.map((v) => v.path)),
     coverableVerbs: new Set(walked.filter((v) => v.kind !== "group").map((v) => v.path)),
-    tools: new Set(buildToolTable("full").map((t) => t.name)),
+    // Every tool any server can serve: the full registry (every profile of
+    // the main server is a subset of it) and the dream executor's server.
+    tools: new Set([...buildToolTable("full").map((t) => t.name), ...DREAM_EXECUTOR_TOOLS]),
     removedTools: new Set(Object.keys(REMOVED_TOOLS)),
     hooks: new Set(
       readdirSync(join(ROOT, "hooks"))
@@ -835,6 +903,8 @@ export function codeFacts(): CodeFacts {
       ...topLevel.filter((key) => BRAIN_YAML_KEYS[key]?.home !== "drop"),
       ...storeSettings,
     ]),
+    toolServerFiles: new Set(scanToolServerFiles()),
+    hostNativeTools: new Set(openclawNativeTools()),
   };
 }
 
@@ -844,7 +914,7 @@ export function readCatalog(root: string = ROOT): CatalogFile[] {
   if (!existsSync(dir)) return [];
   const out: CatalogFile[] = [];
   const visit = (d: string): void => {
-    for (const name of readdirSync(d).toSorted()) {
+    for (const name of readdirSync(d).toSorted(byCodeUnits)) {
       const p = join(d, name);
       if (statSync(p).isDirectory()) visit(p);
       else
@@ -1060,6 +1130,8 @@ export interface CheckEnv {
   readonly schema: SchemaNode;
   /** Whether a repository-relative path exists. */
   readonly exists: (path: string) => boolean;
+  /** Whether a repository-relative path resolves to a place inside the repository. */
+  readonly inRepository: (path: string) => boolean;
   /** The anchors of a repository-relative Markdown file, or `null` when it cannot be read. */
   readonly anchors: (path: string) => ReadonlySet<string> | null;
   /** The text of a repository-relative file, or `null` when it cannot be read. */
@@ -1076,8 +1148,8 @@ export function markdownAnchors(text: string): Set<string> {
       fenced = !fenced;
       continue;
     }
-    for (const m of line.matchAll(/\b(?:id|name)="([^"]+)"/g)) out.add(m[1] ?? "");
     if (fenced) continue;
+    for (const m of line.matchAll(/\b(?:id|name)="([^"]+)"/g)) out.add(m[1] ?? "");
     const heading = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
     if (heading === null) continue;
     const base = (heading[1] ?? "")
@@ -1095,9 +1167,14 @@ export function markdownAnchors(text: string): Set<string> {
 
 /** The check environment of a checkout: real files, real anchors. */
 export function repositoryEnv(root: string = ROOT): CheckEnv {
+  const inRepository = (path: string): boolean => {
+    const inside = relative(root, resolve(root, path));
+    return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+  };
   return {
     schema: loadSchema(root),
-    exists: (path) => existsSync(join(root, path)),
+    inRepository,
+    exists: (path) => inRepository(path) && existsSync(join(root, path)),
     anchors: (path) => {
       try {
         return markdownAnchors(readFileSync(join(root, path), "utf8"));
@@ -1187,7 +1264,13 @@ function parseCatalog(files: ReadonlyArray<CatalogFile>, schema: SchemaNode): Pa
       return undefined;
     }
   };
-  for (const f of files) {
+  // File-name order whatever order the caller passed the files in, so the
+  // index never depends on it.
+  for (const f of files.toSorted((x, y) => byCodeUnits(x.file, y.file))) {
+    if (f.file.includes("/") && f.file.endsWith(".json")) {
+      errors.push(`${at(f.file)}: a JSON file in a subfolder is not part of the catalog`);
+      continue;
+    }
     if (f.file.includes("/") || !f.file.endsWith(".json") || f.file === SCHEMA_NAME) continue;
     if (f.file === REMOVED_FILE) {
       sawRemoved = true;
@@ -1349,19 +1432,25 @@ export function checkCatalog(
     for (const f of a.features) {
       for (const ref of f.docs) {
         const [path = "", anchor] = ref.split("#");
-        if (!env.exists(path)) {
-          errors.push(`${at(a.file, f.slug)}: docs ${JSON.stringify(ref)} names no file`);
-        } else if (anchor !== undefined && path.endsWith(".md")) {
-          const anchors = env.anchors(path);
-          if (anchors !== null && !anchors.has(anchor)) {
-            errors.push(`${at(a.file, f.slug)}: docs ${JSON.stringify(ref)} names no heading`);
+        const where = `${at(a.file, f.slug)}: docs ${JSON.stringify(ref)}`;
+        if (!env.inRepository(path)) {
+          errors.push(`${where} leaves the repository`);
+        } else if (!env.exists(path)) {
+          errors.push(`${where} names no file`);
+        } else if (anchor !== undefined) {
+          // An anchor that cannot be checked is refused, not passed.
+          const anchors = path.toLowerCase().endsWith(".md") ? env.anchors(path) : null;
+          if (anchors === null) {
+            errors.push(`${where} has an anchor in a file whose headings cannot be read`);
+          } else if (!anchors.has(anchor)) {
+            errors.push(`${where} names no heading`);
           }
         }
       }
       for (const path of f.code) {
-        if (!env.exists(path)) {
-          errors.push(`${at(a.file, f.slug)}: code ${JSON.stringify(path)} names no file`);
-        }
+        const where = `${at(a.file, f.slug)}: code ${JSON.stringify(path)}`;
+        if (!env.inRepository(path)) errors.push(`${where} leaves the repository`);
+        else if (!env.exists(path)) errors.push(`${where} names no file`);
       }
     }
   }
@@ -1370,14 +1459,37 @@ export function checkCatalog(
   // CLI half of the rule is not checked: the CLI reference writes related
   // verbs in grouped forms (`a|b`, operations in prose) a literal match
   // cannot read.
+  // A name counts when a backtick opens right before it and no name
+  // character follows it (`` `dream_work_take {}` `` names a tool too).
   const mcpDoc = env.docText(MCP_DOC);
   if (mcpDoc === null) {
     errors.push(`${MCP_DOC}: missing; it must name every MCP tool`);
   } else {
-    for (const tool of [...facts.tools].toSorted()) {
-      if (!mcpDoc.includes(`\`${tool}\``)) {
+    for (const tool of [...facts.tools].toSorted(byCodeUnits)) {
+      if (!new RegExp(`\`${tool}(?![A-Za-z0-9_])`).test(mcpDoc)) {
         errors.push(`${MCP_DOC}: mcp tool ${JSON.stringify(tool)} is not named there in backticks`);
       }
+    }
+  }
+
+  // Every server's tools are read: a server the catalog does not know of
+  // would serve tools no feature claims.
+  const servers = new Set(TOOL_SERVER_FILES);
+  for (const file of [...facts.toolServerFiles].toSorted(byCodeUnits)) {
+    if (!servers.has(file)) {
+      errors.push(`${file}: answers tools/list, but the catalog reads no tool registry from it`);
+    }
+  }
+  for (const file of TOOL_SERVER_FILES) {
+    if (!facts.toolServerFiles.has(file)) {
+      errors.push(`${file}: listed as a tool server, but it no longer answers tools/list`);
+    }
+  }
+  for (const tool of [...facts.hostNativeTools].toSorted(byCodeUnits)) {
+    if (!facts.tools.has(tool)) {
+      errors.push(
+        `src/openclaw/index.ts: native tool ${JSON.stringify(tool)} is no MCP tool, so no feature claims it`,
+      );
     }
   }
 
@@ -1421,7 +1533,10 @@ export function buildIndex(root: string = ROOT): {
   readonly bytes: number;
 } {
   const parsed = parseCatalog(readCatalog(root), loadSchema(root));
-  if (parsed.malformed || parsed.areas.length === 0) return { errors: parsed.errors, bytes: 0 };
+  // Any problem of the files themselves (a mismatched file name, a stray
+  // file, a missing `_removed.json`) refuses the build: an index written
+  // from them would name files that are not there.
+  if (parsed.errors.length > 0) return { errors: parsed.errors, bytes: 0 };
   const text = renderIndex(parsed.areas);
   writeFileSync(join(root, CATALOG_DIR, INDEX_FILE), text);
   const bytes = Buffer.byteLength(text, "utf8");
@@ -1468,4 +1583,6 @@ export function main(argv: ReadonlyArray<string>): number {
   return 2;
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)));
+// The exit code, not `process.exit`: an exit straight after `dump` wrote
+// cut its output short in a pipe, and nothing here keeps the process alive.
+if (import.meta.main) process.exitCode = main(process.argv.slice(2));

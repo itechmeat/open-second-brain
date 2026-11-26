@@ -1,6 +1,6 @@
 # Feature catalog
 
-What Open Second Brain does, by feature, in a form an agent can compare with another product. Read [`INDEX.md`](INDEX.md) first: one line per feature, grouped by area, at most 20000 bytes in all. Open an area file (`<area>.json`) only when a feature needs detail.
+What Open Second Brain does, by feature, in a form an agent can compare with another product. Read [`INDEX.md`](INDEX.md) first: one line per feature, grouped by area, at most 22000 bytes in all. Open an area file (`<area>.json`) only when a feature needs detail.
 
 ## Fields
 
@@ -42,12 +42,12 @@ A feature is enabled separately, has surfaces of its own, or would carry its own
 `bun run catalog:check` fails when:
 
 1. an area file does not follow the schema (counts included), a slug repeats, or a slug of `_removed.json` comes back;
-2. a CLI verb, MCP tool, hook script or skill that the code has belongs to no feature or to two, or a listed one does not exist or was removed;
+2. a CLI verb, MCP tool, hook script or skill that the code has belongs to no feature or to two, or a listed one does not exist or was removed. The verbs are every leaf of the command manifest and every command it marks `runnable` (one with subcommands that also runs by itself); the tools are every tool any server serves, the main registry and the dream executor;
 3. a declared setting belongs to no feature, or a listed setting is not declared;
-4. a `docs` path, its anchor or a `code` path does not exist;
-5. an MCP tool is not named in backticks in `docs/mcp.md`;
-6. `INDEX.md` differs from what the build writes, or is over 20000 bytes;
-7. a file in this folder carries a tracker id.
+4. a `docs` or `code` path leaves the repository or does not exist, or an anchor names no heading; an anchor in a file whose headings cannot be read fails too;
+5. an MCP tool is not named in backticks in `docs/mcp.md`, a source file answers `tools/list` without being a server the catalog reads, or a host plugin registers a native tool that is no MCP tool;
+6. `INDEX.md` differs from what the build writes, or is over 22000 bytes;
+7. a file in this folder carries a tracker id, or a JSON file sits in a subfolder.
 
 ## Changing the catalog
 

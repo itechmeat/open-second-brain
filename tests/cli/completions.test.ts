@@ -65,8 +65,9 @@ describe("o2b completions", () => {
 
   test("refuses two shells or none", async () => {
     const two = await runCli(["completions", "--shell", "zsh", "bash"]);
+    const twoFlags = await runCli(["completions", "--shell", "bash", "--shell", "zsh"]);
     const none = await runCli(["completions"]);
-    for (const result of [two, none]) {
+    for (const result of [two, twoFlags, none]) {
       expect(result.returncode).toBe(2);
       expect(result.stderr).toContain("completions requires one shell");
     }
