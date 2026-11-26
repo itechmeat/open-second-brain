@@ -21,7 +21,7 @@ export async function handleVaultSubcommand(argv: ReadonlyArray<string>): Promis
   const rest = argv.slice(1);
 
   if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) {
-    const text = VAULT_VERB_HELP[verb];
+    const text = Object.hasOwn(VAULT_VERB_HELP, verb) ? VAULT_VERB_HELP[verb] : undefined;
     if (text) {
       process.stdout.write(text);
       return 0;

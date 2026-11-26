@@ -136,7 +136,11 @@ export function resolveToolSurface(opts: ResolveToolSurfaceOptions): ResolvedToo
       profile: opts.explicitScope ?? "full",
     };
   }
-  const profile = TOOL_SURFACE_PROFILES[requested];
+  // Own names only: an inherited one (`constructor`, `toString`,
+  // `__proto__`) is no profile and is refused like any unknown name.
+  const profile = Object.hasOwn(TOOL_SURFACE_PROFILES, requested)
+    ? TOOL_SURFACE_PROFILES[requested]
+    : undefined;
   if (profile === undefined) {
     return {
       scope: opts.explicitScope ?? "full",

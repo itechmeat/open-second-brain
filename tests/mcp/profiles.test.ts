@@ -22,6 +22,17 @@ test("the five named profiles exist", () => {
   ]);
 });
 
+test("an inherited name is no profile: it is reported unknown like any other", () => {
+  for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+    const surface = resolveToolSurface({ profileName: name });
+    expect({ name, unknown: surface.unknownProfile, profile: surface.profile }).toEqual({
+      name,
+      unknown: name,
+      profile: "full",
+    });
+  }
+});
+
 test("full profile resolves to the unrestricted surface", () => {
   const surface = resolveToolSurface({ profileName: "full" });
   expect(surface.scope).toBe("full");

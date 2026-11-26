@@ -223,7 +223,9 @@ export function dispatchByView(
   onProgress?: ProgressSink,
 ): Promise<unknown> | unknown {
   const view = typeof args["view"] === "string" ? args["view"] : "";
-  const handler = table[view];
+  // Own names only: an inherited name (`constructor`) is no view and is
+  // refused like any unknown one.
+  const handler = Object.hasOwn(table, view) ? table[view] : undefined;
   if (handler === undefined) {
     throw new MCPError(
       INVALID_PARAMS,

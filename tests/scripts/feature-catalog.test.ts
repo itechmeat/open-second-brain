@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  assertSupportedSchema,
   buildIndex,
   checkCatalog,
   codeFacts,
@@ -35,6 +37,7 @@ import {
   REMOVED_FILE,
   renderIndex,
   repositoryEnv,
+  scanToolServerFiles,
   type CatalogArea,
   type CatalogFeature,
   type CatalogFile,
@@ -318,6 +321,23 @@ describe("the index", () => {
   });
 });
 
+/** The check errors of the small catalog read against an MCP reference of `text`. */
+function named(text: string): string[] {
+  return checkCatalog(catalogFiles(validGroups()), FACTS, { ...ENV, docText: () => text });
+}
+
+/** The check errors of the small catalog with the first feature's summary replaced. */
+function summaryOf(summary: string): string[] {
+  const groups = validGroups();
+  groups[0] = [{ ...(groups[0]?.[0] as CatalogFeature), summary }];
+  return checkCatalog(catalogFiles(groups), FACTS, ENV);
+}
+
+/** An object schema whose `additionalProperties` is `extra`. */
+function objectSchema(extra: unknown): Record<string, unknown> {
+  return { type: "object", additionalProperties: extra };
+}
+
 describe("more rules of the check", () => {
   test("a hook, a skill and a required setting no feature claims are named", () => {
     const groups = validGroups();
@@ -376,7 +396,7 @@ describe("more rules of the check", () => {
   test("a longer name or a file name does not count as naming a tool", () => {
     const env = {
       ...ENV,
-      docText: () => "`tool_one-v2`, `tool_one.ts`, x`tool_one` and `tool_two`",
+      docText: () => "`tool_one-v2`, `tool_one.ts` and `tool_two`",
     };
     expect(checkCatalog(catalogFiles(validGroups()), FACTS, env)).toEqual([
       'docs/mcp.md: mcp tool "tool_one" is not named there in backticks',
@@ -390,6 +410,41 @@ describe("more rules of the check", () => {
         (ref) => validateAgainst(schema, ref, "doc_ref").length > 0,
       ),
     ).toEqual([true, true, false]);
+  });
+
+  test("a tool counts as named only inside a code span that closes", () => {
+    const missing = 'docs/mcp.md: mcp tool "tool_one" is not named there in backticks';
+    // A backtick that nothing closes is plain text, and a span never
+    // crosses a blank line.
+    expect(named("`tool_two` and `tool_one, a span that never closes")).toEqual([missing]);
+    expect(named("`tool_two` and `tool_one\n\nbut the span never closed`")).toEqual([missing]);
+    expect(named("`tool_one { a |\n b }` and `tool_two`")).toEqual([]);
+    expect(named("`` tool_one `` and `tool_two`")).toEqual([]);
+  });
+
+  test("a summary is measured in characters, not UTF-16 units", () => {
+    // 119 letters and one character outside the Basic Multilingual Plane.
+    expect(summaryOf(`${"a".repeat(119)}\u{1F600}`)).toEqual([]);
+    expect(summaryOf(`${"a".repeat(120)}\u{1F600}`)).toContain(
+      "docs/catalog/area-1.json: first-feature: summary must be at most 120 characters (is 121)",
+    );
+  });
+
+  test("a schema whose additionalProperties is a schema is refused at load", () => {
+    expect(() => assertSupportedSchema(objectSchema({ type: "string" }))).toThrow(
+      "additionalProperties must be true or false",
+    );
+    expect(() => assertSupportedSchema(objectSchema(true))).not.toThrow();
+    expect(() => assertSupportedSchema(objectSchema(false))).not.toThrow();
+  });
+
+  test("a repeated heading takes the next free suffix, as on GitHub", () => {
+    expect([...markdownAnchors("# Setup-1\n# Setup\n# Setup\n# Setup\n")]).toEqual([
+      "setup-1",
+      "setup",
+      "setup-2",
+      "setup-3",
+    ]);
   });
 
   test("a tool counts as named when other text follows it inside the backticks", () => {
@@ -461,6 +516,40 @@ describe("the repository environment", () => {
     ]);
   });
 
+  // POSIX only: creating a symbolic link needs a privilege on Windows.
+  test.skipIf(process.platform === "win32")(
+    "a link inside the tree that leads out of it is not inside it",
+    () => {
+      const root = repo();
+      const outside = mkdtempSync(join(tmpdir(), "o2b-catalog-outside-"));
+      roots.push(outside);
+      writeFileSync(join(outside, "secret.md"), "# Outside\n");
+      symlinkSync(join(outside, "secret.md"), join(root, "docs", "out.md"));
+      symlinkSync(join(root, "docs", "guide.md"), join(root, "docs", "in.md"));
+      const env = repositoryEnv(root);
+      expect(
+        ["docs/guide.md", "docs/in.md", "docs/out.md"].map((p) => env.inRepository(p)),
+      ).toEqual([true, true, false]);
+    },
+  );
+
+  test("only a server that answers tools/list on its method counts as one", () => {
+    const root = repo();
+    mkdirSync(join(root, "src", "mcp"), { recursive: true });
+    const files: Record<string, string> = {
+      "src/mcp/left.ts": 'if ("tools/list" === request.method) list();\n',
+      "src/mcp/right.ts": 'if (msg.method === "tools/list") list();\n',
+      "src/mcp/switch.ts": 'switch (m) { case "tools/list": list(); }\n',
+      "src/mcp/log.ts": 'const listed = calls.some((c) => c.tool === "tools/list");\n',
+    };
+    for (const [rel, text] of Object.entries(files)) writeFileSync(join(root, rel), text);
+    expect(scanToolServerFiles(root)).toEqual([
+      "src/mcp/left.ts",
+      "src/mcp/right.ts",
+      "src/mcp/switch.ts",
+    ]);
+  });
+
   test("a path that resolves outside the repository is not inside it", () => {
     const env = repositoryEnv(repo());
     expect([env.inRepository("docs/guide.md"), env.inRepository("../outside.md")]).toEqual([
@@ -502,20 +591,28 @@ describe("the dump", () => {
   // A shell pipe is the one that cut the output; Windows has no POSIX shell.
   test.skipIf(process.platform === "win32")("reaches a pipe whole and parses", async () => {
     const script = join(REPO_ROOT, "scripts", "feature-catalog.ts");
-    const proc = Bun.spawn(
-      ["sh", "-c", `${shellQuote(process.execPath)} ${shellQuote(script)} dump | cat`],
-      {
-        cwd: REPO_ROOT,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [out, err] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    expect({ code: await proc.exited, err }).toEqual({ code: 0, err: "" });
-    expect(Buffer.byteLength(out)).toBeGreaterThan(131_072);
-    expect(Object.keys(JSON.parse(out) as object)).toContain("cli");
+    // The dump's own status, not the pipeline's (that is `cat`'s): the
+    // shell writes it to a file of its own before the pipe closes.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-catalog-dump-"));
+    const statusFile = join(dir, "status");
+    try {
+      const dump = `${shellQuote(process.execPath)} ${shellQuote(script)} dump`;
+      const proc = Bun.spawn(
+        ["sh", "-c", `{ ${dump}; echo $? > ${shellQuote(statusFile)}; } | cat`],
+        { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+      );
+      const [out, err] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      const pipeline = await proc.exited;
+      const raw = existsSync(statusFile) ? readFileSync(statusFile, "utf8").trim() : "";
+      const dumpStatus = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+      expect({ dumpStatus, pipeline, err }).toEqual({ dumpStatus: 0, pipeline: 0, err: "" });
+      expect(Buffer.byteLength(out)).toBeGreaterThan(131_072);
+      expect(Object.keys(JSON.parse(out) as object)).toContain("cli");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

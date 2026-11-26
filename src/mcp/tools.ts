@@ -627,7 +627,8 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
 export function findTool(tools: ReadonlyArray<ToolDefinition>, name: string): ToolDefinition {
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
-    const tombstone = REMOVED_TOOLS[name];
+    // Own names only: an inherited name was never a tool.
+    const tombstone = Object.hasOwn(REMOVED_TOOLS, name) ? REMOVED_TOOLS[name] : undefined;
     if (tombstone !== undefined) {
       throw new MCPError(
         INVALID_PARAMS,

@@ -72,7 +72,7 @@ async function toolBrainBrief(
   // Only an EXPLICIT argument is refused: the gated surfaces default their
   // scope from `ServerContext.agentName`, and refusing that would make the
   // tool unusable for every client that never passes the argument.
-  if (scopeSupplied && view in BRIEF_VIEW_HANDLERS && !AGENT_SCOPE_VIEWS.has(view)) {
+  if (scopeSupplied && Object.hasOwn(BRIEF_VIEW_HANDLERS, view) && !AGENT_SCOPE_VIEWS.has(view)) {
     throw new MCPError(
       INVALID_PARAMS,
       `brain_brief view=${view} cannot honour '${AGENT_SCOPE_ARG_NAME}'; ` +

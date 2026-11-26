@@ -259,7 +259,9 @@ describe.skipIf(process.platform === "win32")("the final flush through a real pi
 });
 
 /** A stdout whose end completes only when the test says so. */
-function stream(state: Partial<FlushableStream> = {}): FlushableStream & {
+function stream(
+  state: Partial<FlushableStream> & { readonly writableFinished?: boolean } = {},
+): FlushableStream & {
   finish(): void;
   readonly ended: boolean;
 } {
@@ -296,8 +298,17 @@ function fakeDeps(stdout: FlushableStream, platform: NodeJS.Platform = "linux") 
   return { deps, exits, bounds, diagnostics };
 }
 
+/**
+ * The states of stdout the flush meets. Its own `end()` puts stdout in
+ * the ending state (`writableEnded` true, `writableFinished` false) until
+ * the callback says the tail was handed over: that is the still-flushing
+ * case, and the exit waits through it. A stdout that was already ended
+ * when the flush began is not a state a caller reaches: nothing in the CLI
+ * ends stdout but this flush, which runs once, so such a stdout is one that
+ * finished (or was destroyed), and it is not waited for.
+ */
 describe("exitWhenFlushed", () => {
-  test("exits with the command's code once stdout has settled, not before", () => {
+  test("waits while stdout is still flushing, then exits with the command's code", () => {
     const out = stream();
     const { deps, exits } = fakeDeps(out);
     exitWhenFlushed(3, deps);
@@ -308,12 +319,18 @@ describe("exitWhenFlushed", () => {
     expect(deps.state.code).toBe(3);
   });
 
-  test("waits for no stdout that is already closed", () => {
-    for (const closed of [stream({ destroyed: true }), stream({ writableEnded: true })]) {
-      const { deps, exits } = fakeDeps(closed);
-      exitWhenFlushed(0, deps);
-      expect([closed.ended, exits]).toEqual([false, [0]]);
-    }
+  test("waits for no stdout that is destroyed", () => {
+    const destroyed = stream({ destroyed: true });
+    const { deps, exits } = fakeDeps(destroyed);
+    exitWhenFlushed(0, deps);
+    expect([destroyed.ended, exits]).toEqual([false, [0]]);
+  });
+
+  test("waits for no stdout that has finished", () => {
+    const finished = stream({ writableEnded: true, writableFinished: true });
+    const { deps, exits } = fakeDeps(finished);
+    exitWhenFlushed(0, deps);
+    expect([finished.ended, exits]).toEqual([false, [0]]);
   });
 
   test("a stdout whose end throws exits at once", () => {

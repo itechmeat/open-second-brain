@@ -27,8 +27,15 @@
  *     are evidence, not a manifest.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -79,9 +86,41 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Where `tool` is named in Markdown: an opening backtick, the name, then the span's end. */
-export function toolMentionPattern(tool: string): RegExp {
-  return new RegExp(`(?<![A-Za-z0-9_\`])\`${escapeRegExp(tool)}(?=[\`\\s({])`);
+/**
+ * The contents of the code spans of a Markdown text, paired as CommonMark
+ * pairs them: a run of backticks opens a span that the next run of the
+ * same length closes, a run with no closer is plain text, and a span
+ * never crosses a blank line. A fenced block is a span too.
+ */
+export function markdownCodeSpans(text: string): string[] {
+  const out: string[] = [];
+  for (const block of text.split(/\n[ \t]*\n/)) {
+    const runs = [...block.matchAll(/`+/g)];
+    let i = 0;
+    while (i < runs.length) {
+      const open = runs[i]!;
+      const close = runs.findIndex((run, k) => k > i && run[0].length === open[0].length);
+      if (close === -1) {
+        i++;
+        continue;
+      }
+      out.push(block.slice((open.index ?? 0) + open[0].length, runs[close]!.index ?? 0));
+      i = close + 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether a code span names `tool`: the span is the name, or the name
+ * followed by a space, `(` or `{` and the rest of an example
+ * (`` `tool {}` ``). A longer name (`` `tool_one-v2` ``) or a file name
+ * (`` `tool_one.ts` ``) is not the tool.
+ */
+export function spanNamesTool(span: string, tool: string): boolean {
+  // CommonMark strips one space from each end when both ends have one.
+  const content = /^ [\s\S]* $/.test(span) && span.trim() !== "" ? span.slice(1, -1) : span;
+  return new RegExp(`^${escapeRegExp(tool)}(?:$|[\\s({])`).test(content);
 }
 
 /** Order by UTF-16 code units, the same on every host whatever its locale. */
@@ -273,7 +312,11 @@ export const TOOL_SERVER_FILES: ReadonlyArray<string> = Object.freeze([
 /** Files under `src/` with a `tools/list` handler (`case "tools/list"` or `=== "tools/list"`). */
 export function scanToolServerFiles(root: string = ROOT): string[] {
   const out: string[] = [];
-  const handler = /(?:case\s+|method\s*===\s*)"tools\/list"/;
+  // A `case` label, or the JSON-RPC `method` compared with the literal on
+  // either side; a call log that records `tools/list` under another field
+  // is no server.
+  const handler =
+    /case\s+["'`]tools\/list["'`]|\bmethod\s*[=!]==?\s*["'`]tools\/list["'`]|["'`]tools\/list["'`]\s*[=!]==?\s*[\w.?]*\bmethod\b/;
   const visit = (dir: string): void => {
     for (const name of readdirSync(dir).toSorted(byCodeUnits)) {
       const p = join(dir, name);
@@ -986,6 +1029,12 @@ export function assertSupportedSchema(node: unknown, path = "<root>"): void {
     }
   }
   if (node["items"] !== undefined) assertSupportedSchema(node["items"], `${path}[]`);
+  // Only the Boolean form is applied (`false` refuses unknown keys); a
+  // schema object here would be read and then ignored.
+  const extra = node["additionalProperties"];
+  if (extra !== undefined && typeof extra !== "boolean") {
+    throw new Error(`${SCHEMA_FILE}: ${path}: additionalProperties must be true or false`);
+  }
 }
 
 /** The catalog schema of `root`, checked for keywords the validator applies. */
@@ -1048,11 +1097,14 @@ function validateNode(
   if (typeof value === "string") {
     const min = node["minLength"];
     const max = node["maxLength"];
-    if (typeof min === "number" && value.length < min) {
+    // Characters are code points, as JSON Schema counts them: a character
+    // outside the Basic Multilingual Plane is one, not two UTF-16 units.
+    const length = [...value].length;
+    if (typeof min === "number" && length < min) {
       out.push({ path, message: `must be at least ${min} characters` });
     }
-    if (typeof max === "number" && value.length > max) {
-      out.push({ path, message: `must be at most ${max} characters (is ${value.length})` });
+    if (typeof max === "number" && length > max) {
+      out.push({ path, message: `must be at most ${max} characters (is ${length})` });
     }
     const pattern = node["pattern"];
     if (typeof pattern === "string" && !new RegExp(pattern, "u").test(value)) {
@@ -1151,7 +1203,9 @@ export interface CheckEnv {
 /** GitHub-style heading anchors of a Markdown text, plus explicit `id="..."` anchors. */
 export function markdownAnchors(text: string): Set<string> {
   const out = new Set<string>();
-  const counts = new Map<string, number>();
+  // GitHub's slugger: a slug already taken (by a repeat or by a heading
+  // that spells the suffixed form) takes the next free `-N` of its base.
+  const occurrences = new Map<string, number>();
   let fenced = false;
   for (const line of text.split(/\r?\n/)) {
     if (/^\s*(```|~~~)/.test(line)) {
@@ -1168,18 +1222,46 @@ export function markdownAnchors(text: string): Set<string> {
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s_-]/gu, "")
       .replace(/\s/g, "-");
-    const n = counts.get(base) ?? 0;
-    counts.set(base, n + 1);
-    out.add(n === 0 ? base : `${base}-${n}`);
+    let slug = base;
+    while (occurrences.has(slug)) {
+      const n = (occurrences.get(base) ?? 0) + 1;
+      occurrences.set(base, n);
+      slug = `${base}-${n}`;
+    }
+    occurrences.set(slug, 0);
+    out.add(slug);
   }
   return out;
 }
 
+/** Whether `target` lies strictly inside `base`. */
+function within(base: string, target: string): boolean {
+  const inside = relative(base, target);
+  return inside !== "" && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
+}
+
 /** The check environment of a checkout: real files, real anchors. */
 export function repositoryEnv(root: string = ROOT): CheckEnv {
+  const realRoot = (() => {
+    try {
+      return realpathSync(root);
+    } catch {
+      return resolve(root);
+    }
+  })();
   const inRepository = (path: string): boolean => {
-    const inside = relative(root, resolve(root, path));
-    return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+    const lexical = resolve(root, path);
+    if (!within(root, lexical)) return false;
+    // A link inside the tree can point out of it: where it really leads
+    // decides. A path that does not exist is judged as written, and the
+    // existence check names it.
+    let real: string;
+    try {
+      real = realpathSync(lexical);
+    } catch {
+      return true;
+    }
+    return within(realRoot, real);
   };
   return {
     schema: loadSchema(root),
@@ -1469,16 +1551,15 @@ export function checkCatalog(
   // CLI half of the rule is not checked: the CLI reference writes related
   // verbs in grouped forms (`a|b`, operations in prose) a literal match
   // cannot read.
-  // A name counts when an opening backtick sits right before it and the
-  // code span closes, or a space, `(` or `{` follows it
-  // (`` `dream_work_take {}` `` names a tool too). A longer name
-  // (`` `tool_one-v2` ``) or a file name (`` `tool_one.ts` ``) does not.
+  // A name counts inside a complete code span (`spanNamesTool`):
+  // `` `dream_work_take {}` `` names a tool, an unclosed backtick does not.
   const mcpDoc = env.docText(MCP_DOC);
   if (mcpDoc === null) {
     errors.push(`${MCP_DOC}: missing; it must name every MCP tool`);
   } else {
+    const spans = markdownCodeSpans(mcpDoc);
     for (const tool of [...facts.tools].toSorted(byCodeUnits)) {
-      if (!toolMentionPattern(tool).test(mcpDoc)) {
+      if (!spans.some((span) => spanNamesTool(span, tool))) {
         errors.push(`${MCP_DOC}: mcp tool ${JSON.stringify(tool)} is not named there in backticks`);
       }
     }
