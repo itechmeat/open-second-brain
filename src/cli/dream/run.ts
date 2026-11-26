@@ -31,11 +31,13 @@ import { dream } from "../../core/brain/dream.ts";
 import { assertDreamOwner, DreamNotOwnerError } from "../../core/brain/dream-owner/gate.ts";
 import { adoptClaim, releaseClaim } from "../../core/brain/dream-trigger/claim.ts";
 import {
+  busyLockPassIncomplete,
   holdDreamRunClaim,
   recordDreamOutcomeResult,
   type DreamOutcomeRecording,
+  type DreamWorkKept,
 } from "../../core/brain/dream-trigger/outcome.ts";
-import { isLockContention } from "../../core/store/local-lock.ts";
+import { isLockContention, withBackgroundLockWait } from "../../core/store/local-lock.ts";
 import {
   configuredTriggerStoreRoot,
   dreamTriggerClaimPath,
@@ -287,6 +289,7 @@ async function runOnePass(
       ? undefined
       : await prepareClosedQuestions(vault, {
           ...configOpt,
+          background: true,
           ...(deadlineMs !== undefined ? { deadlineMs } : {}),
           ...(catchUpLeftMs !== undefined ? { agentBudgetMs: catchUpLeftMs } : {}),
         });
@@ -297,24 +300,59 @@ async function runOnePass(
     left: closedQuestions?.left ?? 0,
     agent_answered: agentAnswered,
   };
+  // What the front door left in the work queue before the pass: produced
+  // items and the answers of the decision model and the launched agent,
+  // each a store append made when it happened.
+  const kept: DreamWorkKept = {
+    produced: report.produced,
+    answered: (closedQuestions?.answered ?? 0) + agentAnswered,
+  };
   let summary: ReturnType<typeof dream>;
   try {
-    summary = dream(vault, {
-      ...configOpt,
-      ...(closedQuestions !== undefined ? { closedQuestions } : {}),
-      safeguard,
-    });
+    // The pass's own store work is a long background operation: its
+    // store locks wait up to two minutes for a busy holder (a live
+    // session's hook or tool), not the five seconds a person waits on.
+    // Scoped to this synchronous call, so no other lock inherits it.
+    summary = withBackgroundLockWait(() =>
+      dream(vault, {
+        ...configOpt,
+        ...(closedQuestions !== undefined ? { closedQuestions } : {}),
+        safeguard,
+      }),
+    );
   } catch (err) {
     const recording = recordDreamOutcomeResult(vault, {
       ...configOpt,
       startedAt,
       result: { threw: err },
       by,
+      kept,
     });
     const day = recorded(recording);
     if (err instanceof DreamNotOwnerError) {
       const r = refusal(err.message, { code: err.code, reason: err.reason });
       return out(done(r.code, recording), agentAnswered, { ...report, ...r.report });
+    }
+    // A store lock that stayed busy past the wait, after the front door
+    // left work in the queue: an incomplete pass, recorded as one; the
+    // next pass applies the answers. Met before any work was left, in the
+    // next pass again (the record says failed), or with a recording that
+    // failed (the previous ending is unknown), it is a failure.
+    if (busyLockPassIncomplete(err, recording, kept)) {
+      const message =
+        `dream incomplete: ${kept.produced} item(s) produced and ${kept.answered} answer(s) ` +
+        `recorded stay in the work queue for the next pass: ${describeErrorChain(err)}`;
+      process.stderr.write(`warning: dream-store-lock-busy: ${message}\n`);
+      const passJson = { ok: true, incomplete: message, day: dayJson(day) };
+      if (catchUpLeftMs !== undefined) {
+        // The report counts the agent's answers (`agent_answered`); the
+        // zero only ends the catch-up here, so no further pass meets the
+        // same busy lock and turns this incomplete day into a failure.
+        return out(done(EXIT.ok, recording), 0, { ...report, ...passJson });
+      }
+      if (json) writeJson(passJson);
+      else process.stdout.write(`${[message, dayLine(day)].join("\n")}\n`);
+      return out(done(EXIT.ok, recording), agentAnswered, { ...report, incomplete: message });
     }
     const message = `dream failed: ${describeErrorChain(err)}`;
     const r = refusal(message, { day: dayJson(day) });

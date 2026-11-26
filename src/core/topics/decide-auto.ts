@@ -28,6 +28,7 @@ import type { ClosedQuestionsRun } from "../brain/dream-types.ts";
 import { loadBrainConfig } from "../brain/policy.ts";
 import type { DecisionProvider } from "../decision-model/contract.ts";
 import { readTopicQuestionState } from "./decide-operations.ts";
+import { withBackgroundLockWait } from "../store/local-lock.ts";
 import { produceTopicQuestions } from "./decide-produce.ts";
 
 /** The model budget of a live pass when `dream.model_budget_ms` is unset. */
@@ -54,6 +55,12 @@ export interface PrepareClosedQuestionsOptions {
    * budget); still clamped to the caller's deadline less the reserve.
    */
   readonly agentBudgetMs?: number;
+  /**
+   * The caller is a background pass (`o2b dream run`): production's store
+   * locks wait as the pass's own do ({@link withBackgroundLockWait}), not
+   * the five seconds of a command a person waits on.
+   */
+  readonly background?: boolean;
 }
 
 /**
@@ -110,7 +117,8 @@ export async function prepareClosedQuestions(
     if (state === null) return undefined;
     // Production is unconditional (design D1): a quiet brain's backlog is
     // never stuck behind a pass that finds nothing else to change.
-    const produced = produceTopicQuestions(queue, state, { until, clock });
+    const produce = () => produceTopicQuestions(queue, state, { until, clock });
+    const produced = options.background === true ? withBackgroundLockWait(produce) : produce();
     const executed = await runDecisionExecutor(queue, {
       until,
       clock,

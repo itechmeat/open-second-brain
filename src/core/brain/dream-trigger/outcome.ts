@@ -30,7 +30,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { discoverConfig } from "../../config.ts";
-import { isLockContention } from "../../store/local-lock.ts";
+import { isLockBusy, isLockContention } from "../../store/local-lock.ts";
 import { DreamNotOwnerError, openDreamOwnerStore } from "../dream-owner/gate.ts";
 import { readDreamOwner, withDreamPassLock } from "../dream-owner/owner.ts";
 import {
@@ -136,10 +136,76 @@ export function retryDelayMs(failures: number): number {
   return Math.min(DREAM_TRIGGER_RETRY_BASE_MS * 2 ** (n - 1), DREAM_TRIGGER_RETRY_CAP_MS);
 }
 
+/**
+ * What a pass left in the work queue before it ended: items produced and
+ * answers recorded (by the decision model or the launched agent). Each is
+ * a store append made when it happened, so it outlives the pass.
+ */
+export interface DreamWorkKept {
+  readonly produced: number;
+  readonly answered: number;
+}
+
+/** Whether a pass left any work in the queue. */
+export function workKept(kept: DreamWorkKept | undefined): boolean {
+  return kept !== undefined && kept.produced + kept.answered > 0;
+}
+
+/**
+ * Whether a pass that threw `err` ends incomplete (exit 0) rather than
+ * failed, given how its ending was recorded and the work it left. Only a
+ * store lock that stayed busy can, and the record decides: it says
+ * incomplete for a first busy ending after work was left, failed for one
+ * with no work left or for the second in a row. A recording that failed
+ * leaves the previous ending unknown, so the pass is a failure: a second
+ * busy ending in a row must never pass for incomplete. With nothing to
+ * record (no store, no dream owner on this device) there is no retry
+ * schedule, and the work left decides.
+ */
+export function busyLockPassIncomplete(
+  err: unknown,
+  recording: DreamOutcomeRecording,
+  kept: DreamWorkKept,
+): boolean {
+  if (!isLockBusy(err)) return false;
+  switch (recording.kind) {
+    case "recorded":
+      return recording.record.last_run?.outcome === "incomplete";
+    case "failed":
+      return false;
+    case "skipped":
+      return workKept(kept);
+  }
+}
+
 /** How a pass ended, as its caller saw it. */
 export type DreamPassEnd =
   | { readonly kind: "returned"; readonly completion: DayCompletion; readonly note: string | null }
-  | { readonly kind: "threw"; readonly message: string };
+  | { readonly kind: "threw"; readonly message: string }
+  /**
+   * A store lock stayed busy past the pass's wait after the pass had left
+   * work in the queue (`kept`): that work stays, so the day is incomplete,
+   * not failed. A busy lock met before any work was left is `threw`.
+   */
+  | { readonly kind: "lock-busy"; readonly message: string; readonly kept: DreamWorkKept };
+
+/** How the reason of a pass that stopped at a busy store lock starts. */
+const LOCK_BUSY_REASON = "the pass stopped at a busy store lock";
+
+function lockBusyReason(end: { readonly message: string; readonly kept: DreamWorkKept }): string {
+  return (
+    `${LOCK_BUSY_REASON}; kept in the work queue: ${end.kept.produced} item(s) produced, ` +
+    `${end.kept.answered} answer(s) recorded (the next pass applies them): ${end.message}`
+  );
+}
+
+/** Whether the run `previous` records also stopped at a busy store lock. */
+function previousStoppedAtBusyLock(previous: DreamTriggerRecord): boolean {
+  return (
+    previous.last_run?.outcome === "incomplete" &&
+    (previous.reason ?? "").startsWith(LOCK_BUSY_REASON)
+  );
+}
 
 /**
  * The record after a pass that started at `startedAt` and ended at
@@ -154,7 +220,16 @@ export function decideDayOutcome(input: {
   readonly by: DreamRunBy;
   readonly end: DreamPassEnd;
 }): DreamTriggerRecord | null {
-  const { previous, startedAt, endedAt, by, end } = input;
+  const { previous, startedAt, endedAt, by } = input;
+  // A store lock still busy in the next pass is stuck, not a passing
+  // contention: that pass failed, whatever it left.
+  const end: DreamPassEnd =
+    input.end.kind === "lock-busy" && previousStoppedAtBusyLock(previous)
+      ? {
+          kind: "threw",
+          message: `a store lock stayed busy in two passes in a row: ${input.end.message}`,
+        }
+      : input.end;
   const day = isoDate(startedAt);
   const run = (outcome: DreamRunOutcome) => ({
     started_at: startedAt.toISOString(),
@@ -167,7 +242,11 @@ export function decideDayOutcome(input: {
     // the pass does not touch that day, but it is an attempt, so the next
     // one waits its retry delay instead of starting at every session.
     const outcome: DreamRunOutcome =
-      end.kind === "threw" ? "failed" : end.completion.complete ? "complete" : "incomplete";
+      end.kind === "threw"
+        ? "failed"
+        : end.kind === "lock-busy" || !end.completion.complete
+          ? "incomplete"
+          : "complete";
     return {
       ...previous,
       last_run: run(outcome),
@@ -196,7 +275,11 @@ export function decideDayOutcome(input: {
     day,
     closed: false,
     reason:
-      end.kind === "threw" ? `the pass failed: ${end.message}` : end.completion.reasons.join("; "),
+      end.kind === "threw"
+        ? `the pass failed: ${end.message}`
+        : end.kind === "lock-busy"
+          ? lockBusyReason(end)
+          : end.completion.reasons.join("; "),
     note: null,
     last_run: run(end.kind === "threw" ? "failed" : "incomplete"),
     failures,
@@ -408,6 +491,12 @@ export interface RecordDreamOutcomeOptions {
   readonly startedAt: Date;
   /** The pass's result, or what it threw. */
   readonly result: { readonly returned: true } | { readonly threw: unknown };
+  /**
+   * What the pass left in the work queue before it threw. A pass that
+   * stopped at a busy store lock is incomplete only when it left some;
+   * otherwise (or when this is absent) it failed.
+   */
+  readonly kept?: DreamWorkKept;
   readonly by: DreamRunBy;
   /** Clock of the end (default `Date.now`). */
   readonly now?: () => number;
@@ -452,7 +541,12 @@ export function recordDreamOutcomeResult(
 ): DreamOutcomeRecording {
   const { result } = options;
   if ("threw" in result) {
-    if (result.threw instanceof DreamNotOwnerError || isLockContention(result.threw)) {
+    // The dream pass lock another pass holds: that pass records its own.
+    // A store lock that stayed busy is this pass's ending, recorded below.
+    if (
+      result.threw instanceof DreamNotOwnerError ||
+      (isLockContention(result.threw) && !isLockBusy(result.threw))
+    ) {
       return SKIPPED;
     }
   }
@@ -471,7 +565,11 @@ export function recordDreamOutcomeResult(
       const endedAt = new Date(now());
       let end: DreamPassEnd;
       if ("threw" in result) {
-        end = { kind: "threw", message: message(result.threw) };
+        const kept = options.kept;
+        end =
+          isLockBusy(result.threw) && kept !== undefined && workKept(kept)
+            ? { kind: "lock-busy", message: message(result.threw), kept }
+            : { kind: "threw", message: message(result.threw) };
       } else {
         try {
           const queue = readQueueFacts(vault, options.configPath, endedAt.getTime());
