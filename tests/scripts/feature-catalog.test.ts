@@ -419,6 +419,16 @@ describe("more rules of the check", () => {
     expect(named("`tool_two` and `tool_one, a span that never closes")).toEqual([missing]);
     expect(named("`tool_two` and `tool_one\n\nbut the span never closed`")).toEqual([missing]);
     expect(named("`tool_one { a |\n b }` and `tool_two`")).toEqual([]);
+    // Line endings inside a span are spaces, and one space is stripped
+    // from each end: this span names `tool_one`.
+    expect(named("`\ntool_one\n` and `tool_two`")).toEqual([]);
+    // A fenced block, even one holding a blank line, pairs with nothing
+    // outside it, so the inline mentions between two blocks still count.
+    expect(
+      named("```\ncode a\n\ncode b\n```\nUse `tool_one` and `tool_two`.\n~~~\nmore\n~~~\n"),
+    ).toEqual([]);
+    // A name only inside a fenced block is not an inline mention.
+    expect(named("```\ntool_one\n```\n\n`tool_two`")).toEqual([missing]);
     expect(named("`` tool_one `` and `tool_two`")).toEqual([]);
   });
 

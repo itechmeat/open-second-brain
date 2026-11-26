@@ -87,14 +87,42 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * The contents of the code spans of a Markdown text, paired as CommonMark
- * pairs them: a run of backticks opens a span that the next run of the
- * same length closes, a run with no closer is plain text, and a span
- * never crosses a blank line. A fenced block is a span too.
+ * A Markdown text with its fenced code blocks (backtick and tilde fences)
+ * blanked: every line of a block, its fences included, becomes an empty
+ * line, so a backtick inside a block pairs with nothing outside it. A
+ * fence closes on a line of the same character, at least as long.
+ */
+export function withoutFencedBlocks(text: string): string {
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence === null) {
+        if (marker === null || marker[1] === undefined) return line;
+        // A backtick fence's info string may not hold a backtick.
+        if (marker[1].startsWith("`") && line.slice(marker[0].length).includes("`")) return line;
+        fence = { char: marker[1][0] ?? "`", length: marker[1].length };
+        return "";
+      }
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+      if (closing !== undefined && closing[0] === fence.char && closing.length >= fence.length) {
+        fence = null;
+      }
+      return "";
+    })
+    .join("\n");
+}
+
+/**
+ * The contents of the inline code spans of a Markdown text, paired as
+ * CommonMark pairs them: fenced blocks are set aside first, a run of
+ * backticks opens a span that the next run of the same length closes, a
+ * run with no closer is plain text, and a span never crosses a blank line.
  */
 export function markdownCodeSpans(text: string): string[] {
   const out: string[] = [];
-  for (const block of text.split(/\n[ \t]*\n/)) {
+  for (const block of withoutFencedBlocks(text).split(/\n[ \t]*\n/)) {
     const runs = [...block.matchAll(/`+/g)];
     let i = 0;
     while (i < runs.length) {
@@ -118,8 +146,10 @@ export function markdownCodeSpans(text: string): string[] {
  * (`` `tool_one.ts` ``) is not the tool.
  */
 export function spanNamesTool(span: string, tool: string): boolean {
-  // CommonMark strips one space from each end when both ends have one.
-  const content = /^ [\s\S]* $/.test(span) && span.trim() !== "" ? span.slice(1, -1) : span;
+  // CommonMark turns line endings into spaces, then strips one space from
+  // each end when both ends have one and the span is not all spaces.
+  const flat = span.replace(/\r?\n/g, " ");
+  const content = /^ [\s\S]* $/.test(flat) && flat.trim() !== "" ? flat.slice(1, -1) : flat;
   return new RegExp(`^${escapeRegExp(tool)}(?:$|[\\s({])`).test(content);
 }
 
