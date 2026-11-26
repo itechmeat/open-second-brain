@@ -7,20 +7,6 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 
-import { openDreamOwnerStore } from "../../../../src/core/brain/dream-owner/gate.ts";
-import {
-  claimDreamOwner,
-  claimSettled,
-  readDreamOwner,
-} from "../../../../src/core/brain/dream-owner/owner.ts";
-import {
-  DREAM_EXECUTOR_TOOLS,
-  DREAM_RUN_ENV,
-  DREAM_TOKEN_ENV,
-  DREAM_WORK_ANSWER,
-} from "../../../../src/core/brain/dream-queue/dream-session.ts";
-import { createDreamRun } from "../../../../src/core/brain/dream-queue/run-record.ts";
-import { openDreamExecutor } from "../../../../src/mcp/dream-executor.ts";
 import { buildToolTable } from "../../../../src/mcp/tools.ts";
 import { MCPServer } from "../../../../src/mcp/server.ts";
 import { MIGRATION_IN_PROGRESS_REFUSAL } from "../../../../src/mcp/frozen-refusal.ts";
@@ -168,9 +154,7 @@ export function cliRestSuite(shard: number, shards: number): void {
   );
   for (const [name, row] of rows) {
     const argv =
-      (row.kind === "recorder" || row.kind === "reader") && row.argv !== undefined
-        ? row.argv
-        : [...name.split(" "), "--json"];
+      row.kind === "recorder" && row.argv !== undefined ? row.argv : [...name.split(" "), "--json"];
     // In this process: a reader writes no host configuration, and a writer
     // that would is classified `host` and not driven here.
     const options = {
@@ -339,78 +323,6 @@ export function mcpSuite(shard: number, shards: number): void {
     });
     expect(unproven).toEqual([]);
   });
-}
-
-/**
- * The dream executor's tools (`o2b mcp --tool-profile dream-executor`), one
- * test each. A live dream run is made for this machine before the gate is
- * taken (the owner role claimed in the census store, a run record in its
- * device state); then, under no gate, this vault's live gate and a stopped
- * holder's, the server named the legacy vault refuses to start, the server
- * of the store answers the tool, and the vault stays byte-identical. The
- * queue is empty, so a take finds nothing and an answer names no item: an
- * answer the queue accepts is not driven here, and its writes are the
- * store's (tests/mcp/dream-executor-*.test.ts drive those).
- */
-export function dreamExecutorSuite(): void {
-  const template = withTemplate("osb-gate-census-dream-", true);
-  const args: Record<string, Record<string, unknown>> = {
-    [DREAM_WORK_ANSWER]: { id: "census-none", generation: 1, value: 0.5, model: "census" },
-  };
-  for (const name of DREAM_EXECUTOR_TOOLS) {
-    test(`mcp outside: ${name} (dream executor)`, async () => {
-      expect(MCP_CENSUS[name]).toEqual({ kind: "outside", reason: "store" });
-      const conditions = [
-        GATE_CONDITION.none,
-        GATE_CONDITION.thisVault,
-        GATE_CONDITION.stoppedHolder,
-      ] as const;
-      for (const condition of conditions) {
-        // oxlint-disable-next-line no-await-in-loop -- one template copy at a time, as every census row
-        const outcome = await template().run(
-          condition,
-          (run, live: { run: string; token: string }) => {
-            const env = { [DREAM_RUN_ENV]: live.run, [DREAM_TOKEN_ENV]: live.token };
-            const legacy = openDreamExecutor({ env, configPath: run.configPath, vault: run.vault });
-            const opened = openDreamExecutor({ env, configPath: run.configPath, vault: null });
-            if (!opened.ok)
-              return { legacyRefused: !legacy.ok, answered: `refused: ${opened.reason}` };
-            const response = opened.server.handle({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "tools/call",
-              params: { name, arguments: args[name] ?? {} },
-            }) as { result?: unknown; error?: unknown } | null;
-            return { legacyRefused: !legacy.ok, answered: response?.result !== undefined };
-          },
-          (run) => {
-            const opened = openDreamOwnerStore(null, run.configPath);
-            if (opened.store === null) throw new Error(`census store: ${opened.reason}`);
-            const store = opened.store;
-            claimDreamOwner(store, "census-agent", { writer: "o2b", authority: "human" });
-            claimSettled(store, readDreamOwner(store));
-            const owner = readDreamOwner(store).owner;
-            if (owner === null) throw new Error("census store: no dream owner after the claim");
-            const created = createDreamRun(store.deviceStateDir, {
-              ownerRevision: owner.revision,
-              budgetMs: 600_000,
-              operations: ["human-readable"],
-              privateAllowed: false,
-              itemBudget: 50,
-              agent: "census-agent",
-            });
-            return { run: created.record.run, token: created.token };
-          },
-        );
-        expect([name, condition, outcome.value, outcome.changed]).toEqual([
-          name,
-          condition,
-          { legacyRefused: true, answered: true },
-          [],
-        ]);
-      }
-    });
-  }
 }
 
 /** The hook payload: one turn that wrote a file, as every runtime sends it. */

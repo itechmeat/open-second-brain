@@ -10,13 +10,13 @@
       "status": "stable",
       "capabilities": [
         "`brain_ingest_source` turns an agent's summary and entities into one `Brain/sources/src-<slug>.md` page",
-        "Creates or updates entity pages through the shared intake; the connections list names only entities that existed",
+        "Creates or updates entity pages through the shared intake; its connections list names only existing entities",
         "Re-ingest rewrites the same page; a content-sha256 manifest with contract fingerprint skips unchanged sources",
         "Archives the redacted bytes of a trusted local source at `Brain/.archives/<sha256>.txt`",
         "`brain batch-plan` packs new or modified files into batches (default 1 MiB, 25 files), honouring `.gitignore`",
         "`brain extract` previews HTML and CSV/TSV extraction and the appended byte range since the recorded watermark",
         "Lists every page derived from one exact source file or URL (`brain_search_by_source`)",
-        "Removes everything one source produced after a dry run and a snapshot (`forget-source`, `brain_delete_by_source`)"
+        "On confirm, snapshots and deletes pages tracing only to one source (`forget-source`, `brain_delete_by_source`)"
       ],
       "limits": [
         "Runs no model, fetches no URL and does no OCR: the calling agent supplies the text, summary and entities",
@@ -101,9 +101,9 @@
         "`brain git find` filters stored commits by file, author, text and date with no live git call",
         "`brain git mine` turns breaking-change markers and reverts into ADR candidates, never touching existing ones",
         "`brain note-history` splits a note's commits into phases on a 72 h gap, each summarized by its commit subjects",
-        "`brain architect` scans layout and manifests into overview, decision and module notes inside regenerated regions",
+        "`brain architect` turns layout and manifests into overview, decision and module notes in regenerated regions",
         "`brain pre-extract` emits sorted class, function, import and block seeds for TS, JS, Python and HCL",
-        "`brain file-context` searches the index with a file's basename, stem and folder; skips files under 1500 bytes"
+        "`brain file-context` searches the index with a file's basename and stem; skips files under 1500 bytes"
       ],
       "limits": [
         "A git ingest run reads at most the 1000 newest commits by default",
@@ -188,6 +188,8 @@
         "`bank-import` restores the graph (skip/overwrite/merge) and preferences unconfirmed unless `--trusted-restore`",
         "Writes a byte-stable `graph.json` of pages, links and relations (`graph-export`)",
         "Seals a selected knowledge pack with a per-file sha256 and a pack digest (`knowledge-pack export`)",
+        "`knowledge-pack install` checks the sha256 seal, stages pages in `OKF Review/`, restores rules unconfirmed",
+        "`knowledge-pack uninstall` removes a pack's stamped items, keeping rules with local evidence and edited pages",
         "Exports are redacted; okf, bank and graph exports skip prompt-derived pages unless `--include-prompt-derived`"
       ],
       "limits": [

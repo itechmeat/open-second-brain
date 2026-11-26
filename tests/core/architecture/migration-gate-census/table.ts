@@ -182,13 +182,6 @@ export type CliRow =
   | { readonly kind: "outside"; readonly reason: OutsideReason }
   | { readonly kind: "allowed"; readonly reason: keyof typeof ALLOWED_REASON };
 
-/**
- * What a search records on a legacy machine: its access events and their
- * fold, and the metrics row of the index run a missing index starts.
- */
-const SEARCH_RECORDS_RE =
-  /^Brain\/(metrics\/|search(\/activation(\/[^/]+\.json)?|\/activation-state\.json)?$)/;
-
 const V = GUARD.vault;
 const G = GUARD.gate;
 const B = GUARD.both;
@@ -221,15 +214,7 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   bootstrap: u("host"),
   setup: u("host"),
   "brain actions": r,
-  // Two queries leave two access events; keeping one removes the other.
-  "brain activation": w(
-    G,
-    ["brain", "activation", "sweep", "--max-events", "1", "--json"],
-    [
-      ["search", "query", "census"],
-      ["search", "query", "census note"],
-    ],
-  ),
+  "brain activation": u("fixtureState"),
   "brain agenda": r,
   "brain agent-diff": r,
   "brain agent-query": r,
@@ -491,6 +476,8 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   ]),
   // Its operations are positional: list and usage read, accept, learn,
   // reject, recover and page-draft need a proposal the fixture does not build.
+  // Driven bare, so the census exercises only its refusal of a missing
+  // operation: no operation is driven here.
   "brain skill-proposals": u("inputs"),
   "brain skill-proposals rewrite-plan": r,
   "brain skill-proposals rewrite-score": u("inputs"),
@@ -563,8 +550,9 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   init: o("config"),
   install: u("host"),
   "install-cli": o("hostBin"),
-  // Serves the MCP tools until stopped; the MCP section drives every tool
-  // of the main server, and the dream executor's three tools too.
+  // Serves the MCP tools until stopped; never started here. The MCP section
+  // drives every tool of the full table; the dream executor's three tools
+  // (`o2b mcp --tool-profile dream-executor`) are not driven by the census.
   mcp: o("server"),
   "mcp token list": r,
   "mcp token mint": w(V, [
@@ -589,16 +577,10 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
   onboarding: r,
   "partner codegraph report": r,
   "partner codegraph resync": o("stdout"),
-  // `search <query>` is `search query <query>`.
-  // A query records which pages it surfaced (`Brain/search/activation/` on
-  // a legacy machine) and the index run a missing index starts; under the
-  // gate it still answers and records nothing.
-  search: {
-    kind: "recorder",
-    records: SEARCH_RECORDS_RE,
-    argv: ["search", "census", "--json"],
-    prepare: [],
-  },
+  // `search <query>` is `search query <query>`. Driven bare, as every
+  // reader row is, so the census exercises only its usage error (no query):
+  // the query path is not driven here.
+  search: r,
   "search check": r,
   "search event-anchor-backfill": u("index"),
   "search expand": r,
@@ -625,12 +607,8 @@ export const CLI_CENSUS: Readonly<Record<string, CliRow>> = Object.freeze({
     "--env-key",
     "CENSUS_KEY",
   ]),
-  "search query": {
-    kind: "recorder",
-    records: SEARCH_RECORDS_RE,
-    argv: ["search", "query", "census", "--json"],
-    prepare: [],
-  },
+  // Driven bare: only its usage error (no query); the query path is not driven here.
+  "search query": r,
   // A real reindex (the index built first): the index lives in the store's
   // device-local state, the one vault write is its metrics row, which the
   // gate refuses while the reindex itself goes on. The self-heal reindex
@@ -744,11 +722,9 @@ export type McpRow =
   | { readonly kind: "outside"; readonly reason: OutsideReason };
 
 /**
- * Every tool of the full MCP table (`buildToolTable("full")`) and of the
- * dream executor (`DREAM_EXECUTOR_TOOLS`). A row's kind is the tool's own
- * declared `kind` (asserted for the full table), except where noted. Each
- * tool of the full table is driven with every recipe of the probe
- * catalogue; each dream executor tool by `dreamExecutorSuite`.
+ * Every tool of the full MCP table (`buildToolTable("full")`). A row's kind
+ * is the tool's own declared `kind` (asserted), except where noted. Each
+ * is driven with every recipe of the probe catalogue.
  */
 export const MCP_CENSUS: Readonly<Record<string, McpRow>> = Object.freeze({
   brain_agenda: { kind: "reader" },
@@ -878,12 +854,6 @@ export const MCP_CENSUS: Readonly<Record<string, McpRow>> = Object.freeze({
   skills_attach: { kind: "reader" },
   tool_hydrate: { kind: "reader" },
   vault_health: { kind: "reader" },
-  // The dream executor's server (`o2b mcp --tool-profile dream-executor`)
-  // serves these for a live dream run, over the brain store only; named the
-  // legacy vault it refuses to start. Driven by `dreamExecutorSuite`.
-  dream_work_answer: { kind: "outside", reason: "store" },
-  dream_work_finish: { kind: "outside", reason: "store" },
-  dream_work_take: { kind: "outside", reason: "store" },
 });
 
 export type HookRow =

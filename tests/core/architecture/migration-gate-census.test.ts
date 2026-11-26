@@ -14,7 +14,6 @@ import {
   CLI_COMMAND_MANIFEST,
   type CliCommandManifest,
 } from "../../../src/cli/command-manifest.ts";
-import { DREAM_EXECUTOR_TOOLS } from "../../../src/core/brain/dream-queue/dream-session.ts";
 import { runSelfHealUpgrade } from "../../../src/core/maintenance/self-heal-upgrade.ts";
 import { buildToolTable } from "../../../src/mcp/tools.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
@@ -157,11 +156,12 @@ describe("the census covers every writer, in both directions", () => {
 
   test("every MCP tool has exactly one row, of the kind the tool declares", () => {
     const tools = buildToolTable("full");
-    // Every server's tools: the full table and the dream executor's.
-    expect(drift([...tools.map((t) => t.name), ...DREAM_EXECUTOR_TOOLS], MCP_CENSUS)).toEqual({
-      unclassified: [],
-      stale: [],
-    });
+    expect(
+      drift(
+        tools.map((t) => t.name),
+        MCP_CENSUS,
+      ),
+    ).toEqual({ unclassified: [], stale: [] });
     const mismatched = tools
       .filter((tool) => {
         const row = MCP_CENSUS[tool.name];

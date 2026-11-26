@@ -9,19 +9,19 @@
       "summary": "Configures the machine and the brain, connects one agent host and verifies it; a first-run checklist shows what is left.",
       "status": "stable",
       "capabilities": [
-        "`o2b setup --target <host>` prints the machine, host and verify plan; nothing is written without `--apply`",
+        "`o2b setup --target <host>` prints the machine and host plan; nothing is written without `--apply`",
         "`--apply` asks y/N on a terminal and refuses without `--yes` when stdin is not a TTY",
-        "Apply runs `o2b init`, writes the host registration through its install adapter and verifies it",
-        "Apply ends with an in-process MCP probe and a store self-test on throwaway storage",
-        "`o2b init` saves vault, agent name and IANA timezone to the machine config, then creates and binds the store",
+        "Apply runs `o2b init` if the machine is unconfigured, then writes and verifies the host via its adapter",
+        "Apply ends with an in-process MCP probe, then a throwaway store self-test when anything was written",
+        "`o2b init` saves vault, agent name and timezone, then creates and binds the store unless `Brain/` holds data",
         "`o2b init --interactive` (or `setup` on a TTY without `--target`) runs a wizard that finds `.obsidian` vaults",
         "`o2b onboarding` derives a read-only next-step checklist (store, index, identity, first signal) with commands",
-        "`o2b brain init` creates the store; on a legacy vault it scaffolds `Brain/` with `_brain.yaml` and `_BRAIN.md`"
+        "`o2b brain init` with no vault creates the store; on an unswitched machine it scaffolds `Brain/`"
       ],
       "limits": [
-        "Plugin hosts (Claude Code, Hermes, OpenClaw, ZCode) and `generic` get a printed manual step; setup exits 7",
+        "Plugin hosts (Claude Code, Hermes, OpenClaw, ZCode) and `generic` get a manual step; `--apply` exits 7",
         "Setup refuses to change a configured vault, agent name or timezone; `o2b init` changes them",
-        "The Aider target requires `--vault`, because Aider reads its context from a file in the vault"
+        "The Aider target needs a configured vault or `--vault`: Aider reads its context from a file in the vault"
       ],
       "surfaces": {
         "cli": ["setup", "init", "onboarding", "brain init"]
@@ -43,18 +43,20 @@
       "summary": "Writes, checks, updates and removes the integration for each supported agent host; Aider runs inside a memory wrapper.",
       "status": "stable",
       "capabilities": [
-        "Ten host adapters write the integration by JSON merge, fenced block, host CLI call, file copy or symlink, or print it",
-        "`o2b install` detects hosts, plans with a diff, writes on `--apply`, verifies on `--check`, compares on `--friction`",
-        "Writes a fenced brain-usage block into the AGENTS.md or GEMINI.md the host reads, beside the MCP registration",
-        "Uninstall removes only paths recorded in `install.lock.json`; a hand-edited fenced block needs `--force`",
-        "`o2b update` re-applies hosts whose payload sha256 changed, e.g. by `install.tool_profile`, then migrates the store",
+        "Writes each of ten hosts by JSON merge, fenced block, host CLI call, file copy or symlink, or prints the step",
+        "`o2b install` detects hosts, plans a diff, writes on `--apply`, checks on `--check`, compares on `--friction`",
+        "Writes a fenced brain-usage block into the AGENTS.md or GEMINI.md the host reads; hand edits need `--force`",
+        "`uninstall --target` removes only what install locks record; with no record it needs `--force-from-snippet`",
+        "`o2b update` re-applies hosts whose payload sha256 changed (`install.tool_profile`), then migrates the store",
         "`aider wrap` passes a live context sidecar via `--read`, then saves the new chat-history tail as a capture",
         "`brain mcp-landscape` lists MCP servers declared in vault config files: packages and env names, never values",
-        "Reports linked projects or each host's verify state (`second_brain_wiring`)"
+        "Reports linked projects or each host's verify state (`second_brain_wiring`)",
+        "`install-cli` links `o2b`, `vault-log` and `o2b-hook` into `~/.local/bin` (`.cmd` launchers on Windows)",
+        "`completions <shell>` prints a completion script for bash, zsh, fish, elvish, nushell or powershell"
       ],
       "limits": [
         "Claude Code, Hermes, OpenClaw and ZCode install through their own plugin systems, not `o2b install`",
-        "`mcp-landscape` reads only `.mcp.json`, `mcp.json`, `mcp_servers.json`, `claude_desktop_config.json` in the vault",
+        "`mcp-landscape` reads only `.mcp.json`, `mcp.json`, `mcp_servers.json`, `claude_desktop_config.json` there",
         "`aider wrap` requires a configured vault"
       ],
       "surfaces": {
@@ -95,10 +97,10 @@
         "Exposes 11 curated memory tools with live `tools/list` schemas, falling back to vendored static schemas",
         "Fills the system prompt block with the active-preferences body from `brain_context`",
         "Prefetch runs the recall gate, then a ranked `brain_context_pack` (1024 tokens max) and the identity reminder",
-        "Buffers each turn on a background thread and a JSONL transcript; flushes at compaction, session end and shutdown",
-        "Stores built-in memory writes (`add`/`replace` on `memory` or `user`) as `host_memory_write` continuity records",
-        "On a multiplexed gateway resolves settings from the bound Hermes profile, never the process environment",
-        "Re-renders mirrored host memory writes as unconfirmed rules after a dry run (`brain continuity promote`)"
+        "Buffers each turn on a background thread and a JSONL transcript; flushes at compaction, session end, shutdown",
+        "Stores built-in memory writes (`add`, `replace` on `memory` or `user`) as `host_memory_write` records",
+        "On a multiplexed gateway reads vault, agent, timezone, config path and timeout from the bound profile only",
+        "Re-renders mirrored host memory writes as unconfirmed rules (`brain continuity promote`, dry run by default)"
       ],
       "limits": [
         "Reports itself unavailable until a vault path is configured",
@@ -130,7 +132,7 @@
       "status": "stable",
       "capabilities": [
         "Registers `second_brain_status`, `second_brain_query` and `vault_health` in-process and spawns no subprocess",
-        "Prepends the identity reminder per model call via `before_prompt_build` `prependContext`, not the cached prompt",
+        "Prepends the identity reminder per model call via `before_prompt_build` `prependContext`, outside the cache",
         "Names the agent by a host-qualified identity derived from vendor `openclaw` and the operator name",
         "`second_brain_query` lists vault pages by case-insensitive title substring, limit 1 to 500 (default 50)",
         "Serves at remote reach: pages reserved against remote reads and quarantined entity pages are withheld",
@@ -166,7 +168,8 @@
         "Tool profiles full, writer (5 always-loaded tools), catalog, recall, minimal; an unknown profile exits 2",
         "Returns the compact tool catalog or the full schemas of named tools (`tool_hydrate`)",
         "Narrows the served tools with `--allow-tool`, `--disable-tool` and `--max-tools`",
-        "Results over 2000 characters are parked, redacted, for 24 h as artifacts; `brain_artifact_get` returns them",
+        "`second_brain_capabilities` lists available and withheld tools with reasons and the host tool-count ceiling",
+        "Text results of budgeted tools over 2000 chars are parked, redacted, 24 h; `brain_artifact_get` returns them",
         "Summarizes per-tool call latency at p50, p95 and p99 once `mcp_route_metrics_enabled` records it",
         "Runs a tool handler from the shell (`o2b tool-call <tool> --tool-arg k=v`)"
       ],
@@ -202,7 +205,7 @@
     {
       "slug": "mcp-access-tokens",
       "name": "Per-agent MCP tokens",
-      "summary": "Named per-agent tokens for the HTTP transport, and one-command provisioning of a host with its token.",
+      "summary": "Named per-agent tokens for the HTTP transport, and one-command provisioning of a host, optionally with its token.",
       "status": "optional",
       "capabilities": [
         "`mcp token mint --agent` creates `mcp_token_<slug>` from 32 random bytes and prints the material exactly once",
@@ -211,13 +214,14 @@
         "Keeps the old material valid for 10 minutes after `rotate`, with no restart",
         "`mcp_tokens_required` (default off) refuses credential-less HTTP requests once any token exists",
         "Every mint, rotation and revocation appends a value-free record to the secret-custody audit",
-        "`o2b bootstrap --target` registers the host, mints its token and writes `bootstrap.lock.json`; reruns are no-ops",
+        "`bootstrap --target` registers the host, writes `bootstrap.lock.json`, `--token` mints its token; reruns no-op",
         "Tears a provision down with `bootstrap --remove`: uninstalls, revokes the token, drops the receipt"
       ],
       "limits": [
         "Tokens authenticate only the HTTP transport; a stdio registration keeps its config-derived identity",
         "A token sets identity only; tool profiles and reach still bind every caller",
-        "Bootstrap covers codex, grok, opencode (adapter), generic (print), claude-code and zcode (verify only)"
+        "Bootstrap covers codex, grok, opencode (adapter), generic (print), claude-code and zcode (verify only)",
+        "A token caller's note-write records still name the server's configured agent, not the token's"
       ],
       "surfaces": {
         "cli": [
@@ -250,7 +254,7 @@
       "status": "stable",
       "capabilities": [
         "`o2b status` prints config path, config keys, a semantic-search hint and the brain store state, also as JSON",
-        "`o2b doctor` checks vault and config writability, plugin manifests, Hermes resolver parity and codegraph",
+        "`o2b doctor` checks vault/config writability and codegraph; `--repo` adds plugin manifests and Hermes parity",
         "Prints a fix command for each failed doctor check",
         "`doctor --readiness` probes model key, embeddings, adapters, installed hosts and write-back, 5 s timeout each",
         "`doctor selftest` opens, indexes, writes, searches and deletes on a throwaway vault and store",
@@ -291,13 +295,13 @@
         "Names and counts an unhandled promise rejection and keeps serving; HTTP `/health` shows the count",
         "Rate-limits fault lines to a burst per window, then one summary line; the count is never limited",
         "Exits on an uncaught exception, letting its exit hooks checkpoint the search index and release locks",
-        "On SIGINT or SIGTERM stops accepting, finishes in-flight calls within a deadline, names any it abandons, exits 130 or 143",
-        "Refuses writes with `server_outdated` once the installed version or the machine's store layout changed since start"
+        "On SIGINT or SIGTERM stops accepting, finishes calls by a deadline, names those it drops, exits 130 or 143",
+        "Refuses writes with `server_outdated` once the installed version or the store layout changed since it started"
       ],
       "limits": [
-        "The argument gate is top-level only; unknown keys inside nested objects still reach the handler.",
-        "What the outdated check cannot read counts as unchanged, so it never refuses on an unknown.",
-        "The outdated refusal lasts until the agent session restarts the server."
+        "The argument gate is top-level only; unknown keys inside nested objects still reach the handler",
+        "What the outdated check cannot read counts as unchanged, so it never refuses on an unknown",
+        "The outdated refusal lasts until the agent session restarts the server"
       ],
       "surfaces": {},
       "docs": [

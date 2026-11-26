@@ -6,15 +6,16 @@
     {
       "slug": "active-preferences",
       "name": "Active preferences injection",
-      "summary": "Each session, and each subagent, starts with the confirmed rules, recent retirements, topic heads and pinned context.",
+      "summary": "Sessions start with confirmed rules, recent retirements, topic heads and pinned context; subagents skip the last two.",
       "status": "stable",
       "capabilities": [
-        "Injects confirmed rules, topic heads, pinned context, active.md and lessons.md at session start, compact included",
-        "Renders active.md from confirmed and quarantined preferences, a 30-day most-applied top 10 and 3 retirements; `guardrails.provenance_trust_ordering` (off) puts stated rules before deduced and inferred ones",
+        "Injects confirmed rules, topic heads, pinned context, active.md and lessons.md at session start and compaction",
+        "Renders active.md from confirmed and quarantined preferences, a 30-day most-applied top 10 and 3 retirements",
+        "Puts stated rules before deduced and inferred ones with `guardrails.provenance_trust_ordering` (default off)",
         "Charges memory to `active.inject_budget_chars` (8000), cutting sections to headlines, then dropping them",
         "Keeps one hook payload under 9000 chars (UTF-8 bytes on Codex), ending it in one truncation note",
         "Adds up to 12 project topic heads (1600 chars) and the pinned context (1200 chars) inside that budget",
-        "Sends the session-start payload to each subagent (`subagent-inject`)",
+        "Sends subagents rules, active.md and lessons.md, no topic heads or pinned context (`subagent-inject`)",
         "Returns the digest, pinned context and counts through `brain_context` for hosts without a SessionStart hook",
         "Delivers parts 2 to 8 of an oversized start payload one per later event (`reground_parts_enabled`, off)"
       ],
@@ -171,7 +172,7 @@
         "Caps the brief at 4 notes, 900 chars and 2500 ms; abstains below 0.35 IDF-weighted query coverage",
         "Skips notes the session already saw in the start digest or an earlier brief (recall_inject_dedupe, on)",
         "Retrieves named slices (path prefix, types, limit, chars) declared in the recall_inject block of _brain.yaml",
-        "Lets the recall_inject decision-model use drop notes or withhold the brief in shadow or enforce mode",
+        "With the recall_inject decision-model use in enforce, drops notes or withholds the brief; shadow only records",
         "With nav_tier_enabled (default off), injects vault size and the top 8 hubs by link degree every 30 minutes",
         "Warms an anticipatory pack plus session hits (2000 tokens, 120 s TTL) on prompt and tool events",
         "Reads that cache by session lineage root as warm, stale or miss through brain_anticipatory_context"

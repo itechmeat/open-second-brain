@@ -9,17 +9,17 @@
       "summary": "Morning, daily, weekly and monthly briefs, a today dashboard, an operator summary and a logging discipline report.",
       "status": "stable",
       "capabilities": [
-        "Serves seven brief views through `brain_brief`, among them an operator view with the trust verdict and top actions",
-        "Composes the morning brief: top 10 confirmed rules, open questions, 7 days of notes, up to 5 triggers, open decisions",
+        "Serves seven brief views through `brain_brief`, one an operator view with the trust verdict and top actions",
+        "Composes the morning brief: top 10 rules, open questions, 7 days of notes, up to 5 triggers, open decisions",
         "Folds `Brain/log` events into counters and transitions for daily, weekly and monthly briefs",
         "Digest covers 24 h (or `--window Nd`): new, confirmed, retired preferences, confidence shifts, contradictions",
-        "With `report_snapshots_enabled`, digest saves a JSON snapshot in `Brain/reports/` and diffs the next run to it",
+        "With `report_snapshots_enabled`, digest, daily and weekly snapshot JSON to `Brain/reports/` and diff each run",
         "Today lists due and overdue obligations, open pledges, open loops, 7 days of activity and totals",
         "`discipline report` sets ok, info or alert from yesterday's per-agent signals versus git and file activity",
-        "Writes `Brain/profile.md`, a compact digest of counts, top preferences and activity for shell readers (`brain profile`)"
+        "Writes `Brain/profile.md`, a digest of counts, top preferences and activity for the shell (`brain profile`)"
       ],
       "limits": [
-        "Deterministic and model-free; the only writes are trigger delivery marks and opt-in digest snapshots",
+        "Deterministic and model-free; writes only trigger delivery marks, opt-in snapshots and `Brain/profile.md`",
         "`discipline report` is off unless `discipline_report.enabled` is set in `_brain.yaml`"
       ],
       "surfaces": {
@@ -62,10 +62,10 @@
       "status": "stable",
       "capabilities": [
         "`brain timeline` lists `Brain/log` events filtered by preference id, topic, kind, date range and limit",
-        "`brain evolution` traces a preference or topic: status transitions from dream runs, evidence counts, retirements",
+        "`brain evolution` traces a preference or topic: dream-run status transitions, evidence counts, retirements",
         "`attention-flows` evaluates recipe pages: open proposals, high recurrence, active procedures, standing queries",
         "Seeds a default `open-loops.md` recipe in `Brain/attention-flows/` on first use",
-        "`brain synthesise <id>` builds a concept cluster: the target, its depth-1 linkers, optionally unlinked mentions",
+        "`brain synthesise <id>` builds a concept cluster: the target, its depth-1 linkers, optional unlinked mentions",
         "`brain_analytics view=dedup` reports the exact-hash ingest dedup trend per capture surface",
         "Every lens is a deterministic fold over stored records; no model is called"
       ],
@@ -101,7 +101,7 @@
       "status": "stable",
       "capabilities": [
         "`trigger scan` makes triggers from contradictions, stale claims, retention actions and cross-agent collisions",
-        "Each trigger is a Markdown file in `Brain/triggers/`; a cooldown key dedupes repeat findings across all statuses",
+        "Keeps each trigger as a Markdown file in `Brain/triggers/`; a cooldown key dedupes repeats across all statuses",
         "Defers a snoozed trigger for 3 days or until its grounding moves",
         "Brings a dismissed trigger back only when its grounding moves",
         "Expires open triggers after 14 days and keeps at most 10 per kind",
@@ -147,7 +147,7 @@
         "`brain_pledge` stores one-off promises with a due date, a source page and quotes verified against that source",
         "`brain_intake_pledges` checks a whole batch before writing and dedupes by sha256 of title, due and source",
         "A counterparty becomes a `promised_to` edge only when the name resolves to exactly one canonical entity",
-        "`brain agenda` returns conflicts, focus blocks (default 60 min) and external organisers from agent-given events",
+        "`brain agenda` returns conflicts, focus blocks (default 60 min) and outside organisers from agent-given events",
         "Opt-in hook `counterparty-brief` injects once per session dated shareable facts about the one person named"
       ],
       "limits": [
@@ -219,17 +219,17 @@
       "summary": "Ranks recurring queries the vault answers poorly and can surface them as an agenda at session start.",
       "status": "optional",
       "capabilities": [
-        "`brain_search` with `telemetry: true` logs redacted query terms, result count and IDF-weighted coverage",
-        "`brain knowledge-gaps` ranks queries by frequency times (1 - coverage); a gap needs 2 occurrences by default",
+        "`brain_search` with `telemetry: true` logs redacted terms, result count and, with `evidence_pack`, coverage",
+        "`brain knowledge-gaps` ranks by count times (1 - coverage, else share of runs with results); min 2 by default",
         "Filters by date range, minimum occurrences, maximum satisfaction (0 to 1) and limit; read-only",
-        "The demand log is a per-device JSONL shard under `Brain/log/`, compacted past 1 MB; raw queries are never stored",
-        "With `gap_loop_enabled`, the session-end hook promotes gaps seen 3 or more times to notes in `Brain/gap-tasks/`",
+        "Keeps the demand log as a per-device JSONL shard under `Brain/log/`, compacted past 1 MB; no raw query stored",
+        "With `gap_loop_enabled`, the session-end hook promotes gaps seen 3+ times to notes in `Brain/gap-tasks/`",
         "Closes a gap task once its topic recalls at 0.5 coverage or more",
         "Injects open gap tasks as an agenda at session start (`gap-agenda`)",
-        "Context-pack recall-adequacy misses are logged under `recall_gate_telemetry`; the loop never sums them with gap counts"
+        "Logs context-pack recall-adequacy misses under `recall_gate_telemetry`, never summed with gap counts"
       ],
       "limits": [
-        "Off by default: the log needs per-call `telemetry` or `recall_gate_telemetry`; the hooks need `gap_loop_enabled`",
+        "Off by default: the log needs per-call `telemetry` or `recall_gate_telemetry`, the hooks `gap_loop_enabled`",
         "Gap topics are term buckets and telemetry codes, not generated questions"
       ],
       "surfaces": {

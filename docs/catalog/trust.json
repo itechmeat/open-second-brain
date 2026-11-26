@@ -9,20 +9,21 @@
       "summary": "Records each note write by agent and device with a before-image, and plans a sealed undo per agent or path.",
       "status": "stable",
       "capabilities": [
-        "Logs one `note-write` event per create, update, append or revert: agent, device, target, sha256 of both sides.",
-        "Keeps replaced bytes content-addressed in `Brain/.state/write-images/<sha256>`, so a write can be undone.",
-        "Lists writes newest first, filtered by agent, device, path, operation and time window (`brain writes`).",
-        "Folds note-write and write-session events into one row per destination with agents and devices (last 7 days).",
-        "Plans a revert by agent, device or path sealed by a digest; `--apply <digest>` re-plans and snapshots first.",
-        "Refuses a target on drift, an interleaved unselected write, a missing before-image or unreadable bytes.",
-        "Names the edited lines of a legacy Brain log shard by its `prev` and `h` hash chain (`brain log verify`)",
-        "Prunes before-images older than 30 days by default (`writes prune-images --older-than-days`, with `--dry-run`)."
+        "Logs one `note-write` event per create, update, append or revert: agent, device, target, sha256 of both sides",
+        "Keeps replaced bytes as `write-images/<sha256>` in vault or device-local state, so a write can be undone",
+        "Lists writes newest first, filtered by agent, device, path, operation and time window (`brain writes`)",
+        "Folds note-write and write-session events into one row per destination with agents and devices (last 7 days)",
+        "Plans a revert by agent, device or path sealed by a digest; `--apply <digest>` re-plans and snapshots first",
+        "Returns a read-only sealed revert plan over MCP (`brain_writes` `plan_revert`); only the CLI applies it",
+        "Refuses a target on drift, an interleaved unselected write, a missing before-image or unreadable bytes",
+        "Reports the first broken line per legacy Brain log shard by its `prev`/`h` hash chain (`brain log verify`)",
+        "Prunes before-images older than 30 days by default (`writes prune-images --older-than-days`, with `--dry-run`)"
       ],
       "limits": [
-        "Log events on a machine switched to the store carry no hash chain; `log verify` walks legacy day files only.",
-        "Signal slugs and daily logs emit no write event, so the destination list can miss writes and says so.",
-        "The agent name is what the writer asserted; it is not authenticated.",
-        "No three-way merge: a target another writer touched is refused, not merged."
+        "Log events on a machine switched to the store carry no hash chain; `log verify` walks legacy day files only",
+        "Signal slugs and daily logs emit no write event, so the destination list can miss writes and says so",
+        "An event names the writing process's configured agent, for a token caller's write too; it is unauthenticated",
+        "No three-way merge: a target another writer touched is refused, not merged"
       ],
       "surfaces": {
         "cli": [
@@ -60,20 +61,21 @@
       "summary": "A permissions document, an owner-write gate, a global write freeze and host deny rules that keep agents off brain files.",
       "status": "stable",
       "capabilities": [
-        "Resolves guarded writes against the permissions document (`_permissions.yaml` or `permissions.document`).",
-        "Ranks matching entries, then agent override, role and default_action; deny beats ask beats allow at equal scope.",
+        "Resolves guarded writes against the permissions document (`_permissions.yaml` or `permissions.document`)",
+        "Ranks matching entries, then agent override, role, default_action; deny beats ask beats allow at equal scope",
         "Dry-runs the decision table per declared agent (`permissions show`)",
-        "Stops every content writer with a `frozen.json` marker (`brain freeze`, CLI only); an unreadable marker freezes.",
-        "Writes deny rules for Brain preferences, retired, log, snapshots and `_brain.yaml` into Claude Code or Codex.",
-        "Removes only the deny entries its manifest recorded (`brain unprotect`)",
-        "Backs up `.claude/settings*.json` before agent file writes and denies a write whose backup fails (opt-in).",
-        "Refuses or warns on a caller-named foreign `owner:` per `integrity.owner_scope_writes` (default off)."
+        "Queries recorded gate decisions by actor, action, verdict, time window and limit (`permissions ledger`)",
+        "Stops every content writer with a `frozen.json` marker (`brain freeze`, CLI only), even an unreadable one",
+        "Writes deny rules for Brain preferences, retired, log, snapshots and `_brain.yaml` into Claude Code or Codex",
+        "Removes manifest-recorded deny and allow entries, or Codex's current rules if none (`brain unprotect`)",
+        "Backs up `.claude/settings.json` or `settings.local.json` before a file tool writes it; denies if that fails",
+        "Refuses or warns on a caller-named foreign `owner:` per `integrity.owner_scope_writes` (default off)"
       ],
       "limits": [
-        "On a machine switched to the store the freeze marker is device-local and freezes that machine only.",
-        "Native deny rules exist only for Claude Code and Codex.",
-        "The host-settings backup hook is off by default and denies nothing when bun or the hook script is missing.",
-        "With no permissions document every gate behaves as before; an unreadable document refuses instead."
+        "On a machine switched to the store the freeze marker is device-local and freezes that machine only",
+        "Native deny rules exist only for Claude Code and Codex",
+        "The host-settings backup hook is off by default and denies nothing when bun or the hook script is missing",
+        "With no permissions document every gate behaves as before; an unreadable document refuses instead"
       ],
       "surfaces": {
         "cli": [
@@ -111,19 +113,19 @@
       "summary": "Optionally stages agent note creates and ingest pages for operator approval before they are published.",
       "status": "optional",
       "capabilities": [
-        "Stages captured signals in `Brain/pending/` instead of the inbox while `write_approval.enabled` is on.",
-        "Stages note creates (`write_approval.notes`) and ingest summaries (`write_approval.ingest`) in their own lanes.",
-        "Resolves each lane's own key, then the master key; the environment variable wins over the machine config value.",
-        "Lists every lane sorted and names unreadable entries with a reason (`pending list --lane`).",
-        "Publishes an entry unchanged to its target by exclusive create (`pending apply`); `--dry-run` writes nothing.",
-        "Moves a rejected entry into `Brain/retired/` with the given reason (`pending reject --reason`).",
-        "Keeps staged documents out of the search index, so recall cannot surface an unreviewed write.",
-        "Records staging, approval and rejection as signal state records on a machine switched to the store."
+        "Stages captured signals in `Brain/pending/` instead of the inbox while `write_approval.enabled` is on",
+        "Stages note creates (`write_approval.notes`) and ingest summaries (`write_approval.ingest`) in their own lanes",
+        "Without a permissions document, reads the lane key (notes, ingest), then the master key; env beats config",
+        "Lists every lane sorted and names unreadable entries with a reason (`pending list --lane`)",
+        "Publishes an entry unchanged to its target by exclusive create (`pending apply`); `--dry-run` writes nothing",
+        "Moves a rejected entry into `Brain/retired/` with the given reason (`pending reject --reason`)",
+        "Keeps staged documents out of the search index, so recall cannot surface an unreviewed write",
+        "Once switched, records signals as `signal-state` and note or ingest entries as `lane-entry` store records"
       ],
       "limits": [
-        "Off by default: with no key set every write publishes at once.",
-        "Review is CLI-only; no MCP tool lists, applies or rejects a staged entry.",
-        "Only note creates are staged in the notes lane; updates and appends publish directly."
+        "Off by default; once a permissions document exists, its `ask` and `deny` decide and the keys are ignored",
+        "Review is CLI-only; no MCP tool lists, applies or rejects a staged entry",
+        "Only note creates are staged in the notes lane; updates and appends publish directly"
       ],
       "surfaces": {
         "cli": ["brain pending list", "brain pending apply", "brain pending reject"]
@@ -148,18 +150,18 @@
       "summary": "Ed25519-signed attestations of the legacy Brain log heads and ledgers, verified shard by shard.",
       "status": "stable",
       "capabilities": [
-        "Creates an operator Ed25519 keypair under `.open-second-brain/keys/attestation/`, optionally passphrase-wrapped.",
-        "Measures the vault id, one chain head per Brain log shard, ledger file names and the index's embedding stamp.",
-        "Signs the sha256 of that manifest's canonical JSON into one sealed JSON record per run; never mints a key.",
-        "Verifies against the newest attestation per shard: intact, appended (valid forward chain), diverged or missing.",
-        "Checks the signature with the local key or an exported public key kept outside the vault (`--public-key`).",
-        "Stores an attestation as a shared store record on a switched machine, so every machine holding shared lists it.",
-        "Lists attestations newest first, from the CLI or the MCP tool"
+        "Creates an operator Ed25519 keypair in `.open-second-brain/keys/attestation/`, optionally passphrase-wrapped",
+        "Measures the vault id, one chain head per Brain log shard, ledger file names and the index's embedding stamp",
+        "Embeds the manifest sha256 in a sealed record per run, then Ed25519-signs the whole record; never mints a key",
+        "Verifies against the newest attestation per shard: intact, appended (valid forward chain), diverged or missing",
+        "Checks the signature with the local key or an exported public key kept outside the vault (`--public-key`)",
+        "Stores an attestation as a shared store record on a switched machine, so every machine holding shared lists it",
+        "Lists attestations newest first and verifies the newest one, from the CLI or MCP (`brain_attestations`)"
       ],
       "limits": [
-        "Signing refuses on a switched machine whose legacy log tree is gone; brain store records are never attested.",
-        "Verification only reports, repairs nothing, and checks rows from the attested head forward.",
-        "A lost private key leaves every past attestation unverifiable; there is no recovery."
+        "Signing refuses on a switched machine whose legacy log tree is gone; brain store records are never attested",
+        "Verification only reports, repairs nothing, and checks rows from the attested head forward",
+        "A lost private key stops new signing; past attestations stay verifiable while the public key survives"
       ],
       "surfaces": {
         "cli": [
@@ -190,19 +192,19 @@
       "summary": "Credentials kept encrypted behind a capability gate and referenced as $secret:NAME in configuration.",
       "status": "stable",
       "capabilities": [
-        "Stores each value as AES-256-GCM ciphertext in a 0600 file beside a 0600 keyfile in the vault-local state dir.",
+        "Keeps values AES-256-GCM encrypted in a 0600 `secrets.json` beside a 0600 keyfile, in vault or device state",
         "Takes a value from stdin or `--from-env`, never from the command line",
-        "Injects a secret as its env var into a command that matches its glob allowlist (`secret run`), redacting output.",
-        "Wraps the keyfile under a scrypt passphrase on the first `unlock`; `unwrap` writes the raw key back.",
-        "Exports every entry as one passphrase-encrypted bundle and restores it (`secret export`, `secret import`).",
-        "Resolves `$secret:NAME` config references from the store first, then the environment; a locked entry raises.",
-        "Reports which config references are available or missing without decrypting (`secrets list`, `secrets status`).",
+        "Injects a secret as its env var into a command its glob allowlist matches (`secret run`), redacting output",
+        "Wraps the keyfile under a scrypt passphrase on the first `unlock`; `unwrap` writes the raw key back",
+        "Exports every entry as one passphrase-encrypted bundle and restores it (`secret export`, `secret import`)",
+        "Resolves `$secret:NAME` config references from the store first, then the environment; a locked entry raises",
+        "Reports `$secret:` refs (`secrets list`) or a name (`secrets status`) undecrypted; env only unless `--vault`",
         "Logs every custody operation as an audit record that holds no value"
       ],
       "limits": [
-        "Does not protect against root or same-user processes on the host; there is no daemon or hardware key.",
-        "A lost passphrase or keyfile leaves stored values unreadable; there is no recovery.",
-        "Keeping the state directory out of a file-sync folder is left to the operator; only git exclusion is written.",
+        "Does not protect against root or same-user processes on the host; there is no daemon or hardware key",
+        "A lost passphrase or keyfile leaves stored values unreadable; there is no recovery",
+        "Keeping the state directory out of a file-sync folder is left to the operator; only git exclusion is written",
         "The MCP tool can only list secrets and run allowlisted commands"
       ],
       "surfaces": {
@@ -229,19 +231,19 @@
       "summary": "Recovery points before brain mutations, with diff and restore; on a store-switched machine rollback refuses.",
       "status": "stable",
       "capabilities": [
-        "Archives `Brain/` (without `.snapshots`, `.artifacts`) as `.snapshots/<run_id>.tar.zst`, gzip without zstd.",
-        "Takes a snapshot before every dream mutation and destructive write; a snapshot that fails aborts the operation.",
-        "Keeps the newest `snapshots.retention_count` archives (default 10) and prunes the rest.",
-        "Adds the search index only with `snapshots.include_derived_store` (off by default), within a size cap.",
-        "Lists snapshots with reason, size, manifest and index coverage (`snapshot log`).",
-        "Diffs two snapshots, or one against the live tree, by file manifest (`snapshot diff`).",
-        "Refuses `rollback` when the live tree drifted from the snapshot manifest unless `--force-rollback`; asks first.",
-        "Archives the live tree as a recovery point before restoring, and never touches `.snapshots/` on restore."
+        "Archives `Brain/` (without `.snapshots`, `.artifacts`) as `.snapshots/<run_id>.tar.zst`, gzip without zstd",
+        "Takes a snapshot before every dream mutation and destructive write; a snapshot that fails aborts the operation",
+        "Keeps the newest `snapshots.retention_count` archives (default 10) and prunes the rest",
+        "Adds the search index only with `snapshots.include_derived_store` (off by default), within a size cap",
+        "Lists snapshots with reason, size, manifest and index coverage (`snapshot log`)",
+        "Diffs two snapshots, or one and live `Brain/`, per file; preferences and retired per field (`snapshot diff`)",
+        "Refuses `rollback` when the live tree drifted from the snapshot manifest unless `--force-rollback`; asks first",
+        "Archives the live tree as a recovery point before restoring, and never touches `.snapshots/` on restore"
       ],
       "limits": [
-        "On a machine switched to the store a snapshot holds only device-local state; rollback and live diff refuse.",
-        "Covers the `Brain/` tree only, not other notes of the vault.",
-        "Creating a snapshot needs a system `tar` except on Windows."
+        "On a machine switched to the store a snapshot holds only device-local state; rollback and live diff refuse",
+        "Covers the `Brain/` tree only, not other notes of the vault",
+        "Creating a snapshot needs a system `tar` except on Windows"
       ],
       "surfaces": {
         "cli": ["brain snapshot log", "brain snapshot diff", "brain rollback"],
@@ -264,15 +266,15 @@
       "summary": "Shows which agent contributed which signals and notes, compares agents, and groups signals by source.",
       "status": "stable",
       "capabilities": [
-        "Collects per-agent contributions of four kinds: signals, preferences, log events and note writes.",
-        "Filters them by agents, topic, free text, kind and limit (default 50) and returns a per-agent roster.",
-        "Compares agents in browse, search, diff or map mode, listing the topics they share and those unique to each.",
-        "Groups signals by agent and source type with active, processed, archived and topic counts (`brain sources`).",
-        "Withholds contributions outside the caller's owner scope or reach before the roster is counted."
+        "Collects per-agent contributions of four kinds: signals, preferences, log events and note writes",
+        "Filters them by agents, topic, free text, kind and limit (default 50) and returns a per-agent roster",
+        "Compares agents in browse, search, diff or map mode, listing the topics they share and those unique to each",
+        "Groups signals by agent and source type with active, processed, archived and topic counts (`brain sources`)",
+        "Withholds contributions outside the caller's owner scope or reach before the roster is counted"
       ],
       "limits": [
-        "Read-only; it assigns and changes no attribution.",
-        "Attribution is the agent name each writer asserted; it is not authenticated."
+        "Read-only; it assigns and changes no attribution",
+        "Without a per-agent MCP token attribution is caller-asserted; note writes name the writer's configured agent"
       ],
       "surfaces": {
         "cli": ["brain agent-query", "brain agent-diff", "brain sources"],
@@ -297,18 +299,18 @@
       "summary": "At the end of a turn, checks the agent's quoted spans against the notes the turn actually had.",
       "status": "stable",
       "capabilities": [
-        "Finds quoted spans in the turn's last assistant messages at Stop and checks each against the turn's notes.",
-        "Uses the note a span cites (wikilink or path), else the notes the injection ledger says entered this session.",
-        "Gives each span one verdict: verified, not-in-note, source-truncated, note-unavailable or not-text.",
-        "Runs per phase (recall, active, subagent) in `quote_check.<phase>` mode off, shadow (default) or enforce.",
+        "Finds quoted spans in the turn's last assistant messages at Stop and checks each against the turn's notes",
+        "Uses the note a span cites (wikilink or path), else the notes the injection ledger says entered this session",
+        "Gives each span one verdict: verified, not-in-note, source-truncated, note-unavailable or not-text",
+        "Runs per phase (recall, active, subagent) in `quote_check.<phase>` mode off, shadow (default) or enforce",
         "Names the unverified spans to the model in one note",
-        "Appends one `reply_presence` record per checked turn: per injected note, verified, its worst miss or absent.",
-        "Turns off entirely with `quote_check_enabled: false` in the machine config."
+        "Appends one `reply_presence` record per checked turn: per injected note, verified, its worst miss or absent",
+        "Turns off entirely with `quote_check_enabled: false` in the machine config"
       ],
       "limits": [
-        "Never blocks or edits the answer; a verdict is reported, not enforced.",
-        "Inert on hosts that read no Stop annotation (Codex, Grok Build); only enforce's log events remain there.",
-        "The recall phase runs only when `recall_inject_enabled` is on."
+        "Never blocks or edits the answer; a verdict is reported, not enforced",
+        "Codex reads no Stop annotation, so only records and enforce events remain; Grok Build never runs the check",
+        "The recall phase runs only when `recall_inject_enabled` is on"
       ],
       "surfaces": {
         "hooks": ["answer-quote-check"],
@@ -330,19 +332,19 @@
       "summary": "Masks secret-shaped values in what is written, logged or reported; every export path passes one egress guard.",
       "status": "stable",
       "capabilities": [
-        "Masks the values of secret-named keys (api_key, token, password, private_key and more) as `***REDACTED***`, keeping the key",
+        "Masks values of secret-named keys (api_key, token, password, private_key, ...) as `***REDACTED***`",
         "Finds them in env assignments, YAML and log lines, JSON entries and `Authorization: Bearer` headers",
-        "Strips `<private>...</private>` regions from signal fields first; an unclosed tag strips to the end of the field",
+        "Strips `<private>...</private>` regions from signal fields first; an unclosed tag strips to the field's end",
         "Marks text past its 1 MiB scan window as only partly scanned instead of passing the tail as clean",
-        "Passes every export verb through one egress guard that redacts each string leaf and refuses a field it could not scan whole",
-        "Declares every path that sends vault bytes outside the vault in one registry; a census test fails on an undeclared one",
-        "Scrubs public IP addresses, URL credentials, host:port endpoints and internal host names from parked MCP results",
+        "Passes every export verb through one egress guard: it redacts each string, refuses one it cannot scan whole",
+        "Declares every path sending vault bytes out in one registry; a census test fails on an undeclared one",
+        "Scrubs public IPs, URL credentials, host:port endpoints and internal host names from parked MCP results",
         "Replaces the vault root in MCP error messages, and the home and temp roots too for a remote caller"
       ],
       "limits": [
-        "The raw quote field of a signal is kept verbatim and is not redacted.",
-        "Five network paths (two embedding providers, the reranker, the Telegram reply, research) send their payload unscanned; each is declared.",
-        "Redaction is pattern-based and narrow; output meant for other people still needs a look first."
+        "A signal's raw quote is kept only to 4096 characters, after `<private>` stripping and redaction",
+        "Five declared network paths send unscanned: two embedding providers, the reranker, Telegram, research",
+        "Redaction is pattern-based and narrow; output meant for other people still needs a look first"
       ],
       "surfaces": {},
       "docs": [
@@ -366,18 +368,19 @@
       "summary": "Keeps every write inside the vault and atomic, serializes writers with locks and refuses links planted in local state.",
       "status": "stable",
       "capabilities": [
-        "Routes every vault write through one boundary check; a `..` segment, an absolute path or a link out of the vault is refused",
+        "Routes every vault write through one check that refuses `..`, an absolute path or a link out of the vault",
         "Checks a path carried by a synced record before it names a file: it must stay relative and inside its folder",
         "Writes a file as a sibling temp file, fsyncs it, renames it over the target and fsyncs the folder",
         "Takes each lock as an exclusively created name and waits out a held one within that lock's budget",
         "Treats a name Windows still holds as delete pending as a held lock, not as an error",
-        "Refuses machine-local state under `.open-second-brain/` when a folder on the way is a symbolic link, and never follows a leaf link",
-        "Stops every writer of a vault on this machine while a brain store migration of it runs there",
+        "Refuses state in `.open-second-brain/` when a folder on the way is a symbolic link; never follows a leaf link",
+        "Stops the vault's writers on this machine while a brain store migration of that vault runs there",
         "Reports a vault it cannot examine as one `vault_unreadable` error over MCP and one line with exit 1 on the CLI"
       ],
       "limits": [
-        "An atomic write covers one file; a write of several files is not rolled back across them.",
-        "The migration gate is device-local and stops writers on the migrating machine only."
+        "An atomic write covers one file; a write of several files is not rolled back across them",
+        "The migration gate is device-local and stops writers on the migrating machine only",
+        "A search on a legacy machine still records its activation files in `Brain/search/` during a migration"
       ],
       "surfaces": {},
       "docs": [
@@ -401,20 +404,23 @@
     {
       "slug": "agent-identity",
       "name": "Agent identity",
-      "summary": "Names the agent behind each write from its argument, its MCP token or the configured name, and stamps its process kind.",
+      "summary": "Names the agent behind signals, evidence and log lines from an argument, a token or the config; stamps the process kind.",
       "status": "stable",
       "capabilities": [
         "Strips a leading `@` from a caller-named agent and drops generic guesses such as `assistant` or `model`",
-        "Falls back to the identity a per-agent MCP token binds, then to the configured `agent_name`",
+        "Attributes a token caller's signals, evidence, log lines, expirations and ingests to that token's agent",
+        "Judges a token caller's note writes as that token's agent in the permissions document and the owner gate",
+        "Otherwise takes a missing agent from the configured `agent_name`, as every note-write record always does",
         "Refuses a named agent that differs from the one a per-agent token binds; the shared key may name any agent",
         "Derives a host-qualified name per runtime from an operator name of the form `<vendor>-<host>-agent`",
         "Names a dispatched subagent after its delegator plus the subagent id the host gives it",
-        "Reminds the agent of its name and the fitting writer tool every turn: a prompt hook on OpenClaw and Hermes, a post-write hook on Claude Code and Codex",
-        "Stamps each record with the kind of process that wrote it (`origin_channel`: `mcp-tool`, `cli`, `import`), never from an argument"
+        "Reminds the agent of its name and fitting writer tool every turn through OpenClaw's and Hermes's prompt hooks",
+        "Gives the same reminder on Claude Code and Codex through their post-write hook",
+        "Stamps each record with its process kind (`origin_channel`: `mcp-tool`, `cli`, `import`), never an argument"
       ],
       "limits": [
-        "Without a per-agent token the agent name is what the caller asserted; it is not authenticated.",
-        "Records written before the origin stamp carry none and are not backfilled."
+        "Without a per-agent token the agent name is what the caller asserted; it is not authenticated",
+        "Records written before the origin stamp carry none and are not backfilled"
       ],
       "surfaces": {},
       "docs": ["docs/observability.md#note-writes", "docs/architecture.md#runtime-adapters"],
@@ -438,17 +444,17 @@
       "summary": "Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument.",
       "status": "stable",
       "capabilities": [
-        "Sets reach in the transport: stdio, the CLI and a loopback HTTP bind are local, any other HTTP request is remote",
-        "Withholds pages declaring the reserved `private` visibility token from remote reads in search, page walks and path reads",
+        "Sets reach in the transport: stdio, the CLI and a loopback HTTP bind are local; other HTTP requests are remote",
+        "Withholds pages with the reserved `private` visibility token from remote search, page walks and path reads",
         "Lets `--visibility` only narrow results; the reserved token outranks the other tokens on the same page",
         "Refuses a reach argument in any spelling, by name, instead of reading or ignoring it",
-        "Refuses, under `integrity.owner_scope_delivery: fail`, an owner scope that disagrees with the server's identity",
+        "Refuses an owner scope that disagrees with the server's identity under `integrity.owner_scope_delivery: fail`",
         "Gives a remote caller vault-relative paths and named placeholders, never an absolute path of the host",
         "Counts reserved pages and the note-returning surfaces that do not yet consult the field (`search check`)"
       ],
       "limits": [
-        "Local reach proves file-equivalent access or a request from this host, not the operator's intent.",
-        "A vault that never writes the reserved token behaves as before."
+        "Local reach proves file-equivalent access or a request from this host, not the operator's intent",
+        "A vault that never writes the reserved token behaves as before"
       ],
       "surfaces": {},
       "docs": [

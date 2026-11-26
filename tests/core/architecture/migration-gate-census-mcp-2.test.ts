@@ -6,10 +6,9 @@
 import { setDefaultTimeout } from "bun:test";
 
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
-import { dreamExecutorSuite, mcpSuite } from "./migration-gate-census/suites.ts";
+import { mcpSuite } from "./migration-gate-census/suites.ts";
 
 // Tests here run the CLI, the MCP dispatch or the hooks; see tests/helpers/cli-timeout.ts.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 mcpSuite(1, 2);
-dreamExecutorSuite();

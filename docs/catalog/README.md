@@ -10,8 +10,8 @@ Each area file holds `area`, `name`, `summary` and `features`. A feature has, in
 2. `name` and `summary`: what a user would call it, and one factual line of at most 120 characters.
 3. `status`: `stable`, `optional` (off by default, or needs a model, a service or a credential), `experimental` or `deprecated`.
 4. `aliases` (optional): former names and slugs.
-5. `capabilities`: 3 to 8 lines, one behavior each.
-6. `limits`: up to 4 lines on the scope of the feature.
+5. `capabilities`: 3 to 10 lines of at most 110 characters, one behavior each.
+6. `limits`: up to 4 lines of at most 110 characters on the scope of the feature.
 7. `surfaces`: the `cli` verbs, `mcp` tools, `hooks`, `skills` and `config` settings that belong to it; an empty list is left out.
 8. `docs`: repository-relative doc paths, with an optional `#anchor`.
 9. `code`: 1 to 3 repository-relative entry points.

@@ -19,15 +19,15 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `dream-owner` — One device and agent run the live dream passes for a brain; other machines preview, and the role can move. | kw: leader election, single writer, job ownership, failover, multi-device sync
 - `dream-agent` — Model work of a dream pass waits in a queue for the operator's own agent command, which is set and verified per machine. | kw: job queue, background agent, work leasing, headless agent, process supervision
 - `dream-drafts` [optional] — Model-written text from a dream pass records its agent and model and can be held for operator approval. | kw: human-in-the-loop, approval workflow, draft review, provenance, authorship attribution
-- `preference-lifecycle` — Reads, pins, rejects, merges and expires preferences, with their evidence trail and full mutation audit. | kw: memory management, audit trail, rule pinning, memory expiry, deduplication
+- `preference-lifecycle` — Reads, pins, rejects, merges and expires preferences, with their evidence trail and an audit of content changes. | kw: memory management, audit trail, rule pinning, memory expiry, deduplication
 - `memory-corrections` — Tombstones, supersedes or time-replaces any memory and reports the blast radius of a correction first. | kw: memory correction, soft delete, belief revision, bi-temporal validity, fact invalidation
 - `lessons` — Scores outcome-tagged lessons into a digest and promotes approved ones into managed blocks of agent rule files. | kw: lessons learned, outcome tracking, experience replay, self-improving agent, agent rules file
-- `decision-models` [optional] — An optional typed judgment model that reranks, filters and checks candidates, with evaluation and thresholds per use. | kw: llm as judge, reranking, classifier, shadow mode, decision threshold
+- `decision-models` [optional] — An optional typed judgment model that reranks, filters and checks candidates; each use runs off, shadow or enforce. | kw: llm as judge, reranking, classifier, shadow mode, decision threshold
 - `judgment-commands` — Hands a judgment call to an operator-configured command as JSON on stdin and reads its JSON verdict back. | kw: llm as judge, external evaluator, command hook, pluggable judge, json over stdio
 
 ## delivery - Context delivery (delivery.json)
 
-- `active-preferences` — Each session, and each subagent, starts with the confirmed rules, recent retirements, topic heads and pinned context. | kw: memory injection, custom instructions, session bootstrap, system prompt, provenance trust ordering
+- `active-preferences` — Sessions start with confirmed rules, recent retirements, topic heads and pinned context; subagents skip the last two. | kw: memory injection, custom instructions, session bootstrap, system prompt, provenance trust ordering
 - `pinned-context` — A current-task scratchpad that survives context rotation without becoming a permanent preference. | kw: working memory, scratchpad, memory block, task notes, sticky context
 - `standing-rules` — Operator-written rules, vault-wide or scoped to a project, harness or host, delivered to every session. | kw: custom instructions, system prompt, project rules, agent rules file, constitution
 - `context-packs` — Returns preference and retired-rule pages by tier and recency under a token budget, with presets and a size report. | kw: context packing, token budget, context window management, context engineering, retrieval budget
@@ -40,7 +40,7 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 
 - `topics` — One page per theme with status, goal, milestones, decisions and open questions, kept by agents and the dream pass. | kw: topic pages, thematic grouping, project memory, living documents, work log
 - `entities` — Canonical people, projects and things with aliases, relations and subject profiles. | kw: entity resolution, entity registry, alias resolution, knowledge graph, entity linking
-- `claim-ledger` — An append-only truth ledger of entity claims with validity windows, and a claim graph read from note front matter. | kw: temporal knowledge graph, fact ledger, bitemporal facts, truth maintenance, conflict detection
+- `claim-ledger` — An append-only truth ledger of entity claims with validity windows, and a claim graph read from memory front matter. | kw: temporal knowledge graph, fact ledger, bitemporal facts, truth maintenance, conflict detection
 - `decision-records` — Decision notes with options, assumptions, outcomes and ratings, open decisions, persona panels and design notes. | kw: decision log, architecture decision records, decision journal, pre-mortem, outcome tracking
 - `tensions` — Detects contradictions in the operator's notes and tracks each one from open to confirmed, dismissed or resolved. | kw: contradiction detection, inconsistency detection, belief revision, conflict triage, knowledge consistency
 - `dead-ends` — Records approaches tried and failed, with the reason; search and the session-start lessons digest surface them. | kw: negative knowledge, failed approaches, lessons learned, anti-patterns, mistake log
@@ -75,7 +75,7 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `hermes-memory-provider` — Runs Open Second Brain as the Hermes Agent memory provider and stores Hermes built-in memory writes in the brain. | kw: memory provider, memory plugin, agent memory backend, context prefetch, memory hooks
 - `openclaw-plugin` — A native OpenClaw plugin with status, page listing and health tools and a per-turn agent identity reminder. | kw: native plugin, agent plugin, tool registration, prompt hook, identity reminder
 - `mcp-server` — Serves the tools over stdio or HTTP with tool profiles, a two-pass catalog, parked large results and latency metrics. | kw: mcp server, model context protocol, tool filtering, lazy tool loading, result truncation
-- `mcp-access-tokens` [optional] — Named per-agent tokens for the HTTP transport, and one-command provisioning of a host with its token. | kw: api tokens, bearer authentication, per-agent credentials, token rotation, credential provisioning
+- `mcp-access-tokens` [optional] — Named per-agent tokens for the HTTP transport, and one-command provisioning of a host, optionally with its token. | kw: api tokens, bearer authentication, per-agent credentials, token rotation, credential provisioning
 - `install-health` — Reports configuration, vault and plugin health, the installed version and a redacted config snapshot. | kw: health check, diagnostics, doctor command, self-test, readiness probe
 - `mcp-server-safeguards` — The MCP server refuses unknown arguments, survives stray faults, drains on shutdown and stops writing once outdated. | kw: graceful shutdown, input validation, fault tolerance, crash resilience, version skew
 
@@ -115,7 +115,7 @@ The area file named in each heading holds a feature's capabilities, limits, surf
 - `answer-quote-check` — At the end of a turn, checks the agent's quoted spans against the notes the turn actually had. | kw: citation verification, hallucination detection, grounding check, quote verification, answer faithfulness
 - `secret-redaction` — Masks secret-shaped values in what is written, logged or reported; every export path passes one egress guard. | kw: secret redaction, data loss prevention, egress control, credential scrubbing, log sanitization
 - `write-safety` — Keeps every write inside the vault and atomic, serializes writers with locks and refuses links planted in local state. | kw: path traversal protection, atomic file writes, file locking, symlink attack protection, crash safety
-- `agent-identity` — Names the agent behind each write from its argument, its MCP token or the configured name, and stamps its process kind. | kw: agent identity, write attribution, origin tracking, subagent attribution, identity binding
+- `agent-identity` — Names the agent behind signals, evidence and log lines from an argument, a token or the config; stamps the process kind. | kw: agent identity, write attribution, origin tracking, subagent attribution, identity binding
 - `remote-read-reservation` — Pages marked `visibility: private` are withheld from remote callers; reach is a transport fact, never an argument. | kw: private notes, remote access restriction, data classification, visibility labels, access control
 
 ## vault - Vault notes and the human view (vault.json)

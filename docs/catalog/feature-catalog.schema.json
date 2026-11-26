@@ -101,9 +101,9 @@
           "description": "One behavior per line.",
           "type": "array",
           "minItems": 3,
-          "maxItems": 8,
+          "maxItems": 10,
           "items": {
-            "$ref": "#/$defs/line"
+            "$ref": "#/$defs/catalog_line"
           }
         },
         "limits": {
@@ -111,7 +111,7 @@
           "type": "array",
           "maxItems": 4,
           "items": {
-            "$ref": "#/$defs/line"
+            "$ref": "#/$defs/catalog_line"
           }
         },
         "surfaces": {
@@ -203,6 +203,12 @@
           }
         }
       }
+    },
+    "catalog_line": {
+      "description": "A capability or limit line: one behavior or one fact, at most 110 characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 110
     }
   }
 }

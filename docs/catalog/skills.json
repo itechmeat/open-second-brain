@@ -54,6 +54,7 @@
         "Writes an accepted proposal through a write-ahead journal that `recover` rolls back or forward",
         "`rewrite-plan` verifies a skill's task set against its frozen receipt and prints the two round envelopes",
         "`rewrite-score` grades transcripts structurally: promote, hold or not_enough_evidence, then one held-out check",
+        "Accepts a `scored_rewrite` proposal, which overwrites a SKILL.md, only from the CLI with `--yes`; MCP refuses",
         "Reports the rewrite lane's receipts, verdicts and rates over MCP (`brain_skill_rewrite_status`)"
       ],
       "limits": [

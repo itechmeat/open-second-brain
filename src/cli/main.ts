@@ -1763,8 +1763,8 @@ if (import.meta.main) {
   // error keeps its existing loud failure.
   installStdoutEpipeGuard();
   main(process.argv.slice(2))
-    // Exit only once stdout and stderr have handed their output over: an
-    // exit straight after a large write cut it short in a pipe.
+    // Exit only once stdout has handed its output over: an exit straight
+    // after a large write cut it short in a pipe. stderr stays open.
     .then((code) => exitWhenFlushed(code))
     .catch((err: unknown) => {
       if (isEpipeError(err)) process.exit(0);

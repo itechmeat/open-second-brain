@@ -12,10 +12,10 @@
         "Stores topics as append-only ULID-keyed records in the `topics` stream; fields resolve by authority, then time",
         "Holds decision, open-question, log and milestone items; status active, waiting, blocked, on-hold, done, closed",
         "Changes topic membership: assigns notes, signals and decisions, and merges or splits topics",
-        "Writes CLI changes with human authority and `brain_topic` changes with agent authority",
+        "CLI writes default to human authority (`topic record`: agent unless `--as-human`), `brain_topic` to agent",
         "Renders topic.md; past 10 done milestones, 25 decisions or 15 log entries the oldest move to archive.md",
-        "Dream offers each unheld record the active topics sharing 2+ subject words; a model or agent answer picks one",
-        "Dream groups unheld records by rare shared words; 5 records from 2 sessions become a topic once approved",
+        "Dream offers an unheld record active topics sharing 2+ and a fifth of its subject words; an answer picks one",
+        "Dream groups unheld records by rare shared words; 5 from 2 sessions become a topic after approval and wording",
         "Review proposes merges of same-scope topics with head-word Jaccard >= 0.5 and asks about topics quiet 30 days"
       ],
       "limits": [
@@ -66,12 +66,12 @@
       "summary": "Canonical people, projects and things with aliases, relations and subject profiles.",
       "status": "stable",
       "capabilities": [
-        "Keeps one entity per (category, normalized name) as Markdown in `Brain/entities/<category>/`, aliases checked first",
+        "Keeps one entity per category and normalized name in `Brain/entities/<category>/`, aliases checked first",
         "Validates entity labels structurally against `entities.label_denylist` and a store-learned case lexicon",
         "Matches person names by first initial plus surname, reversed word order and an operator nickname file",
         "Relates entities with tokens of the relation vocabulary",
         "Merges two entities under a plan hash: the old name becomes an alias, its page is archived, edges retargeted",
-        "Takes agent-extracted entities and relations; quarantined unless the source file exists (`brain_intake_entities`)",
+        "Takes agent-extracted entities and relations, quarantined unless their source exists (`brain_intake_entities`)",
         "Lists an entity's documents, a stated-versus-evidenced gap and a needs-llm-step envelope (`diarize`)"
       ],
       "limits": [
@@ -104,21 +104,21 @@
     {
       "slug": "claim-ledger",
       "name": "Claims and truth ledger",
-      "summary": "An append-only truth ledger of entity claims with validity windows, and a claim graph read from note front matter.",
+      "summary": "An append-only truth ledger of entity claims with validity windows, and a claim graph read from memory front matter.",
       "status": "stable",
       "capabilities": [
         "Appends (entity, aspect, value, source) claims to device-sharded JSONL in `Brain/truth/`, folded into slots",
         "Marks a slot contested when another source gives a different value within 30 days; resolution is ask_user",
         "Accepts valid_from/valid_until windows; claims with disjoint windows count as succession, not as a conflict",
-        "Sums quantity claims by exact (entity, action, unit) match",
-        "Reports agents that write claims about the same entity within 14 days",
+        "Sums current quantity claims by exact (entity, unit) match, narrowed to an action only when asked",
+        "Reports an entity that 2+ agents claimed from 2+ distinct sources within 14 days",
         "Commits agent-stated subject-relation-object claims only when both entities occur in the given assertion text",
-        "Splits text into atomic assertions by Markdown structure and a sentence splitter, no model; --ingest appends",
-        "Answers truth now, at an instant, replaced-by and contested-by from note front matter links (`brain claims`)"
+        "Splits text into atomic assertions, no model; --ingest --entity appends only quantity, email and URL facts",
+        "Answers truth now, at an instant, replaced-by and contested-by from Brain memory front matter (`brain claims`)"
       ],
       "limits": [
-        "Note capture writes no claims: they enter through truth ingest or state, facts --ingest and correction sweeps",
-        "`brain claims` reads note front matter (superseded_by, contradicts, validity fields), not the `Brain/truth/` ledger"
+        "Note capture writes no claims: truth ingest or state, facts --ingest, correction sweeps and hygiene apply do",
+        "`brain claims` reads only rule, signal and thesis front matter, not plain notes or the `Brain/truth/` ledger"
       ],
       "surfaces": {
         "cli": ["brain truth", "brain claims", "brain facts"],
@@ -152,7 +152,7 @@
       "status": "stable",
       "capabilities": [
         "Records a decision page in Brain/decisions/: chosen option, assumption, review date, pre-mortem, commitment",
-        "Opens one review obligation per review date, idempotently",
+        "Opens one yearly review obligation per decision, anchored at its review date, idempotently",
         "Finds similar past decisions and their outcomes by token overlap, with no model",
         "Parks an open question with enumerated options until it is resolved into a decision page or discarded",
         "Backfills the outcome of a decision and rates its quality from 1 to 5",
@@ -239,7 +239,7 @@
         "Keeps the newest 100 entries active (CLI --max-active) and moves the overflow to Brain/dead-ends/archive/",
         "Lists active entries newest first; an unparseable or wrong-kind page comes back as a warning, not an error",
         "Sanitises fields on write: approach one line of at most 256 chars, reason and context at most 1024 each",
-        "Feeds every dead end into the lessons digest as an Avoid lesson, weighted by a 30-day recency half-life",
+        "Feeds active dead ends into the lessons digest as Avoid lessons, 30-day half-life, within its 20-lesson cap",
         "Leaves the pages to the regular search index, so recall can return a dead end beside notes",
         "Below local reach, lists only readable dead ends and never archives a page the caller cannot read"
       ],
@@ -334,14 +334,14 @@
         "Lists inbound references to a rule or signal (`brain backlinks`)",
         "Lists raw-text mentions of a rule's title or aliases that are not linked (`brain unlinked`)",
         "Proposes bridge links between embedding-near notes with no shared edge, orphans first, cosine >= 0.8, top 10",
-        "Detects communities by deterministic label propagation (at most 20 sweeps) and writes a note per community of 4+",
+        "Detects communities by deterministic label propagation (at most 20 sweeps); writes a note per community of 4+",
         "Suggests edges between entities linked from the same notes by a PMI score (2+ shared notes, top 100)",
         "Audits a hub rule's linked set as well-covered, fragile or missing; a hub needs 5+ links and 30% link text",
-        "Proposes missing edges by identity strength; `--apply` needs a confirm phrase, a holdout gate and stays within 25 writes",
+        "Proposes missing edges by identity strength; `--apply` needs a confirm phrase, a holdout gate, max 25 writes",
         "Rewrites wikilinks to full, short or preserved path forms (`brain links normalize`)"
       ],
       "limits": [
-        "Backlinks, unlinked mentions, hub audit and explorer read rules and signals under Brain/, not plain notes",
+        "Backlinks read Brain rules, signals and logs; unlinked mentions, explorer and hubs cover rules; no plain notes",
         "Bridge discovery needs the embedding index; without vectors it proposes nothing",
         "Co-occurrence reads link structure only (wikilinks and typed relations), never note prose",
         "The explorer serves on 127.0.0.1 only (default port 7777) or writes one exported HTML file"
@@ -399,7 +399,7 @@
         "Gives each finding a sha256 evidence identity, causal context and support, opposition and freshness scores",
         "Names the single strongest objection to a dossier's findings",
         "Writes a research report to Brain/reports/<date>-<slug>.md only when every finding cites a consulted source",
-        "Ranks next directions: open questions (weight 3), orphan notes (2), signals older than 14 days (1), plus age",
+        "Ranks next directions: open questions (weight 3), Brain/ orphans (2), inbox signals 14+ days old (1), plus age",
         "Traces a continuity record or rule back to its observations through source refs or belief history, depth 8",
         "Enqueues dossier contradictions and gaps, or the ranked ideas, into the trigger queue with --triggers"
       ],

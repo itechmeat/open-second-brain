@@ -129,6 +129,18 @@ describe("the real catalog", () => {
   });
 });
 
+/** `n` distinct capability lines. */
+function lines(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `Does thing ${i}.`);
+}
+
+/** The check errors of the small catalog with the first feature's lines replaced. */
+function withCapabilities(capabilities: string[], limits: string[] = []): string[] {
+  const groups = validGroups();
+  groups[0] = [{ ...(groups[0]?.[0] as CatalogFeature), capabilities, limits }];
+  return checkCatalog(catalogFiles(groups), FACTS, ENV);
+}
+
 describe("the check on a small catalog", () => {
   test("a catalog that covers every surface once passes", () => {
     expect(checkCatalog(catalogFiles(validGroups()), FACTS, ENV)).toEqual([]);
@@ -261,6 +273,19 @@ describe("the check on a small catalog", () => {
     ]) {
       expect(errors).toContain(line);
     }
+  });
+
+  test("a feature holds up to 10 capability lines, each of at most 110 characters", () => {
+    expect(withCapabilities(lines(10))).toEqual([]);
+    expect(withCapabilities(lines(11))).toContain(
+      "docs/catalog/area-1.json: first-feature: capabilities must have at most 10 item(s) (has 11)",
+    );
+    const long = "x".repeat(111);
+    const errors = withCapabilities([...lines(2), long], [long]);
+    expect(
+      errors.filter((e) => e.includes("must be at most 110 characters (is 111)")),
+    ).toHaveLength(2);
+    expect(withCapabilities([...lines(2), "x".repeat(110)], ["y".repeat(110)])).toEqual([]);
   });
 });
 

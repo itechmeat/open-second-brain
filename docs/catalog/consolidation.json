@@ -10,7 +10,7 @@
       "status": "stable",
       "capabilities": [
         "Creates a topic's unconfirmed rule when one sign leads by 3 signals in 14 days; guardrails can add minimums",
-        "Moves a rule by evidence: confirmed on its first applied evidence within 14 days, quarantined once violations reach applications",
+        "Confirms on first applied evidence in 14 days; quarantines a confirmed rule once violated >= applied > 2",
         "Retires on trial expiry, rebuttal, a violation in quarantine, an outdated event or 90 days without evidence",
         "Scores confidence as the Wilson 95% lower bound of the applied share times linear freshness over 90 days",
         "Queues a model-written rollup when 20 new facts or 5 new rollups gather (rollup thresholds)",
@@ -19,10 +19,10 @@
         "Previews a pass by dry run, staged bundle, intent review, review candidates or retention review"
       ],
       "limits": [
-        "A live pass runs only on the dream owner's device; other machines run dry runs only.",
-        "The pass writes no model text itself; rollup summaries and topic wording wait in the dream work queue.",
-        "Missed-day replay needs a brain served from the brain store; a legacy `Brain/` tree runs one window.",
-        "Automatic start needs a session start hook or the MCP server on the owner's machine, else `dream run`."
+        "Once a store brain has a dream owner, only that device runs live passes; other machines run dry runs only",
+        "The pass writes no model text itself; rollup summaries and topic wording wait in the dream work queue",
+        "Missed-day replay needs a brain served from the brain store; a legacy `Brain/` tree runs one window",
+        "Automatic start needs a session start hook or the MCP server on the owner's machine, else `dream run`"
       ],
       "surfaces": {
         "cli": [
@@ -61,7 +61,7 @@
       "summary": "Optionally promotes one rule a day per owner from confirmed rules that repeat across topics, citing each source.",
       "status": "optional",
       "capabilities": [
-        "Compares confirmed rules only across topic buckets, pairing principles at Jaccard 0.6 or more (`cross_topic.jaccard`)",
+        "Compares confirmed rules across topic buckets only, pairing principles at Jaccard 0.6+ (`cross_topic.jaccard`)",
         "Fires on a cluster that spans at least 2 distinct topics (`cross_topic.min_topics`, never below 2)",
         "Writes one unconfirmed inferred rule per owner a day, with evidence links to every source rule",
         "Promotes only clusters whose source rules share one owner, so one agent's rules never shape another's",
@@ -107,10 +107,10 @@
         "Sets primary_agent with brain set-primary, which renames the owner's agent when run on the owner's device"
       ],
       "limits": [
-        "Needs the brain store: a brain with no owner record or a legacy `Brain/` tree runs live passes anywhere.",
-        "The gate is the device: any agent on the owner's device may run a live pass.",
-        "The MCP tool cannot force a takeover and moves the role only at local reach.",
-        "`brain set-primary` refuses on a device that is not the owner."
+        "Needs the brain store: a brain with no owner record or a legacy `Brain/` tree runs live passes anywhere",
+        "The gate is the device: any agent on the owner's device may run a live pass",
+        "The MCP tool cannot force a takeover and moves the role only at local reach",
+        "On a store brain with a dream owner, `brain set-primary` refuses on any device that is not the owner"
       ],
       "surfaces": {
         "cli": ["dream owner", "brain set-primary"],
@@ -143,19 +143,21 @@
       "status": "stable",
       "capabilities": [
         "Holds model work as store records with 15-minute leases, backoff from 1 min to 6 h, parking after 5 failures",
-        "Offers closed questions to the decision model first, then leftover work to the operator's agent command",
+        "An active decision model takes closed questions of its non-off uses; the agent command gets all other work",
         "Starts the configured command without a shell, filling {prompt}, {mcp_config}, {mcp_command}, {mcp_args_json}",
         "Gives the session one MCP server with take, answer and finish tools, bound to the run by a hashed token",
         "Uses a command only after agent check answered two canary items in a throwaway store within 120 s",
-        "Bounds a session by dream_agent_budget_ms (300 s), dream_agent_items (100) and dream_agent_batch (10); at the bound it ends the session's whole process tree",
+        "Gives the agent dream_agent_budget_ms (300 s) per pass; at the deadline it ends the session's process tree",
+        "Caps a session at dream_agent_items (100); one that meets it is followed by another while work and time last",
+        "Hands a session up to dream_agent_batch (10) items per take, and as many per answer call",
         "Tries one dream_agent_fallbacks entry when a session fails to start, exits with an error or answers nothing",
         "Marks the session process so hooks capture nothing and no dream pass starts inside it"
       ],
       "limits": [
-        "No presets ship; each machine sets a full command, and the command is never synced.",
-        "The model recorded with an answer is the session's own statement and is not checked.",
-        "A session sees private items unless `dream_agent_private` is off.",
-        "Queue retry and cancel write only on the dream owner's device."
+        "No presets ship; each machine sets a full command, and the command is never synced",
+        "The model recorded with an answer is the session's own statement and is not checked",
+        "A session sees private items unless `dream_agent_private` is off",
+        "Queue retry and cancel write only on the dream owner's device"
       ],
       "surfaces": {
         "cli": [
@@ -201,11 +203,11 @@
         "Holds text answers in awaiting-review when dream.apply_drafts is review; auto, the default, applies them",
         "Applies an approved held answer at the next pass (`dream queue approve`)",
         "Closes a rejected held answer with its reason and writes nothing (`dream queue reject`)",
-        "Writes nothing on a second apply that finds the item's content already in the note"
+        "Skips the rollup write on a re-apply when the note's written_by_item already names that queue item"
       ],
       "limits": [
-        "Review covers text work only (rollup summaries, topic wording); closed-question answers apply directly.",
-        "Approve and reject write only on the dream owner's device."
+        "Review covers text work only (rollup summaries, topic wording); closed-question answers apply directly",
+        "Approve and reject write only on the dream owner's device"
       ],
       "surfaces": {
         "cli": ["dream queue approve", "dream queue reject"],
@@ -228,7 +230,7 @@
     {
       "slug": "preference-lifecycle",
       "name": "Preference lifecycle",
-      "summary": "Reads, pins, rejects, merges and expires preferences, with their evidence trail and full mutation audit.",
+      "summary": "Reads, pins, rejects, merges and expires preferences, with their evidence trail and an audit of content changes.",
       "status": "stable",
       "capabilities": [
         "Looks up one preference with its evidence trail, everything on a topic, or log events since a time",
@@ -237,13 +239,14 @@
         "Retires a rule as user-rejected with a reason that suppresses later signals on its topic and scope",
         "Merges two same-topic, same-scope rules: unions evidence, sums counters, retires the dropped one as merged",
         "Sets, changes or clears the expiration_date of a signal or preference by id",
-        "Appends a JSONL audit line per mutation with agent, reason, revision and content hash, per device",
+        "Audits each mutation (agent, reason, revision, hash) as per-device JSONL or a store row; skips no-op updates",
         "Keeps a per-field before and after edit history beside each preference (brain history)"
       ],
       "limits": [
-        "Merge takes only confirmed or quarantined rules of one topic, scope and pin state, and takes no snapshot.",
-        "Merge leaves confidence to the next dream pass; `--force` skips only the name-aware entity guard.",
-        "Pin, unpin, reject, merge and history are CLI verbs; MCP has query, expire and audit."
+        "Merge takes only confirmed or quarantined rules of one topic and scope, and takes no snapshot",
+        "Merge refuses a pinned drop into an unpinned keep; the pinned rule must be the keep",
+        "Merge leaves confidence to the next dream pass; `--force` skips only the name-aware entity guard",
+        "Pin, unpin, reject, merge and history are CLI verbs; MCP has query, expire and audit"
       ],
       "surfaces": {
         "cli": [
@@ -293,9 +296,9 @@
         "Proposes missing `superseded_by` back-links on retired rules that an active rule supersedes"
       ],
       "limits": [
-        "`brain semantics-backfill` only previews; it has no apply path.",
-        "Wikilink retargeting never rewrites `Brain/log` or receipt lines.",
-        "A target outside the caller's read reach is refused as missing before any write."
+        "`brain semantics-backfill` only previews; it has no apply path",
+        "Wikilink retargeting never rewrites `Brain/log` or receipt lines",
+        "A target outside the caller's read reach is refused as missing before any write"
       ],
       "surfaces": {
         "cli": ["brain lifecycle", "brain semantics-backfill", "brain signal"],
@@ -325,7 +328,7 @@
       "capabilities": [
         "Folds dead-end notes and applied, violated and outdated evidence into one signed digest, Brain/lessons.md",
         "Decays each result with a 30-day half-life (lessons.half_life_days), so fresh outcomes outweigh old ones",
-        "Tiers lessons preferred (2+ distinct results), tentative, contested (both signs recently) or avoid",
+        "Tiers lessons preferred (2+ applied artifacts, no negatives), tentative, contested (both signs ever) or avoid",
         "Regenerates the digest after every dream pass, top 20 by decayed salience (lessons.limit)",
         "Qualifies a lesson for promotion only from a confirmed, high-confidence, preferred rule in an enabled scope",
         "Pins each operator approval to the rule text's hash; a changed rule leaves the block until approved again",
@@ -333,10 +336,10 @@
         "Lists promotion candidates, each blocked one with its reason (`lessons candidates`)"
       ],
       "limits": [
-        "Promotion is off until the machine config key `lessons.promotion.scopes` names a scope.",
-        "Only the CLI approves or denies; no MCP tool, hook or dream path promotes a lesson.",
-        "Dead-end lessons never promote; only preference-derived lessons reach rules files.",
-        "Targets only the instruction files at the vault root."
+        "Promotion is off until the machine config key `lessons.promotion.scopes` names a scope",
+        "Only the CLI approves or denies; no MCP tool, hook or dream path promotes a lesson",
+        "Dead-end lessons never promote; only preference-derived lessons reach rules files",
+        "Targets only the instruction files at the vault root"
       ],
       "surfaces": {
         "cli": [
@@ -368,23 +371,23 @@
     {
       "slug": "decision-models",
       "name": "Decision models",
-      "summary": "An optional typed judgment model that reranks, filters and checks candidates, with evaluation and thresholds per use.",
+      "summary": "An optional typed judgment model that reranks, filters and checks candidates; each use runs off, shadow or enforce.",
       "status": "optional",
       "capabilities": [
         "Asks yes/no, choice (up to 255 options) or score (2 to 10 levels) questions and gets probabilities, no text",
         "Runs each of 17 uses (rerank, skills, dedup, topic routing, recall filter) as off, shadow or enforce",
-        "Tries an ordered provider chain within one timeout budget (3 s by default), falling through on errors",
+        "Tries an ordered provider chain in one timeout budget (3 s default), failing over only on network or timeout",
         "Stops sending once the day's spend reaches decision_model_cost_gate_usd (0.5 USD by default)",
-        "Keeps private records local unless the chain is local end to end or the use is in private_uses",
+        "Lets private records out only for the 9 topic and context uses, on an all-local chain or via private_uses",
         "Records one accounting row per request (provider, model, outcome, latency, tokens, cost) for the report",
-        "Runs a preregistered eval per use with real spend; a promote verdict writes a machine-side tuning mark",
-        "Fits a per-use, per-model threshold to labelled report data at a 5% false-action target (8+ samples)"
+        "Runs preregistered evals for rerank and recall_inject with real spend; promote writes a machine tuning mark",
+        "Fits per-model thresholds for dedup, tension, labels, extract_prefilter at 5% false actions (8+ samples)"
       ],
       "limits": [
-        "Off unless enabled with a provider whose key variable is set, or a keyless loopback server.",
-        "The deterministic result stays canonical; a failed, gated or off call returns it unchanged.",
-        "A vault can opt out with `decision_model.enabled: false`; endpoints and keys are machine settings.",
-        "The `llm-emulation` adapter's probabilities are uncalibrated, and it is used only when named."
+        "Off unless enabled with a provider whose key variable is set, or a keyless loopback server",
+        "The deterministic result stays canonical; a failed, gated or off call returns it unchanged",
+        "A vault can opt out with `decision_model.enabled: false`; endpoints and keys are machine settings",
+        "The `llm-emulation` adapter's probabilities are uncalibrated, and it is used only when named"
       ],
       "surfaces": {
         "cli": [
@@ -426,13 +429,14 @@
       "status": "stable",
       "capabilities": [
         "Sends one question as JSON on stdin to a configured shell command and reads one JSON answer from stdout",
-        "Serves the benchmark judge (`bench_judge_cmd`), the hygiene conflict resolver (`hygiene.resolver_cmd`) and the skill rewrite judge (`skill_rewrite_judge_cmd`)",
-        "Treats an unset command as skipped, and a nonzero exit, a signal, a timeout or malformed JSON as an error result",
+        "Serves the benchmark judge (`bench_judge_cmd`) and the hygiene conflict resolver (`hygiene.resolver_cmd`)",
+        "Serves the skill rewrite judge (`skill_rewrite_judge_cmd`)",
+        "Treats an unset command as skipped, and a nonzero exit, a signal, a timeout or bad JSON as an error result",
         "Ends a command after 60 seconds by default"
       ],
       "limits": [
-        "Verdicts are advisory: the deterministic result stands whatever the command answers.",
-        "Open Second Brain runs no model here; every command is the operator's own."
+        "Bench and skill-rewrite verdicts are advisory; a resolver_cmd merge or supersede verdict drives hygiene apply",
+        "Open Second Brain runs no model here; every command is the operator's own"
       ],
       "surfaces": {},
       "docs": ["docs/cli-reference.md#memory-observability-since-v0390"],
