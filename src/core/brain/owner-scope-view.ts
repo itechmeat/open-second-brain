@@ -105,11 +105,21 @@ export function ownerScopeView(vault: string | null, scope: string | null): Owne
   const record = storeRecordLookup(vault);
   return Object.freeze({
     scope,
-    ...artifactRefView(vault, (rel, cache) => {
-      const page = record?.(rel);
-      if (page !== undefined) return isStoreRecordOwnerVisible(page, scope);
-      return isPathOwnerVisible(vault, rel, scope, cache);
-    }),
+    ...artifactRefView(
+      vault,
+      (rel, cache) => {
+        const page = record?.(rel);
+        // A removal held in `private` has no fields to read an owner from:
+        // the path is judged by the vault rule, as before it was recorded.
+        if (page !== undefined && page.removed !== true) {
+          return isStoreRecordOwnerVisible(page, scope);
+        }
+        return isPathOwnerVisible(vault, rel, scope, cache);
+      },
+      // The ownership rule restricts no reach: a reference that names
+      // nothing the store can place now names nothing it could hide.
+      () => true,
+    ),
   });
 }
 

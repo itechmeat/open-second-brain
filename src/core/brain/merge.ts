@@ -54,6 +54,8 @@ import {
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON, PREF_AUDIT_OP } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
+import { privateWithheld, withPrivateShown } from "../store/caller-reach.ts";
+import { LaneEntryWithheldError } from "../store/lane-reach-guard.ts";
 
 export type BrainMergeErrorCode =
   | "same-id"
@@ -193,7 +195,9 @@ export function mergePreferences(
   if (opts.bypassEntityGuard !== true) {
     let entities: ReadonlyArray<GuardEntityLike> = [];
     try {
-      entities = buildEntityIndex(vault).entities;
+      // The guard reads every entity on the fold of every partition,
+      // whatever the caller's reach (the write rule).
+      entities = withPrivateShown(() => buildEntityIndex(vault).entities);
     } catch {
       // No readable registry means nothing to anchor against.
     }
@@ -203,7 +207,27 @@ export function mergePreferences(
       entities,
     });
     if (!verdict.allowed) {
-      throw new BrainMergeError("entity-guard", `${verdict.reason}; pass --force to override`);
+      // Below local reach the reason may name an entity the caller cannot
+      // read: judged again on the entities it reads, the refusal is the
+      // guard's own when those refuse too, and the fixed answer when only
+      // an entity held in `private` refuses the merge.
+      let reason = verdict.reason;
+      if (privateWithheld()) {
+        let shown: ReadonlyArray<GuardEntityLike> = [];
+        try {
+          shown = buildEntityIndex(vault).entities;
+        } catch {
+          // No readable registry: nothing the caller reads refuses it.
+        }
+        const narrowed = guardEntityMerge({
+          keepText: `${keep.topic} ${keep.principle}`,
+          dropText: `${drop.topic} ${drop.principle}`,
+          entities: shown,
+        });
+        if (narrowed.allowed) throw new LaneEntryWithheldError();
+        reason = narrowed.reason;
+      }
+      throw new BrainMergeError("entity-guard", `${reason}; pass --force to override`);
     }
   }
 

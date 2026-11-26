@@ -33,7 +33,7 @@ import { resolve } from "node:path";
 
 import { pathIsInside } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
-import { resolveArtifactRef } from "./artifact-ref-resolve.ts";
+import { artifactRefScope, laneRefMatch, resolveArtifactRef } from "./artifact-ref-resolve.ts";
 
 /**
  * A reference a report row carries: either a vault-relative path
@@ -68,7 +68,13 @@ export interface ArtifactRefView {
    * are withheld from it. Absent means false.
    */
   readonly withholdsPrivate?: boolean;
-  /** May the caller see the artifact or page this reference names? */
+  /**
+   * May the caller see the artifact or page this reference names? While
+   * {@link withholdsPrivate} is set the lane verdict comes first: a
+   * reference whose match is an entry held in `private` is not visible
+   * even when a legacy file of the same stem is on disk, and one whose
+   * match is `unknown` is not visible either (fail closed).
+   */
   readonly visible: (ref: ArtifactRef) => boolean;
   /**
    * May the caller see a row that names ALL of these? One hidden
@@ -97,10 +103,24 @@ export const UNFILTERED_ARTIFACT_REFS: ArtifactRefView = Object.freeze({
  * `pathVisible` is handed the shared per-response frontmatter cache, the
  * same sharing `search()` gives its filter stages, so a response that
  * names the same artifact from several rows parses it once.
+ *
+ * `unplacedVisible` is the binding's own verdict on a reference that
+ * resolves to nothing while the store cannot say whether it names a lane
+ * entry (`laneRefMatch` answers `unknown`): a view that restricts reach
+ * hides it (fail closed), a view at local reach keeps the verdict of a
+ * reference that names nothing (visible), so a local caller's answers do
+ * not shrink while a `private` shard is unreadable. Asked first, so a
+ * binding that keeps such a reference pays no lane lookup. Absent, the
+ * reference is hidden.
+ *
+ * `withholdsPrivate`: the caller is below local reach, so the lane
+ * verdict comes before any disk match ({@link ArtifactRefView.visible}).
  */
 export function artifactRefView(
   vault: string,
   pathVisible: (rel: string, cache: FrontmatterCache) => boolean,
+  unplacedVisible: (ref: string) => boolean = () => false,
+  withholdsPrivate = false,
 ): ArtifactRefView {
   const cache: FrontmatterCache = new Map();
   // Per-response memo over the REFERENCE, beside the one over the path.
@@ -110,6 +130,7 @@ export function artifactRefView(
   // resolves to nothing, which is the common case now that the whole
   // payload is offered rather than four named keys.
   const verdicts = new Map<string, boolean>();
+  let scope: ReturnType<typeof artifactRefScope> | undefined;
   const visible = (ref: ArtifactRef): boolean => {
     if (ref === null || ref === undefined || ref.length === 0) return true;
     const memo = verdicts.get(ref);
@@ -117,17 +138,30 @@ export function artifactRefView(
     // A bare id with no artifact on disk names nothing that could be
     // hidden - see `artifact-ref-resolve.ts` for why that reading is only
     // true while its directory list is complete.
-    const rel = resolveArtifactRef(vault, ref);
+    scope ??= artifactRefScope(vault);
+    if (withholdsPrivate && typeof ref === "string") {
+      const match = laneRefMatch(vault, ref, scope);
+      if (match.kind === "unknown" || (match.kind === "entry" && match.private)) {
+        verdicts.set(ref, false);
+        return false;
+      }
+    }
+    const rel = resolveArtifactRef(vault, ref, scope);
     // A reference that resolves outside the vault names no page anyone
     // could be shown, and is hidden before the rule reads anything: log
-    // bodies carry strings an earlier caller wrote.
+    // bodies carry strings an earlier caller wrote. One that resolves to
+    // nothing is judged by the binding while the store cannot say whether
+    // it names a lane entry (`laneRefMatch` answers `unknown`).
     const verdict =
-      rel === null ? true : pathIsInside(resolve(vault, rel), vault) && pathVisible(rel, cache);
+      rel === null
+        ? unplacedVisible(ref) || laneRefMatch(vault, ref, scope).kind !== "unknown"
+        : pathIsInside(resolve(vault, rel), vault) && pathVisible(rel, cache);
     verdicts.set(ref, verdict);
     return verdict;
   };
   return Object.freeze({
     filtersNothing: false,
+    ...(withholdsPrivate ? { withholdsPrivate: true } : {}),
     visible,
     row: (...refs: ReadonlyArray<ArtifactRef>) => refs.every(visible),
     keep: <T>(rows: ReadonlyArray<T>, refsOf: (r: T) => ReadonlyArray<ArtifactRef>) =>
@@ -169,6 +203,14 @@ export function readerRefView(
   withholdsPrivate = false,
 ): ArtifactRefView {
   if (readable === undefined && !withholdsPrivate) return UNFILTERED_ARTIFACT_REFS;
-  const view = artifactRefView(vault, (rel) => readable?.(rel) ?? true);
-  return withholdsPrivate ? Object.freeze({ ...view, withholdsPrivate: true }) : view;
+  // The lane verdict before a disk match is `artifactRefView`'s own: a
+  // bare id can name a lane entry held in `private` while a legacy file
+  // of the same stem is on disk, and the file must not show the id the
+  // write-side judge holds.
+  return artifactRefView(
+    vault,
+    (rel) => readable?.(rel) ?? true,
+    () => !withholdsPrivate,
+    withholdsPrivate,
+  );
 }

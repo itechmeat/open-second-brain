@@ -58,11 +58,19 @@ export function reachView(vault: string | null, reach: TransportReach): ReachVie
   const record = storeRecordLookup(vault);
   return Object.freeze({
     reach,
-    ...artifactRefView(vault, (rel, cache) => {
-      const page = record?.(rel);
-      if (page !== undefined) return isStoreRecordReadableAtReach(page, reach);
-      return isPathReadableAtReach(vault, rel, reach, cache);
-    }),
+    ...artifactRefView(
+      vault,
+      (rel, cache) => {
+        const page = record?.(rel);
+        if (page !== undefined) return isStoreRecordReadableAtReach(page, reach);
+        return isPathReadableAtReach(vault, rel, reach, cache);
+      },
+      // Below local reach a reference the store cannot place may name a
+      // `private` entry: hidden (fail closed), and the lane verdict comes
+      // before any disk match.
+      () => false,
+      true,
+    ),
     withholdsPrivate: true,
   });
 }

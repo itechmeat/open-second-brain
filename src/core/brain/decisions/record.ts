@@ -35,7 +35,13 @@ import {
 } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { addObligation, ObligationError, obligationSlotPlan } from "../obligations.ts";
-import { decisionPath, decisionsDir, isValidSlug, validateIsoDate } from "../paths.ts";
+import {
+  decisionPath,
+  decisionsDir,
+  isValidSlug,
+  obligationPath,
+  validateIsoDate,
+} from "../paths.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
@@ -55,6 +61,9 @@ import {
   parseLanePage,
   writeLaneText,
 } from "../../store/lane-pages.ts";
+import { assertCreateMatchAtReach, assertLaneWriteAtReach } from "../../store/lane-reach-guard.ts";
+import { laneTextLandsPrivate } from "../../store/lane-entry-store.ts";
+import { withOperationPrivacy } from "../../store/operation-scope.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -540,13 +549,23 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   const slug = titleSlug(title);
   // The same title an older release stored under its Latin-only slug is
   // the same decision: refused as it was then, not recorded a second time.
+  // Decided on the fold of every partition below local reach (the write
+  // rule): a decision held in `private` under this title refuses the call.
+  assertCreateMatchAtReach(
+    vault,
+    (readable) => {
+      const taken = takenDecisionSlug(vault, title, readable);
+      return taken === null ? [] : [decisionPath(vault, taken)];
+    },
+    input.readable,
+  );
   const existing = takenDecisionSlug(vault, title, input.readable);
   if (existing !== null) {
     throw new DecisionError(`decision already exists: ${existing} (backfill or remove it first)`);
   }
   // Decided before the page is written, so a refusal leaves no decision
   // without its review obligation.
-  planReviewObligation(vault, title, input.readable);
+  const reviewPlan = planReviewObligation(vault, title, input.readable);
 
   const explicitAgent = normalizeAgentArgument(input.agent ?? null);
   const agent = explicitAgent ?? resolveAgentName(input.configPath);
@@ -570,15 +589,21 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
   };
 
   const path = decisionPath(vault, slug);
+  const reviewPath = reviewPlan.existing ? [] : [obligationPath(vault, reviewPlan.slug)];
+  assertLaneWriteAtReach(vault, [path, ...reviewPath]);
+  // The review obligation carries the title: the decision's partition (design D12).
+  const placedPrivate = laneTextLandsPrivate(vault, path, render(record));
   writeLaneText(vault, path, render(record));
 
-  const review = ensureReviewObligation(vault, {
-    title,
-    reviewDate,
-    agent,
-    now,
-    ...(input.readable !== undefined ? { readable: input.readable } : {}),
-  });
+  const review = withOperationPrivacy(placedPrivate, () =>
+    ensureReviewObligation(vault, {
+      title,
+      reviewDate,
+      agent,
+      now,
+      ...(input.readable !== undefined ? { readable: input.readable } : {}),
+    }),
+  );
 
   appendLogEvent(vault, {
     timestamp: isoSecond(now),

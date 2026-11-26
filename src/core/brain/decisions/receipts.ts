@@ -395,7 +395,8 @@ function appendReceiptAgainst(
       ledgerRowRecord(
         DUAL_WRITE_LEDGERS.decisionReceipts,
         receipt,
-        rowNamesPrivatePage(vault, receipt) ? "private" : "shared",
+        // Judged against the store the row is appended to.
+        rowNamesPrivatePage(vault, receipt, undefined, input.configPath) ? "private" : "shared",
       ),
     context: { vault, ...(input.configPath !== undefined ? { configPath: input.configPath } : {}) },
   });

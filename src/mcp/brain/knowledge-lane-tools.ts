@@ -18,6 +18,7 @@ import {
   bridgePairKey,
   discoverBridges,
   dismissBridge,
+  dismissedBridgesPath,
   readDismissedBridges,
   writeBridgeProposals,
 } from "../../core/brain/link-graph/bridge-discovery.ts";
@@ -28,7 +29,7 @@ import {
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
-import { createTriggers } from "../../core/brain/triggers/store.ts";
+import { createTriggersAtReach } from "../../core/brain/triggers/create-at-reach.ts";
 import {
   deepSynthesis,
   synthesisCandidates,
@@ -58,6 +59,8 @@ import {
   parseLanePage,
 } from "../../core/store/lane-pages.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
+import { withPrivateShown } from "../../core/store/caller-reach.ts";
+import { assertLaneWriteAtReach } from "../../core/store/lane-reach-guard.ts";
 
 /**
  * Who may see a lane page by its vault-relative path: the reach view of
@@ -198,6 +201,19 @@ export async function toolBrainBridges(
       );
     }
     if (op === "dismiss") {
+      // The dismissal list is the machine's own: kept on the whole fold.
+      // It is an entry the caller addresses with a write: below local
+      // reach, a list held in `private` (or one the fold of every partition
+      // may miss) refuses the call with the fixed answer here, before the
+      // list is read and before anything is written.
+      // The list is shared on a complete fold past the check above, so
+      // `dismissBridge` is called in the caller's own scope: its guard and
+      // the write's stay live for a list raised to `private` in between.
+      assertLaneWriteAtReach(
+        ctx.vault,
+        [dismissedBridgesPath(ctx.vault)],
+        ctx.configPath ?? undefined,
+      );
       return {
         dismissed: bridgePairKey(source, target),
         added: dismissBridge(ctx.vault, source, target),
@@ -277,7 +293,9 @@ export async function toolBrainBridges(
   const store = await Store.open(searchConfig, { mode: "read" });
   const now = new Date();
   try {
-    const dismissed = readDismissedBridges(ctx.vault);
+    // The dismissals and the artifact are the machine's own, read and
+    // written on the whole fold, as `brain_clusters run` writes its notes.
+    const dismissed = withPrivateShown(() => readDismissedBridges(ctx.vault));
     const report = discoverBridges(store, {
       ...(max !== undefined ? { maxProposals: max as number } : {}),
       ...(minSimilarity !== undefined ? { minSimilarity } : {}),
@@ -285,7 +303,7 @@ export async function toolBrainBridges(
       safeguard: toolSafeguard(ctx, OPERATION.bridges),
       ...(onProgress ? { onProgress } : {}),
     });
-    writeBridgeProposals(ctx.vault, report, { now });
+    withPrivateShown(() => writeBridgeProposals(ctx.vault, report, { now }));
     try {
       appendMetric(ctx.vault, {
         surface: "bridge_discovery",
@@ -393,11 +411,16 @@ export async function toolBrainClusters(
       safeguard: toolSafeguard(ctx, OPERATION.clusters),
       ...(onProgress ? { onProgress } : {}),
     });
-    const materialized = materializeClusterNotes(ctx.vault, communities, {
-      store,
-      now,
-      ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
-    });
+    // The notes are the ones a local run writes, whatever the caller's
+    // reach (design D4): detection is over the whole search index, and the
+    // answer below stays filtered by the reach and owner views.
+    const materialized = withPrivateShown(() =>
+      materializeClusterNotes(ctx.vault, communities, {
+        store,
+        now,
+        ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
+      }),
+    );
     try {
       appendMetric(ctx.vault, {
         surface: "communities",
@@ -547,7 +570,7 @@ export async function toolBrainDeepSynthesis(
   });
   let triggersCreated: number | undefined;
   if (enqueue) {
-    const result = createTriggers(ctx.vault, synthesisCandidates(report), {
+    const result = createTriggersAtReach(ctx.vault, synthesisCandidates(report), {
       now,
       cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
     });
@@ -659,7 +682,7 @@ export function toolBrainIdeaDiscovery(
   );
   let triggersCreated: number | undefined;
   if (enqueue) {
-    const result = createTriggers(ctx.vault, ideaCandidates(ideas), {
+    const result = createTriggersAtReach(ctx.vault, ideaCandidates(ideas), {
       now,
       cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
     });

@@ -28,6 +28,7 @@ import { TRANSPORT_REACH, resolvedTransportReach } from "../core/graph/transport
 import { INTERNAL_ERROR, MCPError } from "./protocol.ts";
 import type { RequestView, ResourceContent, ResourceContext } from "./resources-shared.ts";
 import { MIME_MARKDOWN, deliveryFor, readMarkdown } from "./resources-shared.ts";
+import { withPrivateShown } from "../core/store/caller-reach.ts";
 
 /**
  * Vault-relative paths of the two generated digest files, the probes the
@@ -85,7 +86,10 @@ export function readActive(ctx: ResourceContext, uri: string, view: RequestView)
 export function readLessons(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
   let path: string;
   try {
-    path = lessonsDigestPathForRead(ctx.vault);
+    // The shared digest file is the machine's own cache, kept on the fold
+    // of every partition (the write rule); a reader below local reach is
+    // served its own render below, never this file.
+    path = withPrivateShown(() => lessonsDigestPathForRead(ctx.vault));
   } catch (err) {
     throw new MCPError(INTERNAL_ERROR, `lessons digest render failed: ${(err as Error).message}`);
   }
@@ -94,7 +98,7 @@ export function readLessons(ctx: ResourceContext, uri: string, view: RequestView
   // once so the resource is always meaningful, but never on every read.
   if (!existsSync(path)) {
     try {
-      regenerateLessons(ctx.vault);
+      withPrivateShown(() => regenerateLessons(ctx.vault));
     } catch (err) {
       throw new MCPError(
         INTERNAL_ERROR,

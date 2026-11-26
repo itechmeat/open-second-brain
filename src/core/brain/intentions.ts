@@ -25,6 +25,7 @@ import {
   parseLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
+import { takenOnWholeFold } from "../store/lane-reach-guard.ts";
 
 export interface IntentionChain {
   readonly scope: string;
@@ -203,7 +204,9 @@ export function moveIntentionToHistory(
   const historyDir = join(intentionsDir(vault), "history");
   const base = `${scope}-${isoDate(now)}`;
   let archivePath = join(historyDir, `${base}.md`);
-  for (let suffix = 2; lanePageExists(vault, archivePath); suffix++) {
+  // The free history slot is picked on the fold of every partition, as a
+  // local caller with the same store gets it (the write rule).
+  for (let suffix = 2; takenOnWholeFold(() => lanePageExists(vault, archivePath)); suffix++) {
     archivePath = join(historyDir, `${base}-${suffix}.md`);
   }
   if (lanePagesInStore(vault)) {

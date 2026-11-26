@@ -17,6 +17,7 @@
  * frontmatter keys the operator may have added by hand.
  */
 
+import { nextUnallocatedPath } from "./batch-allocation.ts";
 import { join } from "node:path";
 import { statSync } from "node:fs";
 
@@ -87,6 +88,11 @@ import {
   parseLanePage,
   writeLanePage,
 } from "../../store/lane-pages.ts";
+import { privateWithheld, withPrivateShown } from "../../store/caller-reach.ts";
+import {
+  assertCreateMatchAtReach,
+  assertEntryShareableAtReach,
+} from "../../store/lane-reach-guard.ts";
 
 export interface UpsertEntityInput {
   readonly category: string;
@@ -614,6 +620,7 @@ function writeEntityFile(
   for (const [key, value] of Object.entries(extras)) {
     if (!ENTITY_OWN_FIELDS.has(key)) meta[key] = value;
   }
+  assertEntryShareableAtReach(vault, path, meta, body);
   writeLanePage(vault, path, meta, body, {
     overwrite: opts.overwrite,
     existsErrorKind: "entity",
@@ -669,6 +676,141 @@ function checkAliasClaims(
  * name key and aliases first, and an id once minted is never re-derived,
  * so an entity minted under the old slug keeps its id and every link to it.
  */
+/**
+ * The identity decision of an upsert, taken on the fold of every partition
+ * (the write rule): below local reach an entity held in `private` that a
+ * local upsert would update, or be refused for, refuses the call with the
+ * fixed answer. Answers the path a create would take (the free id on that
+ * fold), or null outside that scope and when a stored record matches.
+ */
+function assertUpsertAtReach(
+  vault: string,
+  category: string,
+  name: string,
+  input: UpsertEntityInput,
+): string | null {
+  let created: string | null = null;
+  assertCreateMatchAtReach(
+    vault,
+    () => {
+      const index = buildEntityIndex(vault);
+      const untrusted = input.untrustedOrigin === true;
+      const found = upsertMatches(index, category, name, untrusted, input.aliases ?? []);
+      if (found.length === 0) {
+        created = entityPath(vault, category, allocateEntityId(index, category, name));
+      }
+      return found;
+    },
+    undefined,
+    input.configPath,
+  );
+  return created;
+}
+
+/**
+ * Below local reach, the upsert of each of `inputs` judged first, as one
+ * call (the write rule): an item that meets an entity held in `private`
+ * refuses all of them before any write. An item whose category or label
+ * is refused is left to its own upsert. Answers the paths the creates
+ * would take.
+ */
+export function assertUpsertsAtReach(
+  vault: string,
+  inputs: ReadonlyArray<UpsertEntityInput>,
+): string[] {
+  if (!privateWithheld()) return [];
+  const out: string[] = [];
+  // The identity keys the batch creates before this item: a later item of
+  // the same key updates that entity instead of creating one.
+  const createdKeys = new Set<string>();
+  for (const input of inputs) {
+    let category: string;
+    let name: string;
+    try {
+      category = validateEntityCategory(input.category);
+      name = assertValidEntityLabel(input.name, {
+        denylist: resolveEntityLabelDenylist(input.configPath),
+      });
+    } catch {
+      continue;
+    }
+    const created = assertUpsertAtReach(vault, category, name, input);
+    const key = entityIdentityKey(category, name);
+    if (created === null || createdKeys.has(key)) continue;
+    createdKeys.add(key);
+    out.push(nextUnallocatedPath(vault, created, out));
+  }
+  return out;
+}
+
+/**
+ * The entity records an upsert of `name` would update in place or be
+ * refused for, as {@link upsertEntity} decides: its write target, every
+ * record claiming its identity key (an archived one included), and the
+ * holders of the aliases it claims.
+ */
+function upsertMatches(
+  index: EntityIndex,
+  category: string,
+  name: string,
+  untrusted: boolean,
+  aliases: ReadonlyArray<string>,
+): string[] {
+  const key = entityIdentityKey(category, name);
+  // A trusted write is refused on a contested or archived key and resolves
+  // canonical records only: a quarantined namesake is not a match (the
+  // write creates beside it, as a local one does). An untrusted one
+  // resolves inside its own lane, where every quarantined claimant of the
+  // key counts (two make the write ambiguous), and is refused on an
+  // archived key like a trusted one.
+  const out = index.entities
+    .filter(
+      (e) =>
+        entityIdentityKey(e.category, e.name) === key &&
+        (untrusted
+          ? e.status === BRAIN_ENTITY_STATUS.archived || e.status === BRAIN_ENTITY_STATUS.quarantine
+          : e.status !== BRAIN_ENTITY_STATUS.quarantine),
+    )
+    .map((e) => e.path);
+  try {
+    const target = resolveWriteTarget(index, { category, query: name }, untrusted);
+    if (target !== null) out.push(target.path);
+  } catch {
+    // An ambiguous target: every claimant of the key is listed above, and
+    // an untrusted write meets every quarantined claimant of the name
+    // here, as the resolution that threw did.
+    if (untrusted) {
+      const query = normalizeEntityName(name);
+      if (query) {
+        out.push(
+          ...index.entities
+            .filter(
+              (e) =>
+                e.status === BRAIN_ENTITY_STATUS.quarantine &&
+                e.category === category &&
+                (normalizeEntityName(e.name) === query ||
+                  e.aliases.some((a) => normalizeEntityName(a) === query)),
+            )
+            .map((e) => e.path),
+        );
+      }
+    }
+  }
+  for (const raw of aliases) {
+    const normalized = normalizeEntityName(raw.trim());
+    if (!normalized) continue;
+    // Both claims count: an alias held by one record must not mask the
+    // canonical name of another.
+    for (const holder of [
+      index.byAlias.get(normalized),
+      index.byKey.get(`${category}:${normalized}`),
+    ]) {
+      if (holder !== undefined) out.push(holder.path);
+    }
+  }
+  return out;
+}
+
 function allocateEntityId(index: EntityIndex, category: string, name: string): string {
   const base = `${BRAIN_ENTITY_ID_PREFIX}${category}-${titleKeySlug(name)}`;
   const taken = new Set(index.entities.map((e) => e.id));
@@ -784,6 +926,7 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   // pre-lexicon structural gate - it can never mis-reject.
   const lexicon = resolveEntityLexicon(vault);
   const name = assertValidEntityLabel(input.name, { denylist });
+  assertUpsertAtReach(vault, category, name, input);
   const index = buildEntityIndex(vault);
   const stamp = isoSecond(input.now);
 
@@ -867,7 +1010,11 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
     return { entity, created: false };
   }
 
-  const id = allocateEntityId(index, category, name);
+  // The free id is picked on the fold of every partition, as a local
+  // caller with the same store gets it (the write rule).
+  const id = privateWithheld()
+    ? withPrivateShown(() => allocateEntityId(buildEntityIndex(vault), category, name))
+    : allocateEntityId(index, category, name);
   const path = entityPath(vault, category, id);
   // Untrusted provenance decides two things about the new record: the status
   // it lands at, and the marker the retrieval gate reads. Both come from the

@@ -259,7 +259,9 @@ test("brain_benchmark run scores an inline dataset and records the metric", asyn
 test("brain_tune run/status/reset lifecycle", async () => {
   writeGroup();
   await indexDefaultLocation();
-  const server = new MCPServer({ vault, configPath });
+  // A local caller: below local reach the winner is not saved and a reset
+  // leaves the file (lane-private-partition-reach-tune.test.ts).
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await initialize(server);
 
   const before = await call(server, "brain_tune", { operation: "status" });
@@ -301,7 +303,8 @@ async function fullPayload(
 test("brain_benchmark and brain_tune name the degradation a run carried", async () => {
   writeGroup();
   await indexDefaultLocation();
-  const server = new MCPServer({ vault, configPath });
+  // A local caller, whose sweep saves its winner.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await initialize(server);
 
   // Semantic recall configured over an index built without embeddings:

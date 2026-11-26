@@ -64,6 +64,7 @@ import {
   storedLegacyPledgeSlugs,
   pledgeExists,
   pledgeSlotReserved,
+  pledgeCreateMatches,
   pledgeTitleClaim,
   titleNamesSlugError,
   pledgeIdentity,
@@ -85,6 +86,7 @@ import {
   removeLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
+import { assertCreateMatchAtReach } from "../store/lane-reach-guard.ts";
 
 /** A pledge-intake payload or anchor failed validation; nothing was written. */
 export class PledgeIntakeError extends Error {
@@ -500,6 +502,17 @@ export function intakePledges(
     );
     verdictByName.set(name, matches.length === 1 ? matches[0]!.id : null);
     if (matches.length !== 1) unanchoredCounterparties.push(name);
+  }
+
+  // Below local reach each item's identity decision is also taken on the
+  // fold of every partition (the write rule): an item that meets a pledge
+  // held in `private` refuses the whole intake here, before any write.
+  for (const prep of prepared) {
+    assertCreateMatchAtReach(
+      vault,
+      (readable) => pledgeCreateMatches(vault, prep.title, prep.due, source, readable),
+      opts.readable,
+    );
   }
 
   // --- Write pass: nothing above wrote; everything below is decided. ---

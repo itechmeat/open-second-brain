@@ -67,9 +67,12 @@ import {
 } from "./response-shape.ts";
 import {
   draftMaturePageSkillProposal,
+  MATURE_PAGE_PATTERN_KIND,
+  planDeclaredSkillProposal,
   SKILL_NAME_RE,
   type DeclaredSkillProposalResult,
 } from "./skill-proposals.ts";
+import { assertCreateMatchAtReach } from "../store/lane-reach-guard.ts";
 import { BRAIN_CONFIDENCE } from "./types.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
@@ -384,6 +387,17 @@ export function commitSkillPageDraft(
     triggers: ReadonlyArray<string>;
     body: string;
   };
+  // The identity check (one name, one proposal; a rejected or accepted
+  // name is suppressed) on the whole fold: below local reach, a proposal
+  // it meets in `private` is the fixed refusal before any write.
+  assertCreateMatchAtReach(vault, () => {
+    const planned = planDeclaredSkillProposal(
+      vault,
+      { name: draft.name, body: draft.body, sourceRefs: [`[[${rel}]]`] },
+      MATURE_PAGE_PATTERN_KIND,
+    );
+    return "declined" in planned ? [planned.declined.path] : [];
+  });
   return draftMaturePageSkillProposal(vault, {
     name: draft.name,
     description: draft.description,

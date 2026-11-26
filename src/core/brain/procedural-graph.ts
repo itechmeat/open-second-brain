@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 
 import { ensureInsideVault } from "../path-safety.ts";
+import { withPrivateShown } from "../store/caller-reach.ts";
 import {
   proceduralGraphPath,
   proceduralMemoryIndexPath,
@@ -56,9 +57,22 @@ export interface ProceduralGraphBuildOptions {
   readonly now?: Date;
 }
 
+/**
+ * Rebuild and store the graph from every procedure and proposal, whole
+ * whatever the caller's reach (design D5 item 4): it is machine state
+ * every later caller reads, and a caller below local reach is answered
+ * through the read-time filter of the tool that serves it.
+ */
 export function rebuildProceduralGraph(
   vault: string,
   opts: ProceduralGraphBuildOptions = {},
+): ProceduralGraphProjection {
+  return withPrivateShown(() => buildProceduralGraph(vault, opts));
+}
+
+function buildProceduralGraph(
+  vault: string,
+  opts: ProceduralGraphBuildOptions,
 ): ProceduralGraphProjection {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);

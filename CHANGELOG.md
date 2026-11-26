@@ -5,10 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.4] - 2026-11-26
 
 ### Fixed
 
+- **Private-partition lane entries are withheld below local reach.** On a machine whose lane pages live in the brain store, a lane entry the store holds in its private partition is no longer listed, shown, counted or named by the lane reads and reference views a remote caller goes through, and the lane writes a remote caller makes never touch one; rebuilt projections stay whole for local callers, and references to such an entry are judged by the entry. While the store cannot be read whole, a remote caller's lane reads answer as empty and a reference the store cannot resolve counts as private for a remote caller; a local caller's answers are unchanged.
+  - New records that name such an entry (receipts, log events, ledger rows) are kept private. Records written before this release are not moved: their earlier shared copies remain on peers that already hold the shared partition, and this machine withholds them from remote callers.
+  - Review obligations written before this release keep their earlier shared copy, which still carries the decision's title; they are corrected in the next patch release, as are a few derived labels of the procedural graph and the metadata a write session reads from an older file at its target.
+  - A remote caller is refused with one fixed answer, which names nothing, when it tries to create an entry whose exact name is already taken by an entry it may not read, when it writes or opens a write session on a lane entry while the store cannot be read whole, and when an entity write would land the entity in the private partition.
+  - An interrupted skill-proposal accept whose proposal is private is left for a local recovery: a remote recovery neither resolves nor names it.
+  - Maintenance that a remote call starts (a default page, a deduplication, a dismissal list, a recovery, the triggers created from findings, the archive of an ingested source, the trim of dead ends, usage counters and the shared lessons digest) runs over every partition as it does for a local caller; only the answer to the remote caller is narrowed. The counts of a remote procedural-memory reconcile leave out a private procedure that was removed, and the scan count and watermark times of a remote skill-proposal learn are taken over the continuity records that caller may read.
+  - A remote bridge dismissal is refused with the same fixed answer while the dismissal list is private; discovery still honours every dismissal.
+  - A remote create checks for an existing entry of the same identity (title, name or alias, publish target) in every partition: when that entry is private the call gets the fixed answer and nothing is written, so no second copy lands beside it; a free id or archive slot is picked as for a local caller. A folder move or removal, and a confirmed cleanup by source, with a private member is refused whole before anything moves.
+  - On a machine with no vault, a lane entry that cites a page is private by the store's rule, so a remote caller there sees most lane entries withheld.
+  - A remote search tuning run is answered as before but does not save its winner, and a remote tuning reset leaves the saved tuning; recall feedback from a remote caller is recorded as that caller saw it and folded into the learned weights with every recorded event. While any lane holds a private entry, a remote hygiene apply or derived-page refresh (other than a dry run) gets the fixed answer before it changes anything; this broad refusal is narrowed in the next patch release.
+  - A remote call that would meet a private entry under another name (a design note or panel of the same topic and day, a trigger key, an archived or quarantined entity of the same name, a pledge or report slot) gets the fixed answer before its first write, and an error raised while the store's private partition is read never reaches a remote caller.
 - **Hermes installs and updates the plugin without a question again.** Hermes 0.23 scans the clone before it installs or updates a plugin, and every release up to 2.0.2 scanned `caution` (25,450 findings for 2.0.1, 25,590 for 2.0.2): Hermes asks for a confirmation then, so an install without a terminal and every unattended update stopped. The verdict came from 26 high findings, all of them prose or test data: design notes and old plans quoting a system password file, a root delete and agent-config paths, one sentence of the bundled skill, five code comments, one regular expression that spells an invisible-character range with the characters themselves, and three test fixtures with a hostile phrase in a template literal. They are reworded (the range is now written with `\u` escapes, the fixtures as plain strings), and the repository now scans `safe`; the 24,000 path-traversal notes that remain are the `../..` of ordinary relative imports, which Hermes counts as `medium` and which do not change the verdict. To update to 2.0.2 or earlier, answer yes in a terminal or run `hermes plugins update open-second-brain --force`.
 
 ### Changed
@@ -9136,7 +9147,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.4...HEAD
+[2.0.4]: https://github.com/itechmeat/open-second-brain/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/itechmeat/open-second-brain/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/itechmeat/open-second-brain/compare/v2.0.0...v2.0.1

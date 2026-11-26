@@ -34,6 +34,14 @@ function serverWithNoVault(): { server: MCPServer; env: LaneEnv } {
   return { server: new MCPServer({ vault: null, configPath: lane.env.configPath }), env: lane };
 }
 
+/** A server at the local reach on the same machine with no vault. */
+function localServer(env: LaneEnv): MCPServer {
+  return new MCPServer(
+    { vault: null, configPath: env.env.configPath },
+    { reach: TRANSPORT_REACH.local },
+  );
+}
+
 function payload(result: Record<string, unknown>): Record<string, unknown> {
   const content = result["content"] as ReadonlyArray<{ text: string }>;
   return JSON.parse(content[0]!.text) as Record<string, unknown>;
@@ -110,10 +118,16 @@ test("brain_tension lists a tension the store holds, and brain_pledge lists none
   // hash below (which reads "absent" for a missing root) proves the same.
   expect(existsSync(root)).toBe(false);
   const before = env.vaultHash();
+  // With no vault the judge counts every page a row names as private, so a
+  // tension naming two preferences lives in `private`: a local caller is
+  // shown it, and private-partition lane entries are withheld below local
+  // reach.
+  const slugs = (answer: Record<string, unknown>) =>
+    (answer["tensions"] as Array<{ slug: string }>).map((t) => t.slug);
+  const local = payload(await localServer(env).callTool("brain_tension", { action: "list" }));
+  expect(slugs(local)).toEqual([record.slug]);
   const tensions = payload(await server.callTool("brain_tension", { action: "list" }));
-  expect((tensions["tensions"] as Array<{ slug: string }>).map((t) => t.slug)).toEqual([
-    record.slug,
-  ]);
+  expect(slugs(tensions)).toEqual([]);
   // A pledge cites a vault page, so no machine without a vault can hold
   // one (`add` refuses there): the empty list is the whole answer.
   const pledges = payload(await server.callTool("brain_pledge", { operation: "list" }));
@@ -176,11 +190,22 @@ test("brain_entity, brain_trigger, brain_skill_proposals and brain_procedural_me
 
   const entities = payload(await server.callTool("brain_entity", { view: "list" }));
   expect(JSON.stringify(entities)).toContain("Ada");
+  // The trigger cites two preferences, so with no vault it lives in
+  // `private`: listed for a local caller, withheld below local reach.
+  const local = localServer(env);
+  const localTriggers = payload(await local.callTool("brain_trigger", { operation: "list" }));
+  expect(JSON.stringify(localTriggers)).toContain(created[0]!.id);
   const triggers = payload(await server.callTool("brain_trigger", { operation: "list" }));
-  expect(JSON.stringify(triggers)).toContain(created[0]!.id);
+  expect(JSON.stringify(triggers)).not.toContain(created[0]!.id);
+  // The proposal cites a note, so with no vault it lives in `private` too.
+  const localProposals = payload(
+    await local.callTool("brain_skill_proposals", { operation: "list" }),
+  );
+  expect(localProposals["total"]).toBe(1);
+  expect(JSON.stringify(localProposals["proposals"])).toContain("release-ritual");
   const proposals = payload(await server.callTool("brain_skill_proposals", { operation: "list" }));
-  expect(proposals["total"]).toBe(1);
-  expect(JSON.stringify(proposals["proposals"])).toContain("release-ritual");
+  expect(proposals["total"]).toBe(0);
+  expect(proposals["proposals"]).toEqual([]);
   const memory = payload(await server.callTool("brain_procedural_memory", { operation: "list" }));
   expect(memory["total"]).toBe(1);
   expect(JSON.stringify(memory["entries"])).toContain("proc-deploy");

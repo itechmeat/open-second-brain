@@ -49,6 +49,7 @@ import {
 } from "../derived-artifact.ts";
 import type { EntityLexiconHandle } from "./canonical.ts";
 import { laneEntryClockMs, lanePagesInStore, readLaneText } from "../../store/lane-pages.ts";
+import { withPrivateShown } from "../../store/caller-reach.ts";
 
 /** Schema tag of the lexicon payload shape. */
 export const ENTITY_LEXICON_SCHEMA_VERSION = "o2b.entity-lexicon.v1";
@@ -401,6 +402,13 @@ export function __clearEntityLexiconCache(): void {
  * handle the predicate is byte-identical to its pre-lexicon behavior.
  */
 export function resolveEntityLexicon(vault: string): EntityLexiconHandle | null {
+  // The learned lexicon is a derived artifact of the machine: its verdicts
+  // gate a create on the fold of every partition, whatever the caller's
+  // reach (the write rule), so an artifact held in `private` still gates.
+  return withPrivateShown(() => resolveLexiconWhole(vault));
+}
+
+function resolveLexiconWhole(vault: string): EntityLexiconHandle | null {
   const root = resolve(vault);
   let key = "absent";
   if (lanePagesInStore(root)) {

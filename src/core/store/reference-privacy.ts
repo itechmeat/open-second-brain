@@ -39,6 +39,7 @@ import { resolve } from "node:path";
 import {
   type ArtifactRefScope,
   artifactRefScope,
+  laneRefMatch,
   resolveArtifactRef,
 } from "../brain/artifact-ref-resolve.ts";
 import { resolveNotePath } from "../brain/note-path.ts";
@@ -51,6 +52,7 @@ import {
 } from "../brain/paths.ts";
 import { extractId } from "../brain/temporal/period-common.ts";
 import { pathIsInside } from "../path-safety.ts";
+import { noVaultRoot } from "../platform-dirs.ts";
 import { extractWikilinks } from "../vault.ts";
 import {
   ANCHORED_WIKILINK_RE,
@@ -58,6 +60,7 @@ import {
   stripWikilinkDecoration,
 } from "../brain/wikilink.ts";
 import { isPrivatePageFile } from "./dual-write-records.ts";
+import { isPrivateFrontmatter } from "./private-page.ts";
 import { rowStrings, textCarriesPrivateRegion } from "./private-region.ts";
 import {
   judgesFromStore,
@@ -303,15 +306,23 @@ function refsNamePrivatePage(
         continue;
       }
     }
+    // A lane entry the store holds is no file: judged by its partition and
+    // its fields, by the one resolution the reference views use (an exact
+    // path, an extensionless path, a bare id; design D7 item 1), with a
+    // vault or without one. What the store cannot resolve is private.
+    const root = vault ?? noVaultRoot();
+    const refScope = scope ?? artifactRefScope(root, fromStore, configPath);
+    const lane = laneRefMatch(root, ref, refScope);
+    if (lane.kind === "unknown") return true;
+    if (lane.kind === "entry") {
+      if (lane.private || isPrivateFrontmatter(lane.meta)) return true;
+      continue;
+    }
     if (vault === null) {
       if (namesAPage(ref)) return true;
       continue;
     }
-    const rel = resolveArtifactRef(
-      vault,
-      ref,
-      scope ?? artifactRefScope(vault, fromStore, configPath),
-    );
+    const rel = resolveArtifactRef(vault, ref, refScope);
     if (rel === null) continue;
     // A path outside the vault names no page anyone may be shown. `resolve`,
     // not `join`: a relative path stays under the vault either way, and an
@@ -349,15 +360,27 @@ export function claimSourceIsPrivate(
     const signal = signalIdOf(target);
     if (signal !== undefined) return storeSignalIdIsPrivate(signal, configPath);
   }
-  if (vault === null) return pageRef;
   const candidates = target.endsWith(PAGE_EXTENSION) ? [target] : [target, target + PAGE_EXTENSION];
+  // A lane entry the store holds is no file: the fold of every partition
+  // is asked first, by the one resolution of the reference views (the
+  // source as written, its `.md` twin, a bare id in any lane; design D7
+  // item 2); with no vault, under the lane root a store-only machine
+  // uses. What the store cannot resolve is private. A shared lane entry
+  // does not answer for a vault page the same reference also names: the
+  // page is judged too, and either private verdict wins.
+  const root = vault ?? noVaultRoot();
+  const lane = laneRefMatch(root, target, artifactRefScope(root, fromStore, configPath));
+  if (lane.kind === "unknown") return true;
+  if (lane.kind === "entry" && (lane.private || isPrivateFrontmatter(lane.meta))) return true;
+  const absent = lane.kind === "entry" ? false : pageRef;
+  if (vault === null) return absent;
   for (const candidate of candidates) {
     let path: string;
     try {
       path = resolveNotePath(vault, candidate, { mustExist: false });
     } catch {
       // Outside the vault: no page anyone may be shown.
-      return pageRef;
+      return absent;
     }
     try {
       if (!statSync(path).isFile()) continue;
@@ -366,7 +389,7 @@ export function claimSourceIsPrivate(
     }
     return isPrivatePageFile(path);
   }
-  return pageRef;
+  return absent;
 }
 
 /**

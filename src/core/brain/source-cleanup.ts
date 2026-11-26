@@ -92,6 +92,8 @@ import { stringArrayField, wikilinkTarget } from "./source-links.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import { REVIEW_LANE } from "./write-gate.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
+import { treeMembersAtReach } from "../store/lane-reach-guard.ts";
 
 /** How a page was found to trace back to the source. */
 export type SourceCleanupMatch = "source_path" | "session_ref" | "wikilink" | "evidenced_by";
@@ -878,6 +880,15 @@ export function deleteBySource(
     });
   }
 
+  // Below local reach a confirmed cleanup lists its derived entries on the
+  // fold of every partition first (the write rule): one held in `private`
+  // refuses the whole cleanup before the first removal, so no source is
+  // left half cleaned. A dry run removes nothing and answers as below.
+  if (confirm && privateWithheld()) {
+    treeMembersAtReach(vault, () =>
+      traceReferences(vault, identity).derived.map((entry) => join(vault, entry.path)),
+    );
+  }
   // A page or a source the caller may not read is planned, counted and
   // left on disk exactly as an absent one: a remote caller can neither
   // learn of a reserved summary page nor delete it.

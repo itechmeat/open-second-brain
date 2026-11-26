@@ -28,6 +28,7 @@ import { isoSecond } from "../../core/brain/time.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
+import { privateWithheld } from "../../core/store/caller-reach.ts";
 import { requestRefView } from "./reach-events.ts";
 import type { ServerContext } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -183,7 +184,9 @@ export async function toolBrainTune(
     };
   }
   if (op === "reset") {
-    return { removed: resetTuning(ctx.vault) };
+    // The tuning file is the machine's own: a caller below local reach
+    // leaves it, and is answered the no-op of a reset with nothing to remove.
+    return { removed: privateWithheld() ? false : resetTuning(ctx.vault) };
   }
   const k = args["k"];
   if (k !== undefined && (!Number.isInteger(k) || (k as number) < 1)) {
@@ -202,6 +205,9 @@ export async function toolBrainTune(
     // Same reasoning as `brain_benchmark`: the grid is scored with the
     // benchmark, so every cell inherits whatever reach is passed here.
     transportReach: contextReach(ctx),
+    // Scored at the caller's reach: below local reach the winner is
+    // answered and not saved as the machine's tuning.
+    persist: !privateWithheld(),
   });
   try {
     appendMetric(ctx.vault, {

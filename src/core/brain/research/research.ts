@@ -62,6 +62,8 @@ import {
   readLanePage,
   writeLanePage,
 } from "../../store/lane-pages.ts";
+import { privateWithheld } from "../../store/caller-reach.ts";
+import { assertCreateMatchAtReach } from "../../store/lane-reach-guard.ts";
 import { laneLockTarget } from "../../store/lane-fold-cache.ts";
 import { withLocalLock } from "../../store/local-lock.ts";
 
@@ -233,6 +235,23 @@ const REPORT_TITLE_SUFFIX_HEX = 8;
  * path held by yet another title is refused rather than overwritten.
  */
 function reportPathFor(vault: string, date: string, title: string): string {
+  if (!privateWithheld()) return chooseReportPage(vault, date, title).path;
+  // Below local reach the page is chosen on the fold of every partition
+  // (the write rule): this title's page held in `private` refuses the call,
+  // and a page another title holds there is not free.
+  let chosen: { readonly path: string; readonly own: boolean } | undefined;
+  assertCreateMatchAtReach(vault, () => {
+    chosen = chooseReportPage(vault, date, title);
+    return chosen.own ? [chosen.path] : [];
+  });
+  return chosen!.path;
+}
+
+function chooseReportPage(
+  vault: string,
+  date: string,
+  title: string,
+): { readonly path: string; readonly own: boolean } {
   const base = slugify(title);
   const digest = createHash("sha256")
     .update(title, "utf8")
@@ -247,9 +266,9 @@ function reportPathFor(vault: string, date: string, title: string): string {
   // that took the digest page still finds it after the base page is gone;
   // only then is a free page taken.
   const own = candidates.find((c) => c.page !== null && c.page.frontmatter["title"] === title);
-  if (own !== undefined) return own.path;
+  if (own !== undefined) return { path: own.path, own: true };
   const free = candidates.find((c) => c.page === null);
-  if (free !== undefined) return free.path;
+  if (free !== undefined) return { path: free.path, own: false };
   throw new ResearchValidationError(
     `a report of another title already holds both pages ${JSON.stringify(title)} could take on ${date}; give the report a distinct title`,
   );

@@ -121,6 +121,7 @@ import {
   readLaneText,
   writeLaneText,
 } from "../../store/lane-pages.ts";
+import { assertCreateMatchAtReach } from "../../store/lane-reach-guard.ts";
 
 /** Frontmatter `kind:` marker of a distillation page (defined in the claim leaf). */
 export { BRAIN_DISTILLATION_KIND };
@@ -385,12 +386,26 @@ export function distillSource(
   // gets, under the new slug's path.
   const relOf = (stem: string): string =>
     canonicalNotePath(relative(vault, distillationPagePath(vault, stem)));
-  const target = locateSuffixedTitleStem(
-    canonicalSource,
-    idHash.slice(0, 12),
-    (stem) => lanePageExists(vault, distillationPagePath(vault, stem)),
-    opts.readable !== undefined ? (stem) => opts.readable!(relOf(stem)) : undefined,
+  const locate = (readable: ((rel: string) => boolean) | undefined) =>
+    locateSuffixedTitleStem(
+      canonicalSource,
+      idHash.slice(0, 12),
+      (stem) => lanePageExists(vault, distillationPagePath(vault, stem)),
+      readable !== undefined ? (stem) => readable(relOf(stem)) : undefined,
+    );
+  // The page this source's distillation updates is found on the fold of
+  // every partition below local reach (the write rule): one held in
+  // `private` refuses the call before any write.
+  assertCreateMatchAtReach(
+    vault,
+    (readable) => {
+      const held = locate(readable);
+      const path = distillationPagePath(vault, held.stem);
+      return !held.withheld && lanePageExists(vault, path) ? [path] : [];
+    },
+    opts.readable,
   );
+  const target = locate(opts.readable);
   const absPath = distillationPagePath(vault, target.stem);
   const existed = !target.withheld && lanePageExists(vault, absPath);
   const stamp = isoSecond(opts.now);

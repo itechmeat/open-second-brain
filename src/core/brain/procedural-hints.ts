@@ -5,6 +5,7 @@ import {
   writeMachineStateText,
   type ProceduralGraphProjection,
 } from "./procedural-graph.ts";
+import { withPrivateShown } from "../store/caller-reach.ts";
 import { assertLaneWrite } from "../store/lane-pages.ts";
 
 export interface ProceduralHintEntry {
@@ -18,9 +19,20 @@ export interface ProceduralHintsProjection {
   readonly entries: ReadonlyArray<ProceduralHintEntry>;
 }
 
+/**
+ * Rebuild and store the hints from the graph, whole whatever the caller's
+ * reach (design D5 item 4), as the graph is.
+ */
 export function rebuildProceduralHints(
   vault: string,
   opts: { now?: Date; graph?: ProceduralGraphProjection } = {},
+): ProceduralHintsProjection {
+  return withPrivateShown(() => buildProceduralHints(vault, opts));
+}
+
+function buildProceduralHints(
+  vault: string,
+  opts: { now?: Date; graph?: ProceduralGraphProjection },
 ): ProceduralHintsProjection {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);

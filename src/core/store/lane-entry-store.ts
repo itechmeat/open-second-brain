@@ -14,7 +14,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { BRAIN_ROOT_REL } from "../brain/path-constants.ts";
 import { canonicalJson } from "../integrity/digest.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { laneFoldIncomplete, laneStoreFold } from "./lane-fold-cache.ts";
+import { laneFoldIncomplete, laneStoreFold, wholeLaneStoreFold } from "./lane-fold-cache.ts";
 import { laneNameRefusal, lanePlaceOf } from "./lane-paths.ts";
 import {
   laneEntryKey,
@@ -74,8 +74,13 @@ function isLaneEntryPath(vault: string, path: string): boolean {
 }
 
 // ----- The store side -----------------------------------------------------------
+//
+// The readers below (`storeEntries`, `storeEntry`, `laneEntryClockMs`) read
+// the caller's fold (`laneStoreFold`): below local reach it holds `shared`
+// only. The privacy verdicts, the placement of a write and a writer's
+// version check read the fold of every partition (`wholeLaneStoreFold`).
 
-/** The live lane entries of the configured store, by `<lane>/<entry>`. */
+/** The live lane entries of the caller's fold, by `<lane>/<entry>`. */
 export function storeEntries(configPath?: string): ReadonlyMap<string, LaneEntryValue> {
   return laneStoreFold(configPath).entries;
 }
@@ -106,11 +111,18 @@ export function storeEntry(
   return storeEntries(configPath).get(laneEntryKey(lane, entry)) ?? null;
 }
 
+/** The live entry at the lane path `path` in the fold of every partition. */
+function wholeStoreEntry(vault: string, path: string, configPath?: string): LaneEntryValue | null {
+  const { lane, entry } = placeOf(vault, path);
+  return wholeLaneStoreFold(configPath).entries.get(laneEntryKey(lane, entry)) ?? null;
+}
+
 /**
  * The live entry at `path` and whether the fold it came from is whole (no
  * `events` shard unreadable or gone, no record whose body is a pending
- * blob), from ONE read of the lane fold: a read-modify-write judges the
- * entry and the completeness of its read together.
+ * blob), from ONE read of the lane fold of every partition: a
+ * read-modify-write judges the entry and the completeness of its read
+ * together, against what the store holds, not what one caller may see.
  */
 export function storeEntryRead(
   vault: string,
@@ -121,7 +133,7 @@ export function storeEntryRead(
   readonly whole: boolean;
   readonly authority: Authority | null;
 } {
-  const fold = laneStoreFold(configPath);
+  const fold = wholeLaneStoreFold(configPath);
   const { lane, entry } = placeOf(vault, path);
   const key = laneEntryKey(lane, entry);
   return {
@@ -132,19 +144,19 @@ export function storeEntryRead(
 }
 
 /**
- * Whether the lane fold may miss a record ({@link laneFoldIncomplete}: an
- * `events` shard unreadable or gone since this machine read it, or a
- * record in `private` whose body blob has not arrived): an entry's private records may
- * be among them, so every privacy verdict over the fold fails closed
- * (design D14).
+ * Whether the lane fold of every partition may miss a record
+ * ({@link laneFoldIncomplete}: an `events` shard unreadable or gone since
+ * this machine read it, or a record in `private` whose body blob has not
+ * arrived): an entry's private records may be among them, so every
+ * privacy verdict over the fold fails closed (design D14).
  */
 export function foldIncomplete(configPath?: string): boolean {
-  return laneFoldIncomplete(laneStoreFold(configPath));
+  return laneFoldIncomplete(wholeLaneStoreFold(configPath));
 }
 
-/** Whether the live entry `value` was written to the `private` partition. */
+/** Whether the live entry `value` was written to the `private` partition (every partition read). */
 export function livesInPrivate(value: LaneEntryValue, configPath?: string): boolean {
-  return laneStoreFold(configPath).privateKeys.has(laneEntryKey(value.lane, value.entry));
+  return wholeLaneStoreFold(configPath).privateKeys.has(laneEntryKey(value.lane, value.entry));
 }
 
 /**
@@ -154,14 +166,16 @@ export function livesInPrivate(value: LaneEntryValue, configPath?: string): bool
  * pages asks here to keep the privacy (review finding F333). A path the
  * store does not hold is no private entry. While the fold may miss a
  * record ({@link foldIncomplete}), every lane entry reads as private (fail
- * closed).
+ * closed). One read of the fold of every partition, whatever the scope.
  */
 export function laneEntryInPrivate(vault: string, path: string, configPath?: string): boolean {
   if (!heldInStore(vault, path, configPath)) return false;
-  if (lanePlaceOf(brainRelOf(vault, path)) === null) return false;
-  if (foldIncomplete(configPath)) return true;
-  const value = storeEntry(vault, path, configPath);
-  return value !== null && livesInPrivate(value, configPath);
+  const place = lanePlaceOf(brainRelOf(vault, path));
+  if (place === null) return false;
+  const fold = wholeLaneStoreFold(configPath);
+  if (laneFoldIncomplete(fold)) return true;
+  const key = laneEntryKey(place.lane, place.entry);
+  return fold.entries.has(key) && fold.privateKeys.has(key);
 }
 
 /** The partition the live entry `value` lives in. */
@@ -206,7 +220,7 @@ export function replacedShared(
   configPath?: string,
 ): DualWriteRecord[] {
   if (!isLaneEntryPath(vault, path)) return [];
-  const prior = storeEntry(vault, path, configPath);
+  const prior = wholeStoreEntry(vault, path, configPath);
   return prior !== null && !livesInPrivate(prior, configPath)
     ? [tombstoneOf(prior, true, "shared")]
     : [];
@@ -331,10 +345,35 @@ export function legacyPagePrivate(vault: string, path: string, configPath?: stri
 export function storedEntryPrivate(vault: string, path: string, configPath?: string): boolean {
   if (!isLaneEntryPath(vault, path)) return false;
   if (foldIncomplete(configPath)) return true;
-  const value = storeEntry(vault, path, configPath);
+  const value = wholeStoreEntry(vault, path, configPath);
   return (
     value !== null && (livesInPrivate(value, configPath) || isPrivateFrontmatter(value.fields))
   );
+}
+
+/**
+ * Whether the lane entry a writer is about to write at `path` with `text`
+ * lives in `private` once written: the entry there does or reserves it,
+ * the legacy page there reserves it, or the judge every lane write applies
+ * ({@link isPrivateEntry}) finds the text private. A writer that, in the
+ * same operation, writes a second record carrying facts of the entry runs
+ * that write under this verdict, decided before either is written (design
+ * D12 of `lane-private-partition-reach`). A failed judgement answers true.
+ */
+export function laneTextLandsPrivate(
+  vault: string,
+  path: string,
+  text: string,
+  configPath?: string,
+): boolean {
+  try {
+    if (legacyPagePrivate(vault, path, configPath) || storedEntryPrivate(vault, path, configPath))
+      return true;
+    const { fields, body } = laneTextParts(path, text);
+    return isPrivateEntry(vault, fields, body, rawToKeep(path, text, fields, body), configPath);
+  } catch {
+    return true;
+  }
 }
 
 /**

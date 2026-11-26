@@ -81,7 +81,7 @@ import {
   storeEntries,
   tombstoneOf,
 } from "./lane-entry-store.ts";
-import { laneFoldIncomplete, laneStoreFold, type LaneFolded } from "./lane-fold-cache.ts";
+import { laneFoldIncomplete, wholeLaneStoreFold, type LaneFolded } from "./lane-fold-cache.ts";
 import { brainRelOfEntry, lanePlaceOf } from "./lane-paths.ts";
 import { laneTextParts, rawToKeep } from "./lane-raw.ts";
 import { laneEntryKey, type LaneEntryValue } from "./lane-records.ts";
@@ -91,13 +91,21 @@ import { openRegularFileForRead } from "./safe-fs.ts";
 /**
  * The absolute paths of every live store entry below `dir`, at any depth,
  * sorted, whatever the machine's mode (the store has no directories; a
- * folder is a path prefix). A path outside `Brain/` is never listed.
+ * folder is a path prefix). A path outside `Brain/` is never listed. The
+ * caller's fold by default (a read); `whole`: the fold of every
+ * partition, for the removal records of an unswitched machine's folder.
  */
-export function storedLanePathsBelow(vault: string, dir: string, ext: string): string[] {
+export function storedLanePathsBelow(
+  vault: string,
+  dir: string,
+  ext: string,
+  whole = false,
+): string[] {
   const prefix = brainRelOf(vault, dir);
   const brain = join(vault, BRAIN_ROOT_REL);
   const out: string[] = [];
-  for (const value of storeEntries().values()) {
+  const entries = whole ? wholeLaneStoreFold().entries : storeEntries();
+  for (const value of entries.values()) {
     const rel = brainRelOfEntry(value.lane, value.entry);
     if (!rel.startsWith(prefix === "" ? "" : `${prefix}/`) || !rel.endsWith(ext)) continue;
     // The fold already refuses an entry id that is no record path; this
@@ -124,7 +132,7 @@ function laneKeyAt(vault: string, path: string): string | null {
 }
 
 /** The live entry of `fold` at the lane path `path`, or `null`. */
-function foldedAt(fold: LaneFolded, vault: string, path: string): FoldedEntry | null {
+export function foldedAt(fold: LaneFolded, vault: string, path: string): FoldedEntry | null {
   const key = laneKeyAt(vault, path);
   if (key === null) return null;
   const value = fold.entries.get(key);
@@ -329,12 +337,12 @@ export function dualWriteLaneRemoval(
   paths: () => ReadonlyArray<string>,
   context: DualWriteContext,
 ): void {
-  dualWrite(() => laneRemovalRecords(vault, laneStoreFold(), paths()), context);
+  dualWrite(() => laneRemovalRecords(vault, wholeLaneStoreFold(), paths()), context);
 }
 
 /** Dual-write an unswitched rename of one lane page. */
 export function dualWriteLaneMove(vault: string, move: LaneMove, context: DualWriteContext): void {
-  dualWrite(() => dualMoveRecords(vault, laneStoreFold(), move), context);
+  dualWrite(() => dualMoveRecords(vault, wholeLaneStoreFold(), move), context);
 }
 
 /**
@@ -365,7 +373,7 @@ export function dualWriteLaneTreeMove(
   context: DualWriteContext,
 ): void {
   dualWrite(() => {
-    const fold = laneStoreFold();
+    const fold = wholeLaneStoreFold();
     const below = new Set([...foldedBelow(fold, vault, from), ...foldedBelow(fold, vault, to)]);
     return [...below]
       .toSorted()

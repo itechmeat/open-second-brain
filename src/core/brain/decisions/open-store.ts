@@ -63,6 +63,7 @@ import {
   lanePagesInStore,
   withLaneLock,
 } from "../../store/lane-pages.ts";
+import { assertCreateMatchAtReach, takenOnWholeFold } from "../../store/lane-reach-guard.ts";
 
 // ----- Vocabulary -----------------------------------------------------------
 
@@ -632,7 +633,14 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
 
   return withOpenDirLock(vault, () => {
     // Dedup is scoped to open records: a settled (resolved / discarded)
-    // twin is history, and the same wording must be parkable again.
+    // twin is history, and the same wording must be parkable again. Below
+    // local reach it is also read on the fold of every partition (the write
+    // rule): an open twin held in `private` refuses the call.
+    assertCreateMatchAtReach(vault, () =>
+      listOpenDecisions(vault, { status: OPEN_DECISION_STATUS.open })
+        .records.filter((r) => r.questionHash === questionHash)
+        .map((r) => r.path),
+    );
     const existing = listOpenDecisions(vault, { status: OPEN_DECISION_STATUS.open }).records.find(
       (r) => r.questionHash === questionHash,
     );
@@ -647,7 +655,9 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
     const slug = titleSlug(title);
     let id = `${OPEN_FILE_PREFIX}${slug}`;
     let suffix = 2;
-    while (lanePageExists(vault, join(dir, `${id}${OPEN_FILE_EXT}`))) {
+    // The free id is picked on the fold of every partition, as a local
+    // caller with the same store gets it (the write rule).
+    while (takenOnWholeFold(() => lanePageExists(vault, join(dir, `${id}${OPEN_FILE_EXT}`)))) {
       id = `${OPEN_FILE_PREFIX}${slug}-${suffix}`;
       suffix += 1;
     }

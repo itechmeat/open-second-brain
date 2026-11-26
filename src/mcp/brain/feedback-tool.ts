@@ -7,6 +7,9 @@
  */
 
 import { contextRecordOrigin } from "./shared.ts";
+import { privateWithheld, withPrivateShown } from "../../core/store/caller-reach.ts";
+import { LaneEntryWithheldError } from "../../core/store/lane-reach-guard.ts";
+import { preferenceSlugHeldInPrivate } from "./feedback-reach.ts";
 import { resolve } from "node:path";
 import { isStoreOnly } from "../../core/store/store-only.ts";
 import { loadPermissionsDocumentFor } from "../../core/brain/permissions/document-source.ts";
@@ -309,6 +312,18 @@ export async function toolBrainFeedback(
     ctx.configPath ?? undefined,
     readableAtContextReachOrUndefined(ctx),
   );
+  // The slug is the topic's identity. Below local reach it is also looked
+  // up on the whole fold: when a rule for this topic is held in `private`
+  // under another slug (one an older release gave it), the call gets the
+  // fixed refusal before any write instead of minting a second rule.
+  if (privateWithheld()) {
+    const whole = withPrivateShown(() => deriveSlug(vault, topic, ctx.configPath ?? undefined));
+    // A forced confirmation also writes the rule at the caller's own slug.
+    const met = [...(whole !== slug ? [whole] : []), ...(forceConfirmed ? [slug] : [])];
+    if (met.some((s) => preferenceSlugHeldInPrivate(vault, s, ctx.configPath ?? undefined))) {
+      throw new LaneEntryWithheldError();
+    }
+  }
 
   // Vault-configured fallback scope (`feedback.default_scope`). Applied
   // only when the call passes no explicit scope. Compute one effective

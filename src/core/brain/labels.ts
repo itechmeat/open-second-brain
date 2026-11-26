@@ -29,7 +29,7 @@ import { resolveNotePath } from "./note-path.ts";
 import { governCallerNamedWritePath } from "../write-binding/index.ts";
 import { assertStandingRulesNotTargeted } from "./standing-rules.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
-import { upsertEntity } from "./entities/registry.ts";
+import { assertUpsertsAtReach, upsertEntity } from "./entities/registry.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { SchemaPack } from "./schema-pack.ts";
 
@@ -187,6 +187,12 @@ export function assignNoteLabel(
   const kept = existing.filter((token) => !token.startsWith(`${assignment.dimension}/`));
   const next = [...kept, assignment.token].toSorted((a, b) => a.localeCompare(b));
   const changed = !sameLabels(existing, next);
+  // The label entity's identity decision is taken on the fold of every
+  // partition before the note is touched (the write rule): one held in
+  // `private` refuses the call with nothing written.
+  assertUpsertsAtReach(vault, [
+    { category: LABEL_ENTITY_CATEGORY, name: assignment.token, agent: opts.agent, now: opts.now },
+  ]);
   if (changed) {
     const nextMetadata = { ...metadata, labels: next };
     writeFrontmatterAtomic(path, nextMetadata, body, { overwrite: true });

@@ -23,23 +23,52 @@ import { isRemotelyReadable, REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visib
 import type { TransportReach } from "../graph/transport-reach.ts";
 import { memoryFromStore, type StoreMemoryPage, storeRecordPages } from "./memory-pages.ts";
 import { join } from "node:path";
-import { laneEntryInPrivate, laneVaultRoot, readLanePage } from "../store/lane-pages.ts";
+import {
+  laneEntryInPrivate,
+  lanePagesInStore,
+  laneVaultRoot,
+  readLanePage,
+} from "../store/lane-pages.ts";
+import { artifactRefScope, laneRefMatch, storeLaneEntryAt } from "./artifact-ref-resolve.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { BRAIN_ROOT_REL } from "./path-constants.ts";
 import { ANCHORED_WIKILINK_RE, stripBrainIdPrefix, stripWikilinkDecoration } from "./wikilink.ts";
 
-/** The store record whose page would sit at a vault-relative path. */
-export type StoreRecordLookup = (rel: string) => StoreMemoryPage | undefined;
+/**
+ * The store record whose page would sit at a vault-relative path: a memory
+ * record, or a lane entry the store holds (design D6 item 2), judged by
+ * its fields and its partition.
+ */
+export type StoreRecordLookup = (rel: string) => VisibilityRecord | undefined;
 
-/** A lookup over the store's records, or `null` on a machine that reads the legacy tree. */
+/**
+ * A lookup over the store's records, or `null` on a machine that reads
+ * neither its memory records nor its lane pages from the store. After the
+ * memory records, a `Brain/` path that names a lane entry of the fold of
+ * every partition answers with that entry's fields and its partition
+ * (`laneEntryInPrivate`; a failed question answers private).
+ */
 export function storeRecordLookup(vault: string | null): StoreRecordLookup | null {
-  if (vault !== null && !memoryFromStore(vault)) return null;
+  const root = vault ?? laneVaultRoot(null);
+  const memory = vault === null || memoryFromStore(vault);
+  let lanes: boolean;
+  try {
+    lanes = lanePagesInStore(root);
+  } catch {
+    lanes = false;
+  }
+  if (!memory && !lanes) return null;
   let byRel: Map<string, StoreMemoryPage> | null = null;
   return (rel) => {
-    byRel ??= new Map(
-      storeRecordPages(vault, { signalStates: "all" }).map((page) => [page.rel, page] as const),
-    );
-    return byRel.get(rel.replace(/\\/g, "/"));
+    const spelled = rel.replace(/\\/g, "/");
+    if (memory) {
+      byRel ??= new Map(
+        storeRecordPages(vault, { signalStates: "all" }).map((page) => [page.rel, page] as const),
+      );
+      const page = byRel.get(spelled);
+      if (page !== undefined) return page;
+    }
+    return lanes ? (storeLaneEntryAt(root, spelled) ?? undefined) : undefined;
   };
 }
 
@@ -47,9 +76,13 @@ export function storeRecordLookup(vault: string | null): StoreRecordLookup | nul
  * What a visibility rule reads of a record: its vault-relative page path,
  * its fields as frontmatter, and whether the store holds it in `private`.
  * A memory record's page and a record-lane page (`lanePageVisible`) both
- * have it, so every view judges both by its own rule.
+ * have it, so every view judges both by its own rule. `removed`: a lane
+ * path whose entry a record held in `private` removed (`storeLaneEntryAt`),
+ * which has no fields.
  */
-export type VisibilityRecord = Pick<StoreMemoryPage, "rel" | "meta" | "private">;
+export type VisibilityRecord = Pick<StoreMemoryPage, "rel" | "meta" | "private"> & {
+  readonly removed?: true;
+};
 
 /** Whether a store record may be read at `reach`. */
 export function isStoreRecordReadableAtReach(
@@ -109,6 +142,7 @@ export function storeRecordRefView(
   // One verdict per lane page per view: a long result list naming the same
   // pages reads and parses each once.
   const laneVerdicts = new Map<string, boolean>();
+  let laneScope: ReturnType<typeof artifactRefScope> | null = null;
   const laneVisible = (rel: string): boolean => {
     let verdict = laneVerdicts.get(rel);
     if (verdict === undefined) {
@@ -127,7 +161,17 @@ export function storeRecordRefView(
     // visibility, and hidden when there is none (fail closed). A bare id
     // that names nothing names nothing that could be hidden.
     if (spelled.startsWith(`${BRAIN_ROOT_REL}/`)) return laneVisible(spelled);
-    return true;
+    // A bare id that names no memory record may name a lane entry the
+    // store holds (a decision, a source, an entity): judged by that
+    // entry's record (design D6 item 3).
+    const root = laneVaultRoot(null);
+    laneScope ??= artifactRefScope(root);
+    const lane = laneRefMatch(root, spelled, laneScope);
+    if (lane.kind === "none") return true;
+    // The store cannot say what the reference names: judged as a record
+    // of the `private` partition (fail closed).
+    if (lane.kind === "unknown") return pageVisible({ rel: spelled, meta: {}, private: true });
+    return laneVisible(lane.rel);
   };
   return Object.freeze({
     filtersNothing: false,
