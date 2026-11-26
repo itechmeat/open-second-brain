@@ -27,15 +27,19 @@ export const EPIPE_CODE = "EPIPE";
 export const WRITE_AFTER_END_CODE = "ERR_STREAM_WRITE_AFTER_END";
 
 /**
- * How long the final flush waits for stdout's `end()` callback before it
- * exits anyway. A reader that is reading takes milliseconds for megabytes,
- * so the bound only matters when a callback never comes (an `end()` whose
- * callback a platform does not deliver) or a reader stops reading (a pager
- * left open): the process then still exits, with its own code, after at
- * most this long. Every exit on earlier releases cut the unread output at
- * once, so the bound never loses more than they did.
+ * How long the final flush waits on Windows for stdout's `end()` callback
+ * before it gives up. On every other platform there is no bound: the
+ * process waits for the callback or for EPIPE, as any filter in a pipeline
+ * does, so a reader that pauses (a pager left open, `| (sleep 60; jq)`)
+ * still receives everything, and Ctrl-C ends the wait at once.
+ *
+ * The bound exists only because delivery of that callback on Windows is
+ * unproven: no Windows run has shown it arriving for a console, a pipe and
+ * a closed pipe alike. When it fires, the output may be incomplete, so the
+ * exit says so on stderr and is never a success. It can go once Windows CI
+ * proves the callback arrives.
  */
-export const FLUSH_EXIT_BOUND_MS = 30_000;
+export const WINDOWS_FLUSH_BOUND_MS = 30_000;
 
 interface ErrnoLike {
   readonly code?: unknown;
@@ -147,21 +151,33 @@ export interface FlushableStream {
 export interface FlushExitDeps {
   readonly stdout: FlushableStream;
   readonly exit: (code: number) => void;
+  /** Decides whether a bound is armed at all: only on `win32`. */
+  readonly platform: NodeJS.Platform;
+  /** The Windows bound in milliseconds ({@link WINDOWS_FLUSH_BOUND_MS}). */
+  readonly boundMs: number;
   /** Arms the bound; returns nothing the flush needs. */
   readonly setBound: (fire: () => void, ms: number) => void;
+  /** Writes the bound's diagnostic; synchronous to descriptor 2 in production. */
+  readonly writeDiagnostic: (message: string) => void;
   /** The state the error listeners read; the process's own by default. */
   readonly state: FlushState;
 }
 
-const PROCESS_FLUSH_DEPS: FlushExitDeps = {
+/** The real streams, exit, platform and bound of this process. */
+export const PROCESS_FLUSH_DEPS: FlushExitDeps = Object.freeze({
   stdout: process.stdout,
   exit: (code: number): void => process.exit(code),
-  setBound: (fire, ms) => {
-    // Unreferenced: the bound never keeps the process alive by itself.
-    setTimeout(fire, ms).unref();
+  platform: process.platform,
+  boundMs: WINDOWS_FLUSH_BOUND_MS,
+  // Referenced: when the callback never comes, the bound is what ends the
+  // process, loudly, rather than an emptied event loop ending it silently
+  // with a success code.
+  setBound: (fire: () => void, ms: number): void => {
+    setTimeout(fire, ms);
   },
+  writeDiagnostic: PROCESS_SINK.writeError,
   state: PROCESS_STATE,
-};
+});
 
 /**
  * Exit with `code` once stdout has handed over everything written to it.
@@ -171,8 +187,10 @@ const PROCESS_FLUSH_DEPS: FlushExitDeps = {
  * `o2b help --json | jq` received the first 131072 bytes of the manifest.
  * Under Bun neither a write callback nor `drain` waits for that tail; the
  * callback of `end()` does. A stdout that is already closed is not waited
- * for, an `end()` that throws counts as done, and
- * {@link FLUSH_EXIT_BOUND_MS} bounds the wait.
+ * for, and an `end()` that throws counts as done. Only on Windows a bound
+ * ({@link WINDOWS_FLUSH_BOUND_MS}) limits the wait; when it fires, the
+ * process says so on stderr and exits with the command's code when that
+ * is not 0, otherwise with 1.
  *
  * stderr is left open, as every earlier release left it. Ending it too
  * lost every line written after the flush began: the drain report a
@@ -183,22 +201,33 @@ const PROCESS_FLUSH_DEPS: FlushExitDeps = {
  */
 export function exitWhenFlushed(code: number, deps: FlushExitDeps = PROCESS_FLUSH_DEPS): void {
   deps.state.code = code;
-  if (deps === PROCESS_FLUSH_DEPS) process.exitCode = code;
+  // Only the process's own flush sets the process's exit code; a test
+  // double with a state of its own leaves it alone.
+  if (deps.state === PROCESS_STATE) process.exitCode = code;
   let exited = false;
-  const exit = (): void => {
+  const exit = (exitCode: number): void => {
     if (exited) return;
     exited = true;
-    deps.exit(code);
+    deps.exit(exitCode);
   };
-  deps.setBound(exit, FLUSH_EXIT_BOUND_MS);
+  if (deps.platform === "win32") {
+    deps.setBound(() => {
+      if (exited) return;
+      deps.writeDiagnostic(
+        `error: standard output did not finish within ${Math.round(deps.boundMs / 1000)} s; ` +
+          "what it had not handed over is lost\n",
+      );
+      exit(code !== 0 ? code : 1);
+    }, deps.boundMs);
+  }
   const { stdout } = deps;
   if (stdout.destroyed === true || stdout.writableEnded === true) {
-    exit();
+    exit(code);
     return;
   }
   try {
-    stdout.end(exit);
+    stdout.end(() => exit(code));
   } catch {
-    exit();
+    exit(code);
   }
 }

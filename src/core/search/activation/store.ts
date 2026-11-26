@@ -27,6 +27,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { dirname, join } from "node:path";
 
 import { BRAIN_ROOT_REL } from "../../brain/path-constants.ts";
+import { assertNoMigrationInProgress } from "../../migration-gate.ts";
 import { machineStatePath } from "../../state/machine-state.ts";
 
 import { fnv1aHex } from "../feedback.ts";
@@ -81,6 +82,11 @@ function activationRoot(vault: string | null): string {
  * so recording the identical event twice is idempotent.
  */
 export function recordAccessEvent(vault: string | null, event: ActivationAccessEvent): string {
+  // The activation files pass no vault guard, so they ask the migration
+  // gate themselves: on a legacy machine they live in `Brain/search/`, the
+  // tree a migration of this vault is moving. The search that records is
+  // still answered; its caller turns the refusal into a warning.
+  if (vault !== null) assertNoMigrationInProgress(vault);
   const dir = activationDir(vault);
   mkdirSync(dir, { recursive: true });
   const bounded: ActivationAccessEvent = {
@@ -187,6 +193,7 @@ export function computeActivationState(
 }
 
 export function writeActivationState(vault: string | null, state: ActivationState): void {
+  if (vault !== null) assertNoMigrationInProgress(vault);
   const path = activationStatePath(vault);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(state, null, 2) + "\n");
@@ -274,6 +281,8 @@ export function sweepActivationEvents(
   vault: string,
   opts: ActivationSweepOptions,
 ): ActivationSweepOutcome {
+  // Asked before the first removal, not only by the state write after it.
+  assertNoMigrationInProgress(vault);
   const retentionDays = opts.retentionDays ?? ACCESS_EVENT_RETENTION_DAYS;
   const maxEvents = opts.maxEvents ?? ACCESS_EVENT_MAX_COUNT;
   const cutoff = opts.nowMs - retentionDays * DAY_MS;

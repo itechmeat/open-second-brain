@@ -25,6 +25,7 @@ import {
   collectSurfaces,
   SCHEMA_FILE,
   TOOL_SERVER_FILES,
+  validateAgainst,
   INDEX_FILE,
   INDEX_KEYWORDS,
   INDEX_MAX_BYTES,
@@ -345,6 +346,25 @@ describe("more rules of the check", () => {
       "src/mcp/other-server.ts: answers tools/list, but the catalog reads no tool registry from it",
       'src/openclaw/index.ts: native tool "tool_native_only" is no MCP tool, so no feature claims it',
     ]);
+  });
+
+  test("a longer name or a file name does not count as naming a tool", () => {
+    const env = {
+      ...ENV,
+      docText: () => "`tool_one-v2`, `tool_one.ts`, x`tool_one` and `tool_two`",
+    };
+    expect(checkCatalog(catalogFiles(validGroups()), FACTS, env)).toEqual([
+      'docs/mcp.md: mcp tool "tool_one" is not named there in backticks',
+    ]);
+  });
+
+  test("a doc reference with a parent segment before its anchor is refused by the schema", () => {
+    const schema = loadSchema(REPO_ROOT);
+    expect(
+      ["..#foo", "a/..#foo", "docs/guide.md#guide"].map(
+        (ref) => validateAgainst(schema, ref, "doc_ref").length > 0,
+      ),
+    ).toEqual([true, true, false]);
   });
 
   test("a tool counts as named when other text follows it inside the backticks", () => {

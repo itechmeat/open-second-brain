@@ -6,13 +6,22 @@
  * reader behind it. Used only by `tests/cli/stdout-flush-on-exit.test.ts`;
  * it is not part of the shipped CLI.
  *
- * Arguments: `<exit code> [late-stderr|exit-hook]`. With `late-stderr`, a
- * line goes to stderr 200 ms after the flush began, while a slow reader
- * still holds stdout back. With `exit-hook`, an `exit` hook writes a line
- * to stderr as the process ends, as the exit hooks of `o2b mcp` do.
+ * Arguments: `<exit code> [late-stderr|exit-hook|short-bound]`.
+ *
+ * - `late-stderr`: a line goes to stderr 200 ms after the flush began; the
+ *   test's reader takes one byte first and then pauses, so stdout is still
+ *   held back when the line is written.
+ * - `exit-hook`: an `exit` hook writes a line to stderr as the process
+ *   ends, as the exit hooks of `o2b mcp` do.
+ * - `short-bound`: the flush runs with a 100 ms Windows bound, so a reader
+ *   that pauses longer shows that no bound cuts the output elsewhere.
  */
 
-import { exitWhenFlushed, installStdoutEpipeGuard } from "../../src/cli/stdout-guard.ts";
+import {
+  exitWhenFlushed,
+  installStdoutEpipeGuard,
+  PROCESS_FLUSH_DEPS,
+} from "../../src/cli/stdout-guard.ts";
 
 installStdoutEpipeGuard();
 
@@ -24,4 +33,5 @@ if (mode === "late-stderr") {
 if (mode === "exit-hook") {
   process.on("exit", () => process.stderr.write("exit hook line\n"));
 }
-exitWhenFlushed(Number.parseInt(codeArg, 10));
+const code = Number.parseInt(codeArg, 10);
+exitWhenFlushed(code, mode === "short-bound" ? { ...PROCESS_FLUSH_DEPS, boundMs: 100 } : undefined);

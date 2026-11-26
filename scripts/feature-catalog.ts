@@ -74,6 +74,16 @@ function readText(path: string): string {
   return readFileSync(join(ROOT, path), "utf8");
 }
 
+/** `text` with every regular-expression metacharacter escaped. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Where `tool` is named in Markdown: an opening backtick, the name, then the span's end. */
+export function toolMentionPattern(tool: string): RegExp {
+  return new RegExp(`(?<![A-Za-z0-9_\`])\`${escapeRegExp(tool)}(?=[\`\\s({])`);
+}
+
 /** Order by UTF-16 code units, the same on every host whatever its locale. */
 export function byCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -1459,14 +1469,16 @@ export function checkCatalog(
   // CLI half of the rule is not checked: the CLI reference writes related
   // verbs in grouped forms (`a|b`, operations in prose) a literal match
   // cannot read.
-  // A name counts when a backtick opens right before it and no name
-  // character follows it (`` `dream_work_take {}` `` names a tool too).
+  // A name counts when an opening backtick sits right before it and the
+  // code span closes, or a space, `(` or `{` follows it
+  // (`` `dream_work_take {}` `` names a tool too). A longer name
+  // (`` `tool_one-v2` ``) or a file name (`` `tool_one.ts` ``) does not.
   const mcpDoc = env.docText(MCP_DOC);
   if (mcpDoc === null) {
     errors.push(`${MCP_DOC}: missing; it must name every MCP tool`);
   } else {
     for (const tool of [...facts.tools].toSorted(byCodeUnits)) {
-      if (!new RegExp(`\`${tool}(?![A-Za-z0-9_])`).test(mcpDoc)) {
+      if (!toolMentionPattern(tool).test(mcpDoc)) {
         errors.push(`${MCP_DOC}: mcp tool ${JSON.stringify(tool)} is not named there in backticks`);
       }
     }

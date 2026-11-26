@@ -24,11 +24,12 @@ import { fileURLToPath } from "node:url";
 import { manifestForJson } from "../../src/cli/command-manifest.ts";
 import {
   exitWhenFlushed,
-  FLUSH_EXIT_BOUND_MS,
+  WINDOWS_FLUSH_BOUND_MS,
   type FlushableStream,
   type FlushExitDeps,
 } from "../../src/cli/stdout-guard.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { lexSource } from "../helpers/source-lexer.ts";
 
 // Tests here spawn processes; see tests/helpers/cli-timeout.ts.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
@@ -102,6 +103,57 @@ async function intoFullDevice(
   return { code: await proc.exited, stderr };
 }
 
+/** Resolve once `ready()` holds, looking every 20 ms. */
+async function waitFor(ready: () => boolean): Promise<void> {
+  while (!ready()) {
+    // oxlint-disable-next-line no-await-in-loop -- polling a file the shell writes
+    await Bun.sleep(20);
+  }
+}
+
+/**
+ * Run `help --json` with a reader that takes one byte and then pauses four
+ * seconds, send `signal` once that byte arrived (the CLI is then waiting
+ * for the reader), and report the CLI's status and how long after the
+ * signal it ended. The CLI runs in the foreground of its shell, never as
+ * a background job, which a shell starts with SIGINT ignored.
+ */
+async function signalDuringWait(
+  signal: "SIGINT" | "SIGTERM",
+): Promise<{ code: number; stderr: string; endedAfterMs: number }> {
+  const home = mkdtempSync(join(tmpdir(), "o2b-stdout-signal-"));
+  homes.push(home);
+  const [pidFile, status, errFile, mark] = ["pid", "status", "stderr", "mark"].map((f) =>
+    join(home, f),
+  ) as [string, string, string, string];
+  const cli = [process.execPath, CLI_ENTRY, "help", "--json"].map(quote).join(" ");
+  const writer = `sh -c 'echo $$ > "$0"; exec "$@"' ${quote(pidFile)} ${cli}`;
+  const script =
+    `{ { ${writer}; echo $? > ${quote(status)}; } 2>&1 1>&3 3>&- | cat > ${quote(errFile)}; } ` +
+    `3>&1 | { dd bs=1 count=1 of=${quote(mark)} 2>/dev/null; sleep 4; cat > /dev/null; }`;
+  const proc = Bun.spawn(["sh", "-c", script], {
+    cwd: home,
+    env: { PATH: process.env["PATH"] ?? "", HOME: home, USERPROFILE: home },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const shellErr = new Response(proc.stderr).text();
+  await waitFor(() => existsSync(mark) && readFileSync(mark).length > 0 && existsSync(pidFile));
+  const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+  const sentAt = Date.now();
+  process.kill(pid, signal);
+  await waitFor(() => existsSync(status) && readFileSync(status, "utf8").trim() !== "");
+  const endedAfterMs = Date.now() - sentAt;
+  await proc.exited;
+  const raw = readFileSync(status, "utf8").trim();
+  return {
+    code: /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN,
+    stderr: readFileSync(errFile, "utf8") + (await shellErr),
+    endedAfterMs,
+  };
+}
+
 describe.skipIf(process.platform === "win32")("the final flush through a real pipe", () => {
   const manifest = `${JSON.stringify(manifestForJson(), null, 2)}\n`;
 
@@ -137,6 +189,33 @@ describe.skipIf(process.platform === "win32")("the final flush through a real pi
     expect(run.out).toBe(manifest);
   });
 
+  test("a reader that starts after a pause longer than any bound still receives everything", async () => {
+    // The flush runs with a 100 ms bound configured; the reader takes one
+    // byte, so the writer is in its wait, then pauses two seconds. Off
+    // Windows no bound is armed, so nothing is cut and the code stays 0.
+    const run = await throughPipe(
+      [HARNESS, "0", "short-bound"],
+      "{ dd bs=1 count=1 2>/dev/null; sleep 2; cat; }",
+    );
+    expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(run.out.length).toBe(300_000);
+  });
+
+  for (const [signal, status] of [
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ] as const) {
+    test(`${signal} during the wait for a paused reader ends the run at once`, async () => {
+      const run = await signalDuringWait(signal);
+      // The shell reports a child that SIGTERM ended as "Terminated"; the
+      // CLI itself writes nothing.
+      const stderr = run.stderr.replace(/^Terminated\n$/, "");
+      expect({ code: run.code, stderr }).toEqual({ code: status, stderr: "" });
+      // The reader pauses four seconds; the run ended long before that.
+      expect(run.endedAfterMs).toBeLessThan(2_000);
+    });
+  }
+
   test("a reader that closes early leaves the command's own exit code", async () => {
     const run = await throughPipe([HARNESS, "2"], "head -c 1");
     expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 2, stderr: "" });
@@ -144,7 +223,12 @@ describe.skipIf(process.platform === "win32")("the final flush through a real pi
   });
 
   test("a stderr line written while stdout drains is delivered, and nothing crashes", async () => {
-    const run = await throughPipe([HARNESS, "0", "late-stderr"], "{ sleep 1; cat; }");
+    // One byte first: the pause starts only once the writer runs, however
+    // long it took to start, so the line lands while stdout is held back.
+    const run = await throughPipe(
+      [HARNESS, "0", "late-stderr"],
+      "{ dd bs=1 count=1 2>/dev/null; sleep 1; cat; }",
+    );
     expect({ code: run.code, stderr: run.stderr }).toEqual({
       code: 0,
       stderr: "late stderr line\n",
@@ -196,16 +280,20 @@ function stream(state: Partial<FlushableStream> = {}): FlushableStream & {
   };
 }
 
-function fakeDeps(stdout: FlushableStream) {
+function fakeDeps(stdout: FlushableStream, platform: NodeJS.Platform = "linux") {
   const exits: number[] = [];
-  const bounds: Array<() => void> = [];
+  const bounds: Array<{ readonly fire: () => void; readonly ms: number }> = [];
+  const diagnostics: string[] = [];
   const deps: FlushExitDeps = {
     stdout,
     exit: (code) => exits.push(code),
-    setBound: (fire) => bounds.push(fire),
+    platform,
+    boundMs: 50,
+    setBound: (fire, ms) => bounds.push({ fire, ms }),
+    writeDiagnostic: (message) => diagnostics.push(message),
     state: { code: null },
   };
-  return { deps, exits, bounds };
+  return { deps, exits, bounds, diagnostics };
 }
 
 describe("exitWhenFlushed", () => {
@@ -239,17 +327,46 @@ describe("exitWhenFlushed", () => {
     expect(exits).toEqual([1]);
   });
 
-  test("exits once at the bound when the end callback never comes", () => {
+  test("arms no bound off Windows: it waits for the reader however long", () => {
+    for (const platform of ["linux", "darwin", "freebsd"] as const) {
+      const { deps, exits, bounds } = fakeDeps(stream(), platform);
+      exitWhenFlushed(0, deps);
+      expect({ platform, bounds: bounds.length, exits }).toEqual({
+        platform,
+        bounds: 0,
+        exits: [],
+      });
+    }
+  });
+
+  test("on Windows a bound that fires says so and never exits 0", () => {
     const out = stream();
-    const { deps, exits, bounds } = fakeDeps(out);
-    exitWhenFlushed(4, deps);
-    expect(exits).toEqual([]);
-    expect(bounds).toHaveLength(1);
-    bounds[0]?.();
-    bounds[0]?.();
+    const { deps, exits, bounds, diagnostics } = fakeDeps(out, "win32");
+    exitWhenFlushed(0, deps);
+    expect(bounds.map((b) => b.ms)).toEqual([50]);
+    bounds[0]?.fire();
+    bounds[0]?.fire();
     out.finish();
-    expect(exits).toEqual([4]);
-    expect(FLUSH_EXIT_BOUND_MS).toBeGreaterThan(0);
+    expect(exits).toEqual([1]);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toStartWith("error: standard output did not finish within");
+    expect(WINDOWS_FLUSH_BOUND_MS).toBeGreaterThan(0);
+  });
+
+  test("on Windows a bound that fires keeps a failing command's own code", () => {
+    const { deps, exits, bounds, diagnostics } = fakeDeps(stream(), "win32");
+    exitWhenFlushed(4, deps);
+    bounds[0]?.fire();
+    expect([exits, diagnostics.length]).toEqual([[4], 1]);
+  });
+
+  test("on Windows a callback before the bound exits quietly with the command's code", () => {
+    const out = stream();
+    const { deps, exits, bounds, diagnostics } = fakeDeps(out, "win32");
+    exitWhenFlushed(0, deps);
+    out.finish();
+    bounds[0]?.fire();
+    expect([exits, diagnostics]).toEqual([[0], []]);
   });
 
   test("a flush on test doubles leaves the process's own exit state alone", () => {
@@ -268,7 +385,8 @@ function flushExitEntries(): Array<{ readonly file: string; readonly text: strin
       const path = join(dir, entry.name);
       if (entry.isDirectory()) visit(path);
       else if (entry.name.endsWith(".ts")) {
-        const text = readFileSync(path, "utf8");
+        // Code only: a comment or a string that names the call is no call.
+        const text = lexSource(readFileSync(path, "utf8")).code;
         if (/(?<!function\s)\bexitWhenFlushed\(/.test(text)) {
           out.push({ file: relative(ROOT, path).split("\\").join("/"), text });
         }

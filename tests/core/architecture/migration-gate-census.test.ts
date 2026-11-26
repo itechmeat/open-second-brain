@@ -14,6 +14,7 @@ import {
   CLI_COMMAND_MANIFEST,
   type CliCommandManifest,
 } from "../../../src/cli/command-manifest.ts";
+import { DREAM_EXECUTOR_TOOLS } from "../../../src/core/brain/dream-queue/dream-session.ts";
 import { runSelfHealUpgrade } from "../../../src/core/maintenance/self-heal-upgrade.ts";
 import { buildToolTable } from "../../../src/mcp/tools.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../helpers/cli-timeout.ts";
@@ -94,21 +95,28 @@ const SPAWN_RE =
 
 /**
  * A file that runs the CLI's `main()` as a process of its own: it exits
- * with `main()`'s code, straight (`process.exit(await main(`) or through
- * the final flush every entry point exits by (`exitWhenFlushed(`, any call
- * but the definition in `src/cli/stdout-guard.ts`), or it is a module run
- * as the program (`import.meta.main`).
+ * with `main()`'s code, straight (`process.exit(await main(`), by setting
+ * the exit code (`process.exitCode = await main(`), or through the final
+ * flush every entry point exits by (`exitWhenFlushed(`, any call but the
+ * definition in `src/cli/stdout-guard.ts`), or it is a module run as the
+ * program (`import.meta.main`). Matched on code only: a comment or a
+ * string that names one is no entry point.
  */
 const ENTRY_RE =
-  /process\.exit\(await main\(|(?<!function\s)\bexitWhenFlushed\(|import\.meta\.main/;
+  /process\.exit\(\s*(?:await\s+)?main\(|process\.exitCode\s*=\s*(?:await\s+)?main\(|(?<!function\s)\bexitWhenFlushed\(|import\.meta\.main\b/;
 
-function sourceFiles(pattern: RegExp): string[] {
+/** Whether a source text is a process entry point (see {@link ENTRY_RE}). */
+function isProcessEntry(text: string): boolean {
+  return ENTRY_RE.test(lexSource(text).code);
+}
+
+function entryFiles(): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) walk(abs);
-      else if (entry.name.endsWith(".ts") && pattern.test(readFileSync(abs, "utf8"))) {
+      else if (entry.name.endsWith(".ts") && isProcessEntry(readFileSync(abs, "utf8"))) {
         out.push(relative(REPO_ROOT, abs).split("\\").join("/"));
       }
     }
@@ -149,12 +157,11 @@ describe("the census covers every writer, in both directions", () => {
 
   test("every MCP tool has exactly one row, of the kind the tool declares", () => {
     const tools = buildToolTable("full");
-    expect(
-      drift(
-        tools.map((t) => t.name),
-        MCP_CENSUS,
-      ),
-    ).toEqual({ unclassified: [], stale: [] });
+    // Every server's tools: the full table and the dream executor's.
+    expect(drift([...tools.map((t) => t.name), ...DREAM_EXECUTOR_TOOLS], MCP_CENSUS)).toEqual({
+      unclassified: [],
+      stale: [],
+    });
     const mismatched = tools
       .filter((tool) => {
         const row = MCP_CENSUS[tool.name];
@@ -184,7 +191,7 @@ describe("the census covers every writer, in both directions", () => {
   });
 
   test("every process entry point besides the hooks is listed with its row", () => {
-    expect(drift(sourceFiles(ENTRY_RE), PROCESS_ENTRIES)).toEqual({ unclassified: [], stale: [] });
+    expect(drift(entryFiles(), PROCESS_ENTRIES)).toEqual({ unclassified: [], stale: [] });
     const missing = Object.values(PROCESS_ENTRIES).filter(
       (row) => row !== "cli" && WORKER_CENSUS[row] === undefined,
     );
@@ -227,6 +234,17 @@ describe("what may write during a migration is listed, never left out", () => {
 });
 
 describe("the census can fail", () => {
+  test("an entry point is found by its code, not by a comment or a string", () => {
+    expect([
+      isProcessEntry("process.exitCode = await main(process.argv.slice(2));"),
+      isProcessEntry("process.exitCode = main(argv);"),
+      isProcessEntry("guard.exitWhenFlushed(await main(argv));"),
+      isProcessEntry("/** calls exitWhenFlushed(0) once import.meta.main is true */\nexport {};"),
+      isProcessEntry('const note = "process.exit(await main(argv))";'),
+      isProcessEntry("export function exitWhenFlushed(code: number): void {}"),
+    ]).toEqual([true, true, true, false, false, false]);
+  });
+
   test("a verb added without a row is named", () => {
     const live = [...leafVerbs(CLI_COMMAND_MANIFEST.commands), "brain census-intruder"];
     expect(drift(live, CLI_CENSUS).unclassified).toEqual(["brain census-intruder"]);

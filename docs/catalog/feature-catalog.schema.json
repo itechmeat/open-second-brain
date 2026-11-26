@@ -46,7 +46,7 @@
     "doc_ref": {
       "description": "A repository-relative doc path as repo_path, with an optional #anchor.",
       "type": "string",
-      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^#\\s\\\\]+(#[^#\\s\\\\]+)?$"
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|#|$))[^#\\s\\\\]+(#[^#\\s\\\\]+)?$"
     },
     "surface_list": {
       "type": "array",
