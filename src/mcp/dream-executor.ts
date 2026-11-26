@@ -25,6 +25,7 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
 import { openDreamOwnerStore } from "../core/brain/dream-owner/gate.ts";
+import { withBackgroundLockWait } from "../core/store/local-lock.ts";
 import { readDreamOwner } from "../core/brain/dream-owner/owner.ts";
 import {
   DREAM_EXECUTOR_SERVER_NAME,
@@ -397,9 +398,15 @@ export class DreamExecutorServer {
         },
         (record, leases) => {
           try {
-            if (name === DREAM_WORK_TAKE) return this.#take(record, leases, args);
-            if (name === DREAM_WORK_ANSWER) return this.#answer(record, leases, args);
-            return this.#finish(record, leases);
+            // A call of a dream pass's session, not of a live one: its
+            // queue work waits for a busy store lock as the pass does.
+            // Scoped to this synchronous call; the run's own lock above
+            // and every other lock of the process keep their bounds.
+            return withBackgroundLockWait(() => {
+              if (name === DREAM_WORK_TAKE) return this.#take(record, leases, args);
+              if (name === DREAM_WORK_ANSWER) return this.#answer(record, leases, args);
+              return this.#finish(record, leases);
+            });
           } catch (err) {
             this.#log(name, "error");
             return result({ refused: err instanceof Error ? err.message : String(err) }, true);
