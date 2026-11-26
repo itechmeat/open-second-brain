@@ -1,6 +1,6 @@
 # Feature catalog
 
-What Open Second Brain does, by feature, in a form an agent can compare with another product. Read [`INDEX.md`](INDEX.md) first: one line per feature, grouped by area, at most 22000 bytes in all. Open an area file (`<area>.json`) only when a feature needs detail.
+What Open Second Brain does, by feature, in a form an agent can read at a glance and check against the code. Read [`INDEX.md`](INDEX.md) first: one line per feature, grouped by area, at most 22000 bytes in all. Open an area file (`<area>.json`) only when a feature needs detail.
 
 ## Fields
 
