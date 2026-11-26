@@ -70,7 +70,7 @@ untrusted at `intake/source-trust.ts:318-326`.
 
 `join(vault, canonicalSource)` at `:161` passes through no shape gate. Verified by
 reading the function body directly: `canonicalNotePath` does not reject `..`, so
-`source_path: "../../../etc/passwd"` resolves outside the vault, `existsSync`
+`source_path: "../../../outside-the-vault"` resolves outside the vault, `existsSync`
 succeeds, and its sha256 is stamped into the page as `source_hash`. Three
 consequences:
 

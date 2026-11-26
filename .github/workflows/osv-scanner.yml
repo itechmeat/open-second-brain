@@ -1,0 +1,47 @@
+name: OSV-Scanner
+
+# Scans the two lockfiles, bun.lock (JavaScript) and uv.lock (Python), against
+# the OSV database on every pull request and on pushes to main, and fails the
+# job when a known vulnerability is found. Only these two files are scanned, so
+# the test fixtures under tests/ are never picked up.
+#
+# This calls the scanner action directly instead of the reusable workflow:
+# the reusable workflow declares `security-events: write` and `actions: read`
+# for its SARIF upload, and a caller must grant whatever a reusable workflow
+# requests even with `upload-sarif: false`. The action needs only
+# `contents: read`, uses no secrets and uploads nothing.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: osv-scanner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scanner:
+    name: osv-scanner
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan bun.lock and uv.lock
+        uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
+        with:
+          scan-args: |-
+            scan
+            source
+            --lockfile=bun.lock
+            --lockfile=uv.lock

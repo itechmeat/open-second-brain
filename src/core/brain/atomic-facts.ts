@@ -93,7 +93,7 @@ function collapse(span: string): string {
 }
 
 /**
- * Split one paragraph into sentences. A boundary is `.`/`!`/`?`
+ * Split one paragraph into sentences. A boundary is `.`, `!` or `?`
  * followed by whitespace and an upper-case/digit/quote opener -
  * EXCEPT after a known abbreviation, a single-letter initial, or a
  * digit-dot-digit number (versions, decimals never contain

@@ -45,7 +45,7 @@ export class VaultEscapeError extends Error {
  * The check is twofold:
  *
  *   1. `path.resolve` normalises `..` so a slug like `../outside`
- *      cannot pretend to be inside the vault. The platform path
+ *      cannot pass for a path inside the vault. The platform path
  *      separator (`/` or `\`) is used for the prefix check so siblings
  *      that share a name prefix (`/v` vs `/v-evil`) are rejected.
  *   2. `fs.realpathSync` follows symlinks for the deepest existing

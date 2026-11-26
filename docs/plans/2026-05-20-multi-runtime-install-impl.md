@@ -466,7 +466,7 @@ Expected: FAIL — module not found.
 Implementation hints:
 
 - Detect indentation by scanning the first indented line; default to 2 spaces if file has no nesting.
-- Detect BOM by inspecting first three bytes (`﻿`); preserve verbatim.
+- Detect BOM by inspecting first three bytes (`EF BB BF`, U+FEFF); preserve verbatim.
 - Use `JSON.parse` for read; manual stringify with `JSON.stringify(..., null, indent)` for write.
 - Don't sort keys; preserve insertion order. JS objects retain insertion order for non-integer keys, so build the merged `mcpServers` by iterating original keys (skipping OSB names if present) then appending OSB names.
 

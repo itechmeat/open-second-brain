@@ -1290,6 +1290,11 @@ codex plugin add open-second-brain@open-second-brain   # re-stage local marketpl
 hermes plugins update open-second-brain
 ```
 
+Hermes scans the new tree before it keeps an update. Releases up to 2.0.2
+scan `caution` under Hermes 0.23, so their update asks for a confirmation
+(`--force` accepts it); later releases scan `safe` and need nothing. See
+[`install/hermes.md`](../install/hermes.md#update).
+
 A Codex marketplace add or upgrade replaces the clone wholesale, so the
 clone arrives without `node_modules`. No step follows: the first `o2b`
 call notices the missing dependency tree and runs

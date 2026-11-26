@@ -534,7 +534,7 @@ export function renderPrefLink(input: {
     // Format / BiDi-override characters that can cause visual spoofing
     // in Obsidian: zero-width space/joiner, LRM/RLM, BiDi embedding +
     // override + isolates, soft hyphen, BOM.
-    .replace(/[​-‏‪-‮⁦-⁩­﻿]/g, " ")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u00AD\uFEFF]/g, " ")
     .replace(/[[\]|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

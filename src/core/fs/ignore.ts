@@ -16,7 +16,7 @@
  *   - `*` and `?` match within one path segment; a doubled star spans
  *     segments (trailing, leading, or between two segments);
  *   - the last matching rule wins, and rules from a deeper file override those
- *     from a shallower one (nearer-`!`-wins), with `.git/info/exclude` layered
+ *     from a shallower one (the nearer `!` wins), with `.git/info/exclude` layered
  *     at the lowest precedence.
  *
  * A malformed pattern (an unterminated bracket class, or one that fails to

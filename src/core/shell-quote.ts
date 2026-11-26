@@ -80,7 +80,7 @@ export function cmdWord(value: string): string {
  * double-quoted word for both when it holds nothing either shell expands
  * there, and otherwise a single-quoted PowerShell word, in which nothing
  * expands and a quote (a typographic one too) is doubled. `cmd.exe` gets
- * null for a value with `%` or `!`: it substitutes `%NAME%` even inside
+ * null for a value with `!` or `%`: it substitutes `%NAME%` even inside
  * double quotes and expands `!NAME!` when delayed expansion is enabled.
  * Neither has a quoting form that keeps it literal in all cmd.exe modes.
  */
