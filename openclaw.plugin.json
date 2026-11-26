@@ -6,13 +6,7 @@
   "activation": { "onStartup": true },
   "skills": ["./skills"],
   "contracts": {
-    "tools": [
-      "second_brain_status",
-      "second_brain_query",
-      "second_brain_capture",
-      "event_log_append",
-      "vault_health"
-    ]
+    "tools": ["second_brain_status", "second_brain_query", "vault_health"]
   },
   "configSchema": {
     "type": "object",

@@ -399,8 +399,8 @@ function planTopicWithoutActivePref(
 }
 
 /**
- * v0.10.16: extra self-approval guardrail. Defaults (min_signals=2,
- * min_distinct_agents=1, min_age_days=0) make this check a no-op for
+ * v0.10.16: extra self-approval guardrail. Defaults (promotion_min_signals=1,
+ * promotion_min_distinct_agents=1, promotion_min_age_days=0) make this check a no-op for
  * clusters that already passed `candidate_threshold`. Operators may opt
  * into stricter thresholds via `_brain.yaml:guardrails:*`. A failed gate
  * routes the cluster to `quarantined` instead of creating a new

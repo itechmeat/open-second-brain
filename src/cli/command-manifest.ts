@@ -658,7 +658,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("benchmark", "Score recall quality against a fixed query dataset"),
         command("tune", "Grid-evaluate and persist self-tuning recall parameters"),
         command("profile", "Materialize the compact Brain/profile.md digest"),
-        command("sgrep", "Grep-shaped semantic Brain search (path:line: output)"),
+        command(
+          "sgrep",
+          "Grep-shaped Brain search over the normal search pipeline (path:line: output)",
+        ),
         command("continuity", "Export continuity records as ATOF/ATIF trajectories"),
         command(
           "payload",
@@ -1541,6 +1544,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("json", "boolean"),
         ]),
         command("show", "Show one topic: its head, items and page", [
+          flag("held", "boolean"),
           flag("config", "string"),
           flag("json", "boolean"),
         ]),

@@ -1,0 +1,329 @@
+{
+  "area": "trust",
+  "name": "Integrity, audit and safety",
+  "summary": "Who wrote what and how to undo it, write permissions, staged review, attestations, secrets, snapshots and answer checks.",
+  "features": [
+    {
+      "slug": "write-ledger",
+      "name": "Write ledger and undo",
+      "summary": "Records each note write by agent and device with a before-image, and plans a sealed undo per agent or path.",
+      "status": "stable",
+      "capabilities": [
+        "Logs one `note-write` event per create, update, append or revert: agent, device, target, sha256 of both sides.",
+        "Keeps replaced bytes content-addressed in `Brain/.state/write-images/<sha256>`, so a write can be undone.",
+        "Lists writes newest first, filtered by agent, device, path, operation and time window (`brain writes`).",
+        "Folds note-write and write-session events into one row per destination with agents and devices (last 7 days).",
+        "Plans a revert by agent, device or path sealed by a digest; `--apply <digest>` re-plans and snapshots first.",
+        "Refuses a target on drift, an interleaved unselected write, a missing before-image or unreadable bytes.",
+        "Names the edited lines of a legacy Brain log shard by its `prev` and `h` hash chain (`brain log verify`)",
+        "Prunes before-images older than 30 days by default (`writes prune-images --older-than-days`, with `--dry-run`)."
+      ],
+      "limits": [
+        "Log events on a machine switched to the store carry no hash chain; `log verify` walks legacy day files only.",
+        "Signal slugs and daily logs emit no write event, so the destination list can miss writes and says so.",
+        "The agent name is what the writer asserted; it is not authenticated.",
+        "No three-way merge: a target another writer touched is refused, not merged."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain writes",
+          "brain writes list",
+          "brain writes destinations",
+          "brain writes revert",
+          "brain writes prune-images",
+          "brain log verify"
+        ],
+        "mcp": ["brain_writes", "brain_write_destinations"]
+      },
+      "docs": [
+        "docs/observability.md#note-writes",
+        "docs/observability.md#the-log-chain",
+        "docs/cli-reference.md#brain-observing-memory"
+      ],
+      "code": [
+        "src/core/brain/notes/write-record.ts",
+        "src/core/brain/notes/revert.ts",
+        "src/core/brain/log-chain.ts"
+      ],
+      "keywords": [
+        "audit log",
+        "write attribution",
+        "undo",
+        "tamper-evident log",
+        "hash chain",
+        "provenance tracking"
+      ]
+    },
+    {
+      "slug": "write-controls",
+      "name": "Write permissions and freeze",
+      "summary": "A permissions document, an owner-write gate, a global write freeze and host deny rules that keep agents off brain files.",
+      "status": "stable",
+      "capabilities": [
+        "Resolves guarded writes against the permissions document (`_permissions.yaml` or `permissions.document`).",
+        "Ranks matching entries, then agent override, role and default_action; deny beats ask beats allow at equal scope.",
+        "Dry-runs the decision table per declared agent (`permissions show`)",
+        "Stops every content writer with a `frozen.json` marker (`brain freeze`, CLI only); an unreadable marker freezes.",
+        "Writes deny rules for Brain preferences, retired, log, snapshots and `_brain.yaml` into Claude Code or Codex.",
+        "Removes only the deny entries its manifest recorded (`brain unprotect`)",
+        "Backs up `.claude/settings*.json` before agent file writes and denies a write whose backup fails (opt-in).",
+        "Refuses or warns on a caller-named foreign `owner:` per `integrity.owner_scope_writes` (default off)."
+      ],
+      "limits": [
+        "On a machine switched to the store the freeze marker is device-local and freezes that machine only.",
+        "Native deny rules exist only for Claude Code and Codex.",
+        "The host-settings backup hook is off by default and denies nothing when bun or the hook script is missing.",
+        "With no permissions document every gate behaves as before; an unreadable document refuses instead."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain permissions show",
+          "brain permissions ledger",
+          "brain freeze",
+          "brain unfreeze",
+          "brain protect",
+          "brain unprotect"
+        ],
+        "hooks": ["pretool-host-backup"],
+        "config": ["integrity", "permissions.document"]
+      },
+      "docs": [
+        "docs/observability.md#the-decision-ledger",
+        "docs/cli-reference.md#brain-observing-memory"
+      ],
+      "code": [
+        "src/core/brain/permissions/",
+        "src/core/brain/freeze-marker.ts",
+        "src/core/brain/protect.ts"
+      ],
+      "keywords": [
+        "access control",
+        "write permissions",
+        "policy engine",
+        "kill switch",
+        "read-only mode",
+        "agent guardrails"
+      ]
+    },
+    {
+      "slug": "staged-review",
+      "name": "Staged review of agent writes",
+      "summary": "Optionally stages agent note creates and ingest pages for operator approval before they are published.",
+      "status": "optional",
+      "capabilities": [
+        "Stages captured signals in `Brain/pending/` instead of the inbox while `write_approval.enabled` is on.",
+        "Stages note creates (`write_approval.notes`) and ingest summaries (`write_approval.ingest`) in their own lanes.",
+        "Resolves each lane's own key, then the master key; the environment variable wins over the machine config value.",
+        "Lists every lane sorted and names unreadable entries with a reason (`pending list --lane`).",
+        "Publishes an entry unchanged to its target by exclusive create (`pending apply`); `--dry-run` writes nothing.",
+        "Moves a rejected entry into `Brain/retired/` with the given reason (`pending reject --reason`).",
+        "Keeps staged documents out of the search index, so recall cannot surface an unreviewed write.",
+        "Records staging, approval and rejection as signal state records on a machine switched to the store."
+      ],
+      "limits": [
+        "Off by default: with no key set every write publishes at once.",
+        "Review is CLI-only; no MCP tool lists, applies or rejects a staged entry.",
+        "Only note creates are staged in the notes lane; updates and appends publish directly."
+      ],
+      "surfaces": {
+        "cli": ["brain pending list", "brain pending apply", "brain pending reject"]
+      },
+      "docs": ["docs/cli-reference.md#write-path-integrity-and-store-safety-since-v1320"],
+      "code": [
+        "src/core/brain/pending/pending-lanes.ts",
+        "src/core/brain/write-gate.ts",
+        "src/core/brain/pending.ts"
+      ],
+      "keywords": [
+        "human in the loop",
+        "approval queue",
+        "moderation queue",
+        "staged writes",
+        "review workflow"
+      ]
+    },
+    {
+      "slug": "store-attestations",
+      "name": "Signed store attestations",
+      "summary": "Ed25519-signed attestations of the legacy Brain log heads and ledgers, verified shard by shard.",
+      "status": "stable",
+      "capabilities": [
+        "Creates an operator Ed25519 keypair under `.open-second-brain/keys/attestation/`, optionally passphrase-wrapped.",
+        "Measures the vault id, one chain head per Brain log shard, ledger file names and the index's embedding stamp.",
+        "Signs the sha256 of that manifest's canonical JSON into one sealed JSON record per run; never mints a key.",
+        "Verifies against the newest attestation per shard: intact, appended (valid forward chain), diverged or missing.",
+        "Checks the signature with the local key or an exported public key kept outside the vault (`--public-key`).",
+        "Stores an attestation as a shared store record on a switched machine, so every machine holding shared lists it.",
+        "Lists attestations newest first, from the CLI or the MCP tool"
+      ],
+      "limits": [
+        "Signing refuses on a switched machine whose legacy log tree is gone; brain store records are never attested.",
+        "Verification only reports, repairs nothing, and checks rows from the attested head forward.",
+        "A lost private key leaves every past attestation unverifiable; there is no recovery."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain attest",
+          "brain attest keygen",
+          "brain attest sign",
+          "brain attest list",
+          "brain attest verify"
+        ],
+        "mcp": ["brain_attestations"]
+      },
+      "docs": [
+        "docs/cli-reference.md#brain-observing-memory",
+        "docs/brain-store.md#standing-rules-and-other-brain-pages-after-the-switch"
+      ],
+      "code": ["src/core/brain/attestation/"],
+      "keywords": [
+        "digital signature",
+        "integrity attestation",
+        "tamper detection",
+        "signed checkpoint",
+        "ed25519",
+        "audit evidence"
+      ]
+    },
+    {
+      "slug": "secret-custody",
+      "name": "Secret custody",
+      "summary": "Credentials kept encrypted behind a capability gate and referenced as $secret:NAME in configuration.",
+      "status": "stable",
+      "capabilities": [
+        "Stores each value as AES-256-GCM ciphertext in a 0600 file beside a 0600 keyfile in the vault-local state dir.",
+        "Takes a value from stdin or `--from-env`, never from the command line",
+        "Injects a secret as its env var into a command that matches its glob allowlist (`secret run`), redacting output.",
+        "Wraps the keyfile under a scrypt passphrase on the first `unlock`",
+        "Exports every entry as one passphrase-encrypted bundle and restores it (`secret export`, `secret import`).",
+        "Resolves `$secret:NAME` config references from the store first, then the environment; a locked entry raises.",
+        "Reports which config references are available or missing without decrypting (`secrets list`, `secrets status`).",
+        "Logs every custody operation as an audit record that holds no value"
+      ],
+      "limits": [
+        "Does not protect against root or same-user processes on the host; there is no daemon or hardware key.",
+        "A lost passphrase or keyfile leaves stored values unreadable; there is no recovery.",
+        "Keeping the state directory out of a file-sync folder is left to the operator; only git exclusion is written.",
+        "The MCP tool can only list secrets and run allowlisted commands"
+      ],
+      "surfaces": {
+        "cli": ["brain secret", "secrets list", "secrets status"],
+        "mcp": ["brain_secrets"]
+      },
+      "docs": [
+        "docs/how-it-works.md#write-time-integrity-and-governance-since-v0440",
+        "docs/cli-reference.md#write-time-integrity-and-governance-since-v0440"
+      ],
+      "code": ["src/core/brain/secrets/", "src/core/secret-resolver.ts"],
+      "keywords": [
+        "secrets management",
+        "credential vault",
+        "encrypted storage",
+        "secret injection",
+        "api key storage",
+        "envelope encryption"
+      ]
+    },
+    {
+      "slug": "snapshots-rollback",
+      "name": "Snapshots and rollback",
+      "summary": "Recovery points before brain mutations, with diff and restore; on a store-switched machine rollback refuses.",
+      "status": "stable",
+      "capabilities": [
+        "Archives `Brain/` (without `.snapshots`, `.artifacts`) as `.snapshots/<run_id>.tar.zst`, gzip without zstd.",
+        "Takes a snapshot before every dream mutation and destructive write; a snapshot that fails aborts the operation.",
+        "Keeps the newest `snapshots.retention_count` archives (default 10) and prunes the rest.",
+        "Adds the search index only with `snapshots.include_derived_store` (off by default), within a size cap.",
+        "Lists snapshots with reason, size, manifest and index coverage (`snapshot log`).",
+        "Diffs two snapshots, or one against the live tree, by file manifest (`snapshot diff`).",
+        "Refuses `rollback` when the live tree drifted from the snapshot manifest unless `--force-rollback`; asks first.",
+        "Archives the live tree as a recovery point before restoring, and never touches `.snapshots/` on restore."
+      ],
+      "limits": [
+        "On a machine switched to the store a snapshot holds only device-local state; rollback and live diff refuse.",
+        "Covers the `Brain/` tree only, not other notes of the vault.",
+        "Creating a snapshot needs a system `tar` except on Windows."
+      ],
+      "surfaces": {
+        "cli": ["brain snapshot log", "brain snapshot diff", "brain rollback"],
+        "config": ["snapshots"]
+      },
+      "docs": ["docs/how-it-works.md#snapshots-and-rollback"],
+      "code": ["src/core/brain/snapshot.ts", "src/core/brain/snapshot-gate.ts"],
+      "keywords": [
+        "backup",
+        "restore point",
+        "point-in-time recovery",
+        "rollback",
+        "versioning",
+        "undo"
+      ]
+    },
+    {
+      "slug": "agent-provenance",
+      "name": "Multi-agent provenance",
+      "summary": "Shows which agent contributed which signals and notes, compares agents, and groups signals by source.",
+      "status": "stable",
+      "capabilities": [
+        "Collects per-agent contributions of four kinds: signals, preferences, log events and note writes.",
+        "Filters them by agents, topic, free text, kind and limit (default 50) and returns a per-agent roster.",
+        "Compares agents in browse, search, diff or map mode, listing the topics they share and those unique to each.",
+        "Groups signals by agent and source type with active, processed, archived and topic counts (`brain sources`).",
+        "Withholds contributions outside the caller's owner scope or reach before the roster is counted."
+      ],
+      "limits": [
+        "Read-only; it assigns and changes no attribution.",
+        "Attribution is the agent name each writer asserted; it is not authenticated."
+      ],
+      "surfaces": {
+        "cli": ["brain agent-query", "brain agent-diff", "brain sources"],
+        "mcp": ["brain_agent_query", "brain_agent_diff", "brain_sources"]
+      },
+      "docs": [
+        "docs/cli-reference.md#brain-observing-memory",
+        "docs/how-it-works.md#vault-portability--session-economy-v0220"
+      ],
+      "code": ["src/core/brain/agent-source/", "src/core/brain/portability/sources.ts"],
+      "keywords": [
+        "data provenance",
+        "multi-agent attribution",
+        "lineage",
+        "contribution tracking",
+        "source tracking"
+      ]
+    },
+    {
+      "slug": "answer-quote-check",
+      "name": "Answer quote check",
+      "summary": "At the end of a turn, checks the agent's quoted spans against the notes the turn actually had.",
+      "status": "stable",
+      "capabilities": [
+        "Finds quoted spans in the turn's last assistant messages at Stop and checks each against the turn's notes.",
+        "Uses the note a span cites (wikilink or path), else the notes the injection ledger says entered this session.",
+        "Gives each span one verdict: verified, not-in-note, source-truncated, note-unavailable or not-text.",
+        "Runs per phase (recall, active, subagent) in `quote_check.<phase>` mode off, shadow (default) or enforce.",
+        "Names the unverified spans to the model in one note",
+        "Appends one `reply_presence` record per checked turn: per injected note, verified, its worst miss or absent.",
+        "Turns off entirely with `quote_check_enabled: false` in the machine config."
+      ],
+      "limits": [
+        "Never blocks or edits the answer; a verdict is reported, not enforced.",
+        "Inert on hosts that read no Stop annotation (Codex, Grok Build); only enforce's log events remain there.",
+        "The recall phase runs only when `recall_inject_enabled` is on."
+      ],
+      "surfaces": {
+        "hooks": ["answer-quote-check"],
+        "config": ["quote_check"]
+      },
+      "docs": ["docs/how-it-works.md#checked-quotes-and-capture-scope-since-v1670"],
+      "code": ["hooks/answer-quote-check.ts", "src/core/brain/answer-quotes/check.ts"],
+      "keywords": [
+        "citation verification",
+        "hallucination detection",
+        "grounding check",
+        "quote verification",
+        "answer faithfulness"
+      ]
+    }
+  ]
+}

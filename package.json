@@ -83,7 +83,9 @@
     "check:paths:strict": "bun run scripts/check-hardcoded-paths.ts --strict",
     "check:hermes-scan": "bun run scripts/hermes-plugin-scan.ts",
     "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
-    "pack:check": "bun run scripts/pack-manifest.ts --check"
+    "pack:check": "bun run scripts/pack-manifest.ts --check",
+    "catalog:build": "bun run scripts/feature-catalog.ts build",
+    "catalog:check": "bun run scripts/feature-catalog.ts --check"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2",

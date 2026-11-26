@@ -6,10 +6,11 @@
  * config key or `o2b mcp --tool-profile <name>` instead of hand-rolling
  * allow/deny flag lists per platform.
  *
- * Contract (mirrors upstream Hermes Tool Slimmer): selection FAILS
- * OPEN - an unknown profile name degrades to the full surface (with
- * the unknown name surfaced for logging), never locks an agent out.
- * Hard-window profiles (`recall`, `minimal`) always retain the
+ * Contract: an unknown profile name FAILS CLOSED. `resolveToolSurface`
+ * reports it in `unknownProfile`, and `o2b mcp` refuses to start on it
+ * (exit 2, on stdio and HTTP alike) rather than serve the full surface:
+ * a typo in a profile meant to narrow an agent's tools must not widen
+ * them. Hard-window profiles (`recall`, `minimal`) always retain the
  * `second_brain_capabilities` diagnostic, which reports every withheld
  * tool with its reason; schema hydration via `tool_hydrate` stays on
  * the `catalog` and `full` surfaces, where every catalogued tool is

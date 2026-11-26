@@ -288,7 +288,7 @@ describe("tool listing", () => {
         "brain_procedural_graph",
         "brain_recurrence",
         // Consolidated view tools (token-diet, v0.34.0); the per-view
-        // names above stay registered as deprecated aliases.
+        // predecessor names were removed in 1.0.0 and answer a tombstone.
         "brain_brief",
         "brain_analytics",
         "brain_anticipatory_context",

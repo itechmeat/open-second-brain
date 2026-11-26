@@ -266,10 +266,12 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
         separator: SENTENCE,
       },
       {
-        // The sentence is about the aliases of those three views, so it
-        // stands or falls with them rather than dangling on its own.
+        // The sentence is about the predecessors of those three views, so
+        // it stands or falls with them rather than dangling on its own.
         tools: VIEW_TOOLS,
-        text: "The per-view predecessor names still resolve via tools/call as deprecated aliases",
+        text:
+          "The per-view predecessor names were removed in 1.0.0; calling one returns an error " +
+          "naming the tool and view to use",
       },
     ],
   },

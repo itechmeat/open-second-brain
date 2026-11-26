@@ -1,0 +1,441 @@
+{
+  "area": "knowledge",
+  "name": "Structured knowledge",
+  "summary": "Typed knowledge beside the notes: topics, entities, claims, decisions, contradictions, dead ends, the schema and the link graph.",
+  "features": [
+    {
+      "slug": "topics",
+      "name": "Topics",
+      "summary": "One page per theme with status, goal, milestones, decisions and open questions, kept by agents and the dream pass.",
+      "status": "stable",
+      "capabilities": [
+        "Stores topics as append-only ULID-keyed records in the `topics` stream; fields resolve by authority, then time",
+        "Holds decision, open-question, log and milestone items; status active, waiting, blocked, on-hold, done, closed",
+        "Changes topic membership: assigns notes, signals and decisions, and merges or splits topics",
+        "Writes CLI changes with human authority and `brain_topic` changes with agent authority",
+        "Renders topic.md; past 10 done milestones, 25 decisions or 15 log entries the oldest move to archive.md",
+        "Dream offers each unheld record the active topics sharing 2+ subject words; a model or agent answer picks one",
+        "Dream groups unheld records by rare shared words; 5 records from 2 sessions become a topic once approved",
+        "Review proposes merges of same-scope topics with head-word Jaccard >= 0.5 and asks about topics quiet 30 days"
+      ],
+      "limits": [
+        "Requires the brain store: a machine without one refuses every topic write",
+        "Automatic routing and grouping run only in the dream pass, on the dream owner's or the view writer's device",
+        "Merge, split and quiet-topic proposals are only listed; none is applied without a topic command",
+        "Below local reach (a remote MCP transport) only shared topics exist and human authority is refused"
+      ],
+      "surfaces": {
+        "cli": [
+          "topic list",
+          "topic show",
+          "topic review",
+          "topic create",
+          "topic rename",
+          "topic status",
+          "topic goal",
+          "topic assign",
+          "topic unassign",
+          "topic merge",
+          "topic split",
+          "topic link",
+          "topic archive",
+          "topic undo",
+          "topic record"
+        ],
+        "mcp": ["brain_topic"]
+      },
+      "docs": [
+        "docs/topics.md",
+        "docs/topics.md#what-dream-does-on-its-own",
+        "docs/topics.md#asking-an-agent"
+      ],
+      "code": ["src/core/topics/actions.ts", "src/core/topics/plan.ts", "src/core/topics/fold.ts"],
+      "keywords": [
+        "topic pages",
+        "thematic grouping",
+        "project memory",
+        "living documents",
+        "work log",
+        "milestone tracking",
+        "open questions"
+      ]
+    },
+    {
+      "slug": "entities",
+      "name": "Entity registry",
+      "summary": "Canonical people, projects and things with aliases, relations and subject profiles.",
+      "status": "stable",
+      "capabilities": [
+        "Keeps one entity per (category, normalized name) as Markdown in `Brain/entities/<category>/`, aliases checked first",
+        "Validates entity labels structurally against `entities.label_denylist` and a store-learned case lexicon",
+        "Matches person names by first initial plus surname, reversed word order and an operator nickname file",
+        "Relates entities with tokens of the relation vocabulary",
+        "Merges two entities under a plan hash: the old name becomes an alias, its page is archived, edges retargeted",
+        "Takes agent-extracted entities and relations; quarantined unless the source file exists (`brain_intake_entities`)",
+        "Lists an entity's documents, a stated-versus-evidenced gap and a needs-llm-step envelope (`diarize`)"
+      ],
+      "limits": [
+        "brain_entity only reads; set, relate, archive, prune and merge run from the CLI",
+        "Runs no entity-recognition model: extraction comes from the calling agent through brain_intake_entities"
+      ],
+      "surfaces": {
+        "cli": ["brain entity", "brain diarize"],
+        "mcp": ["brain_entity", "brain_intake_entities", "brain_diarize"]
+      },
+      "docs": [
+        "docs/cli-reference.md#write-path-integrity-and-store-safety-since-v1320",
+        "docs/cli-reference.md#knowledge-intake-and-consolidation-since-v1360",
+        "docs/mcp.md#tool-highlights"
+      ],
+      "code": [
+        "src/core/brain/entities",
+        "src/core/brain/diarization.ts",
+        "src/mcp/brain/entity-tools.ts"
+      ],
+      "keywords": [
+        "entity resolution",
+        "entity registry",
+        "alias resolution",
+        "knowledge graph",
+        "entity linking",
+        "named entity extraction"
+      ]
+    },
+    {
+      "slug": "claim-ledger",
+      "name": "Claims and truth ledger",
+      "summary": "An append-only truth ledger of entity claims with validity windows, and a claim graph read from note front matter.",
+      "status": "stable",
+      "capabilities": [
+        "Appends (entity, aspect, value, source) claims to device-sharded JSONL in `Brain/truth/`, folded into slots",
+        "Marks a slot contested when another source gives a different value within 30 days; resolution is ask_user",
+        "Accepts valid_from/valid_until windows; claims with disjoint windows count as succession, not as a conflict",
+        "Sums quantity claims by exact (entity, action, unit) match",
+        "Reports agents that write claims about the same entity within 14 days",
+        "Commits agent-stated subject-relation-object claims only when both entities occur in the given assertion text",
+        "Splits text into atomic assertions by Markdown structure and a sentence splitter, no model; --ingest appends",
+        "Answers truth now, at an instant, replaced-by and contested-by from note front matter links (`brain claims`)"
+      ],
+      "limits": [
+        "Note capture writes no claims: they enter through truth ingest or state, facts --ingest and correction sweeps",
+        "`brain claims` reads note front matter (superseded_by, contradicts, validity fields), not the `Brain/truth/` ledger"
+      ],
+      "surfaces": {
+        "cli": ["brain truth", "brain claims", "brain facts"],
+        "mcp": ["brain_truth", "brain_claims"]
+      },
+      "docs": [
+        "docs/how-it-works.md#entity-truth-and-the-self-improving-dream-since-v0430",
+        "docs/cli-reference.md#entity-truth-and-self-improving-dream-since-v0430",
+        "docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330"
+      ],
+      "code": [
+        "src/core/brain/truth",
+        "src/core/brain/claim-graph.ts",
+        "src/core/brain/atomic-facts.ts"
+      ],
+      "keywords": [
+        "temporal knowledge graph",
+        "fact ledger",
+        "bitemporal facts",
+        "truth maintenance",
+        "conflict detection",
+        "fact extraction",
+        "point-in-time query",
+        "provenance"
+      ]
+    },
+    {
+      "slug": "decision-records",
+      "name": "Decision records",
+      "summary": "Decision notes with options, assumptions, outcomes and ratings, open decisions, persona panels and design notes.",
+      "status": "stable",
+      "capabilities": [
+        "Records a decision page in Brain/decisions/: chosen option, assumption, review date, pre-mortem, commitment",
+        "Opens one review obligation per review date, idempotently",
+        "Finds similar past decisions and their outcomes by token overlap, with no model",
+        "Parks an open question with enumerated options until it is resolved into a decision page or discarded",
+        "Backfills the outcome of a decision and rates its quality from 1 to 5",
+        "Resurfaces at most one rated decision per prompt by token overlap, within a per-session cap and turn spacing",
+        "Panel runs one step per persona (default: technical, strategic, risk, user experience), then a synthesis",
+        "Design note grounds a topic in tensions, decisions and truth; commits it only with exactly one recommendation"
+      ],
+      "limits": [
+        "Runs no model: panel steps and design-note text come from the calling agent and are only validated",
+        "Rated-decision recall stays off until decision_recall.max_per_session is set"
+      ],
+      "surfaces": {
+        "cli": ["brain decision", "brain panel", "brain design-note"],
+        "mcp": ["brain_decision", "brain_design_note"]
+      },
+      "docs": [
+        "docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330",
+        "docs/cli-reference.md#agent-write-sessions-since-v0410",
+        "docs/cli-reference.md#knowledge-intake-and-consolidation-since-v1360"
+      ],
+      "code": [
+        "src/core/brain/decisions",
+        "src/core/brain/write-session/panel.ts",
+        "src/core/brain/design-note.ts"
+      ],
+      "keywords": [
+        "decision log",
+        "architecture decision records",
+        "decision journal",
+        "pre-mortem",
+        "outcome tracking",
+        "multi-perspective review",
+        "decision review"
+      ]
+    },
+    {
+      "slug": "tensions",
+      "name": "Contradiction tracking",
+      "summary": "Detects contradictions in the operator's notes and tracks each one from open to confirmed, dismissed or resolved.",
+      "status": "stable",
+      "capabilities": [
+        "Detects contradictions among notes in notes.read_paths: prose token Jaccard >= 0.5 with opposite stance signs",
+        "Derives a note's stance from a built-in multilingual negation word list; no model takes part in detection",
+        "Saves each finding as Brain/tensions/tension-<slug>.md keyed by subject pair and stance; re-detection updates",
+        "Moves a tension from open to confirmed, dismissed or resolved, recording an optional operator reason",
+        "Warns at context-pack build when an injected memory is a subject of an open or confirmed tension",
+        "verify asks the optional tension decision model: contradicts, compatible or unrelated; never changes a tension"
+      ],
+      "limits": [
+        "Detection runs only on an explicit detect call; a vault with no notes.read_paths scans nothing",
+        "Single-glyph CJK negations are not detected by the whitespace tokenizer",
+        "verify answers available: false unless the tension decision-model use is configured"
+      ],
+      "surfaces": {
+        "cli": ["brain tension"],
+        "mcp": ["brain_tension"]
+      },
+      "docs": [
+        "docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330",
+        "docs/decision-models/dedup-tension.md"
+      ],
+      "code": [
+        "src/core/brain/tensions.ts",
+        "src/core/brain/health/contradiction.ts",
+        "src/core/brain/tension-verdicts.ts"
+      ],
+      "keywords": [
+        "contradiction detection",
+        "inconsistency detection",
+        "belief revision",
+        "conflict triage",
+        "knowledge consistency",
+        "negation detection"
+      ]
+    },
+    {
+      "slug": "dead-ends",
+      "name": "Failed approaches",
+      "summary": "Records approaches tried and failed, with the reason; search and the session-start lessons digest surface them.",
+      "status": "stable",
+      "capabilities": [
+        "Records one dead end (approach, why it failed, optional context) as a markdown page under Brain/dead-ends/",
+        "Names each page de-<date>-<slug> with an exclusive create; a same-day repeat gets a -2 suffix, never a loss",
+        "Keeps the newest 100 entries active (CLI --max-active) and moves the overflow to Brain/dead-ends/archive/",
+        "Lists active entries newest first; an unparseable or wrong-kind page comes back as a warning, not an error",
+        "Sanitises fields on write: approach one line of at most 256 chars, reason and context at most 1024 each",
+        "Feeds every dead end into the lessons digest as an Avoid lesson, weighted by a 30-day recency half-life",
+        "Leaves the pages to the regular search index, so recall can return a dead end beside notes",
+        "Below local reach, lists only readable dead ends and never archives a page the caller cannot read"
+      ],
+      "limits": [
+        "Matches nothing against a planned action; a dead end reaches an agent only via search or the lessons digest",
+        "Has no edit or remove operation; an entry leaves the active set only through the overflow archive"
+      ],
+      "surfaces": {
+        "cli": ["brain dead-end"],
+        "mcp": ["brain_dead_ends"]
+      },
+      "docs": [
+        "docs/how-it-works.md#entity-truth-and-the-self-improving-dream-since-v0430",
+        "docs/cli-reference.md#entity-truth-and-self-improving-dream-since-v0430",
+        "docs/how-it-works.md#active-preferences-injection"
+      ],
+      "code": ["src/core/brain/dead-ends.ts", "src/core/brain/lessons.ts"],
+      "keywords": [
+        "negative knowledge",
+        "failed approaches",
+        "lessons learned",
+        "anti-patterns",
+        "mistake log",
+        "avoid list"
+      ]
+    },
+    {
+      "slug": "schema-packs",
+      "name": "Schema packs and labels",
+      "summary": "The record vocabulary of a brain: types, link types, labels and typed attributes, changed through audited mutations.",
+      "status": "stable",
+      "capabilities": [
+        "Declares preference, signal and page types and log event kinds, with aliases, id prefixes and link types",
+        "Declares label dimensions with fixed values, allowed source->target type pairs per link, per-type fields",
+        "Applies a batch of 19 mutation kinds atomically under a file lock; the audit record holds the pack digest",
+        "Previews a batch with dry run: the resulting pack and a leaf-level diff, no config write, no audit record",
+        "Reports integrity ok, modified or unverified: sha256 of the rendered pack against the last audited apply",
+        "Reads the pack as stats, lint, graph, explain, orphans or the active pack",
+        "Assigns labels and typed attributes fail-closed, listing the declared values or fields in the refusal",
+        "Refuses undeclared capture kinds once `page_types` is set"
+      ],
+      "limits": [
+        "One active pack per brain: no pack registry, no pack by URL and no signature; the packs view lists one entry",
+        "brain schema sync is not implemented and exits non-zero",
+        "A deny in the permissions document reaches schema batches only through the ingest action, not on its own",
+        "Label suggestions need the optional labels decision-model use; without it suggest answers available: false"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain schema",
+          "brain schema report",
+          "brain schema stats",
+          "brain schema lint",
+          "brain schema graph",
+          "brain schema explain",
+          "brain schema orphans",
+          "brain schema apply",
+          "brain schema sync",
+          "brain label",
+          "brain attr"
+        ],
+        "mcp": ["schema_inspect", "schema_apply_mutations", "brain_labels"],
+        "skills": ["schema-author"],
+        "config": ["schema"]
+      },
+      "docs": [
+        "docs/how-it-works.md#write-time-integrity-and-governance-since-v0440",
+        "docs/cli-reference.md#brain-observing-memory",
+        "docs/brain-store.md#settings-schema-and-personas-across-machines"
+      ],
+      "code": [
+        "src/core/brain/schema-mutate.ts",
+        "src/core/brain/schema-pack.ts",
+        "src/core/brain/schema-admin.ts"
+      ],
+      "keywords": [
+        "ontology",
+        "controlled vocabulary",
+        "metadata schema",
+        "taxonomy",
+        "typed properties",
+        "content types",
+        "schema validation"
+      ]
+    },
+    {
+      "slug": "link-graph",
+      "name": "Link graph",
+      "summary": "Backlinks, unlinked mentions, proposed bridge links, communities, hub coverage audits and a graph explorer.",
+      "status": "stable",
+      "capabilities": [
+        "Lists inbound references to a rule or signal (`brain backlinks`)",
+        "Lists raw-text mentions of a rule's title or aliases that are not linked (`brain unlinked`)",
+        "Proposes bridge links between embedding-near notes with no shared edge, orphans first, cosine >= 0.8, top 10",
+        "Detects communities by deterministic label propagation (at most 20 sweeps) and writes a note per community of 4+",
+        "Suggests edges between entities linked from the same notes by a PMI score (2+ shared notes, top 100)",
+        "Audits a hub rule's linked set as well-covered, fragile or missing; a hub needs 5+ links and 30% link text",
+        "Proposes missing edges by identity strength; `--apply` needs a confirm phrase, a holdout gate and stays within 25 writes",
+        "Rewrites wikilinks to full, short or preserved path forms (`brain links normalize`)"
+      ],
+      "limits": [
+        "Backlinks, unlinked mentions, hub audit and explorer read rules and signals under Brain/, not plain notes",
+        "Bridge discovery needs the embedding index; without vectors it proposes nothing",
+        "Co-occurrence reads link structure only (wikilinks and typed relations), never note prose",
+        "The explorer serves on 127.0.0.1 only (default port 7777) or writes one exported HTML file"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain backlinks",
+          "brain unlinked",
+          "brain bridges",
+          "brain clusters",
+          "brain moc-audit",
+          "brain links",
+          "brain repair-lane",
+          "brain explorer",
+          "brain co-occurrence"
+        ],
+        "mcp": [
+          "brain_backlinks",
+          "brain_unlinked_mentions",
+          "brain_bridges",
+          "brain_clusters",
+          "brain_moc_audit"
+        ],
+        "config": ["link_graph"]
+      },
+      "docs": [
+        "docs/how-it-works.md#link-and-recall-intelligence-since-v0450",
+        "docs/cli-reference.md#link-and-recall-intelligence-since-v0450",
+        "docs/cli-reference.md#brain-observing-memory"
+      ],
+      "code": [
+        "src/core/brain/link-graph",
+        "src/core/brain/backlinks.ts",
+        "src/core/brain/explorer.ts"
+      ],
+      "keywords": [
+        "knowledge graph",
+        "backlinks",
+        "link suggestions",
+        "community detection",
+        "maps of content",
+        "unlinked mentions",
+        "co-occurrence analysis",
+        "link prediction"
+      ]
+    },
+    {
+      "slug": "synthesis-and-research",
+      "name": "Synthesis and research reports",
+      "summary": "Topic dossiers with agreements, contradictions and gaps, cited research reports, idea discovery and lineage.",
+      "status": "stable",
+      "capabilities": [
+        "Builds a topic dossier over keyword recall (30 notes, max 100): agreements, conflicts, stale claims, gaps",
+        "Reads related/extends/supports links as agreement, contradicts as conflict, 90+ days or superseded as stale",
+        "Gives each finding a sha256 evidence identity, causal context and support, opposition and freshness scores",
+        "Names the single strongest objection to a dossier's findings",
+        "Writes a research report to Brain/reports/<date>-<slug>.md only when every finding cites a consulted source",
+        "Ranks next directions: open questions (weight 3), orphan notes (2), signals older than 14 days (1), plus age",
+        "Traces a continuity record or rule back to its observations through source refs or belief history, depth 8",
+        "Enqueues dossier contradictions and gaps, or the ranked ideas, into the trigger queue with --triggers"
+      ],
+      "limits": [
+        "Runs no model: prose synthesis, source fetching and finding text come from the calling agent",
+        "The research report is MCP-only; no CLI verb writes one",
+        "Deep synthesis recalls with the keyword lane only and refuses where no vault is attached",
+        "Orphan detection matches inbound links by bare basename, so two same-named notes can hide an orphan"
+      ],
+      "surfaces": {
+        "cli": ["brain deep-synthesis", "brain ideas", "brain idea-lineage"],
+        "mcp": [
+          "brain_deep_synthesis",
+          "brain_research_report",
+          "brain_idea_discovery",
+          "brain_idea_lineage"
+        ]
+      },
+      "docs": [
+        "docs/cli-reference.md#workspace-reach-and-proactive-insight-since-v0380",
+        "docs/how-it-works.md#workspace-reach-and-proactive-insight-since-v0380",
+        "docs/how-it-works.md#checked-quotes-and-capture-scope-since-v1670"
+      ],
+      "code": [
+        "src/core/brain/deep-synthesis.ts",
+        "src/core/brain/research/research.ts",
+        "src/core/brain/idea-discovery.ts"
+      ],
+      "keywords": [
+        "research synthesis",
+        "knowledge gaps",
+        "contradiction detection",
+        "provenance tracing",
+        "cited reports",
+        "idea generation"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,285 @@
+{
+  "area": "setup",
+  "name": "Setup and host integration",
+  "summary": "Installing Open Second Brain, connecting agent hosts, the MCP server and its access, and install health.",
+  "features": [
+    {
+      "slug": "guided-setup",
+      "name": "Guided setup",
+      "summary": "Configures the machine and the brain, connects one agent host and verifies it; a first-run checklist shows what is left.",
+      "status": "stable",
+      "capabilities": [
+        "`o2b setup --target <host>` prints the machine, host and verify plan; nothing is written without `--apply`",
+        "`--apply` asks y/N on a terminal and refuses without `--yes` when stdin is not a TTY",
+        "Apply runs `o2b init`, writes the host registration through its install adapter and verifies it",
+        "Apply ends with an in-process MCP probe and a store self-test on throwaway storage",
+        "`o2b init` saves vault, agent name and IANA timezone to the machine config, then creates and binds the store",
+        "`o2b init --interactive` (or `setup` on a TTY without `--target`) runs a wizard that finds `.obsidian` vaults",
+        "`o2b onboarding` derives a read-only next-step checklist (store, index, identity, first signal) with commands",
+        "`o2b brain init` creates the store; on a legacy vault it scaffolds `Brain/` with `_brain.yaml` and `_BRAIN.md`"
+      ],
+      "limits": [
+        "Plugin hosts (Claude Code, Hermes, OpenClaw, ZCode) and `generic` get a printed manual step; setup exits 7",
+        "Setup refuses to change a configured vault, agent name or timezone; `o2b init` changes them",
+        "The Aider target requires `--vault`, because Aider reads its context from a file in the vault"
+      ],
+      "surfaces": {
+        "cli": ["setup", "init", "onboarding", "brain init"]
+      },
+      "docs": ["install.md#install-from-the-registry", "docs/cli-reference.md#core"],
+      "code": ["src/cli/setup.ts", "src/cli/onboarding.ts", "src/core/brain/init.ts"],
+      "keywords": [
+        "installation wizard",
+        "first-run setup",
+        "onboarding checklist",
+        "quickstart",
+        "init command",
+        "bootstrap script"
+      ]
+    },
+    {
+      "slug": "host-install",
+      "name": "Agent host installation",
+      "summary": "Writes, checks, updates and removes the integration for each supported agent host; Aider runs inside a memory wrapper.",
+      "status": "stable",
+      "capabilities": [
+        "Ten host adapters write the integration by JSON merge, fenced block, host CLI call, file copy or symlink, or print it",
+        "`o2b install` detects hosts, plans with a diff, writes on `--apply`, verifies on `--check`, compares on `--friction`",
+        "Writes a fenced brain-usage block into the AGENTS.md or GEMINI.md the host reads, beside the MCP registration",
+        "Uninstall removes only paths recorded in `install.lock.json`; a hand-edited fenced block needs `--force`",
+        "`o2b update` re-applies hosts whose payload sha256 changed, e.g. by `install.tool_profile`, then migrates the store",
+        "`aider wrap` passes a live context sidecar via `--read`, then saves the new chat-history tail as a capture",
+        "`brain mcp-landscape` lists MCP servers declared in vault config files: packages and env names, never values",
+        "Reports linked projects or each host's verify state (`second_brain_wiring`)"
+      ],
+      "limits": [
+        "Claude Code, Hermes, OpenClaw and ZCode install through their own plugin systems, not `o2b install`",
+        "`mcp-landscape` reads only `.mcp.json`, `mcp.json`, `mcp_servers.json`, `claude_desktop_config.json` in the vault",
+        "`aider wrap` requires a configured vault"
+      ],
+      "surfaces": {
+        "cli": [
+          "install",
+          "uninstall",
+          "update",
+          "install-cli",
+          "completions",
+          "aider wrap",
+          "brain mcp-landscape"
+        ],
+        "mcp": ["second_brain_wiring", "brain_mcp_landscape"],
+        "config": ["install"]
+      },
+      "docs": [
+        "install.md#supported-clients",
+        "docs/cli-reference.md#o2b-install-exit-codes",
+        "docs/mcp.md#installation-wiring-since-v1560"
+      ],
+      "code": ["src/core/install", "src/cli/install/install.ts", "src/cli/aider.ts"],
+      "keywords": [
+        "mcp client configuration",
+        "editor integration",
+        "plugin installer",
+        "config merge",
+        "uninstaller",
+        "shell completions"
+      ]
+    },
+    {
+      "slug": "hermes-memory-provider",
+      "name": "Hermes memory provider",
+      "summary": "Runs Open Second Brain as the Hermes Agent memory provider and stores Hermes built-in memory writes in the brain.",
+      "status": "stable",
+      "capabilities": [
+        "Registers a Hermes memory provider and health check, backed by a long-lived `o2b mcp --harness hermes` child",
+        "Exposes 11 curated memory tools with live `tools/list` schemas, falling back to vendored static schemas",
+        "Fills the system prompt block with the active-preferences body from `brain_context`",
+        "Prefetch runs the recall gate, then a ranked `brain_context_pack` (1024 tokens max) and the identity reminder",
+        "Buffers each turn on a background thread and a JSONL transcript; flushes at compaction, session end and shutdown",
+        "Stores built-in memory writes (`add`/`replace` on `memory` or `user`) as `host_memory_write` continuity records",
+        "On a multiplexed gateway resolves settings from the bound Hermes profile, never the process environment",
+        "Re-renders mirrored host memory writes as unconfirmed rules after a dry run (`brain continuity promote`)"
+      ],
+      "limits": [
+        "Reports itself unavailable until a vault path is configured",
+        "Hermes filters out `remove` memory writes before the hook, so deletions are not mirrored",
+        "A failed bridge call injects nothing for that turn; there is no second recall lane"
+      ],
+      "surfaces": {
+        "mcp": ["brain_memory_bridge"]
+      },
+      "docs": ["install/hermes.md#4-enable-the-memory-provider", "docs/mcp.md#hermes-integration"],
+      "code": [
+        "plugins/hermes/provider.py",
+        "plugins/hermes/bridge.py",
+        "src/core/brain/host-memory-write.ts"
+      ],
+      "keywords": [
+        "memory provider",
+        "memory plugin",
+        "agent memory backend",
+        "context prefetch",
+        "memory hooks",
+        "turn capture"
+      ]
+    },
+    {
+      "slug": "openclaw-plugin",
+      "name": "OpenClaw native plugin",
+      "summary": "A native OpenClaw plugin with status, page listing and health tools and a per-turn agent identity reminder.",
+      "status": "stable",
+      "capabilities": [
+        "Registers `second_brain_status`, `second_brain_query` and `vault_health` in-process and spawns no subprocess",
+        "Prepends the identity reminder per model call via `before_prompt_build` `prependContext`, not the cached prompt",
+        "Names the agent by a host-qualified identity derived from vendor `openclaw` and the operator name",
+        "`second_brain_query` lists vault pages by case-insensitive title substring, limit 1 to 500 (default 50)",
+        "Serves at remote reach: pages reserved against remote reads and quarantined entity pages are withheld",
+        "Status redacts config values, including secrets resolved from the custody store",
+        "Resolves the vault from plugin config `vault`, then `VAULT_DIR`, then the working directory"
+      ],
+      "limits": [
+        "Read-only: memory writes go through the separately registered MCP server",
+        "Exposes three tools, not the MCP tool surface"
+      ],
+      "surfaces": {},
+      "docs": [
+        "install/openclaw.md#4-configure-vault-path-agent-name-timezone",
+        "install/openclaw.md#1-install-the-plugin"
+      ],
+      "code": ["src/openclaw/index.ts", "openclaw.plugin.json"],
+      "keywords": [
+        "native plugin",
+        "agent plugin",
+        "tool registration",
+        "prompt hook",
+        "identity reminder"
+      ]
+    },
+    {
+      "slug": "mcp-server",
+      "name": "MCP server and tool profiles",
+      "summary": "Serves the tools over stdio or HTTP, with tool profiles and a two-pass catalog for hosts with tool limits.",
+      "status": "stable",
+      "capabilities": [
+        "Serves MCP over stdio by default or Streamable HTTP on 127.0.0.1 with a Host/Origin DNS-rebinding guard",
+        "Refuses to serve HTTP beyond loopback without `--api-key` or a minted token",
+        "Tool profiles full, writer (5 always-loaded tools), catalog, recall, minimal; an unknown profile exits 2",
+        "Returns the compact tool catalog or the full schemas of named tools (`tool_hydrate`)",
+        "Narrows the served tools with `--allow-tool`, `--disable-tool` and `--max-tools`",
+        "Results over 2000 characters are parked, redacted, for 24 h as artifacts; `brain_artifact_get` returns them",
+        "Summarizes per-tool call latency at p50, p95 and p99 once `mcp_route_metrics_enabled` records it",
+        "Runs a tool handler from the shell (`o2b tool-call <tool> --tool-arg k=v`)"
+      ],
+      "limits": [
+        "HTTP answers each request with one JSON or single-event SSE response; progress tokens are refused there",
+        "A server with no vault starts, but tools that need vault files refuse with `vault_required`",
+        "Route metrics store tool, scope, status, duration and argument names, never argument values"
+      ],
+      "surfaces": {
+        "cli": ["mcp", "tool-call"],
+        "mcp": [
+          "second_brain_capabilities",
+          "tool_hydrate",
+          "brain_artifact_get",
+          "brain_route_metrics"
+        ]
+      },
+      "docs": [
+        "docs/mcp.md#tool-surface-profiles-and-the-two-pass-catalog-since-v0370",
+        "docs/mcp.md#run-from-the-cli",
+        "docs/mcp.md#runtime-capability-window"
+      ],
+      "code": ["src/mcp/server.ts", "src/mcp/profiles.ts", "src/mcp/http.ts"],
+      "keywords": [
+        "mcp server",
+        "model context protocol",
+        "tool filtering",
+        "lazy tool loading",
+        "streamable http",
+        "result truncation"
+      ]
+    },
+    {
+      "slug": "mcp-access-tokens",
+      "name": "Per-agent MCP tokens",
+      "summary": "Named per-agent tokens for the HTTP transport, and one-command provisioning of a host with its token.",
+      "status": "optional",
+      "capabilities": [
+        "`mcp token mint --agent` creates `mcp_token_<slug>` from 32 random bytes and prints the material exactly once",
+        "Stores only the sha256 hash and a 12-character prefix in `mcp-tokens.json`, mode 0600 or an owner-only ACL",
+        "An HTTP request whose bearer or `X-API-Key` matches a token runs as that token's agent for that request",
+        "Keeps the old material valid for 10 minutes after `rotate`, with no restart",
+        "`mcp_tokens_required` (default off) refuses credential-less HTTP requests once any token exists",
+        "Every mint, rotation and revocation appends a value-free record to the secret-custody audit",
+        "`o2b bootstrap --target` registers the host, mints its token and writes `bootstrap.lock.json`; reruns are no-ops",
+        "Tears a provision down with `bootstrap --remove`: uninstalls, revokes the token, drops the receipt"
+      ],
+      "limits": [
+        "Tokens authenticate only the HTTP transport; a stdio registration keeps its config-derived identity",
+        "A token sets identity only; tool profiles and reach still bind every caller",
+        "Bootstrap covers codex, grok, opencode (adapter), generic (print), claude-code and zcode (verify only)"
+      ],
+      "surfaces": {
+        "cli": [
+          "mcp token mint",
+          "mcp token rotate",
+          "mcp token revoke",
+          "mcp token list",
+          "bootstrap"
+        ]
+      },
+      "docs": ["docs/mcp.md#run-from-the-cli", "docs/cli-reference.md#core"],
+      "code": [
+        "src/core/brain/secrets/token-store.ts",
+        "src/cli/bootstrap/run.ts",
+        "src/cli/bootstrap/token-cli.ts"
+      ],
+      "keywords": [
+        "api tokens",
+        "bearer authentication",
+        "per-agent credentials",
+        "token rotation",
+        "credential provisioning",
+        "access control"
+      ]
+    },
+    {
+      "slug": "install-health",
+      "name": "Install health checks",
+      "summary": "Reports configuration, vault and plugin health, the installed version and a redacted config snapshot.",
+      "status": "stable",
+      "capabilities": [
+        "`o2b status` prints config path, config keys, a semantic-search hint and the brain store state, also as JSON",
+        "`o2b doctor` checks vault and config writability, plugin manifests, Hermes resolver parity and codegraph",
+        "Prints a fix command for each failed doctor check",
+        "`doctor --readiness` probes model key, embeddings, adapters, installed hosts and write-back, 5 s timeout each",
+        "`doctor selftest` opens, indexes, writes, searches and deletes on a throwaway vault and store",
+        "`second_brain_status` returns redacted config, vault, Brain, search index, vault-scope and store blocks",
+        "`vault_health` adds runtime notices and a state-surface inventory (path, reachability, override) to the checks",
+        "Writes a redacted config snapshot through the egress guard (`export-config`)"
+      ],
+      "limits": [
+        "Plain `o2b doctor` refuses without a configured vault; `doctor selftest` needs none",
+        "Readiness probes run only with `--readiness`; a probe that times out reports unknown, not failed"
+      ],
+      "surfaces": {
+        "cli": ["status", "doctor", "version", "help", "export-config"],
+        "mcp": ["second_brain_status", "vault_health"]
+      },
+      "docs": [
+        "docs/cli-reference.md#o2b-doctor-exit-codes",
+        "docs/cli-reference.md#o2b-doctor-selftest-since-v1640",
+        "install.md#verify"
+      ],
+      "code": ["src/core/doctor.ts", "src/core/doctor-readiness.ts", "src/core/doctor-selftest.ts"],
+      "keywords": [
+        "health check",
+        "diagnostics",
+        "doctor command",
+        "self-test",
+        "readiness probe",
+        "status report"
+      ]
+    }
+  ]
+}

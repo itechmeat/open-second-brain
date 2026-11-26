@@ -1,0 +1,353 @@
+{
+  "area": "delivery",
+  "name": "Context delivery",
+  "summary": "What reaches the agent and when: the session-start digest, pinned context, standing rules, context packs, prompt-time recall and compaction.",
+  "features": [
+    {
+      "slug": "active-preferences",
+      "name": "Active preferences injection",
+      "summary": "Each session, and each subagent, starts with the confirmed rules, recent retirements, topic heads and pinned context.",
+      "status": "stable",
+      "capabilities": [
+        "Injects confirmed rules, topic heads, pinned context, active.md and lessons.md at session start, compact included",
+        "Renders active.md from confirmed and quarantined preferences, a 30-day most-applied top 10 and 3 retirements",
+        "Charges memory to `active.inject_budget_chars` (8000), cutting sections to headlines, then dropping them",
+        "Keeps one hook payload under 9000 chars (UTF-8 bytes on Codex), ending it in one truncation note",
+        "Adds up to 12 project topic heads (1600 chars) and the pinned context (1200 chars) inside that budget",
+        "Sends the session-start payload to each subagent (`subagent-inject`)",
+        "Returns the digest, pinned context and counts through `brain_context` for hosts without a SessionStart hook",
+        "Delivers parts 2 to 8 of an oversized start payload one per later event (`reground_parts_enabled`, off)"
+      ],
+      "limits": [
+        "Pushes context only on hosts that run the hooks; other hosts must call brain_context themselves",
+        "Topic heads need a brain store and a project linked to the vault; personal topics are never injected",
+        "The subagent write-call fallback delivers once per agent id; its ledger keeps the last 200 ids for 24 h"
+      ],
+      "surfaces": {
+        "mcp": ["brain_context"],
+        "hooks": ["active-inject", "subagent-inject", "reground-deliver"],
+        "config": ["active", "guardrails", "link_graph"]
+      },
+      "docs": [
+        "docs/how-it-works.md#active-preferences-injection",
+        "docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"
+      ],
+      "code": ["hooks/active-inject.ts", "hooks/lib/active-context.ts", "src/core/brain/active.ts"],
+      "keywords": [
+        "memory injection",
+        "custom instructions",
+        "session bootstrap",
+        "system prompt",
+        "core memory",
+        "context priming"
+      ]
+    },
+    {
+      "slug": "pinned-context",
+      "name": "Pinned context",
+      "summary": "A current-task scratchpad that survives context rotation without becoming a permanent preference.",
+      "status": "stable",
+      "capabilities": [
+        "Reads, writes, appends or clears Brain/pinned.md through brain_pinned_context; read is the default",
+        "Applies an ordered batch of write, append, clear and exact-text replace operations all or nothing",
+        "Refuses content over 20,000 chars with budget_exceeded and a shrink hint instead of truncating it",
+        "Serializes writers with a per-file lock and re-reads inside it, so concurrent appends are not lost",
+        "Redacts secrets, strips control characters and normalizes to NFC before storing the text",
+        "Rides the session-start digest fenced as untrusted text, capped by active.pinned_max_chars (default 1200)",
+        "Keeps pinned-set and pinned-clear records in the brain store on a switched machine instead of the file"
+      ],
+      "limits": [
+        "One scratchpad per vault, shared by every agent and session; there is no per-task or per-session pad",
+        "No CLI verb edits it; only the MCP tool and the post-compaction re-assertion write it"
+      ],
+      "surfaces": {
+        "mcp": ["brain_pinned_context"]
+      },
+      "docs": ["docs/how-it-works.md#active-preferences-injection"],
+      "code": [
+        "src/core/brain/pinned.ts",
+        "src/mcp/brain/context-pinned-tools.ts",
+        "src/core/agent-context/pinned-block.ts"
+      ],
+      "keywords": ["working memory", "scratchpad", "memory block", "task notes", "sticky context"]
+    },
+    {
+      "slug": "standing-rules",
+      "name": "Standing rules",
+      "summary": "Operator-written rules, vault-wide or scoped to a project, harness or host, delivered to every session.",
+      "status": "stable",
+      "capabilities": [
+        "Injects Brain/standing-rules.md first at session start and in subagents, under an outranks-memory header",
+        "Caps the vault-wide rules at `active.standing_rules_max_chars` (4000), outside the memory injection budget",
+        "Reads it outside the fail-open memory load, never caches it, and says so when the file cannot be read",
+        "Adds Brain/standing-rules/{project,harness,host}/<key>.md, capped at 2000 chars and charged to the budget",
+        "Keys the project by the nearest .o2b-vault.json pointer, the harness by o2b mcp --harness, host by device id",
+        "Edits the vault-wide or one scoped file byte for byte with o2b brain standing-rules show, set or clear",
+        "Writes the store's standing-rule lane with human authority on a machine switched to the brain store",
+        "Refuses agent writes: note tools reject Brain/ paths and brain_labels has a named guard for these files"
+      ],
+      "limits": [
+        "Harness files apply only through brain_context; the session hooks carry no harness identity",
+        "No MCP tool writes the rules; they change only through the CLI verb or a file editor"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain standing-rules",
+          "brain standing-rules show",
+          "brain standing-rules set",
+          "brain standing-rules clear"
+        ]
+      },
+      "docs": [
+        "docs/how-it-works.md#scoped-operator-rules",
+        "docs/how-it-works.md#active-preferences-injection",
+        "docs/brain-store.md#standing-rules-and-other-brain-pages-after-the-switch"
+      ],
+      "code": [
+        "src/core/brain/standing-rules.ts",
+        "src/core/brain/scoped-rules.ts",
+        "src/core/brain/standing-rules-write.ts"
+      ],
+      "keywords": [
+        "custom instructions",
+        "system prompt",
+        "project rules",
+        "agent rules file",
+        "constitution",
+        "per-project instructions"
+      ]
+    },
+    {
+      "slug": "context-packs",
+      "name": "Context packs",
+      "summary": "Returns preference and retired-rule pages by tier and recency under a token budget, with presets and a size report.",
+      "status": "stable",
+      "capabilities": [
+        "Packs preference and retired pages by tier, newest first, until the ceil(bytes/4) estimate hits max_tokens",
+        "Derives max_tokens from the model window (context.window_tokens, env, model table, 1m suffix) via a preset",
+        "Filters by query substring, or orders by token overlap (ranked) or stored belief vectors (semantic)",
+        "Caps characters per page and in total, cutting hard or in stages (`recall.degradation`)",
+        "Splits items into directive, constraint and consider lanes on request",
+        "Shows, suggests or diffs read-only presets tight-context (4000 tokens) and long-context (24000 tokens)",
+        "Advises strategy, budget split, graph hops and a marginal-value stop per question, writing nothing",
+        "Reports token totals of Brain/ pages per category against a warn threshold (default 200000)"
+      ],
+      "limits": [
+        "Packs preference and retired-rule pages only, not notes, sources or session history",
+        "Semantic order needs stored belief vectors and refuses when no page in reach has one",
+        "Refuses an unplaced model id unless max_tokens or context.window_tokens is given; no silent default",
+        "The score-aware tail trim runs only in brain_context_pack, behind tail_trim_context_pack (default off)"
+      ],
+      "surfaces": {
+        "cli": ["brain context-pack", "brain context-presets", "brain token-footprint"],
+        "mcp": ["brain_context_pack", "brain_context_presets", "brain_retrieval_plan"],
+        "config": ["context", "recall", "guardrails"]
+      },
+      "docs": [
+        "docs/mcp.md#tool-highlights",
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290"
+      ],
+      "code": [
+        "src/core/brain/context-pack.ts",
+        "src/core/brain/context-presets.ts",
+        "src/core/brain/retrieval-plan.ts"
+      ],
+      "keywords": [
+        "context packing",
+        "token budget",
+        "context window management",
+        "context engineering",
+        "retrieval budget",
+        "prompt budget"
+      ]
+    },
+    {
+      "slug": "prompt-recall",
+      "name": "Prompt-time recall injection",
+      "summary": "Optional hooks inject a bounded recall brief per prompt or a link-graph map on a cadence, plus a warm session cache.",
+      "status": "optional",
+      "capabilities": [
+        "With recall_inject_enabled (default off), injects matching note titles, paths, spans and scores per prompt",
+        "Caps the brief at 4 notes, 900 chars and 2500 ms; abstains below 0.35 IDF-weighted query coverage",
+        "Skips notes the session already saw in the start digest or an earlier brief (recall_inject_dedupe, on)",
+        "Retrieves named slices (path prefix, types, limit, chars) declared in the recall_inject block of _brain.yaml",
+        "Lets the recall_inject decision-model use drop notes or withhold the brief in shadow or enforce mode",
+        "With nav_tier_enabled (default off), injects vault size and the top 8 hubs by link degree every 30 minutes",
+        "Warms an anticipatory pack plus session hits (2000 tokens, 120 s TTL) on prompt and tool events",
+        "Reads that cache by session lineage root as warm, stale or miss through brain_anticipatory_context"
+      ],
+      "limits": [
+        "Fails closed: an error or timeout injects nothing, and the decision is audited with counts and scores only",
+        "Uses the existing cross-vault search without its decision-model rerank; adds no retriever of its own",
+        "No hook injects the anticipatory cache; agents read it through the tool or brain anticipate"
+      ],
+      "surfaces": {
+        "cli": ["brain anticipate"],
+        "mcp": ["brain_anticipatory_context"],
+        "hooks": ["recall-inject", "nav-inject"],
+        "config": ["recall_inject", "anticipatory"]
+      },
+      "docs": [
+        "docs/cli-reference.md#trusted-recall-and-memory-write-surface-since-v1350",
+        "docs/decision-models/recall-inject.md#session-dedupe-and-slices",
+        "docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"
+      ],
+      "code": [
+        "src/core/brain/recall-inject.ts",
+        "src/core/brain/nav-inject.ts",
+        "src/core/brain/anticipatory-cache.ts"
+      ],
+      "keywords": [
+        "proactive recall",
+        "automatic retrieval",
+        "prompt augmentation",
+        "retrieval-augmented generation",
+        "context injection",
+        "prefetch cache"
+      ]
+    },
+    {
+      "slug": "cross-agent-updates",
+      "name": "Cross-agent catch-up",
+      "summary": "Shows a session what other agents and machines recorded on its topics and in the shared log since it last looked.",
+      "status": "stable",
+      "capabilities": [
+        "Reads topic records appended to the brain store's shards since the session's last prompt, via a byte cursor",
+        "Keeps decision, question, milestone, status and log records on the session's topics or in its project",
+        "Drops the session's own records by a session stamp (sha256 of the session id), else by device and agent",
+        "Passes a record when the session works on its topic and its kind is decision, refined by `neighbour_relevant`",
+        "Injects at most 5 fenced lines sharing 800 chars before the turn, one heading per topic",
+        "Is on by default with a brain store; neighbour_updates_enabled false turns it off",
+        "With log_catchup_enabled (default off), injects other agents' Brain/log lines at session start, newest 50",
+        "Keeps a per-identity watermark per log shard, so each foreign line shows once, attributed to its agent"
+      ],
+      "limits": [
+        "Neighbour updates read only the brain store's topics shards; a vault without a store gets none",
+        "A session's first prompt, and the first after a day idle, only place the cursor and inject nothing",
+        "A turn cut by the hook ceiling shows nothing and moves no cursor; its updates come on the next turn",
+        "Log catch-up identifies itself by agent name or device id; with neither it stays silent"
+      ],
+      "surfaces": {
+        "hooks": ["neighbour-updates", "log-catchup"]
+      },
+      "docs": [
+        "docs/how-it-works.md#active-preferences-injection",
+        "docs/decision-models/topics-and-agent-context.md#neighbour_relevant",
+        "docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"
+      ],
+      "code": [
+        "hooks/neighbour-updates.ts",
+        "src/core/agent-context/neighbours.ts",
+        "hooks/log-catchup.ts"
+      ],
+      "keywords": [
+        "shared memory",
+        "multi-agent coordination",
+        "activity feed",
+        "change feed",
+        "cross-session sync"
+      ]
+    },
+    {
+      "slug": "compaction-survival",
+      "name": "Compaction survival",
+      "summary": "Builds a pre-compression rules addendum, extracts labelled lines before compaction and re-asserts drifted pins after.",
+      "status": "stable",
+      "capabilities": [
+        "Returns the top-K (default 10) confirmed preferences by confidence plus the head of active.md as an addendum",
+        "Caps the addendum per entry and in total, deriving the caps from the resolved model window when not given",
+        "Extracts 'Label: body' lines (label at most 3 words, 32 chars, any script) as pre_compact_extract records",
+        "Dedupes extracted records by session, turn range, label and content hash",
+        "Finds the last summary marker and keyword-probes each pinned line in the active versus the summary region",
+        "Appends drifted anchors to pinned context as a re-assertion block, once per session and summary hash",
+        "Runs the post-compaction audit only with post_compact_survival_audit on (default off) or --force"
+      ],
+      "limits": [
+        "The audit recognizes only the three built-in summary markers of the Hermes compressor",
+        "No shipped hook runs the audit; a host pipes {session_id, messages} JSON to the CLI verb",
+        "Extraction is called by the Hermes plugin and the Aider wrapper; the Claude Code and Codex hooks never call it"
+      ],
+      "surfaces": {
+        "cli": ["brain pre-compact-extract", "brain post-compact-audit"],
+        "mcp": ["brain_pre_compress_pack", "brain_pre_compact_extract"]
+      },
+      "docs": [
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290",
+        "docs/observability.md#continuity-record-kinds",
+        "docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"
+      ],
+      "code": [
+        "src/core/brain/pre-compress-pack.ts",
+        "src/core/brain/pre-compact-extract.ts",
+        "src/core/brain/post-compact-audit.ts"
+      ],
+      "keywords": [
+        "context compaction",
+        "context compression",
+        "memory flush",
+        "summarization",
+        "context rot",
+        "pre-compaction hook"
+      ]
+    },
+    {
+      "slug": "context-receipts",
+      "name": "Context receipts and outcomes",
+      "summary": "Records what context was delivered, whether it was used, its token impact and generation usage, and joins them by id.",
+      "status": "stable",
+      "capabilities": [
+        "Appends a context_receipt per session-start injection: per-source bytes, tokens, budget and sha256 hashes",
+        "Writes receipts for context and pre-compress packs only when the call passes receipt: true",
+        "Lists, shows, folds a window into a retrieval summary, or re-hashes a receipt against the vault (verify)",
+        "Joins a receipt to its session's quote-check verdicts by exact session_id, or names it unjoined",
+        "Traces a Brain log event to its continuity records by session, turn or artifact correlation ids",
+        "Stores host-given USED, IGNORED or CONTRADICTED verdicts per injected memory for observed-reuse ranking",
+        "Ledgers token impact, pack outcomes and generation usage, each behind its own config key (default off)",
+        "Exports continuity records as ATOF or ATIF v1.7 trajectories (`brain continuity export`)"
+      ],
+      "limits": [
+        "The kernel computes no observed-use verdict; the host must supply them",
+        "Token figures are caller-reported or the ceil(bytes/4) estimate; the ledgers verify neither",
+        "Receipt verify runs at local reach only and refuses private or redacted receipts"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain context-receipts",
+          "brain event-trace",
+          "brain continuity",
+          "brain generation-reports record",
+          "brain generation-reports list",
+          "brain generation-reports summary",
+          "brain generation-reports show"
+        ],
+        "mcp": [
+          "brain_context_receipts",
+          "brain_event_trace",
+          "brain_observed_use",
+          "brain_context_pack_outcome",
+          "brain_token_impact",
+          "brain_generation_reports"
+        ],
+        "config": ["guardrails"]
+      },
+      "docs": [
+        "docs/observability.md#continuity-record-kinds",
+        "docs/observability.md#reading-the-surfaces",
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290"
+      ],
+      "code": [
+        "src/core/brain/context-receipts.ts",
+        "src/core/brain/continuity/store.ts",
+        "src/core/brain/token-impact.ts"
+      ],
+      "keywords": [
+        "context provenance",
+        "observability",
+        "llm tracing",
+        "audit trail",
+        "token accounting",
+        "context attribution"
+      ]
+    }
+  ]
+}

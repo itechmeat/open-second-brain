@@ -1,0 +1,134 @@
+{
+  "area": "skills",
+  "name": "Skills and procedural memory",
+  "summary": "Agent skills served from the brain, skills learned from repeated work, and procedural memory of how things get done.",
+  "features": [
+    {
+      "slug": "skill-library",
+      "name": "Skill library",
+      "summary": "Lists and serves shipped and vault-local agent skills and offers the relevant ones for the current turn.",
+      "status": "stable",
+      "capabilities": [
+        "Finds SKILL.md folders in shipped `skills/` and the machine's own skills folder; local copies shadow shipped",
+        "`list_skills` returns each skill's name, one-line description, path and the same-named copies it shadowed",
+        "`get_skill` returns SKILL.md or a named auxiliary file inside that skill's folder; a path cannot escape it",
+        "`skills_attach` scores skills on the turn text with BM25 (name 3x, description 1x): top 3 within 1,200 chars",
+        "Drops matches that rest only on terms more than half the skills share",
+        "Stays off until `skill_auto_attach` is set",
+        "An optional `skills` decision-model use (shadow or enforce) picks finalists from the BM25 shortlist",
+        "The `open-second-brain` skill teaches the memory layout, default workflow, search surfaces and safety rules"
+      ],
+      "limits": [
+        "`skills_attach` runs only when an agent or a host provider calls it; no hook injects skills by itself",
+        "The decision-model stage only trims or reorders the BM25 shortlist; it never offers a skill outside it"
+      ],
+      "surfaces": {
+        "mcp": ["list_skills", "get_skill", "skills_attach"],
+        "skills": ["open-second-brain"]
+      },
+      "docs": ["docs/mcp.md#skill-surface-since-v0370"],
+      "code": [
+        "src/core/surface/skills.ts",
+        "src/core/surface/skill-attach.ts",
+        "src/mcp/skill-tools.ts"
+      ],
+      "keywords": [
+        "agent skills",
+        "skill retrieval",
+        "tool discovery",
+        "prompt library",
+        "instruction files",
+        "capability routing"
+      ]
+    },
+    {
+      "slug": "skill-learning",
+      "name": "Skill proposals and rewrites",
+      "summary": "Proposes skills from repeated work and mature pages, and gates skill rewrites on a frozen benchmark.",
+      "status": "stable",
+      "capabilities": [
+        "`learn` scans new continuity records for repeated actions, shapes, co-occurrences and daily routines",
+        "Drafts a proposal once a pattern has 3 supporting records (2 at least); a verifier checks its evidence",
+        "`page-candidates` admits core, fresh, high-confidence pages with observed reuse that no skill covers",
+        "`page-draft` stages the agent's draft as a pending proposal; nothing reaches the skills root until accepted",
+        "Writes an accepted proposal through a write-ahead journal that `recover` rolls back or forward",
+        "`rewrite-plan` verifies a skill's task set against its frozen receipt and prints the two round envelopes",
+        "`rewrite-score` grades transcripts structurally: promote, hold or not_enough_evidence, then one held-out check",
+        "Reports the rewrite lane's receipts, verdicts and rates over MCP (`brain_skill_rewrite_status`)"
+      ],
+      "limits": [
+        "Runs no model: drafts and rewrite transcripts come from the calling agent through envelopes",
+        "Rewrite checks look at tools, paths, order and output fields, never at prose",
+        "Rewrite rounds are scored and staged only from the CLI; MCP reads their status"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain skill-proposals",
+          "brain skill-proposals rewrite-plan",
+          "brain skill-proposals rewrite-score"
+        ],
+        "mcp": ["brain_skill_proposals", "brain_skill_rewrite_status"]
+      },
+      "docs": [
+        "docs/cli-reference.md#knowledge-intake-and-consolidation-since-v1360",
+        "docs/cli-reference.md#maintenance-and-operator-surfaces",
+        "docs/mcp.md#tool-highlights"
+      ],
+      "code": [
+        "src/core/brain/skill-proposals.ts",
+        "src/core/brain/skill-page-drafts.ts",
+        "src/core/brain/skill-rewrite.ts"
+      ],
+      "keywords": [
+        "skill learning",
+        "procedure mining",
+        "workflow extraction",
+        "prompt optimization",
+        "regression gate",
+        "human in the loop"
+      ]
+    },
+    {
+      "slug": "procedural-memory",
+      "name": "Procedural memory",
+      "summary": "An index of procedures with usage and outcomes, a procedural graph with hints, and recurrence diagnostics.",
+      "status": "stable",
+      "capabilities": [
+        "`reconcile` indexes procedure pages, SKILL.md files and runbooks (`*.prompt.md`, `*runbook.md`) with triggers",
+        "Walks `Brain/procedures/`, `skills/`, `runbooks/` (or `--root`); reports added, updated and removed entries",
+        "Keeps per-entry use count, last use, successes and failures (`mark-used`, MCP `mark_outcome`)",
+        "Ranks by success rate on `ranked: true`; entries without outcomes sit at 0.5, then by use count and recency",
+        "`procedural-graph rebuild` links procedures, skills, runbooks, proposals to trigger, tag and path-token nodes",
+        "Derives a hint projection: per node, the cue tokens of 3+ characters from its title, path, triggers and tags",
+        "`brain recurrence` counts support per content hash across scopes: leaning at 3, decided at 5, locked at 8",
+        "Adds or removes one source's support in a scope (`brain recurrence learn`, `forget`)"
+      ],
+      "limits": [
+        "Outcome recording and success ranking are MCP-only; the CLI reconciles, lists and counts uses",
+        "The hint projection is read only by `procedural-graph hints` and `brain_procedural_graph`; no hook injects it",
+        "Recurrence support is written only by explicit learn, forget and purge calls"
+      ],
+      "surfaces": {
+        "cli": ["brain procedural-memory", "brain procedural-graph", "brain recurrence"],
+        "mcp": ["brain_procedural_memory", "brain_procedural_graph", "brain_recurrence"]
+      },
+      "docs": [
+        "docs/cli-reference.md#maintenance-and-operator-surfaces",
+        "docs/mcp.md#tool-highlights"
+      ],
+      "code": [
+        "src/core/brain/procedural-memory.ts",
+        "src/core/brain/procedural-graph.ts",
+        "src/core/brain/recurrence.ts"
+      ],
+      "keywords": [
+        "procedural memory",
+        "runbook index",
+        "workflow memory",
+        "success-rate ranking",
+        "evidence counting",
+        "how-to knowledge"
+      ]
+    }
+  ]
+}

@@ -1594,10 +1594,11 @@ export interface BrainRetireConfig {
 
 export interface BrainConfidenceConfig {
   /**
-   * Gate for the "low-evidence-confirmed" doctor warning and the
-   * auto-promotion of unconfirmed preferences to confirmed.
-   * `applied_count <= low_max_applied` keeps a confirmed pref on the
-   * doctor watch-list.
+   * Gate for the "low-evidence-confirmed" doctor warning and for
+   * quarantine entry. `applied_count <= low_max_applied` keeps a
+   * confirmed pref on the doctor watch-list and out of quarantine.
+   * It does not gate the promotion of unconfirmed preferences, and it
+   * does not set the confidence band.
    */
   readonly low_max_applied: number;
   /**

@@ -64,5 +64,78 @@ const PROCESS_SINK: StreamErrorSink = {
  * promise `.catch` handles the synchronous-throw case (see main.ts).
  */
 export function installStdoutEpipeGuard(): void {
-  process.stdout.on("error", (err: unknown) => handleStdoutError(err, PROCESS_SINK));
+  process.stdout.on("error", (err: unknown) => {
+    // Once the final flush has ended stdout, a late write from work still
+    // running has nowhere to go and is not a failure of the command.
+    if (flushing && isWriteAfterEnd(err)) return;
+    handleStdoutError(err, PROCESS_SINK);
+  });
+}
+
+/** The errno-style code of a write to a stream that was already ended. */
+export const WRITE_AFTER_END_CODE = "ERR_STREAM_WRITE_AFTER_END";
+
+function isWriteAfterEnd(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as ErrnoLike).code === WRITE_AFTER_END_CODE
+  );
+}
+
+/** Set once `exitWhenFlushed` has ended the streams. */
+let flushing = false;
+
+/** A stream the final flush ends: what `process.stdout` and `process.stderr` are. */
+export interface FlushableStream {
+  readonly destroyed?: boolean;
+  readonly writableEnded?: boolean;
+  end(callback: () => void): unknown;
+}
+
+/** The streams an exit waits for, and the exit itself, injected for tests. */
+export interface FlushExitDeps {
+  readonly streams: ReadonlyArray<FlushableStream>;
+  readonly exit: (code: number) => void;
+}
+
+const PROCESS_FLUSH_DEPS: FlushExitDeps = {
+  streams: [process.stdout, process.stderr],
+  exit: (code: number): void => process.exit(code),
+};
+
+/**
+ * Exit with `code` once stdout and stderr have handed over everything
+ * written to them.
+ *
+ * Into a pipe, a write the reader has not taken yet still waits in this
+ * process, and `process.exit` right after the write threw that tail away:
+ * `o2b help --json | jq` received the first 131072 bytes of the manifest.
+ * Under Bun neither a write callback nor `drain` waits for that tail; the
+ * callback of `end()` does, so the exit waits exactly as long as the reader
+ * takes. A stream that is already closed is not waited for, and one whose
+ * `end()` throws counts as handed over.
+ */
+export function exitWhenFlushed(code: number, deps: FlushExitDeps = PROCESS_FLUSH_DEPS): void {
+  flushing = true;
+  const open = deps.streams.filter((st) => st.destroyed !== true && st.writableEnded !== true);
+  let pending = open.length;
+  let exited = false;
+  const settle = (): void => {
+    pending -= 1;
+    if (pending <= 0 && !exited) {
+      exited = true;
+      deps.exit(code);
+    }
+  };
+  if (pending === 0) {
+    exited = true;
+    deps.exit(code);
+    return;
+  }
+  for (const stream of open) {
+    try {
+      stream.end(() => settle());
+    } catch {
+      settle();
+    }
+  }
 }

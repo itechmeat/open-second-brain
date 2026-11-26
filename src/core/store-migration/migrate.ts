@@ -2,7 +2,9 @@
  * `o2b brain migrate-store` on the first machine (task 2.3, design D11):
  * move this vault's legacy brain into the brain store.
  *
- *  1. Preflight: a store exists and its root is outside the vault, this
+ *  1. Preflight: a store exists and its root is the vault's reserved
+ *     store folder (`.open-second-brain-store/`, the default with a vault)
+ *     or outside the vault, never anywhere else inside it, this
  *     device has an id and has not switched yet, every legacy entry has a
  *     mapping (the dry run passes), there is room on disk, and no
  *     interrupted run is waiting for `--resume`.

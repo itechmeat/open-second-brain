@@ -59,7 +59,8 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
     --agent-name "<chosen-agent-name>" --timezone "<chosen-tz>"
 ```
 
-On a fresh machine `o2b init` creates the brain store outside the vault
+On a fresh machine `o2b init` creates the brain store in the vault's hidden
+`.open-second-brain-store/` folder
 and binds the vault to it; a separate `o2b brain init` is not needed.
 Dream runs on one device and agent, the dream owner: the installation that
 creates the brain becomes it when its agent name is known. Check with

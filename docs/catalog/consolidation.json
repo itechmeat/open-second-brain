@@ -1,0 +1,422 @@
+{
+  "area": "consolidation",
+  "name": "Consolidation and learning",
+  "summary": "The dream pass that turns signals into rules, its owner and agent, the preference lifecycle, lessons and decision models.",
+  "features": [
+    {
+      "slug": "dream-pass",
+      "name": "Dream consolidation pass",
+      "summary": "Promotes repeated signals to rules, confirms, quarantines and retires them by evidence, and replays missed days.",
+      "status": "stable",
+      "capabilities": [
+        "Creates a topic's unconfirmed rule when one sign leads by 3 signals in 14 days; guardrails can add minimums",
+        "Moves a rule by evidence: confirmed on its first applied evidence within 14 days, quarantined once violations reach applications",
+        "Retires on trial expiry, rebuttal, a violation in quarantine, an outdated event or 90 days without evidence",
+        "Scores confidence as the Wilson 95% lower bound of the applied share times linear freshness over 90 days",
+        "Queues a model-written rollup when 20 new facts or 5 new rollups gather (rollup thresholds)",
+        "Replays each missed UTC day as its own window, so a pass after a silence ends where daily passes would",
+        "Starts at the first session of a day on the owner's device (`dream.auto`)",
+        "Previews a pass by dry run, staged bundle, intent review, review candidates or retention review"
+      ],
+      "limits": [
+        "A live pass runs only on the dream owner's device; other machines run dry runs only.",
+        "The pass writes no model text itself; rollup summaries and topic wording wait in the dream work queue.",
+        "Missed-day replay needs a brain served from the brain store; a legacy `Brain/` tree runs one window.",
+        "Automatic start needs a session start hook or the MCP server on the owner's machine, else `dream run`."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain dream",
+          "dream run",
+          "dream status",
+          "brain intent-review",
+          "brain retention"
+        ],
+        "mcp": ["brain_dream", "brain_intent_review", "brain_review_candidates", "brain_retention"],
+        "config": ["dream", "retire", "confidence", "rollup", "guardrails", "dream.auto"]
+      },
+      "docs": [
+        "docs/how-it-works.md#the-dream-pass-in-detail",
+        "docs/dream.md#how-dream-starts",
+        "docs/dream.md#catch-up-after-missed-days"
+      ],
+      "code": [
+        "src/core/brain/dream.ts",
+        "src/core/brain/dream-plan-topics.ts",
+        "src/core/brain/dream-trigger"
+      ],
+      "keywords": [
+        "memory consolidation",
+        "sleep-time compute",
+        "reflection",
+        "preference learning",
+        "rule induction",
+        "memory decay",
+        "belief revision"
+      ]
+    },
+    {
+      "slug": "cross-topic-rules",
+      "name": "Cross-topic rule generalization",
+      "summary": "Optionally promotes one rule a day per owner from confirmed rules that repeat across topics, citing each source.",
+      "status": "optional",
+      "capabilities": [
+        "Compares confirmed rules only across topic buckets, pairing principles at Jaccard 0.6 or more (`cross_topic.jaccard`)",
+        "Fires on a cluster that spans at least 2 distinct topics (`cross_topic.min_topics`, never below 2)",
+        "Writes one unconfirmed inferred rule per owner a day, with evidence links to every source rule",
+        "Promotes only clusters whose source rules share one owner, so one agent's rules never shape another's",
+        "Keeps the daily allowance in a ledger, `Brain/cross-topic-rules.json` or the store's dream-replay records"
+      ],
+      "limits": [
+        "Off unless `cross_topic.enabled` is true; with the block absent the dream pass is unchanged",
+        "Never modifies or retires the source rules; the new rule then confirms or retires like any other",
+        "Topic-keyed recall does not find the new rule; its evidence links and lineage lead to it",
+        "Has no verb or tool of its own; it runs inside the dream pass"
+      ],
+      "surfaces": {
+        "config": ["cross_topic"]
+      },
+      "docs": [
+        "docs/how-it-works.md#the-dream-pass-in-detail",
+        "docs/how-it-works.md#windows-one-pass-after-any-silence"
+      ],
+      "code": [
+        "src/core/brain/dream-plan-cross-topic.ts",
+        "src/core/brain/policy/blocks/context.ts"
+      ],
+      "keywords": [
+        "rule generalization",
+        "pattern mining",
+        "cross-domain transfer",
+        "knowledge abstraction",
+        "inductive learning"
+      ]
+    },
+    {
+      "slug": "dream-owner",
+      "name": "Dream owner",
+      "summary": "One device and agent run the live dream passes for a brain; other machines preview, and the role can move.",
+      "status": "stable",
+      "capabilities": [
+        "Keeps one owner (a device and its agent) per brain, folded from claim, request and release store records",
+        "Refuses a live pass on any other device with dream_not_owner before any model call or write; dry runs pass",
+        "Binds the installation that creates the brain as its owner when its agent name is known",
+        "Moves the role by a request that the owner's device grants at its next look",
+        "Settles concurrent first claims by the lowest (clock, device), so every device folds the same owner",
+        "Shows other machines one line a day when the owner has covered no window for 3 days",
+        "Sets primary_agent with brain set-primary, which renames the owner's agent when run on the owner's device"
+      ],
+      "limits": [
+        "Needs the brain store: a brain with no owner record or a legacy `Brain/` tree runs live passes anywhere.",
+        "The gate is the device: any agent on the owner's device may run a live pass.",
+        "The MCP tool cannot force a takeover and moves the role only at local reach.",
+        "`brain set-primary` refuses on a device that is not the owner."
+      ],
+      "surfaces": {
+        "cli": ["dream owner", "brain set-primary"],
+        "mcp": ["brain_dream_owner"],
+        "config": ["primary_agent"]
+      },
+      "docs": [
+        "docs/dream.md#the-dream-owner",
+        "docs/how-it-works.md#dream-owner",
+        "docs/brain-store.md#the-dream-owner"
+      ],
+      "code": [
+        "src/core/brain/dream-owner/fold.ts",
+        "src/core/brain/dream-owner/gate.ts",
+        "src/cli/dream/owner.ts"
+      ],
+      "keywords": [
+        "leader election",
+        "single writer",
+        "job ownership",
+        "failover",
+        "multi-device sync",
+        "primary node"
+      ]
+    },
+    {
+      "slug": "dream-agent",
+      "name": "Dream agent and work queue",
+      "summary": "Model work of a dream pass waits in a queue for the operator's own agent command, which is set and verified per machine.",
+      "status": "stable",
+      "capabilities": [
+        "Holds model work as store records with 15-minute leases, backoff from 1 min to 6 h, parking after 5 failures",
+        "Offers closed questions to the decision model first, then leftover work to the operator's agent command",
+        "Starts the configured command without a shell, filling {prompt}, {mcp_config}, {mcp_command}, {mcp_args_json}",
+        "Gives the session one MCP server with take, answer and finish tools, bound to the run by a hashed token",
+        "Uses a command only after agent check answered two canary items in a throwaway store within 120 s",
+        "Bounds a session by dream_agent_budget_ms (300 s), dream_agent_items (100) and dream_agent_batch (10)",
+        "Tries one dream_agent_fallbacks entry when a session fails to start, exits with an error or answers nothing",
+        "Marks the session process so hooks capture nothing and no dream pass starts inside it"
+      ],
+      "limits": [
+        "No presets ship; each machine sets a full command, and the command is never synced.",
+        "The model recorded with an answer is the session's own statement and is not checked.",
+        "A session sees private items unless `dream_agent_private` is off.",
+        "Queue retry and cancel write only on the dream owner's device."
+      ],
+      "surfaces": {
+        "cli": [
+          "dream agent",
+          "dream agent show",
+          "dream agent set",
+          "dream agent check",
+          "dream queue",
+          "dream queue retry",
+          "dream queue cancel"
+        ]
+      },
+      "docs": [
+        "docs/dream.md#setting-the-agent",
+        "docs/dream.md#waiting",
+        "docs/mcp.md#the-dream-executor-profile"
+      ],
+      "code": [
+        "src/core/brain/dream-queue/agent-executor.ts",
+        "src/core/brain/dream-queue/queue.ts",
+        "src/mcp/dream-executor.ts"
+      ],
+      "keywords": [
+        "job queue",
+        "background agent",
+        "work leasing",
+        "headless agent",
+        "task queue",
+        "sleep-time agent"
+      ]
+    },
+    {
+      "slug": "dream-drafts",
+      "name": "Dream drafts review",
+      "summary": "Model-written text from a dream pass records its agent and model and can be held for operator approval.",
+      "status": "optional",
+      "capabilities": [
+        "Records on every text answer the agent that answered and the model its session named",
+        "Writes a rollup summary under Brain/rollups/ with written_by, written_by_model and written_by_item fields",
+        "Creates a topic from an applied wording with the answering agent, model and queue item in its record",
+        "Holds text answers in awaiting-review when dream.apply_drafts is review; auto, the default, applies them",
+        "Applies an approved held answer at the next pass (`dream queue approve`)",
+        "Closes a rejected held answer with its reason and writes nothing (`dream queue reject`)",
+        "Writes nothing on a second apply that finds the item's content already in the note"
+      ],
+      "limits": [
+        "Review covers text work only (rollup summaries, topic wording); closed-question answers apply directly.",
+        "Approve and reject write only on the dream owner's device."
+      ],
+      "surfaces": {
+        "cli": ["dream queue approve", "dream queue reject"],
+        "config": ["dream.apply_drafts"]
+      },
+      "docs": ["docs/dream.md#drafts"],
+      "code": [
+        "src/core/brain/dream-queue/fold.ts",
+        "src/core/brain/dream-queue/rollup-work.ts",
+        "src/cli/dream/queue.ts"
+      ],
+      "keywords": [
+        "human-in-the-loop",
+        "approval workflow",
+        "draft review",
+        "provenance",
+        "authorship attribution"
+      ]
+    },
+    {
+      "slug": "preference-lifecycle",
+      "name": "Preference lifecycle",
+      "summary": "Reads, pins, rejects, merges and expires preferences, with their evidence trail and full mutation audit.",
+      "status": "stable",
+      "capabilities": [
+        "Looks up one preference with its evidence trail, everything on a topic, or log events since a time",
+        "Answers a topic query as of a past instant (--at) or with lapsed memories kept (--show-expired)",
+        "Pins a rule against stale, expiry, rebuttal and quarantine retires; an outdated event still retires it",
+        "Retires a rule as user-rejected with a reason that suppresses later signals on its topic and scope",
+        "Merges two same-topic, same-scope rules: unions evidence, sums counters, retires the dropped one as merged",
+        "Sets, changes or clears the expiration_date of a signal or preference by id",
+        "Appends a JSONL audit line per mutation with agent, reason, revision and content hash, per device",
+        "Keeps a per-field before and after edit history beside each preference (brain history)"
+      ],
+      "limits": [
+        "Merge takes only confirmed or quarantined rules of one topic, scope and pin state, and takes no snapshot.",
+        "Merge leaves confidence to the next dream pass; `--force` skips only the name-aware entity guard.",
+        "Pin, unpin, reject, merge and history are CLI verbs; MCP has query, expire and audit."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain query",
+          "brain pin",
+          "brain unpin",
+          "brain reject",
+          "brain merge",
+          "brain expire",
+          "brain history",
+          "brain audit"
+        ],
+        "mcp": ["brain_query", "brain_expire", "brain_audit"],
+        "config": ["guardrails"]
+      },
+      "docs": [
+        "docs/how-it-works.md#a-preferences-lifecycle",
+        "docs/cli-reference.md#brain-observing-memory"
+      ],
+      "code": [
+        "src/core/brain/query.ts",
+        "src/core/brain/merge.ts",
+        "src/core/brain/pref-audit.ts"
+      ],
+      "keywords": [
+        "memory management",
+        "audit trail",
+        "rule pinning",
+        "memory expiry",
+        "deduplication",
+        "change history"
+      ]
+    },
+    {
+      "slug": "memory-corrections",
+      "name": "Corrections and supersession",
+      "summary": "Tombstones, supersedes or time-replaces any memory and reports the blast radius of a correction first.",
+      "status": "stable",
+      "capabilities": [
+        "Tombstones a memory of any type in place with a reason; recall, injection and dream skip it, bytes stay",
+        "Supersedes a predecessor through a `superseded_by` link that recall resolves to the live tip",
+        "Replaces a fact at one instant: closes `valid_until` and opens `valid_from`, both written or neither",
+        "Previews a correction's blast radius by default: claim-graph closure, wikilink mentions, ledger claims",
+        "Applies a correction with `--apply`, closing validity at the window end or tombstoning a flatly wrong memory",
+        "Retires a signal with a reason, out of dream input but still searchable (`brain signal retire`)",
+        "Lists memories injected but never used, contradicted or heavily used, from observed-use verdicts",
+        "Proposes missing `superseded_by` back-links on retired rules that an active rule supersedes"
+      ],
+      "limits": [
+        "`brain semantics-backfill` only previews; it has no apply path.",
+        "Wikilink retargeting never rewrites `Brain/log` or receipt lines.",
+        "A target outside the caller's read reach is refused as missing before any write."
+      ],
+      "surfaces": {
+        "cli": ["brain lifecycle", "brain semantics-backfill", "brain signal"],
+        "mcp": ["brain_lifecycle"]
+      },
+      "docs": ["docs/cli-reference.md#belief-lifecycle-and-decision-memory-since-v1330"],
+      "code": [
+        "src/core/brain/lifecycle/tombstone.ts",
+        "src/core/brain/lifecycle/correction.ts",
+        "src/core/brain/lifecycle/temporal-replace.ts"
+      ],
+      "keywords": [
+        "memory correction",
+        "soft delete",
+        "belief revision",
+        "bi-temporal validity",
+        "fact invalidation",
+        "supersession",
+        "tombstone"
+      ]
+    },
+    {
+      "slug": "lessons",
+      "name": "Lessons for agent rule files",
+      "summary": "Scores outcome-tagged lessons into a digest and promotes approved ones into managed blocks of agent rule files.",
+      "status": "stable",
+      "capabilities": [
+        "Folds dead-end notes and applied, violated and outdated evidence into one signed digest, Brain/lessons.md",
+        "Decays each result with a 30-day half-life (lessons.half_life_days), so fresh outcomes outweigh old ones",
+        "Tiers lessons preferred (2+ distinct results), tentative, contested (both signs recently) or avoid",
+        "Regenerates the digest after every dream pass, top 20 by decayed salience (lessons.limit)",
+        "Qualifies a lesson for promotion only from a confirmed, high-confidence, preferred rule in an enabled scope",
+        "Pins each operator approval to the rule text's hash; a changed rule leaves the block until approved again",
+        "Writes an approved lesson as a managed block into AGENTS.md, CLAUDE.md or GEMINI.md with `--apply`",
+        "Lists promotion candidates, each blocked one with its reason (`lessons candidates`)"
+      ],
+      "limits": [
+        "Promotion is off until the machine config key `lessons.promotion.scopes` names a scope.",
+        "Only the CLI approves or denies; no MCP tool, hook or dream path promotes a lesson.",
+        "Dead-end lessons never promote; only preference-derived lessons reach rules files.",
+        "Targets only the instruction files at the vault root."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain lessons",
+          "brain lessons candidates",
+          "brain lessons approve",
+          "brain lessons deny",
+          "brain lessons refresh-blocks"
+        ],
+        "config": ["lessons"]
+      },
+      "docs": [
+        "docs/how-it-works.md#active-preferences-injection",
+        "docs/cli-reference.md#write-path-integrity-and-store-safety-since-v1320"
+      ],
+      "code": [
+        "src/core/brain/lessons.ts",
+        "src/core/brain/lessons-promotion.ts",
+        "src/cli/brain/verbs/lessons.ts"
+      ],
+      "keywords": [
+        "lessons learned",
+        "outcome tracking",
+        "experience replay",
+        "self-improving agent",
+        "agent rules file",
+        "recency decay"
+      ]
+    },
+    {
+      "slug": "decision-models",
+      "name": "Decision models",
+      "summary": "An optional typed judgment model that reranks, filters and checks candidates, with evaluation and thresholds per use.",
+      "status": "optional",
+      "capabilities": [
+        "Asks yes/no, choice (up to 255 options) or score (2 to 10 levels) questions and gets probabilities, no text",
+        "Runs each of 17 uses (rerank, skills, dedup, topic routing, recall filter) as off, shadow or enforce",
+        "Tries an ordered provider chain within one timeout budget (3 s by default), falling through on errors",
+        "Stops sending once the day's spend reaches decision_model_cost_gate_usd (0.5 USD by default)",
+        "Keeps private records local unless the chain is local end to end or the use is in private_uses",
+        "Records one accounting row per request (provider, model, outcome, latency, tokens, cost) for the report",
+        "Runs a preregistered eval per use with real spend; a promote verdict writes a machine-side tuning mark",
+        "Fits a per-use, per-model threshold to labelled report data at a 5% false-action target (8+ samples)"
+      ],
+      "limits": [
+        "Off unless enabled with a provider whose key variable is set, or a keyless loopback server.",
+        "The deterministic result stays canonical; a failed, gated or off call returns it unchanged.",
+        "A vault can opt out with `decision_model.enabled: false`; endpoints and keys are machine settings.",
+        "The `llm-emulation` adapter's probabilities are uncalibrated, and it is used only when named."
+      ],
+      "surfaces": {
+        "cli": [
+          "decision-model check",
+          "decision-model report",
+          "decision-model eval run",
+          "decision-model eval list",
+          "decision-model thresholds fit",
+          "decision-model thresholds list",
+          "decision-model thresholds set"
+        ],
+        "skills": ["decision-model-setup"],
+        "config": ["decision_model"]
+      },
+      "docs": [
+        "docs/decision-models.md",
+        "docs/decision-models.md#uses",
+        "docs/decision-models.md#thresholds-the-local-store"
+      ],
+      "code": [
+        "src/core/decision-model/run.ts",
+        "src/core/decision-model/contract.ts",
+        "src/core/decision-model/thresholds-fit.ts"
+      ],
+      "keywords": [
+        "llm as judge",
+        "reranking",
+        "classifier",
+        "shadow mode",
+        "decision threshold",
+        "provider fallback",
+        "cost cap"
+      ]
+    }
+  ]
+}

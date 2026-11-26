@@ -43,6 +43,17 @@ describe("openclaw bundle", () => {
     expect(bundleText).not.toContain(`name: "second_brain_capture"`);
   });
 
+  test("the manifest declares exactly the tools the bundle registers", () => {
+    // OpenClaw reads `contracts.tools` from the manifest; a name the bundle
+    // does not register would be a tool the host expects and never gets.
+    const manifest = JSON.parse(readFileSync(join(ROOT, "openclaw.plugin.json"), "utf8"));
+    const registered = [...bundleText.matchAll(/registerTool\(\{\s*name: "([a-z_]+)"/g)].map(
+      (m) => m[1],
+    );
+    expect(registered.length).toBeGreaterThan(0);
+    expect(manifest.contracts.tools).toEqual(registered);
+  });
+
   test("does NOT contain Python references", () => {
     expect(bundleText).not.toContain("python3");
     expect(bundleText).not.toContain("from open_second_brain");

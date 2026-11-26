@@ -1,6 +1,6 @@
 /**
  * `o2b brain sgrep <query> [path]` (Workspace Insight Suite,
- * t_323a9a83): grep-shaped semantic Brain search. Ordinary shell
+ * t_323a9a83): grep-shaped Brain search. Ordinary shell
  * reflexes - positional query, optional path scope, `path:line:`
  * output lines - over the existing search pipeline. Exact `grep`
  * stays untouched; this is a separate verb, never a wrapper.

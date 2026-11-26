@@ -4,9 +4,10 @@
  * and a digest section. Lets operators catch runaway ingestion
  * before it overflows model context windows.
  *
- * Categories: `preferences`, `retired`, `inbox`, `processed`, `log`,
- * `other`. The "other" bucket captures anything that lives under
- * Brain/ but does not match a known subdirectory.
+ * Categories: `preferences`, `retired`, `inbox`, `processed`,
+ * `archived`, `log`, `other`. The "other" bucket captures the
+ * Markdown files directly under Brain/ (not its unknown
+ * subdirectories) and is left out on a store-only machine.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";

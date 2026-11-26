@@ -21,4 +21,8 @@ try {
 const { main } = (await import(join(ROOT, "src", "cli", "main.ts"))) as {
   main: (argv: ReadonlyArray<string>) => Promise<number>;
 };
-process.exit(await main(process.argv.slice(2)));
+const { exitWhenFlushed } = (await import(join(ROOT, "src", "cli", "stdout-guard.ts"))) as {
+  exitWhenFlushed: (code: number) => void;
+};
+// The same exit as the main entry: only once the output has left.
+exitWhenFlushed(await main(process.argv.slice(2)));

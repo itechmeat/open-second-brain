@@ -761,8 +761,9 @@ export class MCPServer {
   }
 
   private handleToolsList(): Record<string, unknown> {
-    // Hidden tools (deprecated aliases) stay callable but are not
-    // advertised - the list is what every client pays tokens for.
+    // Hidden tools (the second pass of the `catalog` profile) stay
+    // callable but are not advertised - the list is what every client
+    // pays tokens for.
     return {
       tools: this.tools
         .filter((t) => t.hidden !== true)

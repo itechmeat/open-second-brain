@@ -1,0 +1,343 @@
+{
+  "area": "store",
+  "name": "Brain store and maintenance",
+  "summary": "Where memory lives and how it stays healthy: the brain store, migration, shared settings, storage, maintenance, health and hygiene.",
+  "features": [
+    {
+      "slug": "brain-store",
+      "name": "Brain store and sync",
+      "summary": "Append-only shared and private record partitions that several machines can sync, with device, partition and shard care.",
+      "status": "stable",
+      "capabilities": [
+        "Appends JSON-line records to per-device monthly shards, so two machines never write the same file",
+        "Stamps each record with a hybrid logical clock and a sha256 of its body",
+        "Folds records by authority first, human over agent, then by clock",
+        "Spills bodies over the 16 KiB line cap into sha256-named blobs; a blob not yet synced reads as pending",
+        "Sends records of private or unjudgeable pages to the private partition; a machine without it refuses the write",
+        "Creates the store only on an explicit `store init`, with both partitions or `shared` alone",
+        "Quarantines a corrupt shard line, or a blob missing for 7 days, on this machine only (`store shard`)",
+        "Returns record ids new since an index watermark, grouped by partition, stream, scope and topic (500, max 5000)"
+      ],
+      "limits": [
+        "Does not sync files itself: an external file-sync tool must carry the store folder or each partition folder.",
+        "No encryption at rest and no record signatures: the checksum detects damage, not forgery by a syncing peer.",
+        "Shards are append-only and nothing compacts them, so removed records stay on every machine that holds them.",
+        "`brain changes` refuses below local reach (a remote MCP transport) and returns no ids there."
+      ],
+      "surfaces": {
+        "cli": [
+          "store init",
+          "store path",
+          "store device",
+          "store device list",
+          "store device retire",
+          "store partition",
+          "store partition leave",
+          "store shard",
+          "store shard quarantine",
+          "store shard list",
+          "store shard release",
+          "brain changes"
+        ],
+        "mcp": ["brain_changes"]
+      },
+      "docs": [
+        "docs/brain-store.md#the-pieces",
+        "docs/brain-store.md#syncing",
+        "src/core/store/FORMAT.md"
+      ],
+      "code": ["src/core/store/", "src/core/search/brain-store/changes.ts"],
+      "keywords": [
+        "local-first sync",
+        "append-only log",
+        "event sourcing",
+        "hybrid logical clock",
+        "crdt",
+        "content-addressed storage",
+        "multi-device replication"
+      ]
+    },
+    {
+      "slug": "store-migration",
+      "name": "Upgrades and store migration",
+      "summary": "Moves a legacy brain into the store, upgrades release-owned files and relocates vault state, with dry runs.",
+      "status": "stable",
+      "capabilities": [
+        "Migrates the legacy brain by quiescing writers, backing up with a test restore, converting in journaled passes, then verifying",
+        "Starts the migration by itself after an update in a detached worker unless `auto_store_migration: false` is set",
+        "Resumes a stopped migration without importing anything twice (`--resume`)",
+        "Restores the legacy tree and replays the records written since (`--rollback`)",
+        "Moves the legacy tree to a local archive once every cohort device switched or retired (`--remove-legacy`)",
+        "Counts an unswitched cohort device silent for `migration.silent_device_days` (30, 0 off) as retired",
+        "Merges missing keys into `_brain.yaml`, refreshes `_BRAIN.md` and repairs corrupted principles (`brain upgrade`)",
+        "Moves a store that 2.0.0 left outside the vault into `.open-second-brain-store/` by copy, verify, bind, commit"
+      ],
+      "limits": [
+        "`store move-into-vault` never runs by itself and refuses while an agent session, dream pass or migration writes.",
+        "`brain upgrade --apply` refuses on a machine switched to the store, which has no managed files to upgrade.",
+        "`state rollback` restores only files whose digest still matches the manifest; changed files are refused by name.",
+        "A migration rollback works only until the legacy tree has left the vault."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain migrate-store",
+          "brain upgrade",
+          "store move-into-vault",
+          "state status",
+          "state migrate",
+          "state rollback"
+        ],
+        "config": ["migration.silent_device_days"]
+      },
+      "docs": [
+        "docs/brain-store.md#moving-an-existing-install",
+        "docs/cli-reference.md#the-automatic-store-migration",
+        "docs/cli-reference.md#state-surfaces-since-v1500"
+      ],
+      "code": [
+        "src/core/store-migration/",
+        "src/core/brain/upgrade.ts",
+        "src/core/state/migrate.ts"
+      ],
+      "keywords": [
+        "data migration",
+        "schema migration",
+        "dry run",
+        "rollback",
+        "backfill",
+        "storage relocation"
+      ]
+    },
+    {
+      "slug": "shared-settings",
+      "name": "Shared brain settings",
+      "summary": "Settings every machine of a brain agrees on, read and changed by name, with operator values protected from agents.",
+      "status": "stable",
+      "capabilities": [
+        "Gets, lists, sets and unsets a shared setting by name (`<block>.<field>` or a scalar key) from the CLI or MCP.",
+        "Writes a change on a switched machine as a `setting-set` or `setting-unset` record in the shared stream.",
+        "Folds each key as a register: human beats agent authority, then the later clock; unset restores the default.",
+        "Edits the key in place in `Brain/_brain.yaml` on a machine not yet switched to the store.",
+        "Refuses agent writes over a human value and agent writes to operator-only keys (integrity, read, capture scope).",
+        "Validates every value with the settings validator before it writes",
+        "Folds `brain.schema.*` lists per entry from `setting-entry` records, so edits made on two machines both survive.",
+        "Answers a device-only key with the machine config line that holds it"
+      ],
+      "limits": [
+        "Covers only keys every machine shares; device keys stay in each machine's config file, which it does not edit."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain settings",
+          "brain settings get",
+          "brain settings set",
+          "brain settings unset",
+          "brain settings list"
+        ],
+        "mcp": ["brain_settings"]
+      },
+      "docs": [
+        "docs/brain-store.md#settings-schema-and-personas-across-machines",
+        "src/core/store/FORMAT.md#shared-settings"
+      ],
+      "code": [
+        "src/core/brain/policy/settings-write.ts",
+        "src/core/brain/policy/settings-keys.ts",
+        "src/core/store/fold-settings.ts"
+      ],
+      "keywords": [
+        "shared configuration",
+        "config sync",
+        "last-writer-wins register",
+        "settings management",
+        "access policy"
+      ]
+    },
+    {
+      "slug": "storage-report",
+      "name": "Storage usage and compaction",
+      "summary": "Per-surface storage census with a growth forecast against a cap, and compaction of expired receipt records.",
+      "status": "stable",
+      "capabilities": [
+        "Measures bytes per surface (Brain tree, snapshots, archives, payloads, state, index); a refused one is named.",
+        "Appends one `storage_usage` sample per report and fits a per-day linear trend over 30 days once 3 days exist.",
+        "Tiers usage against `storage.cap_bytes`: warn at 80% or 30 days left, critical at 95% or 7; no cap is unbounded.",
+        "Re-measures when deciding: ingest refuses at critical, the maintenance lane pauses at `storage.pause_percent`.",
+        "Scans the continuity and metrics receipt ledgers for records older than 30 days (`brain receipts scan`).",
+        "Folds old records of named shards into one aggregate line per kind and month; previews unless `--apply`.",
+        "Snapshots first, rewrites each shard atomically with compare-and-swap, logs a `receipt_compaction` record."
+      ],
+      "limits": [
+        "The census covers the vault's `Brain/` tree and index files, not the brain store folder.",
+        "Below local reach the report is refused and no sample is taken; compaction runs at local reach only.",
+        "Compacts only this device's shards named from a scan, and refuses to apply on a store-only machine."
+      ],
+      "surfaces": {
+        "cli": ["brain storage", "brain receipts"],
+        "mcp": ["brain_storage", "brain_receipts"],
+        "config": ["storage"]
+      },
+      "docs": ["docs/cli-reference.md#storage-lifecycle-since-v1850"],
+      "code": [
+        "src/core/brain/storage/",
+        "src/core/brain/receipts/compact.ts",
+        "src/mcp/brain/storage-tools.ts"
+      ],
+      "keywords": [
+        "disk usage",
+        "capacity planning",
+        "storage quota",
+        "log compaction",
+        "growth forecast",
+        "retention"
+      ]
+    },
+    {
+      "slug": "maintenance-lane",
+      "name": "Scheduled maintenance",
+      "summary": "A lease-guarded quiet-window lane that runs dream, reindex, links and custom tasks, or prints a cron recipe.",
+      "status": "stable",
+      "capabilities": [
+        "Runs dream, reindex, bridges, clusters and relink stale-first (least recently succeeded first), journaling each.",
+        "Gates a run on a local hour window, query rate (5 in 10 minutes), host run-queue pressure and storage tier.",
+        "Holds an expiring 30-minute SQLite lease so two heavy passes never share a vault; `--force` never bypasses it.",
+        "Refuses a task after `maintenance.failure_streak_limit` failures in a row (default 3); `--retry` passes one.",
+        "Runs machine-config shell commands as `custom:<name>` tasks, off unless `maintenance_custom_tasks` is set.",
+        "Keeps reindex keyword-only unless `maintenance_embeddings` is set, then prints predicted spend and records it.",
+        "Previews relink anchor additions to signal pages and rewrites them only with `--relink-apply`.",
+        "Shows the lease holder and the recent journal rows (`maintenance status`)"
+      ],
+      "limits": [
+        "Runs only when something calls it; it installs no schedule, and `--cron-template` only prints one.",
+        "Custom tasks come from the machine config only, never from the vault or an MCP call, and record no spend."
+      ],
+      "surfaces": {
+        "cli": ["brain maintenance run", "brain maintenance status"],
+        "mcp": ["brain_maintenance"],
+        "config": ["maintenance"]
+      },
+      "docs": [
+        "docs/cli-reference.md#write-time-integrity-and-governance-since-v0440",
+        "docs/hermes-cron.md#use-a-printed-maintenance-recipe"
+      ],
+      "code": [
+        "src/core/brain/maintenance/lane.ts",
+        "src/core/brain/maintenance/lease.ts",
+        "src/core/brain/maintenance/custom-tasks.ts"
+      ],
+      "keywords": [
+        "background jobs",
+        "scheduled maintenance",
+        "job scheduler",
+        "cron",
+        "distributed lease",
+        "off-peak processing",
+        "reindexing"
+      ]
+    },
+    {
+      "slug": "brain-health",
+      "name": "Brain health checks",
+      "summary": "Invariant checks with safe repairs, semantic health, recovery probes and an operator status with next commands.",
+      "status": "stable",
+      "capabilities": [
+        "Runs 66 registered read-only checks: frontmatter, status-vs-folder, ids, links, logs, store shards and clocks.",
+        "Applies safe repairs with `doctor --repair --apply`: closes dangling dream workruns, prunes dead evidence links.",
+        "Plans ordered remediation (`--remediate`) and applies only auto-safe steps (a content-hash re-stamp), capped.",
+        "Reports contradictory preferences (Jaccard 0.5, opposite sign), uncovered concepts and claims stale 180 days.",
+        "Gives an operator verdict of clean, watch or investigate (`brain summary`)",
+        "Combines doctor, health, hygiene, stale scan and review candidates in `brain status`, a command per problem.",
+        "Probes config, required folders and the search index (`watchdog`); remediation only creates missing folders.",
+        "Scores preferences on diversity, connectivity, orphans and gap pressure (`vitals`)"
+      ],
+      "limits": [
+        "Doctor writes nothing without `--repair --apply` or `--remediate`; repairs cover workrun gaps and dead links.",
+        "Contradiction detection is token overlap with opposite sign; it uses no model.",
+        "Below local reach, store findings are computed without the private partition."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain doctor",
+          "brain status",
+          "brain watchdog",
+          "brain health",
+          "brain health-baseline",
+          "brain vitals",
+          "brain summary",
+          "brain actions"
+        ],
+        "mcp": ["brain_doctor", "brain_status", "brain_watchdog", "brain_health"],
+        "config": ["health", "guardrails"]
+      },
+      "docs": [
+        "docs/cli-reference.md#maintenance-and-operator-surfaces",
+        "docs/cli-reference.md#semantic-health-baselining-since-v1380",
+        "docs/brain-store.md#shards-read-only-in-part"
+      ],
+      "code": ["src/core/brain/doctor.ts", "src/core/brain/health/", "src/core/brain/watchdog.ts"],
+      "keywords": [
+        "health check",
+        "integrity check",
+        "self-diagnostics",
+        "fsck",
+        "contradiction detection",
+        "status dashboard"
+      ]
+    },
+    {
+      "slug": "memory-hygiene",
+      "name": "Memory hygiene",
+      "summary": "Finds contested, duplicate, stale and unused memories and broken pages, and applies only the fixes chosen.",
+      "status": "stable",
+      "capabilities": [
+        "Scans for contested truth slots, duplicates (cosine 0.97 or Jaccard), stale pages, low use, url-only sources.",
+        "Applies only named finding ids: merge, supersede via `hygiene.resolver_cmd`, recompile, archive, retire.",
+        "Reports preferences, signals and log days idle past `temporal:` thresholds (90, 30, 180 days) (`brain stale`).",
+        "Merges pages sharing a dedup key (`page-dedup --apply`) by stamping `merged_into` and repointing wikilinks.",
+        "Fixes structural drift with `lint --consolidate --apply`",
+        "Recompiles derived pages whose sources changed (`brain refresh`)",
+        "Unions `private` into `visibility` for informal privacy markers (`privacy-marker-restamp`); dry run by default.",
+        "Adds one Stop-hook line of finding counts per change (`hygiene-digest`), off unless `hygiene_digest_enabled`."
+      ],
+      "limits": [
+        "Scans are read-only; nothing changes without explicit finding ids or an `--apply` flag.",
+        "Contested slots resolve on their own only through an operator-set `hygiene.resolver_cmd`; else they stay review.",
+        "The digest line reaches only hosts with a non-blocking Stop channel (Claude Code)."
+      ],
+      "surfaces": {
+        "cli": [
+          "brain hygiene",
+          "brain stale",
+          "brain page-dedup",
+          "brain lint",
+          "brain validate",
+          "brain refresh",
+          "brain tiers",
+          "brain orphan-repair",
+          "brain privacy-marker-restamp"
+        ],
+        "mcp": ["brain_hygiene", "brain_stale_scan", "brain_tiers"],
+        "hooks": ["hygiene-digest"],
+        "config": ["hygiene", "temporal"]
+      },
+      "docs": [
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290",
+        "docs/how-it-works.md#hygiene-sanitisation-and-lints"
+      ],
+      "code": [
+        "src/core/brain/hygiene/",
+        "src/core/brain/page-dedup.ts",
+        "hooks/hygiene-digest.ts"
+      ],
+      "keywords": [
+        "memory deduplication",
+        "stale memory detection",
+        "conflict resolution",
+        "knowledge base cleanup",
+        "linting",
+        "memory decay",
+        "garbage collection"
+      ]
+    }
+  ]
+}
