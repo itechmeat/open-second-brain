@@ -283,7 +283,7 @@ describe("the wording of a new topic", () => {
     expect(wordingRejection("Alley garden")).not.toBeNull();
   });
 
-  test("a group that changes supersedes its wording item; one that is gone cancels it", () => {
+  test("a group that changes keeps its one wording item, replaced when a take reaches it", () => {
     const members = garden(5);
     produceTopicQuestions(f.queue, readTopicQuestionState(f.a, f.still())!, {
       until: Number.POSITIVE_INFINITY,
@@ -295,7 +295,11 @@ describe("the wording of a new topic", () => {
       until: Number.POSITIVE_INFINITY,
       clock: f.still,
     });
-    expect(f.items(TOPIC_WORDING_OPERATION)).toHaveLength(2);
+    // Asked once at a time: the open wording item stays, and the take's
+    // recheck replaces it with the six members then.
+    const wording = f.items(TOPIC_WORDING_OPERATION);
+    expect(wording).toHaveLength(1);
+    expect(wording[0]!.body.payload["members"]).toHaveLength(5);
   });
 });
 

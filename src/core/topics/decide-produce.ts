@@ -9,9 +9,19 @@
  * Items are written in chunks through `produceWorkBatch` (one gate, one
  * lock, one read of the queue per chunk); the deadline is checked before
  * each chunk.
+ *
+ * A subject is asked once at a time: while an item of the same operation
+ * about it is still open (waiting, out on a lease, or answered and not yet
+ * applied), no second item is produced for a changed input. The take
+ * rechecks the open item's input and replaces it then, once, with the
+ * input of that moment. Without this every new topic or reworded topic
+ * re-asked every waiting routing question (on a real brain, 20,518 route
+ * items for 4,569 records in one night, each one a full copy of the
+ * question).
  */
 
 import {
+  closeDuplicateWork,
   dreamWorkItemBody,
   DreamQueueIncompleteSnapshotError,
   produceWorkBatch,
@@ -19,7 +29,10 @@ import {
   type DreamQueue,
   type ProduceSpec,
 } from "../brain/dream-queue/queue.ts";
-import { wordingProduceSpec } from "./wording-operation.ts";
+import type { DreamWorkStateName } from "../brain/dream-queue/constants.ts";
+import { RELEASE_EGRESS_REFUSED, RELEASE_SHADOW } from "../brain/dream-queue/decision-executor.ts";
+import type { DreamWorkItem } from "../brain/dream-queue/fold.ts";
+import { TOPIC_WORDING_OPERATION, wordingProduceSpec } from "./wording-operation.ts";
 import {
   CLOSED_OPERATIONS,
   closedProduceSpec,
@@ -40,8 +53,56 @@ export interface ProduceTopicQuestionsResult {
   readonly existing: number;
   /** Subjects the run did not reach before its deadline. */
   readonly left: number;
+  /** Open items an older build had asked again, closed as superseded. */
+  readonly duplicates: number;
   /** Items written by this run, per operation. */
   readonly asked: Readonly<Record<ClosedOperation, number>>;
+}
+
+/** States of an item that still stands for its subject: asked and not settled. */
+const OPEN_STATES: ReadonlySet<DreamWorkStateName> = new Set([
+  "waiting",
+  "leased",
+  "accepted",
+  "awaiting-review",
+]);
+
+/** Releases after which no taker offers the item again for the same input. */
+const SET_ASIDE: ReadonlySet<string> = new Set([RELEASE_SHADOW, RELEASE_EGRESS_REFUSED]);
+
+/** Whether no taker offers `item` again for its own input. */
+function setAside(item: DreamWorkItem): boolean {
+  const release = item.last_release;
+  return (
+    release !== null && release.input_hash === item.body.input_hash && SET_ASIDE.has(release.reason)
+  );
+}
+
+/** A question of one version about one subject. */
+function subjectKey(spec: {
+  readonly operation: string;
+  readonly subject: string;
+  readonly prompt_version: string;
+  readonly schema_version: string;
+}): string {
+  return [spec.operation, spec.subject, spec.prompt_version, spec.schema_version].join("\u0000");
+}
+
+/**
+ * The open item of each question (operation, subject, version): the first
+ * in the fold that still waits to be asked or applied. An item set aside
+ * for its own input (asked in shadow, refused by egress) does not stand:
+ * no taker offers it again until its input changes, so a changed input
+ * needs its own item.
+ */
+function openItemsBySubject(items: Iterable<DreamWorkItem>): Map<string, string> {
+  const open = new Map<string, string>();
+  for (const item of items) {
+    if (!OPEN_STATES.has(item.state) || setAside(item)) continue;
+    const key = subjectKey(item.body);
+    if (!open.has(key)) open.set(key, item.id);
+  }
+  return open;
 }
 
 function byOccurrence(x: ClosedQuestion, y: ClosedQuestion): number {
@@ -62,16 +123,44 @@ export function produceTopicQuestions(
   // Each qualifying group's wording item rides beside its `topic-new` item
   // (change `dream-launched-agent`, design D6): same occurrence, so both
   // land in one batch.
-  const wordings = new Map(wordingGroups(state).map((g) => [g.group.key, wordingProduceSpec(g)]));
-  const questions = closedQuestions(state).toSorted(byOccurrence);
+  // Questions an older build asked again are closed first, the newest of
+  // each kept: the take rechecks that one.
+  const duplicates = closeDuplicateWork(
+    queue,
+    new Set<string>([...CLOSED_OPERATIONS, TOPIC_WORDING_OPERATION]),
+    setAside,
+  );
   const snapshot = readDreamWork(queue.store);
   if (snapshot.unreadable.length > 0) {
     throw new DreamQueueIncompleteSnapshotError(snapshot.unreadable);
   }
   const queued = snapshot.items;
-  const pending = questions.filter(
-    (question) => !queued.has(dreamWorkItemBody(closedProduceSpec(question)).id),
+  const open = openItemsBySubject(snapshot.items.values());
+  const wordings = new Map<string, ProduceSpec>();
+  const questions = closedQuestions(state).toSorted(byOccurrence);
+  const newQuestionOf = new Map(
+    questions
+      .filter((q) => q.operation === "topic-new")
+      .map((q) => [q.subject, closedProduceSpec(q)]),
   );
+  for (const entry of wordingGroups(state)) {
+    const spec = wordingProduceSpec(entry);
+    if (open.has(subjectKey(spec))) continue;
+    // Its `topic-new` question is not asked again while an older one is
+    // open: the wording comes after that one.
+    const newQuestion = newQuestionOf.get(entry.group.key);
+    const asked = newQuestion === undefined ? undefined : open.get(subjectKey(newQuestion));
+    wordings.set(
+      entry.group.key,
+      entry.after !== null && asked !== undefined
+        ? wordingProduceSpec({ ...entry, after: asked })
+        : spec,
+    );
+  }
+  const pending = questions.filter((question) => {
+    const spec = closedProduceSpec(question);
+    return !queued.has(dreamWorkItemBody(spec).id) && !open.has(subjectKey(spec));
+  });
   const specsOf = (q: ClosedQuestion): ProduceSpec[] => {
     const spec = closedProduceSpec(q);
     if (q.operation !== "topic-new") return [spec];
@@ -121,5 +210,5 @@ export function produceTopicQuestions(
       else existing += 1;
     }
   }
-  return { produced, existing, left: pending.length - done, asked };
+  return { produced, existing, left: pending.length - done, asked, duplicates };
 }
