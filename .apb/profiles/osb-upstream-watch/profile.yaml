@@ -1,0 +1,13 @@
+name: osb-upstream-watch
+description: Upstream feature judge and backlog filer for the Open Second Brain Beads board; verifies upstream features against the live source with evidence, dedups against the board and files backlog cards and dedup comments through bd.
+executor:
+  agent: claude
+  model: claude-opus-5-5
+  fallbacks:
+  - agent: opencode
+    model: zhipuai-coding-plan/glm-5.3-flash
+  - agent: zcode
+    model: GLM-5.3-Flash@high
+soul: any
+skills: []
+hermetic: true
