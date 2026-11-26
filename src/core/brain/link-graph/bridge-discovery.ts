@@ -24,6 +24,7 @@ import { basename, join, relative } from "node:path";
 
 import type { Store } from "../../search/store.ts";
 import { linkConstraintAllows } from "../../search/link-constraints.ts";
+import { assertLaneWriteAtReach } from "../../store/lane-reach-guard.ts";
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { toPosix } from "../../path-safety.ts";
 import { isoSecond } from "../time.ts";
@@ -212,7 +213,8 @@ function proposalsPath(vault: string): string {
   return join(vault, "Brain", "proposals", "bridges.md");
 }
 
-function dismissedPath(vault: string): string {
+/** The dismissal list of `vault`, an entry a dismissal addresses with a write. */
+export function dismissedBridgesPath(vault: string): string {
   return join(vault, "Brain", "proposals", "bridges-dismissed.json");
 }
 
@@ -266,7 +268,7 @@ export function writeBridgeProposals(
 
 /** Persisted dismissals, unordered pair keys. Fail-soft read. */
 export function readDismissedBridges(vault: string): Set<string> {
-  const text = readLaneText(vault, dismissedPath(vault));
+  const text = readLaneText(vault, dismissedBridgesPath(vault));
   if (text === null) return new Set();
   try {
     const parsed: unknown = JSON.parse(text);
@@ -282,13 +284,16 @@ export function readDismissedBridges(vault: string): Set<string> {
 export function dismissBridge(vault: string, source: string, target: string): boolean {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
+  // A caller still inside a below-reach scope (not the tool, which
+  // judges before it shows `private`): a list held in `private` refuses.
+  assertLaneWriteAtReach(vault, [dismissedBridgesPath(vault)]);
   const key = bridgePairKey(source, target);
   const dismissed = readDismissedBridges(vault);
   if (dismissed.has(key)) return false;
   dismissed.add(key);
   writeLaneText(
     vault,
-    dismissedPath(vault),
+    dismissedBridgesPath(vault),
     JSON.stringify({ pairs: [...dismissed].toSorted() }, null, 2) + "\n",
   );
   return true;

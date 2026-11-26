@@ -4,6 +4,19 @@
  * store, cached per store root until an `events` shard changes, and the
  * device-local lock targets lane writes take on a store-only machine.
  *
+ * Two folds come from one builder. {@link laneStoreFold} is the caller's
+ * fold: for a caller below local reach (`privateWithheld()`) it folds the
+ * `shared` partition only, judged by the fold of every partition (a key
+ * whose winning record is held in `private` is left out, and nothing is
+ * left while that fold may miss a record), so every lane read answers
+ * that caller as a machine holding only `shared` would, whatever reader
+ * asks; otherwise it is the fold of every partition. {@link wholeLaneStoreFold} is always
+ * the fold of every partition, for the work that needs it whatever the
+ * scope (privacy verdicts, a write's placement and checks, record
+ * builders, repairs). Each is cached under its own key, and their
+ * fingerprints never match, so a memo keyed by the caller's stamp keeps a
+ * value built for one scope away from the other.
+ *
  * The fold remembers which live entries were written to the `private`
  * partition: a removal or a move writes its tombstone where the entry
  * lives, so a device that holds only `shared` sees a shared entry's
@@ -26,7 +39,8 @@ import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { processDirsEnv, stateRootDir } from "../platform-dirs.ts";
-import { STORE_PARTITIONS, type Authority } from "./constants.ts";
+import { privateWithheld } from "./caller-reach.ts";
+import { STORE_PARTITIONS, type Authority, type StorePartition } from "./constants.ts";
 import type { StoreRecord } from "./envelope.ts";
 import { parseHlc } from "./hlc.ts";
 import {
@@ -49,6 +63,17 @@ export interface LaneFolded {
   readonly clocks: ReadonlyMap<string, number>;
   /** Keys of the live entries whose winning record is in `private`. */
   readonly privateKeys: ReadonlySet<string>;
+  /**
+   * Keys whose winning record is a removal held in `private`: the entry
+   * was private when it went, so a `shared` value of the key is stale.
+   */
+  readonly privateRemovals: ReadonlySet<string>;
+  /**
+   * Set on the caller's fold below local reach while the fold of every
+   * partition may miss a record: the view then holds no entry at all, and
+   * names no `private` gap ({@link laneStoreFold}).
+   */
+  readonly partitionUnknown?: true;
   /**
    * The authority of each live entry's winning record: a rewrite that only
    * adds to an entry (a privacy restamp) keeps it, so a later writer of the
@@ -95,6 +120,7 @@ const EMPTY_FOLD: LaneFolded = {
   entries: new Map(),
   clocks: new Map(),
   privateKeys: new Set(),
+  privateRemovals: new Set(),
   authorities: new Map(),
   unreadable: [],
   pendingBlobs: [],
@@ -114,9 +140,13 @@ function isLaneRecord(record: StoreRecord): boolean {
  * stored (`pendingBlobStampLines`), so the stored stamp moves the moment
  * one is delivered and stays put while it is absent.
  */
-function laneFingerprintOf(store: StoreInspection): string {
+function laneFingerprintOf(
+  store: StoreInspection,
+  partitions: ReadonlyArray<StorePartition>,
+): string {
   const parts: string[] = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
   for (const partition of [...store.partitions].toSorted()) {
+    if (!partitions.includes(partition)) continue;
     for (const shard of listShards(partitionDir(store.root, partition), { stream: "events" })) {
       let stamp = "missing";
       try {
@@ -132,11 +162,102 @@ function laneFingerprintOf(store: StoreInspection): string {
 }
 
 /**
- * The lane fold of the configured store (empty with no store; on a
- * switched machine whose store cannot be opened, empty with that reason
- * in `unreadable`).
+ * The caller's lane fold of the configured store: below local reach
+ * (`privateWithheld()`) the fold of the `shared` partition only, cached
+ * under its own key, its fingerprint marked apart and stamped over the
+ * `shared` shards only, its `privateKeys` empty and its `unreadable` and
+ * `pendingBlobs` naming `shared` gaps only; otherwise the fold of every
+ * partition ({@link wholeLaneStoreFold}). Every lane read goes through it,
+ * so a reader nobody listed is narrowed by construction.
  */
 export function laneStoreFold(configPath?: string): LaneFolded {
+  if (!privateWithheld()) return wholeLaneStoreFold(configPath);
+  return sharedView(foldOf(configPath, ["shared"]), wholeLaneStoreFold(configPath));
+}
+
+const views = new Map<string, LaneFolded>();
+
+/**
+ * The caller's fold below local reach: the fold of `shared` (`narrow`)
+ * judged by the fold of every partition (`whole`), so a reader that binds
+ * no reach rule of its own is narrowed too. While `whole` may miss a
+ * record ({@link laneFoldIncomplete}) the view holds no entry at all (a
+ * shared value may be the stale copy of an entry raised in a record the
+ * fold cannot see), marked {@link LaneFolded.partitionUnknown}, its gaps
+ * still the `shared` ones only. Otherwise every key whose winning record
+ * in `whole` is held in `private` (a live entry, or a removal) is left
+ * out: a `shared` value of it is stale (a raise or a removal whose
+ * `shared` tombstone this machine has not read). The verdict is part of
+ * the view's fingerprint, so a memo keyed by it never serves a value
+ * built before the verdict changed.
+ */
+function sharedView(narrow: LaneFolded, whole: LaneFolded): LaneFolded {
+  // The view is a function of the two folds, which their fingerprints
+  // name, so the memo is asked before any key is scanned. A fold of a
+  // store that could not be opened has no fingerprint: never memoized,
+  // so two such results never share a key.
+  const memoKey =
+    narrow.fingerprint === "" || whole.fingerprint === ""
+      ? null
+      : `${narrow.fingerprint}\u0000${whole.fingerprint}`;
+  const memo = memoKey === null ? undefined : views.get(memoKey);
+  if (memo !== undefined) return memo;
+  const remember = (view: LaneFolded): LaneFolded => {
+    views.clear();
+    if (memoKey !== null) views.set(memoKey, view);
+    return view;
+  };
+  const unknown = laneFoldIncomplete(whole);
+  const dropped = unknown
+    ? [...narrow.entries.keys()]
+    : [...narrow.entries.keys()].filter(
+        (key) => whole.privateKeys.has(key) || whole.privateRemovals.has(key),
+      );
+  if (!unknown && dropped.length === 0) return remember(narrow);
+  const verdict = unknown
+    ? "withheld=all"
+    : `withheld=${createHash("sha256").update(dropped.toSorted().join("\n")).digest("hex")}`;
+  const fingerprint = `${narrow.fingerprint}\n${verdict}`;
+  const gone = new Set(dropped);
+  const keep = <V>(map: ReadonlyMap<string, V>): Map<string, V> =>
+    new Map([...map].filter(([key]) => !gone.has(key)));
+  const view: LaneFolded = {
+    fingerprint,
+    entries: keep(narrow.entries),
+    clocks: keep(narrow.clocks),
+    privateKeys: new Set(),
+    privateRemovals: new Set(),
+    authorities: keep(narrow.authorities),
+    unreadable: narrow.unreadable,
+    pendingBlobs: narrow.pendingBlobs,
+    ...(unknown ? { partitionUnknown: true as const } : {}),
+  };
+  return remember(view);
+}
+
+/**
+ * The lane fold of every partition this machine holds, whatever the scope
+ * (empty with no store; on a switched machine whose store cannot be
+ * opened, empty with that reason in `unreadable`): for a privacy verdict,
+ * a write's placement and version checks, a record builder or a repair,
+ * which must see every entry the store holds.
+ */
+export function wholeLaneStoreFold(configPath?: string): LaneFolded {
+  return foldOf(configPath, STORE_PARTITIONS);
+}
+
+/**
+ * The lane fold of `partitions` of the configured store. The fold of
+ * every partition is cached under the store root; any narrower one under
+ * the root plus its partitions, with its fingerprint prefixed by a line
+ * naming them (`shared-only` for the caller's fold below local reach),
+ * which no fold of every partition carries.
+ */
+function foldOf(
+  configPath: string | undefined,
+  partitions: ReadonlyArray<StorePartition>,
+): LaneFolded {
+  const narrow = STORE_PARTITIONS.some((partition) => !partitions.includes(partition));
   let store: StoreInspection | null;
   try {
     store = protectionStore(configPath, { needShared: true });
@@ -149,21 +270,23 @@ export function laneStoreFold(configPath?: string): LaneFolded {
     return { ...EMPTY_FOLD, unreadable: [err.publicMessage] };
   }
   if (store === null) return EMPTY_FOLD;
-  const cached = cache.get(store.root);
+  const cacheKey = narrow ? `${store.root}\u0000${partitions.join(",")}` : store.root;
+  const prefix = narrow ? `${partitions.join(",")}-only\n` : "";
+  const cached = cache.get(cacheKey);
   // The stamp a stored fold must still match: the shard part plus the
   // availability of the blobs that fold skipped (one stat each, no shard
   // is read). A fold whose stored stamp lists no blob lines is uncached.
   const cachedLines =
     cached === undefined ? null : pendingBlobStampLines(store.root, cached.pendingBlobs);
-  const shardStamp = laneFingerprintOf(store);
-  const fingerprint = cachedLines === null ? null : `${shardStamp}\n${cachedLines}`;
+  const shardStamp = laneFingerprintOf(store, partitions);
+  const fingerprint = cachedLines === null ? null : `${prefix}${shardStamp}\n${cachedLines}`;
   if (cached !== undefined && cached.fingerprint === fingerprint) return cached;
   const records: StoreRecord[] = [];
   const inPrivate = new Set<string>();
   const unreadable: string[] = [];
   const pendingBlobs: string[] = [];
   for (const partition of STORE_PARTITIONS) {
-    if (!store.partitions.has(partition)) continue;
+    if (!store.partitions.has(partition) || !partitions.includes(partition)) continue;
     // Only the lane records are held: the rest of `events` (signals, the
     // log, preferences) is parsed and dropped as it streams by, so a hook
     // that reads one lane entry never holds the whole stream. A record of
@@ -186,9 +309,13 @@ export function laneStoreFold(configPath?: string): LaneFolded {
   const entries = new Map<string, LaneEntryValue>();
   const clocks = new Map<string, number>();
   const privateKeys = new Set<string>();
+  const privateRemovals = new Set<string>();
   const authorities = new Map<string, Authority>();
   for (const [key, state] of foldLaneEntries(records).entries) {
-    if (state.value === null) continue;
+    if (state.value === null) {
+      if (inPrivate.has(state.winner)) privateRemovals.add(key);
+      continue;
+    }
     entries.set(key, state.value);
     const winner = state.history.find((h) => h.record.id === state.winner);
     if (winner !== undefined) authorities.set(key, winner.authority);
@@ -210,20 +337,22 @@ export function laneStoreFold(configPath?: string): LaneFolded {
   // instead of forcing a full rebuild on every read.
   const blobLines = pendingBlobStampLines(store.root, pendingBlobs);
   const storedFingerprint =
-    blobLines === null || unreadable.length > 0
+    prefix +
+    (blobLines === null || unreadable.length > 0
       ? incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs, records)
-      : `${shardStamp}\n${blobLines}`;
+      : `${shardStamp}\n${blobLines}`);
   const folded = {
     fingerprint: storedFingerprint,
     entries,
     clocks,
     privateKeys,
+    privateRemovals,
     authorities,
     unreadable,
     pendingBlobs,
   };
-  if (unreadable.length === 0 && blobLines !== null) cache.set(store.root, folded);
-  else cache.delete(store.root);
+  if (unreadable.length === 0 && blobLines !== null) cache.set(cacheKey, folded);
+  else cache.delete(cacheKey);
   return folded;
 }
 

@@ -54,8 +54,8 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import { foldIncomplete, heldInStore, storeEntry } from "../store/lane-entry-store.ts";
-import { laneStoreFold } from "../store/lane-fold-cache.ts";
+import { heldInStore, storeEntry } from "../store/lane-entry-store.ts";
+import { laneFoldIncomplete, laneStoreFold } from "../store/lane-fold-cache.ts";
 import { rawParsesBack, renderLaneText } from "../store/lane-raw.ts";
 import { legacyArchivePath } from "../store-migration/legacy-kept.ts";
 import { BRAIN_SCOPED_RULES_DIR, BRAIN_STANDING_RULES_FILE } from "./path-constants.ts";
@@ -194,11 +194,20 @@ export function readOperatorRuleFile(vault: string, path: string): string {
   if (!heldInStore(vault, path)) return readFileSync(path, "utf8");
   const value = storeEntry(vault, path);
   if (value === null) {
-    if (foldIncomplete()) {
-      const missing = laneStoreFold().unreadable;
+    // The caller's fold, for the verdict and the names alike: below local
+    // reach a `private` gap is never named, yet the view then holds no
+    // entry (`partitionUnknown`), so the read fails rather than answer
+    // "no rules".
+    const fold = laneStoreFold();
+    if (laneFoldIncomplete(fold) || fold.partitionUnknown === true) {
+      const missing = fold.unreadable;
       throw new Error(
         "the brain store could not be read whole" +
-          (missing.length > 0 ? ` (${missing.join(", ")})` : " (a record's body has not arrived)"),
+          (missing.length > 0
+            ? ` (${missing.join(", ")})`
+            : fold.partitionUnknown === true
+              ? ""
+              : " (a record's body has not arrived)"),
       );
     }
     const absent = new Error(

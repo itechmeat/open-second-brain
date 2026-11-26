@@ -23,6 +23,7 @@ import { relateEntities, upsertEntity } from "../../../../src/core/brain/entitie
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { writeLanePage } from "../../../../src/core/store/lane-pages.ts";
 import { withOperationPrivacy } from "../../../../src/core/store/operation-scope.ts";
+import { withoutReferenceJudging } from "../../../../src/core/store/reference-privacy.ts";
 import type { StoreRecord } from "../../../../src/core/store/envelope.ts";
 import { makeStoreEnv, type StoreEnv } from "../../store/fixtures/store-env.ts";
 import { partitionRecords, switchDevice } from "./fixtures.ts";
@@ -160,6 +161,21 @@ function entityPage(vault: string, id: string, name: string, body: string, extra
   __clearEntityIndexCache();
 }
 
+/**
+ * The survivor `ent-people-ada` naming the private `ent-people-junk`, in
+ * `shared`, as a writer before private-partition lane entries were
+ * withheld below local reach placed it: that writer did not judge a
+ * reference to a store-held lane entry, so the page landed in `shared`.
+ */
+function preUpgradeSharedSurvivor(vault: string): void {
+  withoutReferenceJudging(() =>
+    entityPage(vault, "ent-people-ada", "Ada", "# Ada\n", { related: ["[[ent-people-junk]]"] }),
+  );
+  expect(shapes(partitionRecords(env!.storeRoot, "shared"))).toContain(
+    "lane-entry people/ent-people-ada",
+  );
+}
+
 describe("a label prune once switched", () => {
   test("a pruned page private by its partition alone keeps the prune out of shared", () => {
     env = switchedEnv();
@@ -167,7 +183,7 @@ describe("a label prune once switched", () => {
     withOperationPrivacy(true, () =>
       entityPage(vault, "ent-people-junk", "***", "Seen at the clinic.\n"),
     );
-    entityPage(vault, "ent-people-ada", "Ada", "# Ada\n", { related: ["[[ent-people-junk]]"] });
+    preUpgradeSharedSurvivor(vault);
     const added = recordsAddedBy(env.storeRoot, () => {
       const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
       expect(result.edgesStripped).toBe(1);
@@ -181,12 +197,33 @@ describe("a label prune once switched", () => {
     env = switchedEnv();
     const vault = env.vault;
     entityPage(vault, "ent-people-junk", "***", "Seen at <private>the clinic</private>.\n");
-    entityPage(vault, "ent-people-ada", "Ada", "# Ada\n", { related: ["[[ent-people-junk]]"] });
+    preUpgradeSharedSurvivor(vault);
     const added = recordsAddedBy(env.storeRoot, () => {
       const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
       expect(result.edgesStripped).toBe(1);
     });
     expect(shapes(added.shared)).toEqual(sharedTombstones("ent-people-ada"));
+    expect(shapes(added.private)).toEqual([
+      "lane-entry people/ent-people-ada",
+      "lane-entry-remove people/ent-people-junk",
+      "log-event snapshot",
+    ]);
+  });
+
+  test("a survivor naming a private page is private from its creation, so the prune adds nothing to shared", () => {
+    env = switchedEnv();
+    const vault = env.vault;
+    entityPage(vault, "ent-people-junk", "***", "Seen at <private>the clinic</private>.\n");
+    // Written now, the survivor is judged by the private page it names.
+    entityPage(vault, "ent-people-ada", "Ada", "# Ada\n", { related: ["[[ent-people-junk]]"] });
+    expect(shapes(partitionRecords(env.storeRoot, "shared"))).not.toContain(
+      "lane-entry people/ent-people-ada",
+    );
+    const added = recordsAddedBy(env.storeRoot, () => {
+      const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
+      expect(result.edgesStripped).toBe(1);
+    });
+    expect(shapes(added.shared)).toEqual([]);
     expect(shapes(added.private)).toEqual([
       "lane-entry people/ent-people-ada",
       "lane-entry-remove people/ent-people-junk",

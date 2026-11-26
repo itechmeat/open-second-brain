@@ -10,7 +10,6 @@ import { join } from "node:path";
 import {
   acceptSkillProposal,
   discardUnreadableSkillAcceptJournals,
-  learnSkillProposals,
   listPendingSkillProposals,
   pendingSkillProposalPatternKind,
   readSkillRewriteStatus,
@@ -44,9 +43,11 @@ import { reachView } from "../../core/brain/reach-view.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStrList, unknownOperationError } from "../coerce.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { visibleProceduralGraph, visibleProceduralHints } from "./procedural-projection-filter.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 // Record-lane tools: with no vault their pages are store records (task 2.10 WP6).
 import { laneVault } from "./lane-vault.ts";
+import { learnAtReach } from "./skill-learn-answer.ts";
 
 async function toolBrainSkillProposals(
   ctx: ServerContext,
@@ -59,10 +60,12 @@ async function toolBrainSkillProposals(
       "min_support",
       args["min_support"],
     );
-    const result =
-      minSupport !== undefined
-        ? learnSkillProposals(laneVault(ctx), { minSupport })
-        : learnSkillProposals(laneVault(ctx));
+    // Maintenance on the whole fold; the answer narrowed below local reach.
+    const result = learnAtReach(
+      laneVault(ctx),
+      minSupport !== undefined ? { minSupport } : {},
+      ctx.configPath ?? undefined,
+    );
     return { ...result };
   }
   if (operation === "list") {
@@ -130,7 +133,9 @@ async function toolBrainSkillProposals(
   }
   if (operation === "page_draft") {
     const page = requiredStringArg("brain_skill_proposals", args, "page");
-    const result = commitSkillPageDraft(laneVault(ctx), page, args["draft"], { now: new Date() });
+    const result = commitSkillPageDraft(laneVault(ctx), page, args["draft"], {
+      now: new Date(),
+    });
     return { ...result };
   }
   if (operation === "evidence") {
@@ -228,7 +233,9 @@ async function toolBrainProceduralMemory(
   // operations, refused before anything is written.
   const readable = readableAtContextReach(ctx);
   const unknownId = (id: string): boolean => {
-    const entry = listProceduralMemory(laneVault(ctx)).find((e) => e.id === id);
+    const entry = listProceduralMemory(laneVault(ctx), ctx.configPath ?? undefined).find(
+      (e) => e.id === id,
+    );
     return entry === undefined || !readable(entry.sourcePath);
   };
   if (operation === "reconcile") {
@@ -242,11 +249,16 @@ async function toolBrainProceduralMemory(
             join(laneVault(ctx), "runbooks"),
           ];
     return {
-      ...reconcileProceduralMemory(laneVault(ctx), { roots: effectiveRoots, include: readable }),
+      ...reconcileProceduralMemory(laneVault(ctx), {
+        roots: effectiveRoots,
+        include: readable,
+      }),
     };
   }
   if (operation === "list") {
-    const entries = listProceduralMemory(laneVault(ctx)).filter((e) => readable(e.sourcePath));
+    const entries = listProceduralMemory(laneVault(ctx), ctx.configPath ?? undefined).filter((e) =>
+      readable(e.sourcePath),
+    );
     // Opt-in success-rate ranking (t_703f7b18); default order unchanged.
     const ordered = args["ranked"] === true ? rankProceduralMemory(entries) : entries;
     return { total: ordered.length, entries: ordered };
@@ -338,9 +350,26 @@ async function toolBrainProceduralGraph(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const operation = requiredStringArg("brain_procedural_graph", args, "operation");
+  // The projections are stored whole; below local reach every answer is
+  // filtered to what the caller may see (design D5).
+  const readable = readableAtContextReachOrUndefined(ctx);
   if (operation === "rebuild") {
-    const graph = rebuildProceduralGraph(laneVault(ctx));
-    const hints = rebuildProceduralHints(laneVault(ctx), { graph });
+    const whole = rebuildProceduralGraph(laneVault(ctx));
+    const wholeHints = rebuildProceduralHints(laneVault(ctx), { graph: whole });
+    const graph =
+      readable === undefined
+        ? whole
+        : visibleProceduralGraph(laneVault(ctx), whole, readable, ctx.configPath ?? undefined);
+    const hints =
+      readable === undefined
+        ? wholeHints
+        : visibleProceduralHints(
+            laneVault(ctx),
+            wholeHints,
+            whole,
+            readable,
+            ctx.configPath ?? undefined,
+          );
     return {
       operation,
       graph: {
@@ -359,12 +388,28 @@ async function toolBrainProceduralGraph(
     if (!graph) {
       throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: graph projection not found");
     }
+    if (readable !== undefined)
+      return {
+        ...visibleProceduralGraph(laneVault(ctx), graph, readable, ctx.configPath ?? undefined),
+      };
     return { ...graph };
   }
   if (operation === "hints") {
     const hints = readProceduralHints(laneVault(ctx));
     if (!hints) {
       throw new MCPError(INVALID_PARAMS, "brain_procedural_graph: hints projection not found");
+    }
+    if (readable !== undefined) {
+      const graph = readProceduralGraph(laneVault(ctx));
+      return {
+        ...visibleProceduralHints(
+          laneVault(ctx),
+          hints,
+          graph,
+          readable,
+          ctx.configPath ?? undefined,
+        ),
+      };
     }
     return { ...hints };
   }

@@ -17,6 +17,7 @@ import { sanitiseTextField } from "../redactor.ts";
 import { slugify } from "../vault.ts";
 import {
   assertLaneWrite,
+  lanePageExists,
   listLaneFiles,
   moveLanePage,
   readLanePage,
@@ -25,6 +26,9 @@ import {
 import type { FrontmatterMap } from "../types.ts";
 import { allocateAndCreate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
+import { withPrivateShown } from "../store/caller-reach.ts";
+import { takenOnWholeFold, withheldPrivateKey } from "../store/lane-reach-guard.ts";
+import { FileAlreadyExistsError } from "../fs-atomic.ts";
 
 /** Active dead-ends kept before overflow archives the oldest. */
 export const DEAD_END_MAX_ACTIVE = 100;
@@ -129,6 +133,12 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
       slug: slugify(approach),
     },
     (allocation) => {
+      // Below local reach a name a `private` entry holds is taken, read on
+      // the fold of every partition (the write rule): the ladder goes on to
+      // the next free name, as for a local caller with the same store.
+      if (withheldPrivateKey(vault, allocation.path)) {
+        throw new FileAlreadyExistsError(allocation.path);
+      }
       const deadEndId = `de-${date}-${allocation.slug}`;
       const metadata: FrontmatterMap = {
         kind: "brain-dead-end",
@@ -165,15 +175,17 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
 
 /**
  * Move the oldest active entries beyond the cap into `archive/`. The cap
- * counts every entry; with `readable`, an overflow entry the caller cannot
- * read stays where it is.
+ * counts every entry, read on the fold of every partition whatever the
+ * caller's reach (the write rule: the trim is maintenance of the lane);
+ * with `readable`, an overflow entry the caller cannot read stays where it
+ * is.
  */
 function trimActive(
   vault: string,
   maxActive: number,
   readable: ((rel: string) => boolean) | undefined,
 ): string[] {
-  const { entries } = listDeadEnds(vault);
+  const { entries } = withPrivateShown(() => listDeadEnds(vault));
   if (entries.length <= maxActive) return [];
   // `entries` is newest first; everything past the cap archives.
   const overflow = entries
@@ -184,7 +196,14 @@ function trimActive(
   const archiveDir = join(deadEndsDir(vault), "archive");
   const archived: string[] = [];
   for (const entry of overflow) {
-    moveLanePage(vault, entry.path, join(archiveDir, `${entry.id}.md`));
+    // The destination is the first slot free on every partition, whatever
+    // the caller's reach: a slot any entry occupies (private or shared) is
+    // skipped, and an archive move never lands on an occupied slot.
+    let dest = join(archiveDir, `${entry.id}.md`);
+    for (let n = 2; takenOnWholeFold(() => lanePageExists(vault, dest)); n++) {
+      dest = join(archiveDir, `${entry.id}-${n}.md`);
+    }
+    moveLanePage(vault, entry.path, dest);
     archived.push(entry.id);
   }
   return archived;

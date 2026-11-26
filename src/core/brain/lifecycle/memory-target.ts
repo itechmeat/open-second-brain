@@ -53,6 +53,14 @@ import {
 import { preferencePrivacy, preferenceStoreRecords, storeFieldsOf } from "../preference.ts";
 import { storePreferenceEntry, typedPreferenceFields } from "../preference-store.ts";
 import { signalStateRecord, storeSignal } from "../signal-state.ts";
+import { privateWithheld } from "../../store/caller-reach.ts";
+import {
+  assertCreateMatchAtReach,
+  assertHolderReadableAtReach,
+  assertLaneWriteAtReach,
+  LaneEntryWithheldError,
+  winnerHeldInPrivate,
+} from "../../store/lane-reach-guard.ts";
 import { assertStoreContentWrite } from "../../store/content-write-gates.ts";
 import { STORE_PARTITIONS, type Authority } from "../../store/constants.ts";
 import { authorityFromOrigin, dualWrite, type DualWriteRecord } from "../../store/dual-write.ts";
@@ -180,7 +188,7 @@ function entityOfRecord(recordId: string, configPath?: string): string | null {
   const store = protectionStore(configPath, { needShared: true });
   if (store === null) return null;
   for (const partition of STORE_PARTITIONS) {
-    if (!store.partitions.has(partition)) continue;
+    if (!store.partitions.has(partition) || (privateWithheld() && partition !== "shared")) continue;
     const read = readStreamRecords(store.root, partition, { stream: "events" });
     const record = read.records.find((r) => r.id === recordId);
     if (record === undefined) continue;
@@ -445,6 +453,18 @@ function storeLaneRelAt(vault: string, rel: string): string | null {
     const candidate = posix.join(BRAIN_ROOT_REL, brainRelOfEntry(value.lane, value.entry));
     if (foldedKey(candidate) === key) found.push(candidate);
   }
+  // Below local reach a shared spelling found here stands in for the
+  // entry named only when the whole fold agrees: a match held in `private`
+  // (the entry named, or another spelling) is the fixed refusal, never a
+  // shared spelling patched in its place.
+  if (found.length > 0) {
+    assertCreateMatchAtReach(vault, () =>
+      [...storeEntries().values()]
+        .map((value) => posix.join(BRAIN_ROOT_REL, brainRelOfEntry(value.lane, value.entry)))
+        .filter((candidate) => foldedKey(candidate) === key)
+        .map((candidate) => join(vault, ...candidate.split("/"))),
+    );
+  }
   return found.length === 1 ? found[0]! : null;
 }
 
@@ -699,10 +719,18 @@ export function writeMemoryPatches(
   const build = (items: ReadonlyArray<MemoryPatch>): DualWriteRecord[] =>
     items.flatMap((p) => memoryPatchRecords(vault, p.target, p.patch, authority));
   if (stored.length > 0) {
+    const lanes = stored.filter((p) => p.target.kind === "lane").map((p) => p.target.abs);
+    assertLaneWriteAtReach(vault, lanes, options.configPath);
     // All or none: a patch a higher-authority write would outrank is
     // refused before any record of the operation is appended.
     assertPatchesApply(vault, stored, authority, options.configPath);
     const records = build(stored);
+    // Below local reach a lane record placed in `private` cannot be read
+    // back through the caller's fold (verifyMemoryPatches): refused before
+    // any record, nothing half done (the write rule).
+    if (privateWithheld() && records.some((r) => r.private === true && r.kind === "lane-entry")) {
+      throw new LaneEntryWithheldError();
+    }
     if (records.length > 0) storeWrite(() => records, context);
     if (onDisk.length > 0) legacy(onDisk);
     return { private: patchesPrivate(records) };
@@ -742,16 +770,17 @@ export function assertPatchesApply(
   configPath?: string,
 ): void {
   if (authority === "human") return;
-  let laneRecords: ReadonlyArray<{ readonly body: Record<string, unknown> }> | null = null;
-  const lanes = (): ReadonlyArray<{ readonly body: Record<string, unknown> }> => {
+  type Held = { readonly body: Record<string, unknown>; readonly partition: string };
+  let laneRecords: ReadonlyArray<Held> | null = null;
+  const lanes = (): ReadonlyArray<Held> => {
     if (laneRecords !== null) return laneRecords;
     const store = protectionStore(configPath, { needShared: true });
-    const out: Array<{ body: Record<string, unknown> }> = [];
+    const out: Held[] = [];
     if (store !== null) {
       for (const partition of STORE_PARTITIONS) {
         if (!store.partitions.has(partition)) continue;
         for (const r of readStreamRecords(store.root, partition, { stream: "events" }).records) {
-          if (LANE_REGISTER_KINDS.has(r.kind)) out.push({ body: r.body });
+          if (LANE_REGISTER_KINDS.has(r.kind)) out.push({ body: r.body, partition });
         }
       }
     }
@@ -780,13 +809,16 @@ export function assertPatchesApply(
       if (record === undefined || record.body["authority"] === "human") continue;
       const place = lanePlaceOf(target.rel.slice(BRAIN_ROOT_REL.length + 1));
       if (place === null) continue;
-      const held = lanes().some(
+      const held = lanes().filter(
         (r) =>
           r.body["lane"] === place.lane &&
           r.body["entry"] === place.entry &&
           r.body["authority"] === "human",
       );
-      if (held) throw outranked(target, "entry");
+      if (held.length > 0) {
+        assertHolderReadableAtReach(winnerHeldInPrivate(place.lane, place.entry, configPath));
+      }
+      if (held.length > 0) throw outranked(target, "entry");
     }
   }
 }

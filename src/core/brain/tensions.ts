@@ -42,6 +42,7 @@ import {
   type NoteForContradiction,
 } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
+import { laneTextLandsPrivate } from "../store/lane-entry-store.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { isPrivateFrontmatter } from "../store/private-page.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
@@ -57,6 +58,7 @@ import {
   parseLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
+import { assertLaneWriteAtReach } from "../store/lane-reach-guard.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -495,7 +497,8 @@ export function persistTension(
   // One operation, one verdict: the page and its log event go to the
   // partition the page's visibility decides. Once switched there is no
   // page file for the event's `[[tension-...]]` link to be judged by.
-  withOperationPrivacy(tensionIsPrivate(record), () => {
+  const placedPrivate = laneTextLandsPrivate(vault, path, render(record));
+  withOperationPrivacy(tensionIsPrivate(record) || placedPrivate, () => {
     writeLaneText(vault, path, render(record));
     appendLogEvent(vault, {
       timestamp: stampedAt,
@@ -529,6 +532,12 @@ export function detectTensions(
     jaccard: opts.jaccard,
     ...(opts.negationMarkers !== undefined ? { negationMarkers: opts.negationMarkers } : {}),
   });
+  // Every finding's page is judged before the first is written (the write
+  // rule): below local reach one held in `private` refuses the whole call.
+  assertLaneWriteAtReach(
+    vault,
+    findings.map((finding) => tensionPath(vault, tensionSlug(finding))),
+  );
   const records: TensionRecord[] = [];
   let created = 0;
   let updated = 0;

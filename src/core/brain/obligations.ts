@@ -49,6 +49,8 @@ import {
   removeLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
+import { assertCreateMatchAtReach, takenOnWholeFold } from "../store/lane-reach-guard.ts";
 
 /**
  * Supported cadences. Day-based cadences add a fixed number of days;
@@ -352,6 +354,14 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
   const now = input.now ?? new Date();
   const today = isoDate(now);
   const anchor = input.anchor ? requireIsoDate(input.anchor, "anchor") : today;
+  // The identity decision is taken on the fold of every partition (the
+  // write rule): below local reach an obligation held in `private` that a
+  // local add would be refused for refuses this add, naming nothing.
+  assertCreateMatchAtReach(
+    vault,
+    (readable) => addMatches(vault, title, input.slot, readable),
+    input.readable,
+  );
   let slug = titleSlug(title);
   if (input.slot !== undefined && input.slot !== slug) {
     // A planned identity-suffixed slot: refused unless it is one of this
@@ -428,6 +438,36 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
     handle.release();
   }
   return Object.freeze({ ...page, path });
+}
+
+/**
+ * The obligation pages an add of `title` (at `slot`, when planned) would
+ * be refused for, as {@link addObligation} decides: the page at the slot
+ * or the slug, a page storing the exact title, a slot another title
+ * reserves.
+ */
+function addMatches(
+  vault: string,
+  title: string,
+  slot: string | undefined,
+  readable: ObligationReadable | undefined,
+): string[] {
+  const slugs: string[] = [];
+  const exact = locateEntry(vault, title, readable);
+  if (exact.page !== null && titleIdentity(exact.page.title) === titleIdentity(title)) {
+    slugs.push(exact.slug);
+  }
+  if (slot !== undefined && slot !== titleSlug(title)) {
+    if (lanePageExists(vault, obligationPath(vault, slot))) slugs.push(slot);
+    const reserved = locateEntry(vault, slot, readable);
+    if (reserved.page !== null && titleIdentity(reserved.page.title) === titleIdentity(slot)) {
+      slugs.push(reserved.slug);
+    }
+  } else {
+    const existing = existingObligationSlug(vault, title, readable);
+    if (existing !== null) slugs.push(existing);
+  }
+  return slugs.map((s) => obligationPath(vault, s));
 }
 
 /**
@@ -650,6 +690,27 @@ export function obligationSlotPlan(
   title: string,
   readable?: ObligationReadable,
 ): { readonly slug: string; readonly existing: boolean } | null {
+  if (!privateWithheld()) return slotPlanOf(vault, title, readable);
+  // Below local reach the plan is made on the fold of every partition (the
+  // write rule): the obligation it reuses, when held in `private`, refuses
+  // the caller, and a free slot is free in every partition.
+  let plan: ReturnType<typeof slotPlanOf> = null;
+  assertCreateMatchAtReach(
+    vault,
+    (wide) => {
+      plan = slotPlanOf(vault, title, wide);
+      return plan?.existing === true ? [obligationPath(vault, plan.slug)] : [];
+    },
+    readable,
+  );
+  return plan;
+}
+
+function slotPlanOf(
+  vault: string,
+  title: string,
+  readable: ObligationReadable | undefined,
+): { readonly slug: string; readonly existing: boolean } | null {
   const located = locateEntry(vault, title, readable);
   if (located.page !== null && titleIdentity(located.page.title) === titleIdentity(title)) {
     // Reused only when it is an obligation `list`, `show` and `done` can
@@ -728,7 +789,9 @@ export function removeObligation(
     if (page === null) throw noObligationError(normalized);
     const archiveDir = obligationsArchiveDir(vault);
     let archivePath = join(archiveDir, `${normalized}.md`);
-    for (let suffix = 2; lanePageExists(vault, archivePath); suffix++) {
+    // The free archive slot is picked on the fold of every partition, as a
+    // local caller with the same store gets it (the write rule).
+    for (let suffix = 2; takenOnWholeFold(() => lanePageExists(vault, archivePath)); suffix++) {
       archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
     }
     try {

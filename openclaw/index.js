@@ -7604,8 +7604,32 @@ var init_state_digest = __esm(() => {
 });
 
 // src/core/record-path.ts
+function recordRelPathProblem(rel) {
+  if (typeof rel !== "string" || rel === "")
+    return "empty path";
+  if (/[\0\r\n]/.test(rel))
+    return "control character in path";
+  if (rel.includes("\\"))
+    return "backslash in path";
+  if (DRIVE_RE.test(rel))
+    return "drive prefix in path";
+  if (rel.startsWith("/"))
+    return "absolute path";
+  for (const segment of rel.split("/")) {
+    if (segment === "")
+      return "empty path segment";
+    if (/^[. ]+$/.test(segment))
+      return "dot segment in path";
+  }
+  return null;
+}
+function isRecordRelPath(rel) {
+  return recordRelPathProblem(rel) === null;
+}
+var DRIVE_RE;
 var init_record_path = __esm(() => {
   init_path_safety();
+  DRIVE_RE = /^[A-Za-z]:/;
 });
 
 // src/core/store/read/stream-read.ts
@@ -8033,6 +8057,10 @@ function markedKey(key) {
     return false;
   seenSwitched.add(key);
   return true;
+}
+function markedSwitched(context = {}) {
+  const at = configuredSwitchKey(context.configPath);
+  return at !== null && markedKey(markerKey(at.root, at.device));
 }
 function isSwitched(context, options) {
   const at = configuredSwitchKey(context.configPath);
@@ -10146,6 +10174,380 @@ var init_dual_write_records = __esm(() => {
   });
 });
 
+// src/core/store/lane-records.ts
+function isLaneEntryId(value) {
+  return typeof value === "string" && value.trim() !== "" && value.length <= LANE_ENTRY_ID_MAX && isRecordRelPath(value);
+}
+function laneNameOf(folder) {
+  const name = folder.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return LANE_NAME_RE.test(name) ? name : "lane";
+}
+function laneEntryKey(lane, entry) {
+  return `${lane}/${entry}`;
+}
+function rejection4(record) {
+  if (recordAuthority(record) === null)
+    return "missing or invalid authority";
+  const { lane, entry, fields, text } = record.body;
+  if (typeof lane !== "string" || !LANE_NAME_RE.test(lane))
+    return "invalid lane";
+  if (!isLaneEntryId(entry))
+    return "invalid entry id";
+  if (record.kind === LANE_ENTRY_REMOVE_KIND)
+    return null;
+  if (fields === null || typeof fields !== "object" || Array.isArray(fields)) {
+    return "fields must be an object";
+  }
+  if (typeof text !== "string")
+    return "text must be a string";
+  return null;
+}
+function foldLaneEntries(input) {
+  const { records } = prepareRecords(input);
+  const register = new RegisterSet;
+  const rejected = [];
+  for (const record of records) {
+    if (record.kind !== LANE_ENTRY_KIND && record.kind !== LANE_ENTRY_REMOVE_KIND)
+      continue;
+    const reason = rejection4(record);
+    if (reason !== null) {
+      rejected.push({ id: record.id, kind: record.kind, reason });
+      continue;
+    }
+    const lane = record.body["lane"];
+    const entry = record.body["entry"];
+    const value = record.kind === LANE_ENTRY_REMOVE_KIND ? TOMBSTONE : {
+      lane,
+      entry,
+      fields: record.body["fields"],
+      text: record.body["text"],
+      ...typeof record.body["raw"] === "string" ? { raw: record.body["raw"] } : {}
+    };
+    register.offer(laneEntryKey(lane, entry), {
+      record,
+      authority: recordAuthority(record),
+      value
+    });
+  }
+  const entries = new Map;
+  for (const key of register.keys()) {
+    const state = register.get(key);
+    entries.set(key, {
+      value: state.value,
+      removed: state.removed,
+      winner: state.winner.record.id,
+      history: state.history
+    });
+  }
+  return { entries, rejected };
+}
+var LANE_ENTRY_KIND = "lane-entry", LANE_ENTRY_REMOVE_KIND = "lane-entry-remove", LANE_RECORD_KINDS, LANE_NAME_RE, LANE_ENTRY_ID_MAX = 512;
+var init_lane_records = __esm(() => {
+  init_record_path();
+  init_constants();
+  init_fold();
+  init_store_paths();
+  LANE_RECORD_KINDS = Object.freeze([LANE_ENTRY_KIND, LANE_ENTRY_REMOVE_KIND]);
+  LANE_NAME_RE = LEDGER_NAME_RE;
+});
+
+// src/core/store/read/protection-store.ts
+function unavailable(reason, switched, root, safeReason, safeDetail) {
+  const frame = (cause) => `this machine ${switched ? "switched to" : "writes to"} the brain store and ${cause}; the ` + "rules stored there are unknown until it opens again. Run `o2b brain doctor`";
+  return new StoreUnavailableError(frame(reason), root, frame(safeReason), safeDetail);
+}
+function openSafe(root) {
+  const at = root === null ? "" : ` at ${root}`;
+  return {
+    safeReason: `the store${at} could not be opened`,
+    safeDetail: `the brain store${at} could not be opened${DETAIL_TAIL}`
+  };
+}
+function protectionStore(configPath, options = {}) {
+  let store = null;
+  let reason = "";
+  let safeReason = "";
+  let safeDetail = "";
+  let lost = false;
+  let openError = false;
+  let root = null;
+  try {
+    const resolved = resolveConfiguredStoreRoot(configPath);
+    root = resolved.root;
+    store = inspectStore(resolved.root);
+    if (store === null) {
+      reason = `the store at ${root} cannot be found (no store.json)`;
+      safeReason = reason;
+      safeDetail = `the brain store at ${root} cannot be found (no store.json)${DETAIL_TAIL}`;
+    }
+  } catch (err) {
+    lost = err instanceof HeldPartitionLostError;
+    openError = true;
+    reason = `the store cannot be opened (${err.message})`;
+    ({ safeReason, safeDetail } = openSafe(root));
+  }
+  const context = configPath !== undefined ? { configPath } : {};
+  const switched = () => markedSwitched(context);
+  if (store === null) {
+    if (switched())
+      throw unavailable(reason, true, root, safeReason, safeDetail);
+    const storeOnly = () => isStoreOnly(options.vault !== undefined ? { ...context, vault: options.vault } : context);
+    if ((lost || openError && options.openErrorFails === true) && storeOnly()) {
+      throw unavailable(reason, false, root, safeReason, safeDetail);
+    }
+    return null;
+  }
+  if (options.needShared === true && !store.partitions.has("shared") && switched()) {
+    const sharedReason = `the shared partition of the store at ${store.root} cannot be found`;
+    throw unavailable(sharedReason, true, store.root, sharedReason, `the shared partition of the brain store at ${store.root} cannot be found${DETAIL_TAIL}`);
+  }
+  return store;
+}
+var StoreUnavailableError, DETAIL_TAIL;
+var init_protection_store = __esm(() => {
+  init_store_only();
+  init_store_open();
+  init_store_paths();
+  StoreUnavailableError = class StoreUnavailableError extends Error {
+    root;
+    publicMessage;
+    safeDetail;
+    name = "StoreUnavailableError";
+    constructor(message, root = null, publicMessage = message, safeDetail = "") {
+      super(message);
+      this.root = root;
+      this.publicMessage = publicMessage;
+      this.safeDetail = safeDetail;
+    }
+  };
+  DETAIL_TAIL = ", so every protection fails closed. Run `o2b brain doctor` on this machine " + "for the cause and the remedy";
+});
+
+// src/core/store/lane-fold-cache.ts
+import { createHash as createHash8 } from "node:crypto";
+import { statSync as statSync16 } from "node:fs";
+function laneFoldIncomplete(fold) {
+  return fold.unreadable.length > 0 || fold.pendingBlobs.some((blob) => blob.startsWith("private/"));
+}
+function isLaneRecord(record) {
+  return record.kind === LANE_ENTRY_KIND || record.kind === LANE_ENTRY_REMOVE_KIND;
+}
+function laneFingerprintOf(store, partitions) {
+  const parts = [store.storeId, `quarantine=${quarantineStamp(store.root)}`];
+  for (const partition of [...store.partitions].toSorted()) {
+    if (!partitions.includes(partition))
+      continue;
+    for (const shard of listShards(partitionDir(store.root, partition), { stream: "events" })) {
+      let stamp = "missing";
+      try {
+        const stat = statSync16(shard.path);
+        stamp = `${stat.size}:${stat.mtimeMs}`;
+      } catch {}
+      parts.push(`${partition}/${shard.rel}=${stamp}`);
+    }
+  }
+  return parts.join(`
+`);
+}
+function wholeLaneStoreFold(configPath) {
+  return foldOf(configPath, STORE_PARTITIONS);
+}
+function foldOf(configPath, partitions) {
+  const narrow = STORE_PARTITIONS.some((partition) => !partitions.includes(partition));
+  let store;
+  try {
+    store = protectionStore(configPath, { needShared: true });
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError))
+      throw err;
+    return { ...EMPTY_FOLD, unreadable: [err.publicMessage] };
+  }
+  if (store === null)
+    return EMPTY_FOLD;
+  const cacheKey = narrow ? `${store.root}\x00${partitions.join(",")}` : store.root;
+  const prefix = narrow ? `${partitions.join(",")}-only
+` : "";
+  const cached = cache2.get(cacheKey);
+  const cachedLines = cached === undefined ? null : pendingBlobStampLines(store.root, cached.pendingBlobs);
+  const shardStamp = laneFingerprintOf(store, partitions);
+  const fingerprint = cachedLines === null ? null : `${prefix}${shardStamp}
+${cachedLines}`;
+  if (cached !== undefined && cached.fingerprint === fingerprint)
+    return cached;
+  const records = [];
+  const inPrivate = new Set;
+  const unreadable = [];
+  const pendingBlobs = [];
+  for (const partition of STORE_PARTITIONS) {
+    if (!store.partitions.has(partition) || !partitions.includes(partition))
+      continue;
+    const read = readStreamRecords(store.root, partition, { stream: "events" }, { keep: isLaneRecord });
+    for (const rel of read.unreadable)
+      unreadable.push(`${partition}/${rel}`);
+    for (const sha of read.pendingBlobs)
+      pendingBlobs.push(`${partition}/${sha}`);
+    for (const record of read.records) {
+      if (record.kind !== LANE_ENTRY_KIND && record.kind !== LANE_ENTRY_REMOVE_KIND)
+        continue;
+      records.push(record);
+      if (partition === "private")
+        inPrivate.add(record.id);
+    }
+  }
+  const entries = new Map;
+  const clocks = new Map;
+  const privateKeys = new Set;
+  const privateRemovals = new Set;
+  const authorities = new Map;
+  for (const [key, state] of foldLaneEntries(records).entries) {
+    if (state.value === null) {
+      if (inPrivate.has(state.winner))
+        privateRemovals.add(key);
+      continue;
+    }
+    entries.set(key, state.value);
+    const winner = state.history.find((h) => h.record.id === state.winner);
+    if (winner !== undefined)
+      authorities.set(key, winner.authority);
+    if (inPrivate.has(state.winner))
+      privateKeys.add(key);
+    let newest = 0;
+    for (const h of state.history)
+      newest = Math.max(newest, parseHlc(h.record.hlc)?.physical ?? 0);
+    clocks.set(key, newest);
+  }
+  const blobLines = pendingBlobStampLines(store.root, pendingBlobs);
+  const storedFingerprint = prefix + (blobLines === null || unreadable.length > 0 ? incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs, records) : `${shardStamp}
+${blobLines}`);
+  const folded = {
+    fingerprint: storedFingerprint,
+    entries,
+    clocks,
+    privateKeys,
+    privateRemovals,
+    authorities,
+    unreadable,
+    pendingBlobs
+  };
+  if (unreadable.length === 0 && blobLines !== null)
+    cache2.set(cacheKey, folded);
+  else
+    cache2.delete(cacheKey);
+  return folded;
+}
+function incompleteFingerprint(store, shardStamp, unreadable, pendingBlobs, records) {
+  const recordDigest = createHash8("sha256");
+  for (const record of records) {
+    recordDigest.update(`${record.id}\x00${record.hlc}\x01`);
+  }
+  const parts = [
+    "incomplete",
+    shardStamp,
+    `unreadable=${unreadable.toSorted().join(",")}`,
+    `records=${recordDigest.digest("hex")}`
+  ];
+  for (const identity of pendingBlobs.toSorted()) {
+    const slashAt = identity.indexOf("/");
+    const partition = identity.slice(0, slashAt);
+    const sha = identity.slice(slashAt + 1);
+    parts.push(`blob ${identity}=${blobStamp(partitionDir(store.root, partition), sha)}`);
+  }
+  return parts.join(`
+`);
+}
+var EMPTY_FOLD, cache2, views;
+var init_lane_fold_cache = __esm(() => {
+  init_platform_dirs();
+  init_caller_reach();
+  init_constants();
+  init_hlc();
+  init_lane_records();
+  init_stream_read();
+  init_shard_quarantine();
+  init_protection_store();
+  init_shard_list();
+  init_store_paths();
+  EMPTY_FOLD = {
+    fingerprint: "",
+    entries: new Map,
+    clocks: new Map,
+    privateKeys: new Set,
+    privateRemovals: new Set,
+    authorities: new Map,
+    unreadable: [],
+    pendingBlobs: []
+  };
+  cache2 = new Map;
+  views = new Map;
+});
+
+// src/core/store/lane-paths.ts
+function laneOfFolder(folder) {
+  return FOLDER_LANES[folder] ?? laneNameOf(folder);
+}
+function folderOfLane(lane) {
+  return LANE_FOLDERS[lane] ?? lane;
+}
+function keepsItsName(entry) {
+  return KEPT_EXTENSION_RE.test(entry) || entry.endsWith(MD);
+}
+function entryOfPath(inLane) {
+  if (!inLane.endsWith(MD))
+    return inLane;
+  const stem = inLane.slice(0, -MD.length);
+  return keepsItsName(stem) ? inLane : stem;
+}
+function placeOfSegments(segments) {
+  if (segments.length === 1) {
+    const special = ROOT_FILE_LANES[segments[0]];
+    if (special !== undefined)
+      return special;
+    return { lane: ROOT_LANE, entry: entryOfPath(segments[0]) };
+  }
+  const [folder, ...rest] = segments;
+  return { lane: laneOfFolder(folder), entry: entryOfPath(rest.join("/")) };
+}
+function laneNameRefusal(brainRel) {
+  const segments = brainRel.split("/").filter((s) => s !== "");
+  if (segments.length === 0)
+    return "the Brain root is not a lane entry";
+  const place = placeOfSegments(segments);
+  const back = place.entry === "" ? null : brainRelOfEntry(place.lane, place.entry);
+  if (back === segments.join("/"))
+    return null;
+  return `the name ${segments.join("/")} does not map to a lane entry and back ` + `(lane ${place.lane}, entry ${place.entry === "" ? "(empty)" : place.entry}` + `${back === null ? "" : `, which maps back to ${back}`}); a lane entry is a .md page ` + `or a file ending in .${KEPT_EXTENSIONS.join(", .")}, in a folder named as its lane`;
+}
+function lanePlaceOf(brainRel) {
+  if (laneNameRefusal(brainRel) !== null)
+    return null;
+  return placeOfSegments(brainRel.split("/").filter((s) => s !== ""));
+}
+function brainRelOfEntry(lane, entry) {
+  for (const [file, place] of Object.entries(ROOT_FILE_LANES)) {
+    if (place.lane === lane && place.entry === entry)
+      return file;
+  }
+  const file = keepsItsName(entry) ? entry : `${entry}${MD}`;
+  return lane === ROOT_LANE ? file : `${folderOfLane(lane)}/${file}`;
+}
+var ROOT_LANE = "brain", MD = ".md", KEPT_EXTENSIONS, KEPT_EXTENSION_RE, FOLDER_LANES, ROOT_FILE_LANES, LANE_FOLDERS;
+var init_lane_paths = __esm(() => {
+  init_lane_records();
+  KEPT_EXTENSIONS = Object.freeze(["json", "jsonl", "yaml", "yml", "txt", "base", "csv"]);
+  KEPT_EXTENSION_RE = new RegExp(`\\.(?:${KEPT_EXTENSIONS.join("|")})$`);
+  FOLDER_LANES = Object.freeze({
+    state: "exact-state",
+    "skill-benchmarks": "skill-benchmark",
+    "standing-rules": "standing-rule",
+    ".sessions": "write-session",
+    ".archives": "source-archive"
+  });
+  ROOT_FILE_LANES = Object.freeze({
+    "standing-rules.md": { lane: "standing-rule", entry: "standing-rules" }
+  });
+  LANE_FOLDERS = Object.freeze(Object.fromEntries(Object.entries(FOLDER_LANES).map(([folder, lane]) => [lane, folder])));
+});
+
 // src/core/store/read/read-context.ts
 function readSource(context = {}) {
   const mode = storeOnlyMode({
@@ -10216,17 +10618,151 @@ var init_memory_ids = __esm(() => {
 
 // src/core/brain/artifact-ref-resolve.ts
 import { isAbsolute as isAbsolute4, join as join28 } from "node:path";
-import { existsSync as existsSync10, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync10, statSync as statSync17 } from "node:fs";
+function idShaped(id) {
+  return id.length <= LANE_ENTRY_ID_MAX && /^[^\s/\\]+$/.test(id);
+}
+function canonicalLaneSpelling(bare) {
+  if (!bare.startsWith(BRAIN_PREFIX))
+    return bare;
+  return bare.replace(/\/+/g, "/").replace(/\/$/, "");
+}
+function matchInFold(fold, bare) {
+  const incomplete = laneFoldIncomplete(fold);
+  const entryAt = (rel) => {
+    const place = lanePlaceOf(rel.slice(BRAIN_PREFIX.length));
+    if (place === null)
+      return null;
+    const key = laneEntryKey(place.lane, place.entry);
+    const value = fold.entries.get(key);
+    if (value === undefined)
+      return incomplete ? UNKNOWN_LANE_REF : NO_LANE_REF;
+    return {
+      kind: "entry",
+      rel,
+      meta: value.fields,
+      private: incomplete || fold.privateKeys.has(key)
+    };
+  };
+  if (!bare.includes("/")) {
+    const rel = laneIdIndex(fold).get(bare);
+    if (rel !== undefined)
+      return entryAt(rel) ?? NO_LANE_REF;
+    return incomplete && idShaped(bare) ? UNKNOWN_LANE_REF : NO_LANE_REF;
+  }
+  const segments = bare.split("/");
+  if (!bare.startsWith(BRAIN_PREFIX) || segments.some((s) => s === "" || s === "." || s === "..")) {
+    return NO_LANE_REF;
+  }
+  const exact = entryAt(bare);
+  if (exact?.kind === "entry" || bare.endsWith(MARKDOWN_EXT))
+    return exact ?? NO_LANE_REF;
+  const twin = entryAt(bare + MARKDOWN_EXT);
+  if (twin?.kind === "entry")
+    return twin;
+  return exact?.kind === "unknown" || twin?.kind === "unknown" ? UNKNOWN_LANE_REF : NO_LANE_REF;
+}
+function laneRefMatch(vault, ref, scope = artifactRefScope(vault)) {
+  try {
+    const lanes = scope.lanes();
+    if (lanes === null)
+      return NO_LANE_REF;
+    const spelled = posixRel(unbracket(ref));
+    if (spelled.length === 0)
+      return NO_LANE_REF;
+    const bare = isAbsolute4(spelled) ? vaultRelative(spelled, vault) : spelled;
+    if (bare.length === 0 || isAbsolute4(bare))
+      return NO_LANE_REF;
+    return lanes.match(canonicalLaneSpelling(bare));
+  } catch {
+    return UNKNOWN_LANE_REF;
+  }
+}
+function laneIdIndex(fold) {
+  const known = idIndexes.get(fold);
+  if (known !== undefined)
+    return known;
+  const ranked = new Map;
+  for (const [key, value] of fold.entries) {
+    const rel = brainRelOfEntry(value.lane, value.entry);
+    const name = rel.slice(rel.lastIndexOf("/") + 1);
+    const ext = ID_EXTENSIONS.find((e) => name.endsWith(e) && name.length > e.length);
+    if (ext === undefined)
+      continue;
+    const id = name.slice(0, -ext.length);
+    const rank = [fold.privateKeys.has(key) ? 0 : 1, LANE_RANK[value.lane] ?? 3];
+    const held = ranked.get(id);
+    const canonical = `${BRAIN_ROOT_REL}/${rel}`;
+    const better = held === undefined || rank[0] < held.rank[0] || rank[0] === held.rank[0] && (rank[1] < held.rank[1] || rank[1] === held.rank[1] && canonical < held.rel);
+    if (better)
+      ranked.set(id, { rel: canonical, rank });
+  }
+  const index = new Map([...ranked].map(([id, held]) => [id, held.rel]));
+  idIndexes.set(fold, index);
+  return index;
+}
+function storeLanesOf(vault, configPath) {
+  try {
+    if (!storeOnlyMode({ vault, ...configPath !== undefined ? { configPath } : {} }).storeOnly) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const prefix = `${BRAIN_ROOT_REL}/`;
+  let degraded;
+  const whole = () => {
+    if (degraded !== undefined)
+      return degraded;
+    const fold = wholeLaneStoreFold(configPath);
+    if (laneFoldIncomplete(fold))
+      degraded = fold;
+    return fold;
+  };
+  return {
+    holds: (rel) => {
+      const place = rel.startsWith(prefix) ? lanePlaceOf(rel.slice(prefix.length)) : null;
+      if (place === null)
+        return false;
+      return whole().entries.has(laneEntryKey(place.lane, place.entry));
+    },
+    byId: (id) => {
+      const match = matchOf(whole(), id);
+      return match.kind === "entry" ? match.rel : null;
+    },
+    match: (bare) => matchOf(whole(), bare)
+  };
+}
+function matchOf(fold, bare) {
+  let known = matches.get(fold);
+  if (known === undefined) {
+    known = new Map;
+    matches.set(fold, known);
+  }
+  let match = known.get(bare);
+  if (match === undefined) {
+    match = matchInFold(fold, bare);
+    if (known.size >= MATCH_MEMO_MAX)
+      known.clear();
+    known.set(bare, match);
+  }
+  return match;
+}
+function laneIdPath(lanes, id) {
+  return lanes.byId(id);
+}
 function artifactRefScope(vault, fromStore, configPath) {
   let store = fromStore;
   let dirs;
   let entities;
+  let lanes;
   return {
     fromStore: () => store ??= memoryFromStore(vault, configPath),
     dirs: () => dirs ??= brainDirs(vault),
     entities: () => (entities ??= {
       value: memoryEntities({ vault, ...configPath !== undefined ? { configPath } : {} })
-    }).value
+    }).value,
+    lanes: () => (lanes ??= { value: storeLanesOf(vault, configPath) }).value
   };
 }
 function unbracket(ref) {
@@ -10252,21 +10788,26 @@ function artifactPath(vault, id, scope) {
     if (existsSync10(abs))
       return vaultRelative(abs, vault);
   }
-  return null;
+  const lanes = scope.lanes();
+  return lanes === null ? null : laneIdPath(lanes, id);
 }
-function pageCandidate(vault, bare) {
+function pageCandidate(vault, bare, scope) {
   if (isVaultFile(vault, bare))
+    return bare;
+  if (bare.startsWith(`${BRAIN_ROOT_REL}/`) && scope.lanes()?.holds(bare) === true)
     return bare;
   const twin = bare + MARKDOWN_EXT;
   if (isVaultFile(vault, twin))
     return twin;
-  return null;
+  if (!bare.startsWith(`${BRAIN_ROOT_REL}/`))
+    return null;
+  return scope.lanes()?.holds(twin) === true ? twin : null;
 }
 function isVaultFile(vault, rel) {
   if (!pathIsInside(join28(vault, rel), vault))
     return false;
   try {
-    return statSync16(join28(vault, rel)).isFile();
+    return statSync17(join28(vault, rel)).isFile();
   } catch {
     return false;
   }
@@ -10275,21 +10816,33 @@ function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault)) {
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0)
     return null;
-  const bare = isAbsolute4(spelled) ? vaultRelative(spelled, vault) : spelled;
+  const bare = canonicalLaneSpelling(isAbsolute4(spelled) ? vaultRelative(spelled, vault) : spelled);
   if (bare.length === 0)
     return null;
   if (bare.endsWith(MARKDOWN_EXT))
     return bare;
   if (bare.includes("/"))
-    return pageCandidate(vault, bare);
+    return pageCandidate(vault, bare, scope);
   return artifactPath(vault, bare, scope);
 }
-var MARKDOWN_EXT = ".md";
+var NO_LANE_REF, UNKNOWN_LANE_REF, ID_EXTENSIONS, LANE_RANK, idIndexes, matches, MATCH_MEMO_MAX = 4096, BRAIN_PREFIX, MARKDOWN_EXT = ".md";
 var init_artifact_ref_resolve = __esm(() => {
   init_path_safety();
+  init_lane_fold_cache();
+  init_lane_paths();
+  init_lane_records();
   init_memory_ids();
+  init_store_only();
+  init_path_constants();
   init_paths();
   init_wikilink();
+  NO_LANE_REF = Object.freeze({ kind: "none" });
+  UNKNOWN_LANE_REF = Object.freeze({ kind: "unknown" });
+  ID_EXTENSIONS = [".md", ".json"];
+  LANE_RANK = { sources: 0, decisions: 1, entities: 2 };
+  idIndexes = new WeakMap;
+  matches = new WeakMap;
+  BRAIN_PREFIX = `${BRAIN_ROOT_REL}/`;
 });
 
 // src/core/brain/note-path.ts
@@ -10350,7 +10903,7 @@ var init_private_region = __esm(() => {
 });
 
 // src/core/store/reference-privacy.ts
-import { existsSync as existsSync11, statSync as statSync17 } from "node:fs";
+import { existsSync as existsSync11, statSync as statSync18 } from "node:fs";
 import { resolve as resolve17 } from "node:path";
 function namesAPage(ref) {
   const trimmed = ref.trim();
@@ -10438,12 +10991,22 @@ function refsNamePrivatePage(vault, refs, guessed, fromStore, scope, configPath)
         continue;
       }
     }
+    const root = vault ?? noVaultRoot();
+    const refScope = scope ?? artifactRefScope(root, fromStore, configPath);
+    const lane = laneRefMatch(root, ref, refScope);
+    if (lane.kind === "unknown")
+      return true;
+    if (lane.kind === "entry") {
+      if (lane.private || isPrivateFrontmatter(lane.meta))
+        return true;
+      continue;
+    }
     if (vault === null) {
       if (namesAPage(ref))
         return true;
       continue;
     }
-    const rel = resolveArtifactRef(vault, ref, scope ?? artifactRefScope(vault, fromStore, configPath));
+    const rel = resolveArtifactRef(vault, ref, refScope);
     if (rel === null)
       continue;
     const abs = resolve17(vault, rel);
@@ -10460,9 +11023,11 @@ var init_reference_privacy = __esm(() => {
   init_paths();
   init_period_common();
   init_path_safety();
+  init_platform_dirs();
   init_vault();
   init_wikilink();
   init_dual_write_records();
+  init_private_page();
   init_private_region();
   init_store_privacy();
   PREFERENCE_DIRS = new Set([BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL]);
@@ -11575,7 +12140,7 @@ import {
   readFileSync as readFileSync26,
   renameSync as renameSync2,
   rmSync as rmSync3,
-  statSync as statSync18,
+  statSync as statSync19,
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { join as join33 } from "node:path";
@@ -11587,7 +12152,7 @@ function secretsDir(vault) {
 function adoptVaultSecrets(legacy, dir) {
   if (legacy === dir || existsSync13(dir) || !existsSync13(legacy))
     return;
-  const names = readdirSync6(legacy).filter((name) => statSync18(join33(legacy, name)).isFile());
+  const names = readdirSync6(legacy).filter((name) => statSync19(join33(legacy, name)).isFile());
   if (names.length === 0)
     return;
   const staging = `${dir}.adopt-${process.pid}`;
@@ -11819,7 +12384,7 @@ function readStore(vault) {
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
     try {
-      if ((statSync18(path).mode & 511) !== 384)
+      if ((statSync19(path).mode & 511) !== 384)
         chmodSync5(path, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the secrets store: ` + `${path}: ${err instanceof Error ? err.message : String(err)}

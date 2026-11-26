@@ -38,7 +38,7 @@
  * check, which states the count it found.
  */
 
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { ensureInsideVault } from "../path-safety.ts";
@@ -78,9 +78,11 @@ import type { ClaimSlot, TruthConflict } from "./truth/types.ts";
 import {
   assertLaneWrite,
   lanePageExists,
+  listLaneFiles,
   parseLanePage,
   writeLanePage,
 } from "../store/lane-pages.ts";
+import { assertCreateMatchAtReach } from "../store/lane-reach-guard.ts";
 
 /** Vault-relative directory a committed design note lands in. */
 export const DESIGN_NOTE_DIR_REL = "Brain/decisions";
@@ -480,10 +482,20 @@ export function commitDesignNote(
   // write refuses it by name exactly as it refuses a second note under the
   // new slug, instead of minting a second note of the day beside it.
   const datePrefix = `design-${isoDate(opts.now)}-`;
-  const sameTopicPath = (existsSync(dir) ? readdirSync(dir) : [])
-    .filter((name) => name.startsWith(datePrefix) && name.endsWith(".md"))
-    .map((name) => join(dir, name))
-    .find((candidate) => sameTopicNote(vault, candidate, trimmed));
+  const sameTopicOf = (): string | undefined =>
+    // The lane's listing, not the disk folder: a store-only machine holds
+    // the day's notes as records, with no file there.
+    listLaneFiles(vault, dir)
+      .filter((name) => name.startsWith(datePrefix))
+      .map((name) => join(dir, name))
+      .find((candidate) => sameTopicNote(vault, candidate, trimmed));
+  // Read on the fold of every partition below local reach (the write
+  // rule): the day's note of this topic held in `private` refuses the call.
+  assertCreateMatchAtReach(vault, () => {
+    const held = sameTopicOf();
+    return held === undefined ? [] : [held];
+  });
+  const sameTopicPath = sameTopicOf();
   const path = sameTopicPath ?? join(dir, noteBasename(slug, opts.now));
 
   writeLanePage(

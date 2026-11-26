@@ -12,11 +12,12 @@
  * decides the target.
  */
 
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
 import { ensureInsideVault } from "../../path-safety.ts";
-import { legacySlugForms, parseFrontmatter, titleIdentity, titleKeySlug } from "../../vault.ts";
+import { listLaneFiles, lanePageExists, parseLanePage } from "../../store/lane-pages.ts";
+import { legacySlugForms, titleIdentity, titleKeySlug } from "../../vault.ts";
 
 const PANELS_REL = "Brain/decisions/panels";
 const PANEL_NAME_RE = /^Brain\/decisions\/panels\/panel-(\d{4}-\d{2}-\d{2})-[^/]+\.md$/u;
@@ -43,9 +44,10 @@ export function panelDefaultNames(
 export function heldLegacyPanelName(vault: string, topic: string, day: string): string | null {
   const dir = join(vault, PANELS_REL);
   const prefix = `panel-${day}-`;
-  if (!existsSync(dir)) return null;
-  const stored = readdirSync(dir)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
+  // The lane's listing, not the disk folder: a store-only machine holds the
+  // day's panels as records, with no file there.
+  const stored = listLaneFiles(vault, dir)
+    .filter((name) => name.startsWith(prefix))
     .map((name) => `${PANELS_REL}/${name}`)
     .find((rel) => sameTopicPanelAt(vault, rel, topic));
   return stored ?? null;
@@ -59,20 +61,25 @@ export function heldLegacyPanelName(vault: string, topic: string, day: string): 
  */
 export function sameTopicPanelAt(vault: string, rel: string, topic: string): boolean {
   const absolute = join(vault, rel);
+  if (!lanePageExists(vault, absolute)) return false;
+  // A name on the vault's disk is read only when it resolves inside the
+  // vault: a link leading elsewhere is never read and holds no topic.
+  let onDisk = true;
   try {
     lstatSync(absolute);
   } catch {
-    return false;
+    onDisk = false;
   }
-  try {
-    ensureInsideVault(absolute, vault);
-  } catch {
-    return false;
+  if (onDisk) {
+    try {
+      ensureInsideVault(absolute, vault);
+    } catch {
+      return false;
+    }
   }
-  if (!existsSync(absolute)) return false;
   let stored: unknown;
   try {
-    stored = parseFrontmatter(absolute)[0]["topic"];
+    stored = parseLanePage(vault, absolute)[0]["topic"];
   } catch {
     return false;
   }
@@ -97,11 +104,10 @@ export function heldPanelDefaultName(
   const names = [fresh, ...legacy];
   if (!names.includes(targetPath)) return null;
   const dir = join(vault, PANELS_REL);
-  if (!existsSync(dir)) return null;
   const prefix = `panel-${day}-`;
   return (
-    readdirSync(dir)
-      .filter((name) => name.startsWith(prefix) && name.endsWith(".md"))
+    listLaneFiles(vault, dir)
+      .filter((name) => name.startsWith(prefix))
       .map((name) => `${PANELS_REL}/${name}`)
       .find((rel) => rel !== targetPath && sameTopicPanelAt(vault, rel, topic)) ??
     names.find((rel) => rel !== targetPath && sameTopicPanelAt(vault, rel, topic)) ??

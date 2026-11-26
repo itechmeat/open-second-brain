@@ -24,6 +24,7 @@
  */
 
 import { isAbsolute } from "node:path";
+import { assertNoPrivateLaneEntryAtReach } from "../../core/store/lane-reach-guard.ts";
 
 import { resolveAgentName } from "../../core/config.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
@@ -314,6 +315,10 @@ async function toolBrainHygiene(
               ),
             ),
           });
+    // The coarse rule: a refresh rewrites and archives derived pages the
+    // caller did not name one by one, so below local reach it is refused
+    // while any lane holds an entry in `private` (a dry run writes nothing).
+    if (!dryRun) assertNoPrivateLaneEntryAtReach(ctx.vault, ctx.configPath ?? undefined);
     const result = await executeRecompile(ctx.vault, plan, {
       dryRun,
       agent: resolveAgentName(ctx.configPath ?? undefined),
@@ -417,6 +422,10 @@ async function toolBrainHygiene(
     willMutate: !dryRun,
     matchList: plan.selected.map((finding) => finding.id),
   });
+  // The coarse rule: an apply retires, merges and retargets entries the
+  // caller did not address one by one, so below local reach it is refused
+  // while any lane holds an entry in `private` (a dry run writes nothing).
+  if (!dryRun) assertNoPrivateLaneEntryAtReach(ctx.vault, ctx.configPath ?? undefined);
   const result = await applyHygienePlan(ctx.vault, plan, {
     dryRun,
     agent: resolveAgentName(ctx.configPath ?? undefined),

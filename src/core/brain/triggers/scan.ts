@@ -9,7 +9,8 @@ import { buildRetentionReview } from "../retention.ts";
 import { collisionCandidates, detectAgentCollisions } from "../truth/collision.ts";
 import { readClaimEvents } from "../truth/store.ts";
 import { candidatesFromHealth, candidatesFromRetention } from "./adapters.ts";
-import { createTriggers, type CreateTriggersOptions, type CreateTriggersResult } from "./store.ts";
+import { createTriggersAtReach } from "./create-at-reach.ts";
+import { type CreateTriggersOptions, type CreateTriggersResult } from "./store.ts";
 import type { InsightCandidate } from "./types.ts";
 
 export interface ScanTriggersOptions extends CreateTriggersOptions {
@@ -78,6 +79,7 @@ export function scanTriggers(vault: string, opts: ScanTriggersOptions): ScanTrig
   }
   candidates.push(...(opts.extraCandidates ?? []));
 
-  const result = createTriggers(vault, candidates, opts);
+  // On the fold of every partition, its answer narrowed below local reach.
+  const result = createTriggersAtReach(vault, candidates, opts);
   return Object.freeze({ ...result, candidates: candidates.length });
 }

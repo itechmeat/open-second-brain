@@ -88,14 +88,18 @@ import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.t
 import { TRANSPORT_REACH } from "../../graph/transport-reach.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
 import { entityPath } from "../paths.ts";
-import { listPendingLane, stageForReview } from "../pending/pending-lanes.ts";
+import {
+  assertStagedTargetsAtReach,
+  listPendingLane,
+  stageForReview,
+} from "../pending/pending-lanes.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import {
   validateEntityCategory,
   normalizeEntityName,
   InvalidEntityLabelError,
 } from "../entities/canonical.ts";
-import { relateEntities, upsertEntity } from "../entities/registry.ts";
+import { assertUpsertsAtReach, relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE,
@@ -429,6 +433,35 @@ export function intakeExtraction(
   let entitiesSkipped = 0;
   let relationsSkipped = 0;
 
+  // Below local reach every entity's identity decision, and the open review
+  // entry a staged create would meet, are judged on the fold of every
+  // partition first (the write rule): one that meets an entry held in
+  // `private` refuses the whole intake before any write.
+  // The aliases each upsert below stores: on the neutralizing lane, with
+  // their structure sigils escaped.
+  const laneAliasesOf = (aliases: ReadonlyArray<string> | undefined) =>
+    aliases !== undefined && neutralizeActive
+      ? aliases.map((alias) => neutralizeMarkdown(alias).text)
+      : aliases;
+  const createPaths = assertUpsertsAtReach(
+    vault,
+    intake.entities.map((entity) => ({
+      category: entity.category,
+      name: entity.name,
+      ...(entity.aliases !== undefined ? { aliases: laneAliasesOf(entity.aliases)! } : {}),
+      agent: opts.agent,
+      now: opts.now,
+      ...(untrustedOrigin ? { untrustedOrigin } : {}),
+    })),
+  );
+  if (opts.disposition === "stage") {
+    assertStagedTargetsAtReach(
+      vault,
+      REVIEW_LANE.notes,
+      createPaths.map((path) => canonicalNotePath(relative(vault, path))),
+    );
+  }
+
   for (const entity of intake.entities) {
     const category = validateEntityCategory(entity.category);
     // Stamp provenance into the body only when creating the page, so a later
@@ -443,10 +476,7 @@ export function intakeExtraction(
     // Aliases are third-party strings stored beside the name; on the
     // neutralizing lane they are stored with their structure sigils
     // escaped, so no reader of the page extracts a link from one.
-    const laneAliases =
-      entity.aliases !== undefined && neutralizeActive
-        ? entity.aliases.map((alias) => neutralizeMarkdown(alias).text)
-        : entity.aliases;
+    const laneAliases = laneAliasesOf(entity.aliases);
     let res;
     try {
       res = upsertEntity(vault, {

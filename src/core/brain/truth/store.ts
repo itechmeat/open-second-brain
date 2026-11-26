@@ -384,7 +384,8 @@ export function appendClaimEvent(
       appendFileSync(shard, JSON.stringify(event) + "\n");
       return shard;
     },
-    store: () => truthClaimRowRecord(event, claimSourceIsPrivate(vault, event.source)),
+    store: () =>
+      truthClaimRowRecord(event, claimSourceIsPrivate(vault, event.source, opts.configPath)),
     context: { vault, ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}) },
   });
   if (routed.mode === "legacy") {

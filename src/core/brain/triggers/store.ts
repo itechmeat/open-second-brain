@@ -52,6 +52,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatterText } from "../../vault.ts";
+import { triggerTextPlaced } from "./key-placement.ts";
 import { lockDirSync } from "../../fs-lock.ts";
 import {
   isTriggerKind,
@@ -709,7 +710,12 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
 
 function writeRecord(record: TriggerRecord): void {
   const { effectiveStatus: _ignored, ...stored } = record;
-  writeLaneText(vaultOfBrainPath(record.path), record.path, renderTrigger(stored));
+  const vault = vaultOfBrainPath(record.path);
+  writeLaneText(
+    vault,
+    record.path,
+    triggerTextPlaced(vault, record.cooldownKey, renderTrigger(stored)),
+  );
 }
 
 // ── Listing ─────────────────────────────────────────────────────────────────

@@ -91,6 +91,7 @@ import {
 } from "./pre-extract.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import {
+  assertStagedTargetsAtReach,
   listPendingLane,
   resolveWriteDisposition,
   stageForReview,
@@ -109,6 +110,8 @@ import {
   readLaneText,
   writeLanePage,
 } from "../../store/lane-pages.ts";
+import { withPrivateShown } from "../../store/caller-reach.ts";
+import { assertCreateMatchAtReach, takenOnWholeFold } from "../../store/lane-reach-guard.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -346,12 +349,26 @@ export function ingestSource(
   // the page selected, under either slug; one withheld is answered under
   // the path an absent page gets (the new slug), so the path itself does
   // not tell which page exists either.
-  const target = locateSuffixedTitleStem(
-    canonicalSource,
-    sourceHash.slice(0, 12),
-    (candidate) => lanePageExists(vault, sourcePagePath(vault, candidate)),
-    opts.readable !== undefined ? (candidate) => opts.readable!(relOf(candidate)) : undefined,
+  const locate = (readable: ((rel: string) => boolean) | undefined) =>
+    locateSuffixedTitleStem(
+      canonicalSource,
+      sourceHash.slice(0, 12),
+      (candidate) => lanePageExists(vault, sourcePagePath(vault, candidate)),
+      readable !== undefined ? (candidate) => readable(relOf(candidate)) : undefined,
+    );
+  // The summary page a re-ingest rewrites is found on the fold of every
+  // partition below local reach (the write rule): one held in `private`
+  // refuses the ingest before any write.
+  assertCreateMatchAtReach(
+    vault,
+    (readable) => {
+      const held = locate(readable);
+      const path = sourcePagePath(vault, held.stem);
+      return !held.withheld && lanePageExists(vault, path) ? [path] : [];
+    },
+    opts.readable,
   );
+  const target = locate(opts.readable);
   const absPath = sourcePagePath(vault, target.stem);
   const summaryPath = relOf(target.stem);
   // Write-time marker neutralization gate (t_c2ac4fc8), resolved beside the
@@ -376,6 +393,12 @@ export function ingestSource(
     opts.subject ?? (opts.agent !== undefined ? { agent: opts.agent, via: "config" } : undefined),
     { target: summaryPath, ...(opts.now !== undefined ? { now: opts.now } : {}) },
   );
+  // A first publish that stages meets the open review entry of its target,
+  // read on the fold of every partition below local reach (the write rule):
+  // one held in `private` refuses the ingest here, before any write.
+  if (disposition.verdict === "stage" && !takenOnWholeFold(() => lanePageExists(vault, absPath))) {
+    assertStagedTargetsAtReach(vault, REVIEW_LANE.ingest, [summaryPath]);
+  }
   const preExtract =
     opts.preExtract === true ? runPreExtract(vault, canonicalSource, opts.readable) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
@@ -787,7 +810,10 @@ function captureTrustedSourceArchive(
     // failed capture - so neither stamp nor refusal (absence stays
     // absence; see `sourceArchiveRefusal`'s contract).
     if (origin.bytes === undefined) return {};
-    const put = putSourceArchive(vault, origin.bytes);
+    // The archive is the machine's own content-addressed store: its dedup
+    // and repair read the fold of every partition, whatever the caller's
+    // reach, as a local ingest does (the write rule).
+    const put = withPrivateShown(() => putSourceArchive(vault, origin.bytes!));
     return { hash: put.hash, bytes: put.bytes };
   } catch (error) {
     return { refusal: archiveRefusalMessage(error) };

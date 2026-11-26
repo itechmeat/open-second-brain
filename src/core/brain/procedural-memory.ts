@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
+import { privateWithheld, withPrivateShown } from "../store/caller-reach.ts";
+import { lanePlaceOf } from "../store/lane-paths.ts";
 import { opaqueFields } from "../store/operation-privacy.ts";
 import { withOperationPrivacy } from "../store/operation-scope.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
@@ -18,12 +20,14 @@ import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts
 import type { ProceduralEntryKind, ProceduralMemoryEntry, ProceduralOutcome } from "./types.ts";
 import {
   assertLaneWrite,
+  laneEntryInPrivate,
   lanePageExists,
   lanePagesInStore,
   listLaneTree,
   parseLanePage,
   writeLaneText,
   readLaneFile,
+  readLanePage,
   withLaneLock,
 } from "../store/lane-pages.ts";
 
@@ -52,7 +56,21 @@ export interface ProceduralReconcileResult {
   readonly removed: number;
 }
 
+/**
+ * Reconcile the index with the procedure pages under `opts.roots`. Built
+ * and written whole whatever the caller's reach (design D5 item 4): the
+ * index and the projections are what every later caller reads, so a
+ * caller below local reach stores what a local run stores; only the
+ * counts it is answered are taken over the pages it may read (`include`).
+ */
 export function reconcileProceduralMemory(
+  vault: string,
+  opts: ProceduralReconcileOptions,
+): ProceduralReconcileResult {
+  return withPrivateShown(() => reconcileWhole(vault, opts));
+}
+
+function reconcileWhole(
   vault: string,
   opts: ProceduralReconcileOptions,
 ): ProceduralReconcileResult {
@@ -109,7 +127,52 @@ export function reconcileProceduralMemory(
   return { total: next.filter(counted).length, added, updated, removed };
 }
 
-export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMemoryEntry> {
+/**
+ * The entries of the index. The index is one store record naming every
+ * procedure, which lands in `private` when one entry names a private
+ * page, so it is read whole; below local reach an entry is then kept only
+ * when its page is no store-held lane entry, or one the caller's fold
+ * holds outside the `private` partition (design D5 item 3): a
+ * private-partition procedure neither shows nor hides the shared ones.
+ */
+export function listProceduralMemory(
+  vault: string,
+  configPath?: string,
+): ReadonlyArray<ProceduralMemoryEntry> {
+  const entries = withPrivateShown(() => readIndexEntries(vault));
+  if (!privateWithheld()) return entries;
+  return Object.freeze(
+    entries.filter((entry: unknown) => sharedBelowReach(vault, entry, configPath)),
+  );
+}
+
+/**
+ * Whether a caller below local reach may be told of the index row
+ * `entry`: a row that is no object or has no string `sourcePath` cannot be
+ * judged and is dropped (fail closed), as is one whose judgement fails.
+ */
+function sharedBelowReach(
+  vault: string,
+  entry: unknown,
+  configPath?: string,
+): entry is ProceduralMemoryEntry {
+  if (entry === null || typeof entry !== "object") return false;
+  const rel = (entry as { readonly sourcePath?: unknown }).sourcePath;
+  if (typeof rel !== "string" || rel === "") return false;
+  const prefix = `${BRAIN_ROOT_REL}/`;
+  try {
+    if (!rel.startsWith(prefix) || !lanePagesInStore(vault, configPath)) return true;
+    if (lanePlaceOf(rel.slice(prefix.length)) === null) return true;
+    const path = join(vault, rel);
+    return (
+      readLanePage(vault, path, configPath) !== null && !laneEntryInPrivate(vault, path, configPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function readIndexEntries(vault: string): ReadonlyArray<ProceduralMemoryEntry> {
   const path = proceduralMemoryIndexPath(vault);
   if (!lanePageExists(vault, path)) return Object.freeze([]);
   try {
@@ -228,7 +291,10 @@ function writeUsageTick(
   // Read, counted and written under the usage file's lock, so two ticks,
   // or a tick and a reconcile, of two processes never lose one.
   return withUsageLock(vault, () => {
-    const usage = readUsageMap(vault, true);
+    // The counters are machine state of every procedure: read on the fold
+    // of every partition, whatever the caller's reach (the write rule), so
+    // a tick never drops the counters of a procedure held in `private`.
+    const usage = withPrivateShown(() => readUsageMap(vault, true));
     for (const [id, used] of usageOf(entries)) if (!usage.has(id)) usage.set(id, used);
     const next = tick(usage.get(target.id) ?? counters(target, undefined));
     usage.set(target.id, next);
@@ -438,7 +504,12 @@ function asStringOrNull(value: unknown): string | null {
 }
 
 /** The counters an index entry carries: none, they live in the usage file. */
-const AT_REST = Object.freeze({ lastUsedAt: null, usedCount: 0, successCount: 0, failureCount: 0 });
+const AT_REST = Object.freeze({
+  lastUsedAt: null,
+  usedCount: 0,
+  successCount: 0,
+  failureCount: 0,
+});
 
 function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).

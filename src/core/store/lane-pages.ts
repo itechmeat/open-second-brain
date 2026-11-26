@@ -54,7 +54,8 @@ import {
 } from "../vault.ts";
 import { assertStoreContentWrite } from "./content-write-gates.ts";
 import { type DualWriteContext } from "./dual-write.ts";
-import { laneLockTarget, laneStoreFold } from "./lane-fold-cache.ts";
+import { laneLockTarget, laneStoreFold, wholeLaneStoreFold } from "./lane-fold-cache.ts";
+import * as reach from "./lane-reach-guard.ts";
 import {
   brainRelOf,
   entryRecord,
@@ -83,7 +84,6 @@ import {
   laneMoveRecords,
   sameLaneEntry,
   type LaneMove,
-  laneRemovalRecords,
   storedContent,
   storedLanePathsBelow,
 } from "./lane-dual-moves.ts";
@@ -443,6 +443,7 @@ export function writeLanePage(
   // legacy writer skips a byte-identical file: a page re-rendered on every
   // run must not grow the shards or move the entry's clock.
   if (opts.overwrite === true && heldInStore(vault, path, opts.configPath)) {
+    reach.assertLaneWriteAtReach(vault, [path], opts.configPath);
     if (sameEntry(storeEntry(vault, path, opts.configPath), frontmatter, body)) return false;
   }
   const replaced = opts.overwrite === true && legacyPagePrivate(vault, path, opts.configPath);
@@ -498,6 +499,7 @@ export function writeLaneText(
   opts: { readonly exclusive?: boolean } = {},
 ): void {
   if (opts.exclusive !== true && heldInStore(vault, path)) {
+    reach.assertLaneWriteAtReach(vault, [path]);
     const { fields, body } = laneTextParts(path, text);
     const raw = rawToKeep(path, text, fields, body);
     if (sameEntry(storeEntry(vault, path), fields, body, raw)) return;
@@ -554,8 +556,10 @@ function withCreateLock(
   }
   withLocalLock(laneLockTarget(path, "create\u0000"), () => {
     // Checked outside the store write, so the refusal reaches the caller as
-    // the same `FileAlreadyExistsError` (EEXIST) the unswitched path throws.
-    if (storeEntry(vault, path, configPath) !== null) {
+    // the same `FileAlreadyExistsError` (EEXIST) the unswitched path throws;
+    // against every partition, so a create never lands over an entry.
+    reach.assertLaneWriteAtReach(vault, [path], configPath);
+    if (storeEntryRead(vault, path, configPath).value !== null) {
       throw new FileAlreadyExistsError(path, {
         ...(existsKind !== undefined ? { kind: existsKind } : {}),
         displayPath: brainRelOf(vault, path),
@@ -572,13 +576,12 @@ function withCreateLock(
  */
 export function removeLanePage(vault: string, path: string): boolean {
   if (heldInStore(vault, path)) {
-    const value = storeEntry(vault, path);
-    if (value === null) return false;
+    reach.assertLaneRemovalAtReach(vault);
+    if (reach.withheldPrivateKey(vault, path) || storeEntry(vault, path) === null) return false;
     // In the partition the entry lives in, never re-judged from its
-    // content now: a shared entry's tombstone must reach every device.
-    const isPrivate = livesInPrivate(value);
-    withOperationPrivacy(isPrivate, () => storeWrite(() => tombstoneOf(value), context(vault)));
-    return true;
+    // content now; the reach check, the winner and that partition come
+    // from one fold, read as the write builds its records.
+    return storeWrite(() => reach.removalRecordsAtReach(vault, [path]), context(vault)).length > 0;
   }
   guardUserVaultWrite(vault, path);
   let removed = true;
@@ -627,8 +630,12 @@ export function moveLanePage(
     dualWriteLaneMove(vault, { from, to, destinationPrivate }, context(vault));
     return;
   }
-  const value = storeEntry(vault, from);
+  // The removal guard first: while the fold may miss a record, a source
+  // the caller's fold does not show gets the fixed answer, not a path.
+  reach.assertLaneRemovalAtReach(vault);
+  const value = reach.withheldPrivateKey(vault, from) ? null : storeEntry(vault, from);
   if (value === null) throw new Error(`no lane page to move: ${from}`);
+  reach.assertLaneWriteAtReach(vault, [to]);
   // A move onto the entry it moves changes nothing.
   if (rewrite === undefined && sameLaneEntry(vault, from, to)) return;
   // The tombstone stays where the entry lives: it must reach every device
@@ -641,23 +648,27 @@ export function moveLanePage(
     storedEntryPrivate(vault, to) ||
     (rewrite !== undefined && isPrivateEntry(vault, rewrite.frontmatter, rewrite.body));
   withOperationPrivacy(isPrivate, () =>
-    storeWrite(
-      () => [
+    storeWrite(() => {
+      // One fold for the reach checks, the moved value and the
+      // tombstone's partition: a source raised since the read above is
+      // left alone, a destination judged again.
+      const source = reach.moveSourceAtReach(vault, wholeLaneStoreFold(), from, to);
+      if (source === null) return [];
+      return [
         // A shared entry this move replaces with a private one goes first.
         ...replacedShared(vault, to),
-        tombstoneOf(value),
+        tombstoneOf(source.value, false, source.partition),
         entryRecord(
           vault,
           to,
-          rewrite?.frontmatter ?? value.fields,
-          rewrite?.body ?? value.text,
+          rewrite?.frontmatter ?? source.value.fields,
+          rewrite?.body ?? source.value.text,
           isPrivate,
           "located",
-          rewrite === undefined ? value.raw : undefined,
+          rewrite === undefined ? source.value.raw : undefined,
         ),
-      ],
-      context(vault),
-    ),
+      ];
+    }, context(vault)),
   );
 }
 
@@ -707,9 +718,12 @@ export function moveLaneTree(vault: string, from: string, to: string): void {
     dualWriteLaneTreeMove(vault, from, to, context(vault));
     return;
   }
-  const paths = listLaneTree(vault, from, "");
+  reach.assertLaneRemovalAtReach(vault);
+  const paths = reach.treeMembersAtReach(vault, () => listLaneTree(vault, from, ""));
   if (paths.length === 0) return;
   assertLaneDestination(vault, from, to, paths.map(movedTo));
+  const destinations = paths.map((path) => movedTo(path).to);
+  reach.assertLaneWriteAtReach(vault, destinations);
   // One store write, every record built from one fold (`laneMoveRecords`),
   // each entry placed by itself (design D14 item 18): a shared entry and
   // its tombstone stay in `shared`, so a device that holds only `shared`
@@ -717,8 +731,15 @@ export function moveLaneTree(vault: string, from: string, to: string): void {
   // `shared`. An enclosing private operation still raises the moved
   // entries, never their tombstones.
   storeWrite(() => {
-    const fold = laneStoreFold();
-    return paths.flatMap((path) => laneMoveRecords(vault, fold, movedTo(path), storedContent));
+    const fold = wholeLaneStoreFold();
+    const kept = reach.pathsAtReach(vault, fold, paths);
+    // The destinations are judged again against the same fold.
+    reach.assertWritableInFold(
+      vault,
+      fold,
+      kept.map((path) => movedTo(path).to),
+    );
+    return kept.flatMap((path) => laneMoveRecords(vault, fold, movedTo(path), storedContent));
   }, context(vault));
 }
 
@@ -727,13 +748,14 @@ export function removeLaneTree(vault: string, dir: string): void {
   if (!heldInStore(vault, dir)) {
     guardUserVaultWrite(vault, dir);
     rmSync(dir, { recursive: true, force: true });
-    dualWriteLaneRemoval(vault, () => storedLanePathsBelow(vault, dir, ""), context(vault));
+    dualWriteLaneRemoval(vault, () => storedLanePathsBelow(vault, dir, "", true), context(vault));
     return;
   }
   // One store write, so a folder is never half removed; each tombstone in
   // the partition its entry lives in, so a device that holds only `shared`
   // sees the folder's shared entries go.
-  const paths = listLaneTree(vault, dir, "");
+  reach.assertLaneRemovalAtReach(vault);
+  const paths = reach.treeMembersAtReach(vault, () => listLaneTree(vault, dir, ""));
   if (paths.length === 0) return;
-  storeWrite(() => laneRemovalRecords(vault, laneStoreFold(), paths), context(vault));
+  storeWrite(() => reach.removalRecordsAtReach(vault, paths), context(vault));
 }

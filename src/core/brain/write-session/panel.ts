@@ -13,6 +13,8 @@
  * target (default `Brain/decisions/panels/panel-<date>-<topic>.md`).
  */
 
+import { join } from "node:path";
+
 import {
   WriteSessionRequestError,
   commitArtifact,
@@ -36,6 +38,7 @@ import {
   type PromptPrefix,
 } from "../prompt-prefix.ts";
 import { isoSecond } from "../time.ts";
+import { assertCreateMatchAtReach, assertLaneWriteAtReach } from "../../store/lane-reach-guard.ts";
 import type {
   WriteSessionEnvelope,
   WriteSessionError,
@@ -80,6 +83,9 @@ export function openPanelSession(
       targetErrors,
     );
   }
+  // Below local reach a session is never opened on a target the store
+  // holds in `private`, as for an artifact session (`engine.ts`).
+  assertLaneWriteAtReach(vault, [join(vault, targetPath)]);
   const first = personas[0]!;
   const expiresAt = new Date(Date.parse(now) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
   const record = createWriteSession(vault, now, (id) =>
@@ -121,6 +127,13 @@ export function openPanelSession(
  * A different topic that once shared the old slug does not hold the name.
  */
 function defaultPanelTarget(vault: string, topic: string, day: string): string {
+  // The day's panel of this topic is looked up on the fold of every
+  // partition below local reach (the write rule): one held in `private`
+  // refuses the call with the fixed answer.
+  assertCreateMatchAtReach(vault, () => {
+    const held = heldLegacyPanelName(vault, topic, day);
+    return held === null ? [] : [join(vault, held)];
+  });
   return heldLegacyPanelName(vault, topic, day) ?? panelDefaultNames(topic, day).fresh;
 }
 
@@ -178,6 +191,12 @@ export function submitToPanelSession(
       );
     }
     const note = renderPanelNote(session, text, now);
+    // Below local reach a target the store holds in `private` (it may
+    // have become one since the open) refuses with the fixed answer before
+    // anything of this submit - the metric, the parked record - is written.
+    if (session.requireReview) {
+      assertLaneWriteAtReach(vault, [join(vault, session.targetPath)]);
+    }
     // The synthesis is the last generation handoff of the pass; every
     // persona step and the synthesis shared `panelPrefix(topic)`, so the
     // pass is byte-stable by construction. Record it (opt-in, fail-soft).

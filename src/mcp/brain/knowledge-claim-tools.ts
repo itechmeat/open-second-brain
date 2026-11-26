@@ -9,6 +9,7 @@
  */
 
 import { reachView } from "../../core/brain/reach-view.ts";
+import { privateWithheld, withPrivateShown } from "../../core/store/caller-reach.ts";
 import { everyArtifactRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
@@ -111,12 +112,17 @@ export function toolBrainClaims(
   const visible = (rows: ReadonlyArray<ClaimNode>): ReadonlyArray<ClaimNode> => rows.filter(shown);
   switch (operation) {
     case "rebuild": {
-      const graph = rebuildClaimGraph(ctx.vault);
+      // The stored projection serves every later caller, a local one
+      // included: it is built from every partition whatever the scope.
+      // The answer is the caller's own build, so its count and its
+      // `truncated` describe only what this caller may see.
+      const graph = withPrivateShown(() => rebuildClaimGraph(ctx.vault));
+      const answered = privateWithheld() ? buildClaimGraph(ctx.vault) : graph;
       return {
         operation,
         rebuilt: true,
-        node_count: visible(allClaims(graph)).length,
-        truncated: graph.truncated,
+        node_count: visible(allClaims(answered)).length,
+        truncated: answered.truncated,
       };
     }
     case "replaced": {

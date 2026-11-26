@@ -22,6 +22,8 @@ import {
 } from "../store/lane-pages.ts";
 import { storePreferenceRecords, storeSignalRecords } from "./memory-page-records.ts";
 import { isStoreOnly } from "../store/store-only.ts";
+import { privateWithheld, withPrivateShown } from "../store/caller-reach.ts";
+import { foldIncomplete } from "../store/lane-entry-store.ts";
 
 export type AttentionFlowAction =
   | "open_proposals"
@@ -104,6 +106,15 @@ export interface AttentionFlowEvaluation {
 export function ensureDefaultAttentionFlows(vault: string): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertLaneWrite(vault);
+  // Seeding the default page is maintenance of the machine's own state:
+  // decided on the fold of every partition, whatever the caller's reach,
+  // and skipped below local reach while that fold may miss the page
+  // (change lane-private-partition-reach, the write rule).
+  if (privateWithheld() && foldIncomplete()) return;
+  withPrivateShown(() => seedDefaultAttentionFlow(vault));
+}
+
+function seedDefaultAttentionFlow(vault: string): void {
   const dir = attentionFlowsDir(vault);
   const defaultPath = join(dir, "open-loops.md");
   if (lanePageExists(vault, defaultPath)) return;

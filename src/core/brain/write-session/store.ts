@@ -37,6 +37,7 @@ import {
   removeLanePage,
   writeLaneText,
 } from "../../store/lane-pages.ts";
+import { takenOnWholeFold } from "../../store/lane-reach-guard.ts";
 import { deviceMintTag } from "../record-name.ts";
 
 /** Session ids are lowercase slugs - the grammar doubles as path safety. */
@@ -87,10 +88,14 @@ export function allocateWriteSessionId(vault: string, nowIso: string): string {
   // starting a session in the same second would otherwise write one entry.
   const tag = lanePagesInStore(vault) ? deviceMintTag() : null;
   const stem = tag === null ? second : `${second}-${tag}`;
-  if (!lanePageExists(vault, join(writeSessionDir(vault), `${stem}.json`))) return stem;
+  // The free id is picked on the fold of every partition, as a local
+  // caller with the same store gets it (the write rule).
+  const taken = (id: string): boolean =>
+    takenOnWholeFold(() => lanePageExists(vault, join(writeSessionDir(vault), `${id}.json`)));
+  if (!taken(stem)) return stem;
   for (let n = 2; n < 10_000; n++) {
     const candidate = `${stem}-${n}`;
-    if (!lanePageExists(vault, join(writeSessionDir(vault), `${candidate}.json`))) return candidate;
+    if (!taken(candidate)) return candidate;
   }
   throw new Error(`could not allocate a write-session id for ${stem}`);
 }

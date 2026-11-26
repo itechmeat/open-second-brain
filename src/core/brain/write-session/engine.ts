@@ -50,6 +50,7 @@ import {
   type WriteSessionRecord,
 } from "./types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { assertLaneWriteAtReach } from "../../store/lane-reach-guard.ts";
 
 export const DEFAULT_RETRY_CAP = 3;
 export const DEFAULT_TTL_MS = 24 * 3600 * 1000;
@@ -108,6 +109,9 @@ export function openArtifactSession(
       targetErrors,
     );
   }
+  // Below local reach a session is never opened on a target the store
+  // holds in `private`: refused with the fixed answer before it exists.
+  assertLaneWriteAtReach(vault, [join(vault, input.targetPath)]);
   const now = resolveNow(input.now);
   const schemaType = input.schemaType?.trim() || null;
   const expiresAt = new Date(Date.parse(now) + normalizeTtlMs(input.ttlMs)).toISOString();
@@ -159,6 +163,11 @@ export function submitToSession(vault: string, input: SubmitToSessionInput): Wri
       `session ${session.id} is a '${session.kind}' session - submit through its kind-specific surface`,
     );
   }
+
+  // Below local reach a target the store holds in `private` (it may have
+  // become one since the open) refuses with the fixed answer before any
+  // record of this submit - a failed attempt or the parked step - is saved.
+  assertLaneWriteAtReach(vault, [join(vault, session.targetPath)]);
 
   // Collision guard runs at COMMIT time, not just open time: the target
   // may have appeared between open and submit (another device, another
@@ -375,6 +384,10 @@ export function commitArtifact(
   // whose ancestor links out - is rejected before any mkdir/read/write.
   const absolute = ensureInsideVault(join(vault, session.targetPath), vault);
   assertCommitTargetGoverned(vault, session.targetPath);
+  // Below local reach a target the store holds in `private` (or any lane
+  // target while the store cannot be read whole) is refused with the
+  // fixed answer, again at commit: it may have become one since the open.
+  assertLaneWriteAtReach(vault, [absolute]);
   // Last-line-of-defense collision guard: submit-time checks cannot
   // cover the window between a needs-review park and the operator's
   // approve - if the target appeared meanwhile, `create` must still

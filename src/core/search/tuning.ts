@@ -83,6 +83,13 @@ export interface TuneRecallOptions {
   /** Injected clock for the persisted `evaluated_at` stamp. */
   readonly now: Date;
   /**
+   * Whether the winner is saved as the vault's tuning (default true). A
+   * caller below local reach scores the grid at its own reach, so its
+   * winner is answered and not saved: the one tuning file stays what a
+   * local caller measured.
+   */
+  readonly persist?: boolean;
+  /**
    * The reach the party that supplied this dataset was established at,
    * forwarded verbatim to every grid cell's benchmark run. Absent
    * resolves to the narrowest there - see
@@ -227,6 +234,7 @@ export async function tuneRecall(
   }
 
   const datasetHash = createHash("sha256").update(JSON.stringify(dataset)).digest("hex");
+  if (opts.persist === false) return tuningReport(chosen, evaluated, datasetHash);
   // The tuning file passes no vault guard, so it asks the migration gate itself:
   // the file is per-vault state a migration of this vault is moving.
   if (config.vault !== null) assertNoMigrationInProgress(config.vault);
@@ -251,9 +259,17 @@ export async function tuneRecall(
     ) + "\n",
   );
 
+  return tuningReport(chosen, evaluated, datasetHash);
+}
+
+function tuningReport(
+  chosen: TuningEvaluation,
+  evaluated: ReadonlyArray<TuningEvaluation>,
+  datasetHash: string,
+): TuneRecallReport {
   return Object.freeze({
     chosen: chosen.params,
-    evaluated: Object.freeze(evaluated),
+    evaluated: Object.freeze([...evaluated]),
     datasetHash,
     degraded: Object.freeze([...new Set(evaluated.flatMap((e) => e.degraded))].toSorted()),
   });

@@ -87,6 +87,7 @@ import {
   removeLanePage,
   writeLaneText,
 } from "../../store/lane-pages.ts";
+import { assertCreateMatchAtReach } from "../../store/lane-reach-guard.ts";
 import { signalRawShape } from "../../store/dual-write-records.ts";
 
 // ----- Typed errors ---------------------------------------------------------
@@ -397,6 +398,9 @@ export function stageForReview(
       publishTarget,
     );
   }
+  // Below local reach the open entries are read on the fold of every
+  // partition too (the write rule): one held in `private` refuses here.
+  assertStagedTargetsAtReach(vault, lane, [publishTarget]);
   // One open entry per publish target. The comparison is on the DECODED
   // target, so it catches the two-day case (two ids, one target) as well
   // as the same-day one (one id, silently rewritten bytes); an unreadable
@@ -421,6 +425,32 @@ export function stageForReview(
   // on a store-only machine (task 2.10 WP6).
   writeLaneText(vault, stagedPath, render());
   return { pendingId, path: stagedPath };
+}
+
+/**
+ * Below local reach, refuse with the fixed answer a staging for any of
+ * `targets` that an open entry of `lane` held in `private` already holds:
+ * the open entries read on the fold of every partition (the write rule),
+ * where a local caller is answered with that entry. Nothing is read
+ * outside that scope or with no target.
+ */
+export function assertStagedTargetsAtReach(
+  vault: string,
+  lane: ReviewLane,
+  targets: ReadonlyArray<string>,
+): void {
+  if (targets.length === 0) return;
+  const laneDir = pendingLaneDirIn(brainDirs(vault), lane);
+  assertCreateMatchAtReach(vault, () =>
+    laneDirFiles(vault, laneDir).filter((path) => {
+      const entry = readLaneEntry(vault, lane, path);
+      return (
+        entry.unreadableReason === undefined &&
+        entry.publishTarget !== undefined &&
+        targets.includes(entry.publishTarget)
+      );
+    }),
+  );
 }
 
 /** A trailing `.md` in any casing - the extension a note target ends in. */

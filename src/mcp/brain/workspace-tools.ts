@@ -186,6 +186,9 @@ function isTriggerTransition(operation: string): operation is TriggerAction {
 function triggerRefs(record: TriggerRecord): ReadonlyArray<string> {
   return [
     ...record.sourceArtifacts,
+    // The key may name an id the artifact list does not (a batch key
+    // adopted from a covering trigger): its segments count too.
+    ...record.cooldownKey.split(":"),
     ...extractWikilinkRichBodies(record.reason).map((b) => parseWikilinkRich(b).target),
   ];
 }
