@@ -447,12 +447,12 @@
         "Sets reach in the transport: stdio, the CLI and a loopback HTTP bind are local; other HTTP requests are remote",
         "Withholds pages with the reserved `private` visibility token from remote search, page walks and path reads",
         "Lets `--visibility` only narrow results; the reserved token outranks the other tokens on the same page",
-        "Refuses a reach argument in any spelling, by name, instead of reading or ignoring it",
-        "Refuses an owner scope that disagrees with the server's identity under `integrity.owner_scope_delivery: fail`",
+        "Refuses a reach argument in any spelling; `integrity.owner_scope_delivery: fail` refuses a foreign owner scope",
         "Gives a remote caller vault-relative paths and named placeholders, never an absolute path of the host",
         "Counts reserved pages and the note-returning surfaces that do not yet consult the field (`search check`)",
         "Withholds lane entries of the private partition from remote lists, shows, counts and names",
-        "Refuses a remote write that would meet a private entry with one fixed answer that names nothing",
+        "Refuses a remote create or overwrite that meets a private entry with one fixed answer naming nothing",
+        "A remote removal or move of a private entry finds it absent; a folder with a private member is refused whole",
         "Keeps new receipts, log events and ledger rows that name a private lane entry in the private partition"
       ],
       "limits": [
