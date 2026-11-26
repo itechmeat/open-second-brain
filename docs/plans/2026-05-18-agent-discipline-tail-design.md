@@ -587,7 +587,7 @@ populate Brain.
   manifest entry → CONFLICT, exit 2, other files still processed.
 - `import-memory-snapshot.test.ts` — `--apply` creates the snapshot,
   `rollback` restores the original Brain.
-- `import-memory-path-safety.test.ts` — `--memory /etc/passwd`
+- `import-memory-path-safety.test.ts` — `--memory` naming a system file outside the vault
   refuses without the override flag; with the override flag and a
   valid markdown corpus, succeeds.
 - `import-memory-update-preserves-evidence.test.ts` — UPDATE keeps

@@ -1148,14 +1148,14 @@ describe("applyProtect claudecode", () => {
     writeFileSync(
       join(dir, ".claude", "settings.json"),
       JSON.stringify({
-        permissions: { deny: ["Bash(rm -rf /)"], allow: [] },
+        permissions: { deny: ["Bash(curl:*)"], allow: [] },
       }),
     );
     applyProtect({ target: "claudecode", vault: dir });
     const settings = JSON.parse(
       readFileSync(join(dir, ".claude", "settings.json"), "utf8"),
     );
-    expect(settings.permissions.deny).toContain("Bash(rm -rf /)");
+    expect(settings.permissions.deny).toContain("Bash(curl:*)");
     expect(settings.permissions.deny).toContain(
       `Write(${dir}/Brain/preferences/**)`,
     );
@@ -1274,7 +1274,7 @@ describe("unprotect claudecode", () => {
     mkdirSync(join(dir, "Brain"), { recursive: true });
     mkdirSync(join(dir, ".claude"), { recursive: true });
     const userSettings = JSON.stringify(
-      { permissions: { deny: ["Bash(rm -rf /)"], allow: [] } },
+      { permissions: { deny: ["Bash(curl:*)"], allow: [] } },
       null,
       2,
     ) + "\n";

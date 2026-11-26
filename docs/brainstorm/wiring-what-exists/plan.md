@@ -118,7 +118,7 @@ A1, C1, D1, D2, E1, E2   (independent)
   `trust` on the result and on both surfaces.
 - **Acceptance**: a source that does not exist quarantines rather than writing under
   `stated`; `[[Articles/x.md]]` and `Articles/x.md` produce one identity; a
-  `../../etc/passwd` source is refused without stat-ing it; an unreadable source
+  `../../outside-the-vault` source is refused without stat-ing it; an unreadable source
   raises the typed error and leaks no absolute path; a trusted in-vault source
   produces a page byte-identical to today's apart from the added keys.
 - **Depends on**: none.

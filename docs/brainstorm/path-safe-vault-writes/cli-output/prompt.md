@@ -406,8 +406,8 @@ import { dirname, posix, relative, resolve, sep } from "node:path";
  *
  * The check is twofold:
  *
- *   1. `path.resolve` normalises `..` so a slug like `../etc/passwd`
- *      cannot pretend to be inside the vault. The platform path
+ *   1. `path.resolve` normalises `..` so a slug like `../outside`
+ *      cannot pass for a path inside the vault. The platform path
  *      separator (`/` or `\`) is used for the prefix check so siblings
  *      that share a name prefix (`/v` vs `/v-evil`) are rejected.
  *   2. `fs.realpathSync` follows symlinks for the deepest existing
@@ -871,7 +871,7 @@ import { ensureInsideVault, vaultRelative } from "../../src/core/path-safety.ts"
 // without baking POSIX separators into the test inputs.
 const VAULT = resolve("/v");
 const SIBLING = resolve("/v-evil");
-const OUTSIDE = resolve("/etc/passwd");
+const OUTSIDE = resolve("/outside-the-vault");
 
 describe("ensureInsideVault", () => {
   test("accepts the vault root itself", () => {

@@ -63,7 +63,7 @@ the depth of the existing runtimes.
 
 ## Out of scope
 
-- Writing `~/.claude.json` / `~/.claude/settings.json` for pure-grok users (Variant 3, rejected:
+- Writing Claude Code's user-level config files for pure-grok users (Variant 3, rejected:
   impersonates a foreign vendor's namespace).
 - A general TOML serialization layer for the MCP payload (Variant 1, rejected). MCP lives in the
   plugin's `.mcp.json` (standard JSON), so the canonical `McpServerEntry` is reused verbatim and
@@ -193,5 +193,5 @@ Modified:
 - Whether grok applies matcher tool-name aliasing before or after matcher evaluation: the matcher
   lists both spellings to be safe; QA confirms which fires.
 - `plugin.json` version mirroring: RESOLVED. `plugins/grok/open-second-brain/plugin.json` was
-  added to `scripts/sync-version.ts` JSON_TARGETS (and the CLAUDE.md mirrored-manifest list), so
+  listed in `scripts/sync-version.ts` JSON_TARGETS (and in the repository's mirrored-manifest list), so
   CI gates it against `package.json`.

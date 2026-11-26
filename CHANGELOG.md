@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Hermes installs and updates the plugin without a question again.** Hermes 0.23 scans the clone before it installs or updates a plugin, and every release up to 2.0.2 scanned `caution` (25,450 findings for 2.0.1, 25,590 for 2.0.2): Hermes asks for a confirmation then, so an install without a terminal and every unattended update stopped. The verdict came from 26 high findings, all of them prose or test data: design notes and old plans quoting a system password file, a root delete and agent-config paths, one sentence of the bundled skill, five code comments, one regular expression that spells an invisible-character range with the characters themselves, and three test fixtures with a hostile phrase in a template literal. They are reworded (the range is now written with `\u` escapes, the fixtures as plain strings), and the repository now scans `safe`; the 24,000 path-traversal notes that remain are the `../..` of ordinary relative imports, which Hermes counts as `medium` and which do not change the verdict. To update to 2.0.2 or earlier, answer yes in a terminal or run `hermes plugins update open-second-brain --force`.
+
+### Changed
+
+- **The Hermes scan gate runs the current scanner and fails on `caution`.** `bun run check:hermes-scan` pins hermes-agent v0.23.4 (scanner `plugin-guard-v15`, now in `hermes_cli/plugins_install_scan.py`) and fetches every module it imports, digest-checked as before; it prints each scanned tree's verdict with its counts by severity and by pattern, lists every high and critical finding, and fails unless the documented install (`hermes plugins install itechmeat/open-second-brain`) scans `safe`. It used to pin scanner `plugin-guard-v8` and fail only on `dangerous`, so it never showed the `caution` verdict. The `plugins/hermes` subdirectory is reported too (it scans `safe`, but it is not a working install on its own).
+
+### Added
+
+- **CI checks the lockfiles for known vulnerabilities.** A new `osv-scanner` job runs Google's OSV-Scanner (action v2.7.1, pinned by commit) over `bun.lock` and `uv.lock` on every pull request and on pushes to `main`, and fails on a known vulnerability; it holds only `contents: read`, uses no secrets and uploads nothing.
 ## [2.0.3] - 2026-11-26
 
 ### Fixed
@@ -9121,7 +9134,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.3...HEAD
 [2.0.3]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/itechmeat/open-second-brain/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/itechmeat/open-second-brain/compare/v2.0.0...v2.0.1

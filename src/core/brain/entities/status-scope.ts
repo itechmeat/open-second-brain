@@ -59,7 +59,7 @@ const SCOPES_ADMITTING: Readonly<Record<BrainEntityStatus, ReadonlyArray<EntityS
  * consume (`atomic-facts`, `truth/contamination`, `truth/merge-guard`) carry
  * `status: string` rather than the narrowed type, so the predicate has to
  * answer for a value that never parsed - and a `Map` answers it without an
- * `as` cast that would let an unparsed value pretend to be vocabulary.
+ * `as` cast that would let an unparsed value pass for vocabulary.
  */
 const SCOPES_BY_STATUS: ReadonlyMap<string, ReadonlyArray<EntityStatusScope>> = new Map(
   Object.entries(SCOPES_ADMITTING),

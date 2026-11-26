@@ -22,6 +22,15 @@ Or paste `https://github.com/itechmeat/open-second-brain` into the
 Hermes Dashboard -> Plugins -> Install from GitHub URL. Do not pin
 a tag - the CLI resolves to the latest released version on its own.
 
+Hermes runs its security scan over the clone before it installs or
+updates the plugin. Open Second Brain is checked against that scanner in
+CI and scans `safe`, so the install and every later
+`hermes plugins update` go through without a question. Install the
+repository itself, as above: a subdirectory install
+(`itechmeat/open-second-brain/plugins/hermes`) also scans `safe` but does
+not work, because the provider reads its templates and the `o2b` wrapper
+from the repository root.
+
 On native Windows (Hermes desktop app or `install.ps1`), Hermes keeps its
 home in `%LOCALAPPDATA%\hermes`; the plugin, the provider and the steps
 below are the same, with the Windows paths from
@@ -272,6 +281,18 @@ o2b doctor --vault /path/to/vault --repo .
 
 `memory.provider` persists across updates, so the provider stays active
 with no re-activation step.
+
+Releases up to 2.0.2 scan `caution` under Hermes 0.23 (about 25,000
+findings, 26 of them high: quoted attack strings in old design notes, test
+fixtures and code comments), and Hermes asks before it installs a
+`caution` tree, so an update without a terminal stops at "Requires
+confirmation (caution verdict)". Once the next release is out, the
+update scans that release and goes through with nothing to do. To install
+or update to 2.0.2 or earlier, answer yes in a terminal or add `--force`
+(`hermes plugins update open-second-brain --force`); `--force` accepts
+`caution` only, never a `dangerous` verdict. The same holds for a plugin
+directory that is a clone of, or a link to, a full checkout: Hermes scans
+the pulled tree before it keeps it.
 
 Keep the `o2b` on PATH at the plugin's version. The links step 2
 creates point into the plugin and follow it; an `o2b` installed some

@@ -15,7 +15,7 @@
  *    Claims distilled from an address nobody in this vault owns ranked beside
  *    the operator's own notes.
  * 3. `join(vault, canonicalSource)` passed through no shape gate, so
- *    `../../etc/passwd` was stat-ed and hashed: an existence oracle over any
+ *    `../../outside-the-vault` was stat-ed and hashed: an existence oracle over any
  *    path the process could reach, on a string the CALLER supplied.
  * 4. A source with no bytes recorded the literal `"missing"` as its hash and
  *    the page was written anyway. Absence was a value instead of a verdict.

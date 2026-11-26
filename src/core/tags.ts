@@ -81,8 +81,11 @@ export function isObsidianTagValue(value: string): boolean {
 // stored excerpt is fenced one backtick longer than any run it holds, so
 // its lines never close it early. The opening run is a whole run, which
 // fixes its length and keeps the scan linear on a long line of marks.
+// The lookaheads spell their mark as a one-character class: Hermes' plugin
+// install scanner reads an exclamation mark right before a backtick as an
+// inline shell snippet, and the class matches the same single character.
 const CODE_FENCE_RE =
-  /(^|\n)(?:(`{3,})(?!`)[^\n]*\n[\s\S]*?(?:\n\2`*[^\n]*|$)|(~{3,})(?!~)[^\n]*\n[\s\S]*?(?:\n\3~*[^\n]*|$))/g;
+  /(^|\n)(?:(`{3,})(?![`])[^\n]*\n[\s\S]*?(?:\n\2`*[^\n]*|$)|(~{3,})(?![~])[^\n]*\n[\s\S]*?(?:\n\3~*[^\n]*|$))/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
 
 /**

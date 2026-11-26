@@ -41,6 +41,7 @@ Follow these steps in order. Do not skip the stop in step 6. Never ask the perso
 - `generic` prints the MCP server entries for the person to merge into their host's configuration; nothing is written.
 - GitHub Copilot CLI registration depends on the `copilot mcp add` flags of the installed Copilot version; a change shows up in `o2b install --check`.
 - Hermes Agent: do not install separate copies of the plugin in several profile homes on one machine (install/hermes.md).
+- Hermes Agent: install the repository (`hermes plugins install itechmeat/open-second-brain --enable`), not its `plugins/hermes` subdirectory; Hermes' install scan passes it as `safe`, and releases up to 2.0.2 need `hermes plugins update open-second-brain --force` or a yes in a terminal (install/hermes.md).
 - Open Second Brain does not sync between machines. Sharing one brain needs a sync tool the person chooses (docs/brain-store.md).
 - The brain store is append-only: retiring a rule does not erase its record. Do not store secrets in it.
 
