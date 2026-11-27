@@ -13,7 +13,8 @@
     "name": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 60
+      "maxLength": 60,
+      "pattern": "^[^\\r\\n]*$"
     },
     "summary": {
       "type": "string",
@@ -83,7 +84,8 @@
         "summary": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 120
+          "maxLength": 120,
+          "pattern": "^[^\\r\\n]*$"
         },
         "status": {
           "type": "string",
@@ -161,7 +163,7 @@
           "maxItems": 8,
           "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/line"
+            "$ref": "#/$defs/one_line"
           }
         }
       }
@@ -209,6 +211,12 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 110
+    },
+    "one_line": {
+      "description": "A string the index renders on one line: no line break.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\r\\n]*$"
     }
   }
 }

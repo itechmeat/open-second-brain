@@ -24,6 +24,7 @@ import {
   buildIndex,
   checkCatalog,
   codeFacts,
+  collectSkills,
   collectSurfaces,
   SCHEMA_FILE,
   TOOL_SERVER_FILES,
@@ -429,7 +430,27 @@ describe("more rules of the check", () => {
     ).toEqual([]);
     // A name only inside a fenced block is not an inline mention.
     expect(named("```\ntool_one\n```\n\n`tool_two`")).toEqual([missing]);
+    // An escaped backtick is plain text and opens no span; inside a real
+    // span a backslash is plain text and closes nothing.
+    expect(named("\\`tool_one {}\\` and `tool_two`")).toEqual([missing]);
+    expect(named("`tool_one \\` and `tool_two`")).toEqual([]);
     expect(named("`` tool_one `` and `tool_two`")).toEqual([]);
+  });
+
+  test("a summary, a keyword or an area name with a line break is refused", () => {
+    expect(summaryOf("First.\nSecond.").some((e) => e.includes("summary"))).toBe(true);
+    const groups = validGroups();
+    groups[0] = [
+      { ...(groups[0]?.[0] as CatalogFeature), keywords: ["alpha", "be\nta", "gamma", "delta"] },
+    ];
+    const keywordErrors = checkCatalog(catalogFiles(groups), FACTS, ENV);
+    expect(keywordErrors.some((e) => e.includes("keywords.1"))).toBe(true);
+    const files = catalogFiles(validGroups()).map((f) =>
+      f.file === "area-1.json"
+        ? { ...f, text: f.text.replace('"name":"Area 1"', '"name":"Area\\n1"') }
+        : f,
+    );
+    expect(checkCatalog(files, FACTS, ENV).some((e) => e.includes("area-1.json: name"))).toBe(true);
   });
 
   test("a summary is measured in characters, not UTF-16 units", () => {
@@ -440,12 +461,58 @@ describe("more rules of the check", () => {
     );
   });
 
+  test("an assertion beside $ref is applied, and a reference alone still validates", () => {
+    const schema = {
+      $defs: { word: { type: "string" } },
+      properties: {
+        short: { $ref: "#/$defs/word", maxLength: 3 },
+        plain: { $ref: "#/$defs/word" },
+      },
+    };
+    expect(validateAgainst(schema, { short: "abcd", plain: "abcd" })).toEqual([
+      { path: ["short"], message: "must be at most 3 characters (is 4)" },
+    ]);
+  });
+
+  test("an undeclared __proto__ key is an unknown field, and required reads own keys", () => {
+    const schema = {
+      type: "object",
+      required: ["toString"],
+      properties: { slug: { type: "string" } },
+      additionalProperties: false,
+    };
+    const value = JSON.parse('{"slug": "a", "__proto__": {"x": 1}}') as unknown;
+    expect(validateAgainst(schema, value).map((e) => e.message)).toEqual([
+      "misses the required field toString",
+      "has the unknown field __proto__",
+    ]);
+  });
+
+  test("a schema keyword the validator cannot apply is refused at load", () => {
+    for (const [node, message] of [
+      [{ type: "float" }, "type must be one of"],
+      [{ type: ["string", "null"] }, "type must be one of"],
+      [{ maxLength: "3" }, "maxLength must be a non-negative integer"],
+      [{ pattern: "(" }, "pattern must be a valid regular expression"],
+      [{ required: "slug" }, "required must be an array of names"],
+      [{ $ref: "elsewhere.json" }, "$ref must be a #/$defs/<name> reference"],
+    ] as const) {
+      expect(() => assertSupportedSchema(node)).toThrow(message);
+    }
+    expect(validateAgainst({ type: "number" }, 1.5)).toEqual([]);
+    expect(validateAgainst({ type: "null" }, null)).toEqual([]);
+  });
+
   test("a schema whose additionalProperties is a schema is refused at load", () => {
     expect(() => assertSupportedSchema(objectSchema({ type: "string" }))).toThrow(
       "additionalProperties must be true or false",
     );
     expect(() => assertSupportedSchema(objectSchema(true))).not.toThrow();
     expect(() => assertSupportedSchema(objectSchema(false))).not.toThrow();
+  });
+
+  test("a heading inside a fence stays out of the anchors, whatever shorter fence it holds", () => {
+    expect([...markdownAnchors("````\n```\n# Example\n````\n# Real\n")]).toEqual(["real"]);
   });
 
   test("a repeated heading takes the next free suffix, as on GitHub", () => {
@@ -550,10 +617,14 @@ describe("the repository environment", () => {
       "src/mcp/left.ts": 'if ("tools/list" === request.method) list();\n',
       "src/mcp/right.ts": 'if (msg.method === "tools/list") list();\n',
       "src/mcp/switch.ts": 'switch (m) { case "tools/list": list(); }\n',
+      "src/mcp/bracket.ts": 'if (request["method"] === "tools/list") list();\n',
+      "src/mcp/bracket-left.ts": "if ('tools/list' === msg['method']) list();\n",
       "src/mcp/log.ts": 'const listed = calls.some((c) => c.tool === "tools/list");\n',
     };
     for (const [rel, text] of Object.entries(files)) writeFileSync(join(root, rel), text);
     expect(scanToolServerFiles(root)).toEqual([
+      "src/mcp/bracket-left.ts",
+      "src/mcp/bracket.ts",
       "src/mcp/left.ts",
       "src/mcp/right.ts",
       "src/mcp/switch.ts",
@@ -566,6 +637,37 @@ describe("the repository environment", () => {
       true,
       false,
     ]);
+  });
+
+  test("a skill name in YAML quotes is read without the quotes", () => {
+    const root = repo();
+    mkdirSync(join(root, "skills", "quoted"), { recursive: true });
+    writeFileSync(
+      join(root, "skills", "quoted", "SKILL.md"),
+      '---\nname: "quoted-skill"\ndescription: A skill.\n---\nBody.\n',
+    );
+    expect(collectSkills(root).skills.map((s) => s.name)).toEqual(["quoted-skill"]);
+  });
+
+  test("an index over the byte cap is refused before it replaces the one on disk", () => {
+    const root = repo();
+    const dir = join(root, "docs", "catalog");
+    for (const f of catalogFiles(validGroups())) writeFileSync(join(dir, f.file), f.text);
+    const good = readFileSync(join(dir, INDEX_FILE), "utf8");
+    // Enough features of a long summary to pass the cap.
+    const many = Array.from({ length: Math.ceil(INDEX_MAX_BYTES / 100) }, (_, i) =>
+      feature(`feature-${i}`, { summary: "x".repeat(110) }),
+    );
+    const big = catalogFiles([many]).filter((f) => f.file !== INDEX_FILE);
+    for (const f of big) writeFileSync(join(dir, f.file), f.text);
+    rmSync(join(dir, "area-2.json"), { force: true });
+    const built = buildIndex(root);
+    expect({ written: built.written, over: built.bytes > INDEX_MAX_BYTES }).toEqual({
+      written: false,
+      over: true,
+    });
+    expect(built.errors[0]).toContain("over the");
+    expect(readFileSync(join(dir, INDEX_FILE), "utf8")).toBe(good);
   });
 
   test("the build writes the index from valid files and refuses a mismatched file name", () => {

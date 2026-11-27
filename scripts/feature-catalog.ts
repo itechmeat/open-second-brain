@@ -49,6 +49,7 @@ import {
   DREAM_EXECUTOR_TOOLS,
 } from "../src/core/brain/dream-queue/dream-session.ts";
 import { BRAIN_YAML_KEYS } from "../src/core/brain/policy/settings-keys.ts";
+import { parseFrontmatterText } from "../src/core/vault.ts";
 import { STORE_NATIVE_SETTINGS } from "../src/core/brain/policy/settings-names.ts";
 import { brainConfigKnownKeys } from "../src/core/brain/policy/validate.ts";
 import { HOST_KINDS } from "../src/core/install/host-kinds.ts";
@@ -114,26 +115,57 @@ export function withoutFencedBlocks(text: string): string {
     .join("\n");
 }
 
+/** The ASCII punctuation a backslash escapes in CommonMark. */
+const ESCAPABLE = /[!-/:-@[-`{-~]/;
+
 /**
- * The contents of the inline code spans of a Markdown text, paired as
- * CommonMark pairs them: fenced blocks are set aside first, a run of
- * backticks opens a span that the next run of the same length closes, a
- * run with no closer is plain text, and a span never crosses a blank line.
+ * The contents of the inline code spans of a Markdown text, read as
+ * CommonMark reads them: fenced blocks are set aside first; outside a
+ * span a backslash escapes the punctuation after it, so `` \` `` is a
+ * plain backtick that neither opens nor closes a span; a run of backticks
+ * opens a span that the next run of the same length closes, and inside a
+ * span a backslash is plain text; a run with no closer is plain text; a
+ * span never crosses a blank line.
  */
 export function markdownCodeSpans(text: string): string[] {
   const out: string[] = [];
   for (const block of withoutFencedBlocks(text).split(/\n[ \t]*\n/)) {
-    const runs = [...block.matchAll(/`+/g)];
     let i = 0;
-    while (i < runs.length) {
-      const open = runs[i]!;
-      const close = runs.findIndex((run, k) => k > i && run[0].length === open[0].length);
-      if (close === -1) {
+    while (i < block.length) {
+      const ch = block[i];
+      if (ch === "\\" && ESCAPABLE.test(block[i + 1] ?? "")) {
+        i += 2;
+        continue;
+      }
+      if (ch !== "`") {
         i++;
         continue;
       }
-      out.push(block.slice((open.index ?? 0) + open[0].length, runs[close]!.index ?? 0));
-      i = close + 1;
+      let open = i;
+      while (block[open] === "`") open++;
+      const length = open - i;
+      // The closer: the next run of exactly `length` backticks.
+      let close = -1;
+      let j = open;
+      while (j < block.length) {
+        if (block[j] !== "`") {
+          j++;
+          continue;
+        }
+        let runEnd = j;
+        while (block[runEnd] === "`") runEnd++;
+        if (runEnd - j === length) {
+          close = j;
+          break;
+        }
+        j = runEnd;
+      }
+      if (close === -1) {
+        i = open;
+        continue;
+      }
+      out.push(block.slice(open, close));
+      i = close + length;
     }
   }
   return out;
@@ -151,6 +183,11 @@ export function spanNamesTool(span: string, tool: string): boolean {
   const flat = span.replace(/\r?\n/g, " ");
   const content = /^ [\s\S]* $/.test(flat) && flat.trim() !== "" ? flat.slice(1, -1) : flat;
   return new RegExp(`^${escapeRegExp(tool)}(?:$|[\\s({])`).test(content);
+}
+
+/** The declaration of a top-level `_brain.yaml` key, by own name only. */
+function brainYamlKey(key: string): (typeof BRAIN_YAML_KEYS)[string] | undefined {
+  return Object.hasOwn(BRAIN_YAML_KEYS, key) ? BRAIN_YAML_KEYS[key] : undefined;
 }
 
 /** Order by UTF-16 code units, the same on every host whatever its locale. */
@@ -342,11 +379,14 @@ export const TOOL_SERVER_FILES: ReadonlyArray<string> = Object.freeze([
 /** Files under `src/` with a `tools/list` handler (`case "tools/list"` or `=== "tools/list"`). */
 export function scanToolServerFiles(root: string = ROOT): string[] {
   const out: string[] = [];
-  // A `case` label, or the JSON-RPC `method` compared with the literal on
-  // either side; a call log that records `tools/list` under another field
-  // is no server.
-  const handler =
-    /case\s+["'`]tools\/list["'`]|\bmethod\s*[=!]==?\s*["'`]tools\/list["'`]|["'`]tools\/list["'`]\s*[=!]==?\s*[\w.?]*\bmethod\b/;
+  // A `case` label, or the JSON-RPC `method` (`.method` or `["method"]`)
+  // compared with the literal on either side; a call log that records
+  // `tools/list` under another field is no server.
+  const literal = String.raw`["'\x60]tools/list["'\x60]`;
+  const method = String.raw`(?:\bmethod\b|\[\s*["'\x60]method["'\x60]\s*\])`;
+  const handler = new RegExp(
+    `case\\s+${literal}|${method}\\s*[=!]==?\\s*${literal}|${literal}\\s*[=!]==?\\s*[\\w.?]*${method}`,
+  );
   const visit = (dir: string): void => {
     for (const name of readdirSync(dir).toSorted(byCodeUnits)) {
       const p = join(dir, name);
@@ -601,34 +641,29 @@ function collectHostNativeHooks() {
 
 // ---------- Skills ----------
 
-function frontMatter(text: string): Record<string, string> {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  const out: Record<string, string> = {};
-  if (m === null) return out;
-  for (const line of (m[1] ?? "").split(/\r?\n/)) {
-    const kv = /^([a-z_-]+):\s*(.*)$/.exec(line);
-    if (kv?.[1] !== undefined) out[kv[1]] = (kv[2] ?? "").trim();
-  }
-  return out;
-}
-
 function firstSentence(text: string): string {
   const m = /^(.+?[.])(\s|$)/.exec(text);
   return (m?.[1] ?? text).trim();
 }
 
-function collectSkills() {
-  const dir = join(ROOT, "skills");
+/** The shipped skills of `root` with the names the product reads from them. */
+export function collectSkills(root: string = ROOT) {
+  const dir = join(root, "skills");
   const skills = readdirSync(dir)
     .filter((d) => existsSync(join(dir, d, "SKILL.md")))
     .toSorted()
     .map((d) => {
-      const fm = frontMatter(readFileSync(join(dir, d, "SKILL.md"), "utf8"));
+      // The product's own front matter reader decodes YAML (a quoted name
+      // is the name inside the quotes), and the name rule is the one skill
+      // discovery applies: the trimmed `name`, else the folder.
+      const [meta] = parseFrontmatterText(readFileSync(join(dir, d, "SKILL.md"), "utf8"));
+      const name = typeof meta["name"] === "string" ? meta["name"].trim() : "";
+      const description = typeof meta["description"] === "string" ? meta["description"] : "";
       return {
-        name: fm["name"] ?? d,
+        name: name.length > 0 ? name : d,
         path: `skills/${d}/SKILL.md`,
-        description: firstSentence(fm["description"] ?? ""),
-        mirrored_for_codex: existsSync(join(ROOT, "plugins/codex/skills", d, "SKILL.md")),
+        description: firstSentence(description),
+        mirrored_for_codex: existsSync(join(root, "plugins/codex/skills", d, "SKILL.md")),
       };
     });
   return { source: "skills/*/SKILL.md", method: "parse", count: skills.length, skills };
@@ -824,9 +859,9 @@ function collectConfig() {
   const known = brainConfigKnownKeys();
   const brainYaml = [...known.topLevel].toSorted().map((key) => ({
     key,
-    home: BRAIN_YAML_KEYS[key]?.home ?? "unclassified",
+    home: brainYamlKey(key)?.home ?? "unclassified",
     fields: [...(known.subKeys.get(key) ?? [])].toSorted(),
-    field_homes: BRAIN_YAML_KEYS[key]?.fields ?? {},
+    field_homes: brainYamlKey(key)?.fields ?? {},
   }));
   const scanned = scanConfigAndEnv();
   return {
@@ -983,7 +1018,7 @@ export function codeFacts(): CodeFacts {
     skills: new Set(collectSkills().skills.map((s) => s.name)),
     configKeys: new Set([...topLevel, ...storeSettings]),
     requiredConfigKeys: new Set([
-      ...topLevel.filter((key) => BRAIN_YAML_KEYS[key]?.home !== "drop"),
+      ...topLevel.filter((key) => brainYamlKey(key)?.home !== "drop"),
       ...storeSettings,
     ]),
     toolServerFiles: new Set(scanToolServerFiles()),
@@ -1065,12 +1100,77 @@ export function assertSupportedSchema(node: unknown, path = "<root>"): void {
   if (extra !== undefined && typeof extra !== "boolean") {
     throw new Error(`${SCHEMA_FILE}: ${path}: additionalProperties must be true or false`);
   }
+  // Every other keyword must have the shape the validator applies; one it
+  // could not apply would pass every value silently.
+  const fail = (keyword: string, shape: string): never => {
+    throw new Error(`${SCHEMA_FILE}: ${path}: ${keyword} must be ${shape}`);
+  };
+  const type = node["type"];
+  if (type !== undefined && (typeof type !== "string" || !SCHEMA_TYPES.has(type))) {
+    fail("type", `one of ${[...SCHEMA_TYPES].join(", ")}`);
+  }
+  for (const keyword of ["minLength", "maxLength", "minItems", "maxItems"] as const) {
+    const n = node[keyword];
+    if (n !== undefined && !(typeof n === "number" && Number.isInteger(n) && n >= 0)) {
+      fail(keyword, "a non-negative integer");
+    }
+  }
+  if (node["uniqueItems"] !== undefined && typeof node["uniqueItems"] !== "boolean") {
+    fail("uniqueItems", "true or false");
+  }
+  if (node["enum"] !== undefined && !Array.isArray(node["enum"])) fail("enum", "an array");
+  const required = node["required"];
+  if (
+    required !== undefined &&
+    !(Array.isArray(required) && required.every((r) => typeof r === "string"))
+  ) {
+    fail("required", "an array of names");
+  }
+  const pattern = node["pattern"];
+  if (pattern !== undefined) {
+    if (typeof pattern !== "string") fail("pattern", "a string");
+    let compiled: RegExp | null = null;
+    try {
+      compiled = new RegExp(pattern as string, "u");
+    } catch {
+      compiled = null;
+    }
+    if (compiled === null) fail("pattern", "a valid regular expression");
+  }
+  const ref = node["$ref"];
+  if (ref !== undefined && (typeof ref !== "string" || !/^#\/\$defs\/[A-Za-z0-9_]+$/.test(ref))) {
+    fail("$ref", "a #/$defs/<name> reference");
+  }
+}
+
+/** The `type` values the validator applies. */
+const SCHEMA_TYPES: ReadonlySet<string> = new Set([
+  "object",
+  "array",
+  "string",
+  "integer",
+  "number",
+  "boolean",
+  "null",
+]);
+
+/** Every `$ref` under `node`, each resolvable in `root`'s `$defs`. */
+function assertReferencesResolve(root: SchemaNode, node: unknown): void {
+  if (!isRecord(node)) return;
+  if (typeof node["$ref"] === "string") resolveRef(root, node["$ref"]);
+  for (const group of ["properties", "$defs"] as const) {
+    const children = node[group];
+    if (isRecord(children))
+      for (const child of Object.values(children)) assertReferencesResolve(root, child);
+  }
+  if (node["items"] !== undefined) assertReferencesResolve(root, node["items"]);
 }
 
 /** The catalog schema of `root`, checked for keywords the validator applies. */
 export function loadSchema(root: string = ROOT): SchemaNode {
   const schema = JSON.parse(readFileSync(join(root, SCHEMA_FILE), "utf8")) as unknown;
   assertSupportedSchema(schema);
+  assertReferencesResolve(schema as SchemaNode, schema);
   return schema as SchemaNode;
 }
 
@@ -1082,7 +1182,8 @@ interface SchemaError {
 function resolveRef(root: SchemaNode, ref: string): SchemaNode {
   const m = /^#\/\$defs\/([A-Za-z0-9_]+)$/.exec(ref);
   const defs = root["$defs"];
-  const target = m !== null && isRecord(defs) ? defs[m[1] ?? ""] : undefined;
+  const name = m?.[1] ?? "";
+  const target = isRecord(defs) && Object.hasOwn(defs, name) ? defs[name] : undefined;
   if (!isRecord(target)) throw new Error(`${SCHEMA_FILE}: unresolvable $ref ${ref}`);
   return target;
 }
@@ -1097,8 +1198,12 @@ function typeMatches(type: unknown, value: unknown): boolean {
       return typeof value === "string";
     case "integer":
       return typeof value === "number" && Number.isInteger(value);
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
     case "boolean":
       return typeof value === "boolean";
+    case "null":
+      return value === null;
     default:
       return false;
   }
@@ -1111,9 +1216,10 @@ function validateNode(
   path: ReadonlyArray<string | number>,
   out: SchemaError[],
 ): void {
+  // A reference applies beside the node's own keywords, as in JSON Schema
+  // 2020-12: an assertion next to `$ref` is applied, not skipped.
   if (typeof node["$ref"] === "string") {
     validateNode(root, resolveRef(root, node["$ref"]), value, path, out);
-    return;
   }
   if (node["type"] !== undefined && !typeMatches(node["type"], value)) {
     out.push({ path, message: `must be ${String(node["type"])}` });
@@ -1167,12 +1273,13 @@ function validateNode(
     const properties = isRecord(node["properties"]) ? node["properties"] : {};
     const required = Array.isArray(node["required"]) ? node["required"] : [];
     for (const key of required) {
-      if (typeof key === "string" && !(key in value)) {
+      if (typeof key === "string" && !Object.hasOwn(value, key)) {
         out.push({ path, message: `misses the required field ${key}` });
       }
     }
     for (const [key, child] of Object.entries(value)) {
-      const sub = properties[key];
+      // Own names only: an undeclared `__proto__` key is an unknown field.
+      const sub = Object.hasOwn(properties, key) ? properties[key] : undefined;
       if (isRecord(sub)) validateNode(root, sub, child, [...path, key], out);
       else if (node["additionalProperties"] === false) {
         out.push({ path, message: `has the unknown field ${key}` });
@@ -1236,13 +1343,9 @@ export function markdownAnchors(text: string): Set<string> {
   // GitHub's slugger: a slug already taken (by a repeat or by a heading
   // that spells the suffixed form) takes the next free `-N` of its base.
   const occurrences = new Map<string, number>();
-  let fenced = false;
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) continue;
+  // The same fence rule as the code spans: a block's lines, fences
+  // included, are blank here.
+  for (const line of withoutFencedBlocks(text).split("\n")) {
     for (const m of line.matchAll(/\b(?:id|name)="([^"]+)"/g)) out.add(m[1] ?? "");
     const heading = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
     if (heading === null) continue;
@@ -1653,27 +1756,34 @@ function cmdDump(): number {
 /** Writes the index from the area files; refuses while they are malformed. */
 export function buildIndex(root: string = ROOT): {
   readonly errors: string[];
+  /** The rendered index's size; with `written` false nothing was written. */
   readonly bytes: number;
+  readonly written: boolean;
 } {
   const parsed = parseCatalog(readCatalog(root), loadSchema(root));
   // Any problem of the files themselves (a mismatched file name, a stray
   // file, a missing `_removed.json`) refuses the build: an index written
   // from them would name files that are not there.
-  if (parsed.errors.length > 0) return { errors: parsed.errors, bytes: 0 };
+  if (parsed.errors.length > 0) return { errors: parsed.errors, bytes: 0, written: false };
   const text = renderIndex(parsed.areas);
-  writeFileSync(join(root, CATALOG_DIR, INDEX_FILE), text);
+  // Measured before the write: an index over the cap never replaces the
+  // one on disk.
   const bytes = Buffer.byteLength(text, "utf8");
-  const errors =
-    bytes > INDEX_MAX_BYTES
-      ? [`${at(INDEX_FILE)}: ${bytes} bytes, over the ${INDEX_MAX_BYTES}-byte limit`]
-      : [];
-  return { errors, bytes };
+  if (bytes > INDEX_MAX_BYTES) {
+    return {
+      errors: [`${at(INDEX_FILE)}: ${bytes} bytes, over the ${INDEX_MAX_BYTES}-byte limit`],
+      bytes,
+      written: false,
+    };
+  }
+  writeFileSync(join(root, CATALOG_DIR, INDEX_FILE), text);
+  return { errors: [], bytes, written: true };
 }
 
 function cmdBuild(): number {
-  const { errors, bytes } = buildIndex();
+  const { errors, bytes, written } = buildIndex();
   for (const e of errors) process.stderr.write(`${e}\n`);
-  if (bytes > 0) process.stdout.write(`wrote ${CATALOG_DIR}/${INDEX_FILE} (${bytes} bytes)\n`);
+  if (written) process.stdout.write(`wrote ${CATALOG_DIR}/${INDEX_FILE} (${bytes} bytes)\n`);
   return errors.length === 0 ? 0 : 1;
 }
 
