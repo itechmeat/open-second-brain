@@ -419,6 +419,14 @@ describe("private-partition lane entries are withheld below local reach: derived
       private_records: e
         .laneRecords("private")
         .some((r) => JSON.stringify(r.body).includes("Zqdecreview")),
+      // The obligation's own record, not only the decision's.
+      private_obligation: e
+        .laneRecords("private")
+        .some(
+          (r) =>
+            r.body["lane"] === "obligations" &&
+            JSON.stringify(r.body).toLowerCase().includes("zqdecreview"),
+        ),
       shared_records: e
         .laneRecords("shared")
         .filter((r) => JSON.stringify(r.body).includes("Zqdecreview")).length,
@@ -444,9 +452,9 @@ describe("private-partition lane entries are withheld below local reach: derived
       rewritten,
       rewritten_list: rewrittenList.includes("Zqdecreview"),
     }).toEqual({
-      created: { private_records: true, shared_records: 0 },
+      created: { private_records: true, private_obligation: true, shared_records: 0 },
       created_list: false,
-      rewritten: { private_records: true, shared_records: 0 },
+      rewritten: { private_records: true, private_obligation: true, shared_records: 0 },
       rewritten_list: false,
     });
   });

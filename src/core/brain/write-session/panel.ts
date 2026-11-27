@@ -30,7 +30,11 @@ import { createWriteSession, saveWriteSession } from "./store.ts";
 import { loadPersonas } from "./personas.ts";
 import { inspectExistingTarget, validateTargetPath } from "./validate.ts";
 import { formatFrontmatter } from "../../vault.ts";
-import { heldLegacyPanelName, heldPanelDefaultName, panelDefaultNames } from "./panel-target.ts";
+import {
+  heldLegacyPanelName,
+  heldPanelDefaultNameAtReach,
+  panelDefaultNames,
+} from "./panel-target.ts";
 import {
   deterministicPrefix,
   emitPromptPrefixMetric,
@@ -161,6 +165,11 @@ export function submitToPanelSession(
       `session ${session.id} is an '${session.kind}' session - use the artifact submit surface`,
     );
   }
+  // Below local reach a target the store holds in `private` (it may have
+  // become one since the open) refuses with the fixed answer before
+  // anything of this submit - the step, a failed attempt, the metric, the
+  // parked record - is written, as `submitToSession` does.
+  assertLaneWriteAtReach(vault, [join(vault, session.targetPath)]);
   const errors = validateStepText(input.text);
   if (errors.length > 0) {
     return recordFailedAttempt(vault, session, errors, now);
@@ -175,7 +184,9 @@ export function submitToPanelSession(
     // silent overwrite.
     // A same-topic panel of the day under the other default name (an older
     // release's session published it meanwhile) holds the day too.
-    const held = heldPanelDefaultName(vault, session.topic, session.targetPath);
+    // Read on the fold of every partition below local reach: a private
+    // same-topic panel of the day refuses with the fixed answer.
+    const held = heldPanelDefaultNameAtReach(vault, session.topic, session.targetPath);
     if (inspectExistingTarget(vault, session.targetPath) !== null || held !== null) {
       return recordFailedAttempt(
         vault,
@@ -191,12 +202,6 @@ export function submitToPanelSession(
       );
     }
     const note = renderPanelNote(session, text, now);
-    // Below local reach a target the store holds in `private` (it may
-    // have become one since the open) refuses with the fixed answer before
-    // anything of this submit - the metric, the parked record - is written.
-    if (session.requireReview) {
-      assertLaneWriteAtReach(vault, [join(vault, session.targetPath)]);
-    }
     // The synthesis is the last generation handoff of the pass; every
     // persona step and the synthesis shared `panelPrefix(topic)`, so the
     // pass is byte-stable by construction. Record it (opt-in, fail-soft).

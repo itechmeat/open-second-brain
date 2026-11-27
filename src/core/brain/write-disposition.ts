@@ -275,6 +275,101 @@ function recordDispositionRow(
 }
 
 /**
+ * A disposition decided and not yet recorded (change `lane-reach-residuals`,
+ * design R7): the verdict, and the one step that appends the ledger row it
+ * owes. A caller that has reach checks to run decides first, runs them,
+ * and records last, so a call those checks refuse leaves no row behind.
+ */
+export interface DecidedWriteDisposition {
+  /** The verdict; `refuse` is a deny, which {@link record} throws. */
+  readonly verdict: WriteDisposition["verdict"];
+  /**
+   * Append the decision-ledger row the verdict owes (none for a publish
+   * that records no allows, none with no document) and answer the
+   * disposition. A deny throws {@link WriteRefusedError} after its row.
+   * Called once.
+   */
+  readonly record: () => WriteDisposition;
+}
+
+/**
+ * Decide the write disposition for one lane without recording it: the
+ * verdict {@link resolveWriteDisposition} answers, and the step that
+ * records its row. An unreadable document fails closed here, through the
+ * loader's own error, before anything is recorded.
+ */
+export function decideWriteDisposition(
+  vault: string | null,
+  lane: ReviewLane,
+  subject?: WriteSubject,
+  opts: ResolveWriteDispositionOptions = {},
+): DecidedWriteDisposition {
+  // The permissions document is the operator's shared setting (or the
+  // legacy file on an unswitched machine); with none, the lane's toggle
+  // decides. A machine with no vault still reads the setting.
+  const { document } = loadPermissionsDocumentFor(vault, opts.configPath);
+  if (document === null) {
+    const on = resolveWriteApprovalLane(lane);
+    const disposition: WriteDisposition = Object.freeze({
+      verdict: on ? "stage" : "publish",
+      source: decidingSource(lane),
+    });
+    return { verdict: disposition.verdict, record: () => disposition };
+  }
+  const effectiveSubject: WriteSubject = subject ?? {
+    agent: resolveAgentName(opts.configPath),
+    via: "config",
+  };
+  const action = documentActionFor(lane);
+  const decision = resolvePermission(
+    document,
+    substrateSubject(effectiveSubject),
+    action,
+    opts.target,
+  );
+  const recordRow = () => recordDispositionRow(vault, effectiveSubject, action, opts, decision);
+  if (decision.verdict === "deny") {
+    return {
+      verdict: "refuse",
+      record: () => {
+        recordRow();
+        throw new WriteRefusedError({
+          agent: effectiveSubject.agent,
+          via: effectiveSubject.via,
+          action,
+          rule: decision.source,
+          target: opts.target ?? "",
+        });
+      },
+    };
+  }
+  if (decision.verdict === "ask") {
+    return {
+      verdict: "stage",
+      record: () => {
+        recordRow();
+        return Object.freeze({
+          verdict: "stage",
+          source: decision.source,
+          reason: decision.reason,
+        });
+      },
+    };
+  }
+  return {
+    verdict: "publish",
+    record: () => {
+      if (document.ledger?.record_allows === true) recordRow();
+      return Object.freeze({
+        verdict: "publish",
+        source: decision.source,
+        reason: decision.reason,
+      });
+    },
+  };
+}
+
+/**
  * Resolve the write disposition for one lane.
  *
  * ABSENT document (write-side trust, Task 9): the `write_approval.*`
@@ -288,6 +383,8 @@ function recordDispositionRow(
  * command; `ask` records one row and stages; `allow` publishes, with a
  * row only when the document's `ledger.record_allows` asks for it. An
  * unreadable document fails closed through the loader's own error.
+ *
+ * Decided and recorded in one step ({@link decideWriteDisposition}).
  */
 export function resolveWriteDisposition(
   vault: string | null,
@@ -295,54 +392,7 @@ export function resolveWriteDisposition(
   subject?: WriteSubject,
   opts: ResolveWriteDispositionOptions = {},
 ): WriteDisposition {
-  // The permissions document is the operator's shared setting (or the
-  // legacy file on an unswitched machine); with none, the lane's toggle
-  // decides. A machine with no vault still reads the setting.
-  const { document } = loadPermissionsDocumentFor(vault, opts.configPath);
-  if (document === null) {
-    const on = resolveWriteApprovalLane(lane);
-    return Object.freeze({
-      verdict: on ? "stage" : "publish",
-      source: decidingSource(lane),
-    });
-  }
-  const effectiveSubject: WriteSubject = subject ?? {
-    agent: resolveAgentName(opts.configPath),
-    via: "config",
-  };
-  const action = documentActionFor(lane);
-  const decision = resolvePermission(
-    document,
-    substrateSubject(effectiveSubject),
-    action,
-    opts.target,
-  );
-  if (decision.verdict === "deny") {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-    throw new WriteRefusedError({
-      agent: effectiveSubject.agent,
-      via: effectiveSubject.via,
-      action,
-      rule: decision.source,
-      target: opts.target ?? "",
-    });
-  }
-  if (decision.verdict === "ask") {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-    return Object.freeze({
-      verdict: "stage",
-      source: decision.source,
-      reason: decision.reason,
-    });
-  }
-  if (document.ledger?.record_allows === true) {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-  }
-  return Object.freeze({
-    verdict: "publish",
-    source: decision.source,
-    reason: decision.reason,
-  });
+  return decideWriteDisposition(vault, lane, subject, opts).record();
 }
 
 /**

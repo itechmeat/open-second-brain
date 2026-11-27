@@ -24,7 +24,7 @@
  */
 
 import { isAbsolute } from "node:path";
-import { assertNoPrivateLaneEntryAtReach } from "../../core/store/lane-reach-guard.ts";
+import { LaneEntryWithheldError } from "../../core/store/lane-reach-guard.ts";
 
 import { resolveAgentName } from "../../core/config.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
@@ -34,6 +34,7 @@ import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { applyHygienePlan } from "../../core/brain/hygiene/apply.ts";
+import { assertRecompileEntryAtReach } from "../../core/brain/hygiene/members-at-reach.ts";
 import { annotateDedupFindings } from "../../core/brain/hygiene/dedup-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
@@ -315,11 +316,31 @@ async function toolBrainHygiene(
               ),
             ),
           });
-    // The coarse rule: a refresh rewrites and archives derived pages the
-    // caller did not name one by one, so below local reach it is refused
-    // while any lane holds an entry in `private` (a dry run writes nothing).
-    if (!dryRun) assertNoPrivateLaneEntryAtReach(ctx.vault, ctx.configPath ?? undefined);
-    const result = await executeRecompile(ctx.vault, plan, {
+    // Judged per entry (change `lane-reach-residuals`, design R11): below
+    // local reach an entry whose page is held in `private` on the fold of
+    // every partition is refused with the fixed answer before it is
+    // rederived or archived, and the other entries run (a dry run writes
+    // nothing, so nothing is refused).
+    const refused: { page: string; message: string }[] = [];
+    const runnable = dryRun
+      ? plan
+      : Object.freeze({
+          entries: Object.freeze(
+            plan.entries.filter((entry) => {
+              // A manual entry is only reported: it writes nothing.
+              if (entry.kind === "manual") return true;
+              try {
+                assertRecompileEntryAtReach(ctx.vault, entry, ctx.configPath ?? undefined);
+                return true;
+              } catch (err) {
+                if (!(err instanceof LaneEntryWithheldError)) throw err;
+                refused.push({ page: entry.page, message: err.message });
+                return false;
+              }
+            }),
+          ),
+        });
+    const result = await executeRecompile(ctx.vault, runnable, {
       dryRun,
       agent: resolveAgentName(ctx.configPath ?? undefined),
       now,
@@ -335,7 +356,7 @@ async function toolBrainHygiene(
       rederived: result.rederived.map((page) => toolPath(ctx, page)),
       archived: result.archived.map((page) => toolPath(ctx, page)),
       manual: result.manual.map((page) => toolPath(ctx, page)),
-      errors: result.errors.map((row) => errorRowForCaller(ctx, row)),
+      errors: [...refused, ...result.errors].map((row) => errorRowForCaller(ctx, row)),
     };
   }
 
@@ -422,14 +443,13 @@ async function toolBrainHygiene(
     willMutate: !dryRun,
     matchList: plan.selected.map((finding) => finding.id),
   });
-  // The coarse rule: an apply retires, merges and retargets entries the
-  // caller did not address one by one, so below local reach it is refused
-  // while any lane holds an entry in `private` (a dry run writes nothing).
-  if (!dryRun) assertNoPrivateLaneEntryAtReach(ctx.vault, ctx.configPath ?? undefined);
+  // Each action is judged on its own members below local reach
+  // (`members-at-reach.ts`): a refused action is one entry of `errors`.
   const result = await applyHygienePlan(ctx.vault, plan, {
     dryRun,
     agent: resolveAgentName(ctx.configPath ?? undefined),
     now,
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     // The deny consult on the destructive retire route answers for the
     // credential-minted subject, never for the config agent - the same
     // threading every other destructive surface applies (write-side

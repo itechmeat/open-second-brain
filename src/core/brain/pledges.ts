@@ -43,7 +43,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { basename, join, posix } from "node:path";
+import { join, posix } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import {
@@ -87,8 +87,14 @@ import {
   readLaneText,
   removeLanePage,
   writeLaneText,
+  readLaneBase,
 } from "../store/lane-pages.ts";
-import { withPrivateShown } from "../store/caller-reach.ts";
+import {
+  pledgeCreateMatches as createMatchesOf,
+  slotReservedAtReach,
+  titleClaimAtReach,
+  type PledgeIdentityReads,
+} from "./pledge-create-reach.ts";
 import {
   assertCreateMatchAtReach,
   LaneEntryWithheldError,
@@ -674,21 +680,28 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
   // The claims and reservations of the ladder are read on the fold of
   // every partition, as for a local caller (the write rule); one that only
   // a pledge held in `private` makes leaves the caller the fixed refusal.
-  const claim = withPrivateShown(() => pledgeTitleClaim(vault, input.title, input.readable));
+  // The caller's identity rule is widened to every pledge held in `private`
+  // (`pledge-create-reach.ts`): a claim only such a pledge makes sets the
+  // private hold, and its refusal is the fixed one.
+  const decided = titleClaimAtReach(vault, input.readable, (readable) =>
+    pledgeTitleClaim(vault, input.title, readable),
+  );
+  const claim = decided.value;
   if (claim?.kind === "refuse") {
-    if (pledgeTitleClaim(vault, input.title, input.readable)?.kind !== "refuse") {
-      throw new LaneEntryWithheldError();
-    }
+    if (decided.privateOnly) throw new LaneEntryWithheldError();
     throw titleNamesSlugError(claim.slug);
   }
-  let heldInPrivate = false;
+  let heldInPrivate = claim?.kind === "base" && decided.privateOnly;
   for (const slug of candidates) {
     if (claim?.kind === "base" && slug === claim.slug) {
       heldInPrivate ||= withheldPrivateKey(vault, pledgePath(vault, claim.slug));
       continue;
     }
-    if (takenOnWholeFold(() => pledgeSlotReserved(vault, slug, candidates[0]!, input.readable))) {
-      heldInPrivate ||= !pledgeSlotReserved(vault, slug, candidates[0]!, input.readable);
+    const reserved = slotReservedAtReach(vault, input.readable, (readable) =>
+      pledgeSlotReserved(vault, slug, candidates[0]!, readable),
+    );
+    if (reserved.value) {
+      heldInPrivate ||= reserved.privateOnly;
       continue;
     }
     const path = pledgePath(vault, slug);
@@ -733,10 +746,8 @@ export function createPledgePage(vault: string, input: CreatePledgePageInput): P
 }
 
 /**
- * The pledge pages a create of `(title, due, source)` would be refused for,
- * as {@link createPledgePage} decides: the pledge of the same identity at
- * any stem, a pledge whose listed slug the title is, a candidate slot
- * holding the same identity or a page unreadable as a pledge.
+ * The pledge pages a create of `(title, due, source)` would be refused for
+ * (`pledge-create-reach.ts`), read from this folder.
  */
 export function pledgeCreateMatches(
   vault: string,
@@ -745,24 +756,18 @@ export function pledgeCreateMatches(
   source: string,
   readable?: (rel: string) => boolean,
 ): string[] {
-  const identity = pledgeIdentity(title, due, source);
-  const same = findPledgeByIdentity(vault, title, due, source, readable);
-  const named = pledgeTitleClaim(vault, title, readable);
-  return [
-    ...(same === null ? [] : [same.path]),
-    ...(named?.kind === "refuse" ? [pledgePath(vault, named.slug)] : []),
-    ...pledgeSlugCandidates(title, due, source)
-      .map((slug) => pledgePath(vault, slug))
-      .filter((path) => sameIdentityAt(vault, path, identity)),
-  ];
+  return createMatchesOf(vault, title, due, source, readable, IDENTITY_READS);
 }
 
-/** Whether the lane page at `path` stores a pledge of `identity`, or is unreadable as one. */
-function sameIdentityAt(vault: string, path: string, identity: string): boolean {
-  if (!lanePageExists(vault, path)) return false;
-  const stored = parsePage(vault, basename(path, ".md"));
-  return stored === null || pledgeIdentity(stored.title, stored.due, stored.source) === identity;
-}
+/** The folder's reads the identity decisions of `pledge-create-reach.ts` use. */
+const IDENTITY_READS: PledgeIdentityReads = {
+  identity: pledgeIdentity,
+  findByIdentity: findPledgeByIdentity,
+  titleClaim: pledgeTitleClaim,
+  slugCandidates: pledgeSlugCandidates,
+  path: pledgePath,
+  parse: parsePage,
+};
 
 /**
  * True when `slot`, an identity-suffixed candidate beyond the `base`
@@ -860,6 +865,8 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
   // writer's edit.
   const handle = acquireLaneLock(vault, path);
   try {
+    // The base before the read the stamp is computed from (`replaces`).
+    const base = readLaneBase(vault, path);
     const prior = parsePage(vault, slug);
     if (prior === null) throw noPledgeError(slug);
     if (prior.fulfilled !== null) {
@@ -873,6 +880,7 @@ export function fulfillPledge(vault: string, input: FulfillPledgeInput): PledgeP
       rewritePledgeFrontmatter(vault, prior, (meta) => {
         meta["fulfilled"] = date;
       }),
+      { replaces: base },
     );
     return Object.freeze({ ...prior, fulfilled: date });
   } finally {

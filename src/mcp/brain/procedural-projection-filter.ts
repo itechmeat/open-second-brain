@@ -18,6 +18,15 @@
  *    nodes that point at it) is kept only through an edge to a kept node;
  *    an edge is kept only when both its ends are kept.
  *
+ * A kept entity node that a dropped node links to is titled from its id
+ * (`Tag: <slug>` for `ent-tag-<slug>`), not with its stored title: the
+ * projection keeps the spelling of the first procedure that named the
+ * entity, which may be one the caller may not read (change
+ * `lane-reach-residuals`, design R2). It answers under an id of this
+ * answer (`ent-retitled:<n>`), not its stored id, which keeps the
+ * entity's spelling as a slug, and its kept edges are rewritten to that
+ * id.
+ *
  * A hint entry is kept only when its node is a kept node with a source.
  * The answer is built from the known fields only, so a field a later
  * release adds to a projection does not cross unfiltered.
@@ -84,6 +93,42 @@ function keptSourceNodes(
   );
 }
 
+/** Entity id prefixes (`procedural-graph.ts` `entityNodeId`) and the title each names. */
+const ENTITY_TITLES: ReadonlyArray<readonly [string, string]> = [
+  ["ent-proposal-path-", "Proposal Path"],
+  ["ent-trigger-", "Trigger"],
+  ["ent-tag-", "Tag"],
+  ["ent-path-", "Path"],
+];
+
+/** The title of an entity node derived from its id alone. */
+function titleFromEntityId(id: string): string {
+  for (const [prefix, label] of ENTITY_TITLES) {
+    if (id.startsWith(prefix) && id.length > prefix.length) {
+      return `${label}: ${id.slice(prefix.length)}`;
+    }
+  }
+  return id;
+}
+
+/** The kept entity nodes a node the caller may not see links to. */
+function entitiesLinkedFromDropped(
+  nodes: ReadonlyArray<ProceduralGraphNode>,
+  edges: ReadonlyArray<ProceduralGraphProjection["edges"][number]>,
+  kept: ReadonlySet<string>,
+  entities: ReadonlySet<string>,
+): Set<string> {
+  const dropped = new Set(nodes.filter((node) => !kept.has(node.id)).map((node) => node.id));
+  const linked = new Set<string>();
+  for (const edge of edges) {
+    if (dropped.has(edge.from) && entities.has(edge.to) && kept.has(edge.to)) linked.add(edge.to);
+    if (dropped.has(edge.to) && entities.has(edge.from) && kept.has(edge.from)) {
+      linked.add(edge.from);
+    }
+  }
+  return linked;
+}
+
 /** The graph a caller below local reach may see. */
 export function visibleProceduralGraph(
   vault: string,
@@ -102,12 +147,45 @@ export function visibleProceduralGraph(
     if (kept.has(edge.from) && entities.has(edge.to)) kept.add(edge.to);
     if (kept.has(edge.to) && entities.has(edge.from)) kept.add(edge.from);
   }
+  const retitled = entitiesLinkedFromDropped(nodes, edges, kept, entities);
+  const keptNodes = nodes.filter((node) => kept.has(node.id));
+  const renamed = answerEntityIds(keptNodes, retitled);
+  const idOf = (id: string): string => renamed.get(id) ?? id;
   return {
     schema_version: graph.schema_version,
     generated_at: graph.generated_at,
-    nodes: nodes.filter((node) => kept.has(node.id)),
-    edges: edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)),
+    nodes: keptNodes.map((node) =>
+      retitled.has(node.id)
+        ? { ...node, id: idOf(node.id), title: titleFromEntityId(node.id) }
+        : node,
+    ),
+    edges: edges
+      .filter((edge) => kept.has(edge.from) && kept.has(edge.to))
+      .map((edge) =>
+        renamed.has(edge.from) || renamed.has(edge.to)
+          ? { ...edge, from: idOf(edge.from), to: idOf(edge.to) }
+          : edge,
+      ),
   };
+}
+
+/**
+ * The id each retitled entity node answers under: `ent-retitled:<n>`, by
+ * its place in the answer, so it is stable within one answer and carries
+ * no spelling of the entity (`entityNodeId` keeps the trigger or tag as a
+ * slug). The colon keeps it apart from every id `entityNodeId` makes.
+ */
+function answerEntityIds(
+  nodes: ReadonlyArray<ProceduralGraphNode>,
+  retitled: ReadonlySet<string>,
+): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const node of nodes) {
+    if (retitled.has(node.id) && !ids.has(node.id)) {
+      ids.set(node.id, `ent-retitled:${ids.size + 1}`);
+    }
+  }
+  return ids;
 }
 
 /**

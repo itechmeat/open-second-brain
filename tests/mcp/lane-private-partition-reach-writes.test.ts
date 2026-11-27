@@ -13,7 +13,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { openDecision } from "../../src/core/brain/decisions/open-store.ts";
@@ -25,7 +25,6 @@ import {
 import { addObligation } from "../../src/core/brain/obligations.ts";
 import { createPledgePage } from "../../src/core/brain/pledges.ts";
 import { withPrivateWithheld } from "../../src/core/store/caller-reach.ts";
-import { foldIncomplete } from "../../src/core/store/lane-entry-store.ts";
 import { laneStoreFold } from "../../src/core/store/lane-fold-cache.ts";
 import {
   laneEntryInPrivate,
@@ -36,8 +35,8 @@ import {
   writeLanePage,
   writeLaneText,
 } from "../../src/core/store/lane-pages.ts";
-import { listShards } from "../../src/core/store/shard-list.ts";
 import {
+  dropPrivateEvents,
   raiseWithoutTombstone,
   sharedLaneRecord,
 } from "./lane-private-partition-reach-store-fixture.ts";
@@ -121,18 +120,6 @@ function pledgeAdd(title: string): Record<string, unknown> {
 function sourcePage(e: LaneEnv): void {
   mkdirSync(join(e.vault, "Notes"), { recursive: true });
   writeFileSync(join(e.vault, SOURCE), SOURCE_TEXT, "utf8");
-}
-
-/**
- * Make the fold of every partition incomplete: after a fold has read them,
- * the `private` partition's `events` shards are gone.
- */
-function dropPrivateEvents(e: LaneEnv): void {
-  laneStoreFold();
-  for (const shard of listShards(join(e.env.storeRoot, "private"), { stream: "events" })) {
-    rmSync(shard.path, { force: true });
-  }
-  expect(foldIncomplete()).toBe(true);
 }
 
 /** An obligation written by the obligation writer; `hidden` puts a `<private>` region in its notes. */

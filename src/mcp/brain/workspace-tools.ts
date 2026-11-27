@@ -36,6 +36,7 @@ import {
   setIntention,
   showIntention,
 } from "../../core/brain/intentions.ts";
+import { isAlreadyRecorded } from "../../core/brain/repeat-call.ts";
 import { resolveSessionScope } from "../../core/brain/session-scope.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE } from "../tool-error-codes.ts";
@@ -92,6 +93,7 @@ function toolBrainIntention(
       scope: chain.scope,
       version: chain.version,
       path: lanePath(ctx, chain.path),
+      ...(isAlreadyRecorded(chain) ? { already_recorded: true } : {}),
     };
   }
   if (operation === "show") {

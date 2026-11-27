@@ -11,6 +11,10 @@
  *  - `lane-entry-remove` `{ authority, lane, entry }`, in `events`: the
  *    tombstone of an entry.
  *
+ * Either kind may carry `acted_by`, the writer's own authority, when the
+ * record is stored at a stronger one it keeps from the entry it replaces
+ * (`lane-standing.ts`). The fold never reads it.
+ *
  * Entries fold by `(lane, entry)` under design D4: one register per entry,
  * resolved by authority, then clock; a removal is a tombstone and nothing
  * is deleted. Standing rules are human-authored and carry `human`.
@@ -86,6 +90,11 @@ export function laneEntryRecord(input: {
   /** The file's text byte for byte, when the fields and text do not reproduce it. */
   readonly raw?: string;
   readonly authority: Authority;
+  /**
+   * The writer's own authority, when the record is stored at a stronger
+   * one it keeps from the entry it replaces (`acted_by`); never folded.
+   */
+  readonly actedBy?: Authority;
   readonly agent?: string;
   readonly private: boolean;
   /** `true`: `private` when this machine holds it, else `shared`. */
@@ -108,6 +117,7 @@ export function laneEntryRecord(input: {
       fields: plainJson(input.fields),
       text: input.text,
       ...(input.raw !== undefined ? { raw: input.raw } : {}),
+      ...(input.actedBy !== undefined ? { acted_by: input.actedBy } : {}),
     },
   };
 }
@@ -117,6 +127,8 @@ export function laneEntryRemoveRecord(input: {
   readonly lane: string;
   readonly entry: string;
   readonly authority: Authority;
+  /** The writer's own authority, when it differs from `authority` (`acted_by`). */
+  readonly actedBy?: Authority;
   readonly private: boolean;
   /** `true`: `private` when this machine holds it, else `shared`. */
   readonly privateWhenHeld?: boolean;
@@ -129,7 +141,12 @@ export function laneEntryRemoveRecord(input: {
     kind: LANE_ENTRY_REMOVE_KIND,
     private: input.private,
     ...(input.privateWhenHeld === true ? { privateWhenHeld: true } : {}),
-    body: { [AUTHORITY_FIELD]: input.authority, lane: input.lane, entry: input.entry },
+    body: {
+      [AUTHORITY_FIELD]: input.authority,
+      lane: input.lane,
+      entry: input.entry,
+      ...(input.actedBy !== undefined ? { acted_by: input.actedBy } : {}),
+    },
   };
 }
 

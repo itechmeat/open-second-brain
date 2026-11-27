@@ -56,9 +56,11 @@ import { assertStoreContentWrite } from "./content-write-gates.ts";
 import { type DualWriteContext } from "./dual-write.ts";
 import { laneLockTarget, laneStoreFold, wholeLaneStoreFold } from "./lane-fold-cache.ts";
 import * as reach from "./lane-reach-guard.ts";
+import * as standing from "./lane-standing.ts";
 import {
   brainRelOf,
   entryRecord,
+  entryText,
   fieldsCopy,
   heldInStore,
   insideBrain,
@@ -74,6 +76,8 @@ import {
   storeEntryRead,
   storedEntryPrivate,
   tombstoneOf,
+  type LaneEntrySnapshot,
+  type LanePage,
 } from "./lane-entry-store.ts";
 import {
   assertFoldersApart,
@@ -87,14 +91,27 @@ import {
   storedContent,
   storedLanePathsBelow,
 } from "./lane-dual-moves.ts";
-import { rawParsesBack, rawToKeep, renderLaneText } from "./lane-raw.ts";
+import { rawToKeep } from "./lane-raw.ts";
 import { brainRelOfEntry, lanePlaceOf } from "./lane-paths.ts";
 import { acquireDirLock, STORE_LOCK_STALE_MS, withLocalLock } from "./local-lock.ts";
 import { assertNoteVaultForWrite } from "../vault-adapter/index.ts";
 import { withOperationPrivacy } from "./operation-scope.ts";
 import { routeWrite, storeWrite } from "./store-write.ts";
 
-export { laneEntryClockMs, laneEntryInPrivate, lanePagesInStore } from "./lane-entry-store.ts";
+export {
+  laneEntryClockMs,
+  laneEntryInPrivate,
+  lanePagesInStore,
+  readLaneEntrySnapshot,
+  type LaneEntrySnapshot,
+  type LanePage,
+} from "./lane-entry-store.ts";
+export {
+  LaneEntryChangedError,
+  LaneWriteNotAppliedError,
+  LaneWriteUnverifiedError,
+  readLaneBase,
+} from "./lane-standing.ts";
 
 /**
  * The vault root a lane module works under when no vault is configured.
@@ -133,7 +150,7 @@ function routeLaneWrite(
     spec.legacy();
     return;
   }
-  routeWrite(spec);
+  reach.storeWriteAtReach(() => routeWrite(spec));
 }
 
 /**
@@ -164,14 +181,6 @@ function context(vault: string, configPath?: string): DualWriteContext {
 }
 
 // ----- Reads --------------------------------------------------------------------
-
-/** One lane page as a lane module reads it. */
-export interface LanePage {
-  /** Absolute path of the page (a legacy path; no file on a store-only machine). */
-  readonly path: string;
-  readonly frontmatter: FrontmatterMap;
-  readonly body: string;
-}
 
 /**
  * Whether the lane file at `path` exists, or, for a lane folder, whether
@@ -293,54 +302,6 @@ export function readLaneText(vault: string, path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
-/** The text of the store entry `value` at `path`, as {@link readLaneText} answers it. */
-function entryText(path: string, value: NonNullable<ReturnType<typeof storeEntry>>): string {
-  if (value.raw !== undefined && rawParsesBack(path, value.raw, value.fields, value.text)) {
-    return value.raw;
-  }
-  return renderLaneText(path, value.fields, value.text);
-}
-
-/**
- * One read of a store-held lane entry, for a read-modify-write: the page
- * and the stored text come from the same fold value, and `unchanged()`
- * answers whether the store still holds that value, so a write that
- * follows lands only on the entry it was computed from.
- */
-export interface LaneEntrySnapshot {
-  readonly page: LanePage;
-  readonly text: string;
-  /**
-   * Whether the fold this entry was read from is whole: a record it could
-   * not read (an unreadable shard, a pending body blob) may be a newer
-   * version of the entry, so a write from this read waits while it is not.
-   */
-  readonly whole: boolean;
-  /** The authority of the record that holds the entry now, from the same read. */
-  readonly authority: Authority | null;
-  /** Whether the store, read whole again, still holds the entry this snapshot read. */
-  unchanged(): boolean;
-}
-
-/**
- * The store-held lane entry at `path` read once ({@link LaneEntrySnapshot}),
- * or null when the store holds no entry there. For a store-held path only.
- */
-export function readLaneEntrySnapshot(vault: string, path: string): LaneEntrySnapshot | null {
-  const { value, whole, authority } = storeEntryRead(vault, path);
-  if (value === null) return null;
-  return {
-    page: { path, frontmatter: fieldsCopy(value), body: value.text },
-    text: entryText(path, value),
-    whole,
-    authority,
-    unchanged: () => {
-      const now = storeEntryRead(vault, path);
-      return now.whole && sameEntry(now.value, value.fields, value.text, value.raw);
-    },
-  };
-}
-
 /**
  * The names of the lane files directly in `dir` that end in `ext`, sorted:
  * what `readdirSync(dir).filter(...)` gives on an unswitched machine.
@@ -431,11 +392,14 @@ export function writeLanePage(
     /** The machine config selecting the store for this write. */
     readonly configPath?: string;
     /**
-     * The store record's authority, for a rewrite that keeps the standing
-     * of the record it replaces; the lane's own when absent. The legacy
+     * The writer's own authority (the restamp passes the snapshot's); the
+     * lane's own when absent. The record is still raised to the authority
+     * of the record that holds the key (`lane-standing.ts`). The legacy
      * file write ignores it.
      */
     readonly authority?: Authority;
+    /** The base the write was computed from (`readLaneBase`); refused when it changed. */
+    readonly replaces?: LaneEntrySnapshot | null;
   } = {},
 ): boolean {
   let written = true;
@@ -444,6 +408,7 @@ export function writeLanePage(
   // run must not grow the shards or move the entry's clock.
   if (opts.overwrite === true && heldInStore(vault, path, opts.configPath)) {
     reach.assertLaneWriteAtReach(vault, [path], opts.configPath);
+    standing.checkLaneBase(vault, path, opts.replaces, opts.configPath);
     if (sameEntry(storeEntry(vault, path, opts.configPath), frontmatter, body)) return false;
   }
   const replaced = opts.overwrite === true && legacyPagePrivate(vault, path, opts.configPath);
@@ -459,30 +424,38 @@ export function writeLanePage(
         {
           legacy: () => {
             mkdirSync(dirname(path), { recursive: true });
-            const { authority: _authority, configPath: _configPath, ...fileOpts } = opts;
+            const { authority: _a, configPath: _c, replaces: _r, ...fileOpts } = opts;
             written = writeFrontmatterAtomic(path, frontmatter, body, fileOpts);
           },
-          store: () => [
-            ...replacedShared(vault, path, opts.configPath),
-            entryRecord(
-              vault,
-              path,
-              frontmatter,
-              body,
-              replaced ||
-                storedEntryPrivate(vault, path, opts.configPath) ||
-                isPrivateEntry(vault, frontmatter, body, undefined, opts.configPath),
-              "judged",
-              undefined,
-              opts.authority,
-            ),
-          ],
+          store: () => {
+            // Reach and privacy judged again from the fold the records are
+            // built from (design R5).
+            const fold = wholeLaneStoreFold(opts.configPath);
+            reach.assertWritableInFold(vault, fold, [path], opts.configPath);
+            return [
+              ...replacedShared(vault, path, opts.configPath),
+              entryRecord(
+                vault,
+                path,
+                frontmatter,
+                body,
+                replaced ||
+                  reach.entryPrivateInFold(vault, fold, path) ||
+                  isPrivateEntry(vault, frontmatter, body, undefined, opts.configPath),
+                "judged",
+                undefined,
+                opts.authority,
+                standing.holderAuthority(vault, fold, path),
+              ),
+            ];
+          },
           context: context(vault, opts.configPath),
         },
         opts.configPath,
       ),
     opts.configPath,
   );
+  standing.readBackLanePage(vault, path, frontmatter, body, opts.configPath);
   return written;
 }
 
@@ -496,10 +469,14 @@ export function writeLaneText(
   vault: string,
   path: string,
   text: string,
-  opts: { readonly exclusive?: boolean } = {},
+  opts: {
+    readonly exclusive?: boolean;
+    readonly replaces?: LaneEntrySnapshot | null;
+  } = {},
 ): void {
   if (opts.exclusive !== true && heldInStore(vault, path)) {
     reach.assertLaneWriteAtReach(vault, [path]);
+    standing.checkLaneBase(vault, path, opts.replaces);
     const { fields, body } = laneTextParts(path, text);
     const raw = rawToKeep(path, text, fields, body);
     if (sameEntry(storeEntry(vault, path), fields, body, raw)) return;
@@ -513,6 +490,10 @@ export function writeLaneText(
         else atomicWriteFileSync(path, text);
       },
       store: () => {
+        // Reach and privacy judged again from the fold the records are
+        // built from (design R5).
+        const fold = wholeLaneStoreFold();
+        reach.assertWritableInFold(vault, fold, [path]);
         const { fields, body } = laneTextParts(path, text);
         const raw = rawToKeep(path, text, fields, body);
         return [
@@ -522,15 +503,20 @@ export function writeLaneText(
             path,
             fields,
             body,
-            replaced || storedEntryPrivate(vault, path) || isPrivateEntry(vault, fields, body, raw),
+            replaced ||
+              reach.entryPrivateInFold(vault, fold, path) ||
+              isPrivateEntry(vault, fields, body, raw),
             "judged",
             raw,
+            undefined,
+            standing.holderAuthority(vault, fold, path),
           ),
         ];
       },
       context: context(vault),
     }),
   );
+  standing.readBackLaneText(vault, path, text);
 }
 
 /**
@@ -581,7 +567,14 @@ export function removeLanePage(vault: string, path: string): boolean {
     // In the partition the entry lives in, never re-judged from its
     // content now; the reach check, the winner and that partition come
     // from one fold, read as the write builds its records.
-    return storeWrite(() => reach.removalRecordsAtReach(vault, [path]), context(vault)).length > 0;
+    return (
+      standing.readBackAppended(
+        vault,
+        reach.storeWriteAtReach(() =>
+          storeWrite(() => reach.removalRecordsAtReach(vault, [path]), context(vault)),
+        ),
+      ).length > 0
+    );
   }
   guardUserVaultWrite(vault, path);
   let removed = true;
@@ -647,28 +640,40 @@ export function moveLanePage(
     livesInPrivate(value) ||
     storedEntryPrivate(vault, to) ||
     (rewrite !== undefined && isPrivateEntry(vault, rewrite.frontmatter, rewrite.body));
-  withOperationPrivacy(isPrivate, () =>
-    storeWrite(() => {
-      // One fold for the reach checks, the moved value and the
-      // tombstone's partition: a source raised since the read above is
-      // left alone, a destination judged again.
-      const source = reach.moveSourceAtReach(vault, wholeLaneStoreFold(), from, to);
-      if (source === null) return [];
-      return [
-        // A shared entry this move replaces with a private one goes first.
-        ...replacedShared(vault, to),
-        tombstoneOf(source.value, false, source.partition),
-        entryRecord(
-          vault,
-          to,
-          rewrite?.frontmatter ?? source.value.fields,
-          rewrite?.body ?? source.value.text,
-          isPrivate,
-          "located",
-          rewrite === undefined ? source.value.raw : undefined,
-        ),
-      ];
-    }, context(vault)),
+  standing.readBackAppended(
+    vault,
+    withOperationPrivacy(isPrivate, () =>
+      reach.storeWriteAtReach(() =>
+        storeWrite(() => {
+          // One fold for the reach checks, the moved value, its partition
+          // and the tombstone's (design R5): below local reach a source
+          // raised since the read above refuses the move, and a destination
+          // is judged again; at local reach a source raised meanwhile moves
+          // the entry into `private`.
+          const fold = wholeLaneStoreFold();
+          const source = reach.moveSourceAtReach(vault, fold, from, to);
+          if (source === null) return [];
+          return [
+            // A shared entry this move replaces with a private one goes first.
+            ...replacedShared(vault, to),
+            tombstoneOf(source.value, false, source.partition, fold.authorities.get(source.key)),
+            entryRecord(
+              vault,
+              to,
+              rewrite?.frontmatter ?? source.value.fields,
+              rewrite?.body ?? source.value.text,
+              isPrivate ||
+                source.partition === "private" ||
+                reach.entryPrivateInFold(vault, fold, to),
+              "located",
+              rewrite === undefined ? source.value.raw : undefined,
+              undefined,
+              standing.movedStanding(vault, fold, from, to),
+            ),
+          ];
+        }, context(vault)),
+      ),
+    ),
   );
 }
 
@@ -730,17 +735,24 @@ export function moveLaneTree(vault: string, from: string, to: string): void {
   // sees it leave the folder, and a private entry's text never reaches
   // `shared`. An enclosing private operation still raises the moved
   // entries, never their tombstones.
-  storeWrite(() => {
-    const fold = wholeLaneStoreFold();
-    const kept = reach.pathsAtReach(vault, fold, paths);
-    // The destinations are judged again against the same fold.
-    reach.assertWritableInFold(
-      vault,
-      fold,
-      kept.map((path) => movedTo(path).to),
-    );
-    return kept.flatMap((path) => laneMoveRecords(vault, fold, movedTo(path), storedContent));
-  }, context(vault));
+  standing.readBackAppended(
+    vault,
+    reach.storeWriteAtReach(() =>
+      storeWrite(() => {
+        const fold = wholeLaneStoreFold();
+        // Below local reach a member raised since the check above refuses the
+        // whole move (design R5).
+        const kept = reach.pathsAtReach(vault, fold, paths);
+        // The destinations are judged again against the same fold.
+        reach.assertWritableInFold(
+          vault,
+          fold,
+          kept.map((path) => movedTo(path).to),
+        );
+        return kept.flatMap((path) => laneMoveRecords(vault, fold, movedTo(path), storedContent));
+      }, context(vault)),
+    ),
+  );
 }
 
 /** Remove the folder `dir` and every lane file below it; absent is a no-op. */
@@ -757,5 +769,10 @@ export function removeLaneTree(vault: string, dir: string): void {
   reach.assertLaneRemovalAtReach(vault);
   const paths = reach.treeMembersAtReach(vault, () => listLaneTree(vault, dir, ""));
   if (paths.length === 0) return;
-  storeWrite(() => reach.removalRecordsAtReach(vault, paths), context(vault));
+  standing.readBackAppended(
+    vault,
+    reach.storeWriteAtReach(() =>
+      storeWrite(() => reach.removalRecordsAtReach(vault, paths), context(vault)),
+    ),
+  );
 }

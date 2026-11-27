@@ -80,10 +80,11 @@ describe("private-partition lane entries are withheld below local reach: the rea
     const remoteList = await call(remote, "brain_write_session", { op: "list" });
     const localList = await call(localServer(e), "brain_write_session", { op: "list" });
     expect({
+      remote_ok: (JSON.parse(remoteList) as Record<string, unknown>)["error"] === undefined,
       remote: remoteList.includes(id),
       remote_names_private_gap: remoteList.includes("private/events/"),
       local: localList.includes(id),
-    }).toEqual({ remote: false, remote_names_private_gap: false, local: true });
+    }).toEqual({ remote_ok: true, remote: false, remote_names_private_gap: false, local: true });
   });
 
   test("a reader with no predicate does not see a stale shared value of a raised entry", async () => {
@@ -153,12 +154,14 @@ describe("private-partition lane entries are withheld below local reach: rebuilt
       local_hidden: localHistory.includes("zqclaimhidden"),
       local_shared: localHistory.includes("zqclaimshared"),
       remote_hidden: remoteHistory.includes("zqclaimhidden"),
+      remote_shared: remoteHistory.includes("zqclaimshared"),
     }).toEqual({
       count: 1,
       truncated: false,
       local_hidden: true,
       local_shared: true,
       remote_hidden: false,
+      remote_shared: true,
     });
   });
 });
@@ -220,19 +223,32 @@ function raisedAtBuild(e: LaneEnv, entry: string, fn: () => void): void {
 }
 
 describe("private-partition lane entries are withheld below local reach: removal binding", () => {
+  // Change `lane-reach-residuals` modifies the answer: a removal whose
+  // entry is raised meanwhile is refused with the fixed answer, not dropped
+  // (requirement "An update below local reach of a private-partition lane
+  // entry acts as on an absent one", scenario "A removal whose entry is
+  // raised meanwhile writes no private tombstone").
   test("a winner that changed before the build is judged again before the append", () => {
     const e = env();
     const path = join(e.vault, "Brain", "procedures", "zqbuildraised.md");
     writeLaneText(e.vault, path, "---\ntitle: Zqbuildraised\n---\n\nsteps\n");
-    let removed = null as boolean | null;
+    let refusal = "none";
     raisedAtBuild(e, "zqbuildraised", () => {
-      removed = removeLanePage(e.vault, path);
+      try {
+        removeLanePage(e.vault, path);
+      } catch (err) {
+        refusal = `${(err as Error).name}: ${(err as Error).message}`;
+      }
     });
     expect({
-      removed,
+      refusal,
       tombstones: e.laneRecords().filter((r) => r.kind === "lane-entry-remove").length,
       local_reads: (readLaneText(e.vault, path) ?? "").includes("synthetic region body"),
-    }).toEqual({ removed: false, tombstones: 0, local_reads: true });
+    }).toEqual({
+      refusal: "LaneEntryWithheldError: this entry cannot be written at this reach",
+      tombstones: 0,
+      local_reads: true,
+    });
   });
 
   test("a removal whose entry is raised meanwhile writes no private tombstone", () => {
@@ -251,6 +267,10 @@ describe("private-partition lane entries are withheld below local reach: removal
     }).toEqual({ removed: false, private_tombstones: 0, local_reads: true });
   });
 
+  // Change `lane-reach-residuals` modifies the answer: the move is refused
+  // with the fixed answer, not dropped (requirement "A write decides reach
+  // and privacy from the fold it writes from", scenario "A remote move of a
+  // source raised meanwhile is refused, not dropped").
   test("a move whose source is raised meanwhile writes no private tombstone", () => {
     const e = env();
     const from = join(e.vault, "Brain", "procedures", "zqmvraised.md");
@@ -268,19 +288,33 @@ describe("private-partition lane entries are withheld below local reach: removal
         }
       },
     );
+    let refusal = "none";
     try {
       withPrivateWithheld(true, () => moveLanePage(e.vault, from, to));
+    } catch (err) {
+      refusal = `${(err as Error).name}: ${(err as Error).message}`;
     } finally {
       spy.mockRestore();
     }
     expect({
       raised,
+      refusal,
       private_tombstones: e.laneRecords("private").filter((r) => r.kind === "lane-entry-remove")
         .length,
       source_reads: (readLaneText(e.vault, from) ?? "").includes("synthetic region body"),
-    }).toEqual({ raised: true, private_tombstones: 0, source_reads: true });
+    }).toEqual({
+      raised: true,
+      refusal: "LaneEntryWithheldError: this entry cannot be written at this reach",
+      private_tombstones: 0,
+      source_reads: true,
+    });
   });
 
+  // Change `lane-reach-residuals` modifies the answer: the folder removal
+  // is refused whole with the fixed answer and removes no other member
+  // (requirement "An update below local reach of a private-partition lane
+  // entry acts as on an absent one", scenario "A removal whose entry is
+  // raised meanwhile writes no private tombstone").
   test("a tree removal whose entry is raised meanwhile writes no private tombstone", () => {
     const e = env();
     const dir = join(e.vault, "Brain", "procedures");
@@ -288,12 +322,25 @@ describe("private-partition lane entries are withheld below local reach: removal
     const keptPath = join(dir, "zqtreekept.md");
     writeLaneText(e.vault, raisedPath, "---\ntitle: Zqtreeraised\n---\n\nsteps\n");
     writeLaneText(e.vault, keptPath, "---\ntitle: Zqtreekept\n---\n\nsteps\n");
-    raisedDuringRemoval(e, raisedPath, "zqtreeraised", () => removeLaneTree(e.vault, dir));
+    let refusal = "none";
+    raisedDuringRemoval(e, raisedPath, "zqtreeraised", () => {
+      try {
+        removeLaneTree(e.vault, dir);
+      } catch (err) {
+        refusal = `${(err as Error).name}: ${(err as Error).message}`;
+      }
+    });
     expect({
+      refusal,
       private_tombstones: e.laneRecords("private").filter((r) => r.kind === "lane-entry-remove")
         .length,
       raised_reads: (readLaneText(e.vault, raisedPath) ?? "").includes("synthetic region body"),
       kept_removed: readLaneText(e.vault, keptPath) === null,
-    }).toEqual({ private_tombstones: 0, raised_reads: true, kept_removed: true });
+    }).toEqual({
+      refusal: "LaneEntryWithheldError: this entry cannot be written at this reach",
+      private_tombstones: 0,
+      raised_reads: true,
+      kept_removed: false,
+    });
   });
 });

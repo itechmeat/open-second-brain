@@ -42,8 +42,10 @@ import { machineStatePath } from "../state/machine-state.ts";
 import type { DualWriteRecord } from "../store/dual-write.ts";
 import { ledgerRowRecord } from "../store/dual-write-records.ts";
 import { readLedgerRows } from "../store/read/ledger-rows.ts";
+import { readStreamRecords } from "../store/read/stream-read.ts";
 import { rowNamesPrivatePage } from "../store/reference-privacy.ts";
-import { STORE_PARTITIONS } from "../store/constants.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
+import { LEDGER_ROW_KIND, STORE_PARTITIONS } from "../store/constants.ts";
 import { listShards } from "../store/shard-list.ts";
 import { isStoreOnly } from "../store/store-only.ts";
 import { partitionDir, resolveConfiguredStoreRoot } from "../store/store-paths.ts";
@@ -203,6 +205,25 @@ export function loadFeedbackEvents(vault: string | null): RecallFeedbackEvent[] 
       isFeedbackEvent,
     ),
   ).toSorted((a, b) => a.ts - b.ts || a.resultPath.localeCompare(b.resultPath));
+}
+
+/**
+ * The feedback events a caller below local reach may read: on a store-only
+ * machine the events the `shared` partition holds, each once; on an
+ * unswitched machine every event file (the files carry no partition).
+ */
+function sharedFeedbackEventCount(vault: string | null): number {
+  if (!isStoreOnly({ vault })) return loadFeedbackEvents(vault).length;
+  const read = readStreamRecords(resolveConfiguredStoreRoot().root, "shared", {
+    stream: "ledgers",
+    ledger: SEARCH_FEEDBACK_LEDGER,
+  });
+  return dedupeIdentical(
+    read.records
+      .filter((record) => record.kind === LEDGER_ROW_KIND)
+      .map((record) => record.body["row"])
+      .filter(isFeedbackEvent),
+  ).length;
 }
 
 /** Rows with identical content, kept once (first occurrence). */
@@ -549,6 +570,12 @@ export async function captureRecallFeedback(
     contributions,
   });
   const file = recordRecallFeedback(config.vault, event);
-  const learned = readLearnedWeights(config.vault) ?? NEUTRAL_LEARNED_WEIGHTS;
+  const folded = readLearnedWeights(config.vault) ?? NEUTRAL_LEARNED_WEIGHTS;
+  // The weights stay folded from every partition, as written; below local
+  // reach only the answer's `events` is narrowed to the events the caller
+  // may read (change `lane-reach-residuals`, design R13).
+  const learned = privateWithheld()
+    ? Object.freeze({ ...folded, events: sharedFeedbackEventCount(config.vault) })
+    : folded;
   return Object.freeze({ file, event, learned, resultFound: hit !== undefined, degraded });
 }

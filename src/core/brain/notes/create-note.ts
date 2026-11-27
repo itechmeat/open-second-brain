@@ -94,8 +94,12 @@ import { withOperationPrivacy } from "../../store/operation-scope.ts";
 import { createNotePrivacy } from "./create-note-privacy.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
-import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
-import { substrateSubject, type WriteSubject } from "../write-disposition.ts";
+import { assertStagedTargetsAtReach, stageForReview } from "../pending/pending-lanes.ts";
+import {
+  decideWriteDisposition,
+  substrateSubject,
+  type WriteSubject,
+} from "../write-disposition.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode =
@@ -851,7 +855,7 @@ function createNoteInScope(vault: string, input: CreateNoteInput): CreateNoteRes
   // document exactly. Under a permissions document the document alone
   // decides for the caller the write record would have named, and a deny
   // refuses here as a typed WriteRefusedError before any byte exists.
-  const disposition = resolveWriteDisposition(
+  const decided = decideWriteDisposition(
     vault,
     REVIEW_LANE.notes,
     // The credential-minted subject wins over the config resolution
@@ -862,6 +866,10 @@ function createNoteInScope(vault: string, input: CreateNoteInput): CreateNoteRes
     // honest if that ever changes) resolves through this caller's config.
     { target: relPath, configPath: input.configPath },
   );
+  // Below local reach the staging's reach check runs before the row (change
+  // `lane-reach-residuals`, a refusal before the first durable step).
+  if (decided.verdict === "stage") assertStagedTargetsAtReach(vault, REVIEW_LANE.notes, [relPath]);
+  const disposition = decided.record();
   if (disposition.verdict === "stage") {
     if (existsSync(abs)) {
       throw new CreateNoteError("exists", `note already exists: ${relPath}`);

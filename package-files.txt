@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7218396 bytes
-# Maximum unpacked size: 24541893 bytes
+# Maximum packed size: 7253701 bytes
+# Maximum unpacked size: 24667956 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json
@@ -531,6 +531,8 @@ src/core/brain/doctor/recovery-point-liveness.ts
 src/core/brain/doctor/removed-tool-checks.ts
 src/core/brain/doctor/report.ts
 src/core/brain/doctor/rerank-health-check.ts
+src/core/brain/doctor/review-obligation-check.ts
+src/core/brain/doctor/review-obligation-exit.ts
 src/core/brain/doctor/secrets-sync-check.ts
 src/core/brain/doctor/semantic-health-check.ts
 src/core/brain/doctor/session-identity-check.ts
@@ -617,6 +619,7 @@ src/core/brain/entities/canonical.ts
 src/core/brain/entities/index-builder.ts
 src/core/brain/entities/label-hygiene.ts
 src/core/brain/entities/lexicon.ts
+src/core/brain/entities/locked-write.ts
 src/core/brain/entities/page-merge.ts
 src/core/brain/entities/page-privacy.ts
 src/core/brain/entities/page-scope.ts
@@ -626,6 +629,7 @@ src/core/brain/entities/registry.ts
 src/core/brain/entities/semantic-dedup.ts
 src/core/brain/entities/status-scope.ts
 src/core/brain/entities/types.ts
+src/core/brain/entities/upsert-reach.ts
 src/core/brain/event-trace.ts
 src/core/brain/evidence-read.ts
 src/core/brain/evidence.ts
@@ -687,6 +691,7 @@ src/core/brain/hygiene/detectors/id.ts
 src/core/brain/hygiene/detectors/slug-collisions.ts
 src/core/brain/hygiene/detectors/tags.ts
 src/core/brain/hygiene/detectors/usefulness.ts
+src/core/brain/hygiene/members-at-reach.ts
 src/core/brain/hygiene/plan.ts
 src/core/brain/hygiene/resolve-conflicts.ts
 src/core/brain/hygiene/scan.ts
@@ -694,6 +699,7 @@ src/core/brain/hygiene/types.ts
 src/core/brain/idea-discovery.ts
 src/core/brain/idea-lineage.ts
 src/core/brain/idempotency-ledger.ts
+src/core/brain/idempotency-reach.ts
 src/core/brain/import-census.ts
 src/core/brain/import-claude-memory.ts
 src/core/brain/index.ts
@@ -722,6 +728,7 @@ src/core/brain/inline-rewrite.ts
 src/core/brain/inline-scan.ts
 src/core/brain/inline.ts
 src/core/brain/intake/extract-intake.ts
+src/core/brain/intake/intake-reach.ts
 src/core/brain/intake/page-entity-links.ts
 src/core/brain/intake/source-trust.ts
 src/core/brain/intent-review.ts
@@ -821,6 +828,7 @@ src/core/brain/notes/scaffold-stub.ts
 src/core/brain/notes/write-destinations.ts
 src/core/brain/notes/write-log.ts
 src/core/brain/notes/write-record.ts
+src/core/brain/obligation-create-reach.ts
 src/core/brain/obligations.ts
 src/core/brain/observed-use.ts
 src/core/brain/offset-cursor.ts
@@ -844,6 +852,7 @@ src/core/brain/payload-json.ts
 src/core/brain/payload-registry.ts
 src/core/brain/pending.ts
 src/core/brain/pending/pending-lanes.ts
+src/core/brain/pending/staged-reach.ts
 src/core/brain/permissions/document-source.ts
 src/core/brain/permissions/document.ts
 src/core/brain/permissions/ledger.ts
@@ -851,6 +860,7 @@ src/core/brain/permissions/resolve.ts
 src/core/brain/pin.ts
 src/core/brain/pinned.ts
 src/core/brain/planted-rows.ts
+src/core/brain/pledge-create-reach.ts
 src/core/brain/pledge-intake.ts
 src/core/brain/pledges.ts
 src/core/brain/policy.ts
@@ -962,6 +972,7 @@ src/core/brain/recurrence.ts
 src/core/brain/regions.ts
 src/core/brain/reground-parts.ts
 src/core/brain/render/activity-line.ts
+src/core/brain/repeat-call.ts
 src/core/brain/report-snapshot.ts
 src/core/brain/research/external-fetch.ts
 src/core/brain/research/extract.ts
@@ -1035,6 +1046,8 @@ src/core/brain/signal-state.ts
 src/core/brain/signal.ts
 src/core/brain/similarity.ts
 src/core/brain/skill-accept-journal.ts
+src/core/brain/skill-accept-reach.ts
+src/core/brain/skill-learn-reach.ts
 src/core/brain/skill-page-drafts.ts
 src/core/brain/skill-proposal-verifier.ts
 src/core/brain/skill-proposals.ts
@@ -1047,6 +1060,7 @@ src/core/brain/snapshot-diff.ts
 src/core/brain/snapshot-gate.ts
 src/core/brain/snapshot-transient.ts
 src/core/brain/snapshot.ts
+src/core/brain/source-cleanup-reach.ts
 src/core/brain/source-cleanup.ts
 src/core/brain/source-links.ts
 src/core/brain/stale-dependency.ts
@@ -1588,6 +1602,7 @@ src/core/store/fresh-switch.ts
 src/core/store/gc-hint.ts
 src/core/store/held-ledger.ts
 src/core/store/hlc.ts
+src/core/store/lane-authority.ts
 src/core/store/lane-dual-moves.ts
 src/core/store/lane-entry-store.ts
 src/core/store/lane-fold-cache.ts
@@ -1596,6 +1611,7 @@ src/core/store/lane-paths.ts
 src/core/store/lane-raw.ts
 src/core/store/lane-reach-guard.ts
 src/core/store/lane-records.ts
+src/core/store/lane-standing.ts
 src/core/store/legacy-tree.ts
 src/core/store/local-lock.ts
 src/core/store/migration-availability.ts

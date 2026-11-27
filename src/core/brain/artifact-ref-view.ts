@@ -33,7 +33,14 @@ import { resolve } from "node:path";
 
 import { pathIsInside } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
-import { artifactRefScope, laneRefMatch, resolveArtifactRef } from "./artifact-ref-resolve.ts";
+import {
+  artifactRefScope,
+  type LaneRefMatch,
+  laneRefMatch,
+  memoryRecordRel,
+  resolveArtifactRef,
+  withReferenceFold,
+} from "./artifact-ref-resolve.ts";
 
 /**
  * A reference a report row carries: either a vault-relative path
@@ -114,7 +121,12 @@ export const UNFILTERED_ARTIFACT_REFS: ArtifactRefView = Object.freeze({
  * reference is hidden.
  *
  * `withholdsPrivate`: the caller is below local reach, so the lane
- * verdict comes before any disk match ({@link ArtifactRefView.visible}).
+ * verdict comes before any disk match ({@link ArtifactRefView.visible}):
+ * a reference whose match is a lane entry is judged as that entry's page,
+ * in whichever spelling named it (an id ending in `.md`, an extensionless
+ * path), and a reference whose resolution throws is withheld, that row
+ * only (design R3). Each reference is judged with one lane match and one
+ * read of the fold of every partition (design R15).
  */
 export function artifactRefView(
   vault: string,
@@ -131,31 +143,47 @@ export function artifactRefView(
   // payload is offered rather than four named keys.
   const verdicts = new Map<string, boolean>();
   let scope: ReturnType<typeof artifactRefScope> | undefined;
-  const visible = (ref: ArtifactRef): boolean => {
-    if (ref === null || ref === undefined || ref.length === 0) return true;
-    const memo = verdicts.get(ref);
-    if (memo !== undefined) return memo;
+  const judge = (ref: string): boolean => {
     // A bare id with no artifact on disk names nothing that could be
     // hidden - see `artifact-ref-resolve.ts` for why that reading is only
     // true while its directory list is complete.
     scope ??= artifactRefScope(vault);
-    if (withholdsPrivate && typeof ref === "string") {
-      const match = laneRefMatch(vault, ref, scope);
-      if (match.kind === "unknown" || (match.kind === "entry" && match.private)) {
-        verdicts.set(ref, false);
-        return false;
-      }
+    let match: LaneRefMatch | undefined;
+    if (withholdsPrivate) {
+      match = laneRefMatch(vault, ref, scope);
+      if (match.kind === "unknown" || (match.kind === "entry" && match.private)) return false;
     }
-    const rel = resolveArtifactRef(vault, ref, scope);
+    let rel: string | null;
+    try {
+      // A shared lane entry is judged as its own page, whichever spelling
+      // named it (design R3), after the memory record a bare id may also
+      // name, which is judged first, as `resolveArtifactRef` does.
+      rel =
+        match?.kind === "entry"
+          ? (memoryRecordRel(vault, ref, scope) ?? match.rel)
+          : resolveArtifactRef(vault, ref, scope, match);
+    } catch (err) {
+      // A lookup that fails withholds its row below local reach, and the
+      // other rows are still answered (design R3); at local reach it
+      // fails as before.
+      if (withholdsPrivate) return false;
+      throw err;
+    }
     // A reference that resolves outside the vault names no page anyone
     // could be shown, and is hidden before the rule reads anything: log
     // bodies carry strings an earlier caller wrote. One that resolves to
     // nothing is judged by the binding while the store cannot say whether
     // it names a lane entry (`laneRefMatch` answers `unknown`).
-    const verdict =
-      rel === null
-        ? unplacedVisible(ref) || laneRefMatch(vault, ref, scope).kind !== "unknown"
-        : pathIsInside(resolve(vault, rel), vault) && pathVisible(rel, cache);
+    if (rel === null) {
+      return unplacedVisible(ref) || (match ?? laneRefMatch(vault, ref, scope)).kind !== "unknown";
+    }
+    return pathIsInside(resolve(vault, rel), vault) && pathVisible(rel, cache);
+  };
+  const visible = (ref: ArtifactRef): boolean => {
+    if (ref === null || ref === undefined || ref.length === 0) return true;
+    const memo = verdicts.get(ref);
+    if (memo !== undefined) return memo;
+    const verdict = withReferenceFold(() => judge(ref));
     verdicts.set(ref, verdict);
     return verdict;
   };

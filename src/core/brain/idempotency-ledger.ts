@@ -51,6 +51,7 @@ import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { receiptMatchAtReach } from "./idempotency-reach.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
 import { dualWrite, type DualWriteRecord } from "../store/dual-write.ts";
 import { withLocalLock } from "../store/local-lock.ts";
@@ -247,8 +248,14 @@ export function lookupKey(
   namespace?: string,
 ): IdempotencyRecord | null {
   const normalised = normaliseKey(key);
+  const matches = (record: IdempotencyRecord): boolean =>
+    record.key === normalised && record.namespace === namespace;
+  // Below local reach a receipt held in `private`, or a `private` ledger
+  // that may miss one, refuses the keyed call (design R1).
+  const atReach = receiptMatchAtReach(vault, matches);
+  if (atReach !== undefined) return atReach;
   for (const record of readAllRecords(vault)) {
-    if (record.key === normalised && record.namespace === namespace) return record;
+    if (matches(record)) return record;
   }
   return null;
 }

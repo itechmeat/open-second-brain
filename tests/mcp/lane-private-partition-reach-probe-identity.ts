@@ -5,24 +5,40 @@
  * 1. Hand-written arguments for the tools whose required arguments are
  *    objects or arrays of objects, so no tool of the registry is skipped.
  * 2. Identity twins: with private entries, a `private` entry with the same
- *    identity as a remote create of the plan, under ANOTHER key (an entity
- *    whose alias is the name the probe's entity intakes create), which the
- *    same-key guard of the lane primitives never sees.
+ *    identity as a remote create of the plan, under ANOTHER key, which the
+ *    same-key guard of the lane primitives never sees: one per creating
+ *    verb of the plan ({@link IDENTITY_TWINS}: an entity whose alias is the
+ *    name the entity intakes create, a pledge of the intake's promise at
+ *    its suffixed stem, a report of the report's title on its digest page),
+ *    and every other creating verb named with the reason it has no
+ *    identity under another key ({@link NO_IDENTITY_TWIN}).
  * 3. The identity invariant: no lane gains a shared entry whose identity
  *    (title, name or alias, topic, cooldown key, publish target, question)
  *    equals that of an entry held in `private` before the calls.
  */
 
+import { join } from "node:path";
+
 import { expect } from "bun:test";
 
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
-import { laneEntryInPrivate } from "../../src/core/store/lane-pages.ts";
+import { pledgePath } from "../../src/core/brain/paths.ts";
+import { pledgeSlugCandidates } from "../../src/core/brain/pledges.ts";
+import { wholeLaneStoreFold } from "../../src/core/store/lane-fold-cache.ts";
+import { laneEntryInPrivate, removeLanePage } from "../../src/core/store/lane-pages.ts";
+import type { MCPServer } from "../../src/mcp/server.ts";
 import type { LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
 import { PROBE_SOURCE } from "./lane-private-partition-reach-probe-writers.ts";
-import { AGENT, REGION } from "./lane-private-partition-reach-writes-fixture.ts";
+import { AGENT, REGION, callJson } from "./lane-private-partition-reach-writes-fixture.ts";
 
 /** The name the probe's entity intakes create; a private entity answers to it in the seeded store. */
 export const PROBE_ENTITY = "Zqprobe Person";
+
+/** The promise the probe's pledge intake records; a private pledge of it sits at its suffixed stem. */
+const PROBE_PLEDGE = { title: "Zqprobe pledge", due: "2026-12-01" } as const;
+/** The title of the probe's research report; a private report of it sits on its digest page. */
+const PROBE_REPORT = "Zqprobe report";
+const EVIDENCE = ["We will ship the report."];
 
 const DATASET = {
   queries: [{ id: "zqprobe-q1", query: "zqcommonword", expected: [PROBE_SOURCE] }],
@@ -44,7 +60,7 @@ export const HAND_ARGS: Readonly<Record<string, Readonly<Record<string, unknown>
   },
   brain_distill_source: { source_path: PROBE_SOURCE, claims: [{ text: "zqprobewrite claim" }] },
   brain_research_report: {
-    title: "Zqprobe report",
+    title: PROBE_REPORT,
     sources: ["zqprobewrite source"],
     findings: [{ statement: "zqprobewrite finding", sources: ["zqprobewrite source"] }],
   },
@@ -58,14 +74,11 @@ export const HAND_ARGS: Readonly<Record<string, Readonly<Record<string, unknown>
   },
   brain_intake_pledges: {
     source: PROBE_SOURCE,
-    pledges: [
-      { title: "Zqprobe pledge", due: "2026-12-01", evidence: ["We will ship the report."] },
-    ],
+    pledges: [{ ...PROBE_PLEDGE, evidence: EVIDENCE }],
   },
   schema_apply_mutations: { mutations: [] },
 };
 
-/** Tools whose base call meets an identity twin in the seeded store: the fixed refusal is their answer there. */
 /**
  * Verbs under the coarse rule of the fourth closure round (bulk form): a
  * verb that rewrites lane entries the caller did not address one by one
@@ -78,14 +91,18 @@ export const COARSE_VERBS: ReadonlySet<string> = new Set([
   "brain_hygiene refresh",
 ]);
 
-export const IDENTITY_TOOLS: ReadonlySet<string> = new Set([
-  "brain_intake_entities",
-  "brain_ingest_source",
-]);
+/** One identity twin: the creating call it answers, and the private entry it seeds. */
+export interface IdentityTwin {
+  /** The creating call, `<tool> <verb>` as the plan labels it. */
+  readonly verb: string;
+  /** What the creating call's arguments carry that the twin's identity answers to. */
+  readonly carries: string;
+  /** Seed the private twin; answers the canary marks only it carries. */
+  readonly seed: (e: LaneEnv, local: MCPServer) => Promise<string[]>;
+}
 
-/** Seed the identity twins (with private entries only). */
-export function seedIdentityTwins(e: LaneEnv, withPrivate: boolean): void {
-  if (!withPrivate) return;
+/** An entity held in `private` whose alias is the name the entity intakes create. */
+async function entityTwin(e: LaneEnv): Promise<string[]> {
   const { entity } = upsertEntity(e.vault, {
     category: "people",
     name: "Zqprobe Held Name",
@@ -95,6 +112,117 @@ export function seedIdentityTwins(e: LaneEnv, withPrivate: boolean): void {
     body: `zqprobe held notes ${REGION}\n`,
   });
   expect(laneEntryInPrivate(e.vault, entity.path)).toBe(true);
+  return ["Zqprobe Held Name", "zqprobe held notes"];
+}
+
+const slugOf = (answer: Record<string, unknown>): unknown =>
+  (answer["pledge"] as Record<string, unknown> | undefined)?.["slug"];
+
+/**
+ * A pledge of the intake's promise held in `private` at its suffixed
+ * stem: a pledge of another promise holds the base slot while it is
+ * added, then goes, leaving the base slot free.
+ */
+async function pledgeTwin(e: LaneEnv, local: MCPServer): Promise<string[]> {
+  const [base, suffixed] = pledgeSlugCandidates(PROBE_PLEDGE.title, PROBE_PLEDGE.due, PROBE_SOURCE);
+  const add = (due: string, notes?: string): Record<string, unknown> => ({
+    operation: "add",
+    title: PROBE_PLEDGE.title,
+    due,
+    source: PROBE_SOURCE,
+    evidence: EVIDENCE,
+    agent: AGENT,
+    ...(notes === undefined ? {} : { notes }),
+  });
+  expect(slugOf(await callJson(local, "brain_pledge", add("2026-12-09")))).toBe(base);
+  const held = await callJson(
+    local,
+    "brain_pledge",
+    add(PROBE_PLEDGE.due, `zqtwinpledgenote ${REGION}`),
+  );
+  expect(slugOf(held)).toBe(suffixed);
+  expect(removeLanePage(e.vault, pledgePath(e.vault, base!))).toBe(true);
+  expect(laneEntryInPrivate(e.vault, pledgePath(e.vault, suffixed!))).toBe(true);
+  return ["zqtwinpledgenote"];
+}
+
+/** The arguments of a research report of `title` with one finding. */
+const report = (title: string, statement: string): Record<string, unknown> => ({
+  title,
+  sources: ["zqprobewrite source"],
+  findings: [{ statement, sources: ["zqprobewrite source"] }],
+});
+
+/** The live report pages of the store, by key. */
+const reportKeys = (): string[] =>
+  [...wholeLaneStoreFold().entries.keys()].filter((key) => key.startsWith("reports/"));
+
+/**
+ * A report of the probe report's title held in `private` on its digest
+ * page: a report of another title with the same slug holds the base page
+ * while it is written, then goes, leaving the base page free.
+ */
+async function reportTwin(e: LaneEnv, local: MCPServer): Promise<string[]> {
+  const before = new Set(reportKeys());
+  await callJson(local, "brain_research_report", report("Zqprobe-report", "zqtwinbase finding"));
+  const basePage = reportKeys().find((key) => !before.has(key));
+  expect(basePage).toBeDefined();
+  await callJson(
+    local,
+    "brain_research_report",
+    report(PROBE_REPORT, `zqtwinreportfinding ${REGION}`),
+  );
+  const digestPage = reportKeys().find((key) => !before.has(key) && key !== basePage);
+  expect(digestPage).toBeDefined();
+  expect(removeLanePage(e.vault, join(e.vault, "Brain", `${basePage!}.md`))).toBe(true);
+  expect(laneEntryInPrivate(e.vault, join(e.vault, "Brain", `${digestPage!}.md`))).toBe(true);
+  return ["zqtwinreportfinding"];
+}
+
+/** The identity twin of every creating verb that has an identity under another key. */
+export const IDENTITY_TWINS: ReadonlyArray<IdentityTwin> = [
+  { verb: "brain_intake_entities (no verb)", carries: PROBE_ENTITY, seed: entityTwin },
+  // The same entity twin answers the ingest's entities (seeded once).
+  { verb: "brain_ingest_source (no verb)", carries: PROBE_ENTITY, seed: async () => [] },
+  { verb: "brain_intake_pledges (no verb)", carries: PROBE_PLEDGE.title, seed: pledgeTwin },
+  { verb: "brain_research_report (no verb)", carries: PROBE_REPORT, seed: reportTwin },
+];
+
+/**
+ * The creating verbs of the plan with no identity under another key, each
+ * with the reason. A creating verb is one whose call adds a shared lane
+ * entry on the twin; the probe fails on one named in neither list.
+ */
+export const NO_IDENTITY_TWIN: Readonly<Record<string, string>> = {
+  "brain_distill_source (no verb)":
+    "the distillation is keyed by the source's digest alone (`dist-<source>`): no other key holds its identity",
+  "brain_intention move": "moves the named intention to its history page: no new identity",
+  "brain_skill_proposals accept":
+    "accepts the named proposal: the accepted copy and the procedure are that proposal's",
+  "brain_obligation remove": "archives the named obligation: no new identity",
+  "brain_pledge remove": "archives the named pledge: no new identity",
+};
+
+/** Seed the identity twins (with private entries only); answers their canary marks. */
+export async function seedIdentityTwins(
+  e: LaneEnv,
+  local: MCPServer,
+  withPrivate: boolean,
+): Promise<string[]> {
+  if (!withPrivate) return [];
+  const marks: string[] = [];
+  for (const twin of IDENTITY_TWINS) {
+    // oxlint-disable-next-line no-await-in-loop -- one store, written in order
+    marks.push(...(await twin.seed(e, local)));
+  }
+  return marks;
+}
+
+/** Whether the call `label` (`<tool> <verb> <names>`), passing `passed`, meets an identity twin. */
+export function meetsIdentityTwin(label: string, passed: string | undefined): boolean {
+  return IDENTITY_TWINS.some(
+    (twin) => label.startsWith(`${twin.verb} `) && passed?.includes(twin.carries) === true,
+  );
 }
 
 const laneOf = (key: string): string => key.split("/")[0]!;

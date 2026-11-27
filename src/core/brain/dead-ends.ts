@@ -27,7 +27,7 @@ import type { FrontmatterMap } from "../types.ts";
 import { allocateAndCreate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { withPrivateShown } from "../store/caller-reach.ts";
-import { takenOnWholeFold, withheldPrivateKey } from "../store/lane-reach-guard.ts";
+import { withheldPrivateKey } from "../store/lane-reach-guard.ts";
 import { FileAlreadyExistsError } from "../fs-atomic.ts";
 
 /** Active dead-ends kept before overflow archives the oldest. */
@@ -174,11 +174,13 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
 }
 
 /**
- * Move the oldest active entries beyond the cap into `archive/`. The cap
- * counts every entry, read on the fold of every partition whatever the
- * caller's reach (the write rule: the trim is maintenance of the lane);
- * with `readable`, an overflow entry the caller cannot read stays where it
- * is.
+ * Move the oldest active entries beyond the cap into `archive/`. The trim
+ * is maintenance of the lane: it runs on the fold of every partition as a
+ * local caller's would, whatever the caller's reach, so the cap holds on
+ * every partition and an overflow entry held in `private` is archived
+ * within `private` (change `lane-reach-residuals`, design R13). Only the
+ * answer is narrowed: with `readable`, the ids answered are those of the
+ * archived entries the caller can read.
  */
 function trimActive(
   vault: string,
@@ -187,26 +189,31 @@ function trimActive(
 ): string[] {
   const { entries } = withPrivateShown(() => listDeadEnds(vault));
   if (entries.length <= maxActive) return [];
-  // `entries` is newest first; everything past the cap archives.
+  // `entries` is newest first; everything past the cap archives. Whether
+  // the caller can read an entry is judged before it moves.
   const overflow = entries
     .slice(maxActive)
     .toReversed()
-    .filter((entry) => readable === undefined || readable(vaultRelative(entry.path, vault)));
-  if (overflow.length === 0) return [];
+    .map((entry) => ({
+      entry,
+      shown: readable === undefined || readable(vaultRelative(entry.path, vault)),
+    }));
   const archiveDir = join(deadEndsDir(vault), "archive");
-  const archived: string[] = [];
-  for (const entry of overflow) {
-    // The destination is the first slot free on every partition, whatever
-    // the caller's reach: a slot any entry occupies (private or shared) is
-    // skipped, and an archive move never lands on an occupied slot.
-    let dest = join(archiveDir, `${entry.id}.md`);
-    for (let n = 2; takenOnWholeFold(() => lanePageExists(vault, dest)); n++) {
-      dest = join(archiveDir, `${entry.id}-${n}.md`);
+  return withPrivateShown(() => {
+    const archived: string[] = [];
+    for (const { entry, shown } of overflow) {
+      // The destination is the first slot free on every partition: a slot
+      // any entry occupies (private or shared) is skipped, and an archive
+      // move never lands on an occupied slot.
+      let dest = join(archiveDir, `${entry.id}.md`);
+      for (let n = 2; lanePageExists(vault, dest); n++) {
+        dest = join(archiveDir, `${entry.id}-${n}.md`);
+      }
+      moveLanePage(vault, entry.path, dest);
+      if (shown) archived.push(entry.id);
     }
-    moveLanePage(vault, entry.path, dest);
-    archived.push(entry.id);
-  }
-  return archived;
+    return archived;
+  });
 }
 
 function parseSections(body: string): { reason: string; context: string | null } {

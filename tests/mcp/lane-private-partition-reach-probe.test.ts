@@ -25,6 +25,12 @@
  * is called with its read verbs, built from its input schema, as a caller
  * below local reach, each distinct call once, and the serialized answer or
  * error is searched for every canary.
+ *
+ * Then the shared-only list-count comparison
+ * (`lane-private-partition-reach-probe-counts.ts`): a twin store seeded
+ * with only the shared entries replays every call, and each list or count
+ * call it answers at local reach must give the counts the remote answer
+ * on the store with private entries gave.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -39,21 +45,24 @@ import { laneEntryInPrivate, writeLaneText } from "../../src/core/store/lane-pag
 import { lanePlaceOf } from "../../src/core/store/lane-paths.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
-import type { ToolDefinition } from "../../src/mcp/tool-contract.ts";
 import { makeLaneEnv, type LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
+import { countMismatches } from "./lane-private-partition-reach-probe-counts.ts";
+import {
+  COMMON,
+  planFor,
+  type Plan,
+  type Seeded,
+} from "./lane-private-partition-reach-probe-read-plan.ts";
 import {
   buildProjections,
   PROBE_SOURCE,
   PROBE_SOURCE_TEXT,
   WRITERS,
   type SeededEntry,
-  type WriterRow,
 } from "./lane-private-partition-reach-probe-writers.ts";
 
 const REPO = resolve(import.meta.dir, "..", "..");
 const SRC = join(REPO, "src");
-/** A word every seeded entry carries, so a search finds them all. */
-const COMMON = "zqcommonword";
 const REGION = "<private>synthetic region body</private>";
 const CREATED_AT = "2026-11-01T00:00:00Z";
 const AGENT = "tester";
@@ -164,16 +173,6 @@ function laneFolders(vault: string): LaneFolder[] {
 
 // ----- The seeded entries -----------------------------------------------------------
 
-interface Seeded {
-  /** The lane, as the report names it. */
-  readonly lane: string;
-  readonly by: "writer" | "writeLaneText";
-  readonly hidden: SeededEntry;
-  readonly shared: SeededEntry;
-  /** The lane's own reader, for a lane seeded by its writer. */
-  readonly reader?: WriterRow["reader"];
-}
-
 function pageText(slug: string, title: string, bodyMark: string, region: boolean): string {
   const front = [
     `title: ${title}`,
@@ -189,21 +188,38 @@ function pageText(slug: string, title: string, bodyMark: string, region: boolean
   return `---\n${front}\n---\n\n${body.join("\n")}\n`;
 }
 
-/** Seed every writer lane through its writer, the hidden entry first. */
-async function seedWriters(env: LaneEnv, local: MCPServer): Promise<Seeded[]> {
+/**
+ * Seed every writer lane through its writer, the hidden entry first; with
+ * `sharedOnly` (the twin of the count comparison) the shared entry alone.
+ */
+async function seedWriters(env: LaneEnv, local: MCPServer, sharedOnly = false): Promise<Seeded[]> {
   const out: Seeded[] = [];
   for (const row of WRITERS) {
     // oxlint-disable-next-line no-await-in-loop -- the writers share one store, written in order
-    const hidden = await row.seed(env, local, true);
+    const hidden = sharedOnly ? undefined : await row.seed(env, local, true);
     // oxlint-disable-next-line no-await-in-loop -- the writers share one store, written in order
     const shared = await row.seed(env, local, false);
-    out.push({ lane: row.lane, by: "writer", hidden, shared, reader: row.reader });
+    out.push({
+      lane: row.lane,
+      by: "writer",
+      hidden: hidden ?? shared,
+      shared,
+      reader: row.reader,
+    });
   }
   return out;
 }
 
-/** Seed every other lane folder with `writeLaneText` in a page format. */
-function seedText(vault: string, folders: ReadonlyArray<LaneFolder>, offset: number): Seeded[] {
+/**
+ * Seed every other lane folder with `writeLaneText` in a page format;
+ * with `sharedOnly` the shared entry alone.
+ */
+function seedText(
+  vault: string,
+  folders: ReadonlyArray<LaneFolder>,
+  offset: number,
+  sharedOnly = false,
+): Seeded[] {
   return folders.map((folder, i) => {
     const index = offset + i;
     const mk = (kind: "hid" | "shr"): SeededEntry => {
@@ -219,230 +235,15 @@ function seedText(vault: string, folders: ReadonlyArray<LaneFolder>, offset: num
       ];
       return { rel, marks, id: slug, title };
     };
-    return { lane: folder.folder, by: "writeLaneText", hidden: mk("hid"), shared: mk("shr") };
+    const shared = mk("shr");
+    const hidden = sharedOnly ? shared : mk("hid");
+    return { lane: folder.folder, by: "writeLaneText", hidden, shared };
   });
 }
 
 /** The canary marks of a hidden entry. */
 function canaries(s: Seeded): SeededEntry["marks"] {
   return s.hidden.marks;
-}
-
-// ----- The calls, from the registry ----------------------------------------------------
-
-const ACTION_KEYS = ["action", "operation", "op", "view", "mode"] as const;
-/**
- * The verbs of a write-kind tool that only read. A verb name, not a lane:
- * every other verb of a write tool is skipped and named in the output.
- */
-const READ_VERBS = new Set([
-  "list",
-  "show",
-  "get",
-  "status",
-  "history",
-  "hints",
-  "summary",
-  "current",
-  "at",
-  "replaced",
-  "contests",
-  "conflicts",
-  "slots",
-  "aggregate",
-  "collisions",
-  "events",
-  "state",
-  "list_open",
-  "show_open",
-  "compare",
-  "similar",
-  "recall",
-  "read",
-  "usage",
-  "evidence",
-  "page_candidates",
-  "scan",
-  "check",
-  "verify",
-  "morning",
-  "daily",
-  "weekly",
-  "monthly",
-  "operator",
-  "digest",
-  "today",
-  "timeline",
-  "attention_flows",
-  "belief_evolution",
-  "concept_synthesis",
-  "dedup",
-  "suggest",
-  "gate_list",
-  "gate_summary",
-]);
-/**
- * The read verbs that list rather than name one entry: called once, with
- * no per-lane argument (an id, path or title passed to them names nothing).
- */
-const LIST_VERBS = new Set([
-  "list",
-  "list_open",
-  "summary",
-  "aggregate",
-  "collisions",
-  "slots",
-  "events",
-  "state",
-  "hints",
-  "morning",
-  "daily",
-  "weekly",
-  "monthly",
-  "operator",
-  "digest",
-  "today",
-  "timeline",
-  "attention_flows",
-  "belief_evolution",
-  "concept_synthesis",
-  "gate_list",
-  "gate_summary",
-]);
-/** Write tools with no verb whose call with no write argument only reads. */
-const READ_ONLY_CALLS = new Set([
-  "brain_context",
-  "brain_doctor",
-  "brain_idea_discovery",
-  "brain_search",
-]);
-const QUERY_PROPS = new Set([
-  "query",
-  "q",
-  "pattern",
-  "prompt",
-  "question",
-  "topic",
-  "focus_query",
-]);
-const ID_PROPS = new Set([
-  "id",
-  "slug",
-  "slugs",
-  "pref_id",
-  "chunk_id",
-  "artifact_id",
-  "content_hash",
-  "session_id",
-  "skill_name",
-  "entity",
-  "scope",
-  "name",
-  "subject",
-  "flow_id",
-  "preset_id",
-  "target",
-]);
-const PATH_PROPS = new Set(["path", "file_path", "source_file", "source", "page", "artifact"]);
-
-/**
- * Verbs that read none of the per-lane arguments, from the tools' code, so
- * their per-lane calls would repeat the call without them: `brain_trigger`
- * scan and history (`workspace-tools.ts`: only a transition reads `id`),
- * and `brain_agent_diff` modes other than search (`agent-source/diff.ts`:
- * `mode` labels one `queryAgentSources` read of the same topic and query,
- * so the search mode's per-lane calls stand for every mode). A tool with
- * no verb is keyed by `(no verb)`: `brain_search_by_source` answers the
- * pages an ingest derived from `source_file` (`ingest-source-tools.ts`),
- * and no seeded lane entry is an ingest source, so its per-lane calls
- * repeat the absent-source call.
- */
-const NO_ENTRY_ARGS: Readonly<Record<string, ReadonlySet<string>>> = {
-  brain_trigger: new Set(["scan", "history"]),
-  brain_agent_diff: new Set(["browse", "diff", "map"]),
-  brain_search_by_source: new Set(["(no verb)"]),
-};
-
-interface Plan {
-  readonly tool: string;
-  readonly calls: Array<{ readonly args: Record<string, unknown>; readonly seeded?: Seeded }>;
-  readonly skipped: string[];
-}
-
-function schemaOf(tool: ToolDefinition): {
-  props: Record<string, { type?: string; enum?: unknown[]; items?: unknown }>;
-  required: string[];
-} {
-  const s = (tool.inputSchema ?? {}) as {
-    properties?: Record<string, { type?: string; enum?: unknown[] }>;
-    required?: string[];
-  };
-  return { props: s.properties ?? {}, required: s.required ?? [] };
-}
-
-function valueFor(
-  prop: string,
-  spec: { type?: string },
-  seeded: Seeded | undefined,
-): unknown | undefined {
-  const asType = (v: string): unknown => (spec.type === "array" ? [v] : v);
-  if (QUERY_PROPS.has(prop)) return asType(seeded === undefined ? COMMON : seeded.hidden.title);
-  if (ID_PROPS.has(prop))
-    return asType(seeded === undefined ? "probe-absent-id" : seeded.hidden.id);
-  if (PATH_PROPS.has(prop))
-    return asType(seeded === undefined ? "Brain/probe-absent.md" : seeded.hidden.rel);
-  if (prop === "events") return [];
-  return undefined;
-}
-
-function planFor(tool: ToolDefinition, seeded: ReadonlyArray<Seeded>): Plan {
-  const { props, required } = schemaOf(tool);
-  // A required verb key wins (brain_analytics: `view` is required, its
-  // `operation` qualifies one view only).
-  const actionKey =
-    ACTION_KEYS.find((k) => Array.isArray(props[k]?.enum) && required.includes(k)) ??
-    ACTION_KEYS.find((k) => Array.isArray(props[k]?.enum));
-  const skipped: string[] = [];
-  let verbs: Array<string | undefined> = [undefined];
-  if (actionKey !== undefined) {
-    const all = props[actionKey]!.enum as string[];
-    verbs = tool.kind === "write" ? all.filter((v) => READ_VERBS.has(v)) : all;
-    for (const v of all) if (!verbs.includes(v)) skipped.push(`${actionKey}=${v}: write verb`);
-  } else if (tool.kind === "write" && !READ_ONLY_CALLS.has(tool.name)) {
-    return { tool: tool.name, calls: [], skipped: ["write tool with no read verb"] };
-  }
-  const idLike = Object.keys(props).filter(
-    (p) => QUERY_PROPS.has(p) || ID_PROPS.has(p) || PATH_PROPS.has(p),
-  );
-  const calls: Plan["calls"] = [];
-  for (const verb of verbs) {
-    const base: Record<string, unknown> = {};
-    if (actionKey !== undefined) base[actionKey] = verb;
-    let missing: string | null = null;
-    for (const req of required) {
-      if (req === actionKey) continue;
-      const v = valueFor(req, props[req] ?? {}, undefined);
-      if (v === undefined) missing = req;
-      else base[req] = v;
-    }
-    const label = verb === undefined ? "(no verb)" : `${actionKey}=${verb}`;
-    if (missing !== null) {
-      skipped.push(`${label}: required '${missing}' has no sensible probe value`);
-      continue;
-    }
-    if ("dry_run" in props) base["dry_run"] = true;
-    calls.push({ args: base });
-    const namesNone =
-      NO_ENTRY_ARGS[tool.name]?.has(verb ?? "(no verb)") === true ||
-      (verb !== undefined && LIST_VERBS.has(verb));
-    if (idLike.length === 0 || namesNone) continue;
-    for (const s of seeded) {
-      const args = { ...base };
-      for (const p of idLike) args[p] = valueFor(p, props[p] ?? {}, s);
-      calls.push({ args, seeded: s });
-    }
-  }
-  return { tool: tool.name, calls, skipped };
 }
 
 async function answer(
@@ -472,22 +273,31 @@ interface Finding {
   readonly field: string;
 }
 
-/** Run every plan at one reach; the canaries each answer carries. */
+/**
+ * Run every plan at one reach; the canaries each answer carries, and each
+ * answer by call key. With `local` (the shared-only twin) each list or
+ * count call is answered at local reach too, after the call below it.
+ */
 async function runAll(
   server: MCPServer,
   plans: ReadonlyArray<Plan>,
   seeded: ReadonlyArray<Seeded>,
+  local?: MCPServer,
 ): Promise<{
   findings: Finding[];
   sharedSeen: Set<string>;
   timeouts: string[];
   errors: string[];
   calls: number;
+  answers: Map<string, string>;
+  localAnswers: Map<string, string>;
 }> {
   const findings: Finding[] = [];
   const sharedSeen = new Set<string>();
   const timeouts: string[] = [];
   const errors: string[] = [];
+  const answers = new Map<string, string>();
+  const localAnswers = new Map<string, string>();
   // Each distinct call once: a verb with no per-lane argument is planned
   // once per tool, and two plans may build the same call.
   const made = new Set<string>();
@@ -499,6 +309,11 @@ async function runAll(
       made.add(key);
       // oxlint-disable-next-line no-await-in-loop -- one server, its calls in order
       const text = await answer(server, plan.tool, call.args);
+      answers.set(key, text);
+      if (local !== undefined && call.listing) {
+        // oxlint-disable-next-line no-await-in-loop -- one server, its calls in order
+        localAnswers.set(key, await answer(local, plan.tool, call.args));
+      }
       if (text.includes("probe_timeout")) timeouts.push(`${plan.tool} ${passed}`);
       if (/internal[ _]error/.test(text)) errors.push(`${plan.tool} ${passed}`);
       for (const s of seeded) {
@@ -513,18 +328,25 @@ async function runAll(
       }
     }
   }
-  return { findings, sharedSeen, timeouts, errors, calls: made.size };
+  return { findings, sharedSeen, timeouts, errors, calls: made.size, answers, localAnswers };
 }
 
-/** Resources too: every listed resource read at the reach given. */
+/**
+ * Resources too: the listing itself (each resource's metadata) and every
+ * listed resource read at the reach given. A listing that fails is no
+ * proof that nothing leaks, so it throws.
+ */
 async function readResources(server: MCPServer): Promise<string[]> {
   const listed = (await server.handleRequest({
     jsonrpc: "2.0",
     id: 1,
     method: "resources/list",
-  })) as { result?: { resources?: Array<{ uri: string }> } } | null;
-  const out: string[] = [];
-  for (const r of listed?.result?.resources ?? []) {
+  })) as { result?: { resources?: Array<{ uri: string }> }; error?: unknown } | null;
+  if (listed === null || listed.error !== undefined || !Array.isArray(listed.result?.resources)) {
+    throw new Error(`resource listing failed: ${JSON.stringify(listed)}`);
+  }
+  const out: string[] = [`resources/list ${JSON.stringify(listed.result)}`];
+  for (const r of listed.result.resources) {
     const read = await server.handleRequest({
       jsonrpc: "2.0",
       id: 2,
@@ -553,6 +375,10 @@ function summarize(findings: ReadonlyArray<Finding>): Map<string, Set<string>> {
 }
 
 describe("registry-wide probe of private-partition lane entries", () => {
+  // The calls are what the probe proves: every writer seeds its lane and
+  // every read verb of every tool is called in order, on this store and its
+  // shared-only twin, so the run takes tens of seconds and the test passes
+  // its own limit as the last argument instead of the default 5 s.
   test("no tool hands a caller below local reach a private-partition lane entry", async () => {
     const started = Date.now();
     lane = makeLaneEnv("store", "osb-lane-probe-");
@@ -604,6 +430,35 @@ describe("registry-wide probe of private-partition lane entries", () => {
       }
     }
 
+    // ----- The shared-only twin of the count comparison -----
+    // The store with private entries goes first (one live store per test).
+    lane.cleanup();
+    lane = makeLaneEnv("store", "osb-lane-probe-twin-");
+    const twinVault = lane.vault;
+    mkdirSync(join(twinVault, "Notes"), { recursive: true });
+    writeFileSync(join(twinVault, PROBE_SOURCE), PROBE_SOURCE_TEXT, "utf8");
+    const twinLocal = server(lane, TRANSPORT_REACH.local);
+    const twinWriters = await seedWriters(lane, twinLocal, true);
+    seedText(twinVault, textFolders, 0, true);
+    expect(twinWriters.length).toBe(byWriter.length);
+    await buildProjections(twinLocal);
+    const twin = await runAll(server(lane), plans, [], twinLocal);
+    const countProblems: string[] = [];
+    let counted = 0;
+    for (const plan of plans) {
+      for (const call of plan.calls) {
+        if (!call.listing) continue;
+        const key = `${plan.tool}\u0000${JSON.stringify(call.args)}`;
+        const remoteText = below.answers.get(key);
+        const localText = twin.localAnswers.get(key);
+        if (remoteText === undefined || localText === undefined) continue;
+        counted++;
+        countProblems.push(
+          ...countMismatches(call.call, remoteText, localText, twin.answers.get(key)),
+        );
+      }
+    }
+
     // ----- The report -----
     const lines: string[] = [];
     lines.push(
@@ -639,7 +494,9 @@ describe("registry-wide probe of private-partition lane entries", () => {
     for (const r of resourceFindings) lines.push(`RESOURCE LEAK ${r.tool} ${r.lane}:${r.field}`);
     lines.push(`tools: ${tools.length}, called: ${plans.filter((p) => p.calls.length > 0).length}`);
     lines.push(`calls made below local reach (distinct): ${below.calls}`);
-    lines.push(`resources read remotely: ${resourcesRemote.length}`);
+    lines.push(
+      `resource answers scanned remotely (the listing included): ${resourcesRemote.length}`,
+    );
     lines.push(
       `writer lanes whose own reader shows no hidden entry locally: ${unseen.join(", ") || "none"}`,
     );
@@ -652,6 +509,9 @@ describe("registry-wide probe of private-partition lane entries", () => {
     lines.push(`recorded gap, no remote reader of the shared control: ${gap.join(", ")}`);
     lines.push(`timeouts (remote): ${below.timeouts.join(" | ") || "none"}`);
     lines.push(`internal errors (remote): ${below.errors.join(" | ") || "none"}`);
+    lines.push(`list or count calls compared with the shared-only twin: ${counted}`);
+    lines.push(`count mismatches (${countProblems.length}):`);
+    for (const p of countProblems) lines.push(`  ${p}`);
     lines.push(`probe time: ${Date.now() - started} ms`);
     console.log(lines.join("\n"));
 
@@ -669,5 +529,8 @@ describe("registry-wide probe of private-partition lane entries", () => {
     expect(
       [...remoteByTool.entries()].map(([k, v]) => `${k}: ${[...v].toSorted().join(",")}`),
     ).toEqual([]);
+    // Every list or count call answers the shared-only twin's counts.
+    expect(counted).toBeGreaterThan(0);
+    expect(countProblems).toEqual([]);
   }, 900_000);
 });

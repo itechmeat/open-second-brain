@@ -535,10 +535,17 @@ describe("private-partition lane entries are withheld below local reach", () => 
           expect(JSON.stringify(localAnswer).includes(entries.hidden.identity)).toBe(true);
         }
 
+        const env = lane;
         for (const verb of row.verbs ?? []) {
           const hiddenId = verb.id(entries.hidden);
           const absentId = verb.absentId ?? "synthetic-absent-entry";
+          // The private partition's records around the write to the hidden entry.
+          const privateBefore = JSON.stringify(env.laneRecords("private"));
           const hiddenAnswer = await verb.call(remote, hiddenId);
+          expect({
+            verb: verb.name,
+            private_unchanged: JSON.stringify(env.laneRecords("private")) === privateBefore,
+          }).toEqual({ verb: verb.name, private_unchanged: true });
           const absentAnswer = await verb.call(remote, absentId);
           if (verb.same !== false) {
             expect({

@@ -225,21 +225,29 @@ export const MERGED_FROM_FIELD = "merged_from";
  * clear. Pinned facts are often drawn from the notes an agent is working
  * on, so the record goes to `private` when this machine holds it and to
  * `shared` when it does not. A text that carries a `<private>` region or
- * names a private page (`namesPrivate`, `pinnedTextIsPrivate` in
- * `reference-privacy.ts`) goes to `private` only; a clear is judged by the
- * text it clears, so it lands where that text's set did.
+ * names a private page (`pinnedTextIsPrivate` in `reference-privacy.ts`)
+ * goes to `private` only; a clear is judged by the text it clears, so it
+ * lands where that text's set did.
+ *
+ * `partition` is the register its caller decided (change
+ * `lane-reach-residuals`, design R1): `private-when-held` at local reach,
+ * `shared` below it, `private` for a text judged private. The boolean form
+ * keeps its meaning: `true` gives `private`, `false` gives
+ * `private-when-held`.
  */
 export function pinnedRecord(
   content: string | null,
   authority: Authority,
-  namesPrivate: boolean,
+  partition: boolean | RowPartition,
 ): DualWriteRecord {
   const body: RecordBody =
     content === null ? { [AUTHORITY_FIELD]: authority } : { [AUTHORITY_FIELD]: authority, content };
+  const decided: RowPartition =
+    typeof partition === "boolean" ? (partition ? "private" : "private-when-held") : partition;
   return {
     stream: "events",
     kind: content === null ? PINNED_CLEAR_KIND : PINNED_SET_KIND,
-    ...partitionOf(namesPrivate ? "private" : "private-when-held"),
+    ...partitionOf(decided),
     body,
   };
 }

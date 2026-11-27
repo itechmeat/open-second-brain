@@ -38,7 +38,6 @@ import { requireNextStep } from "./next-step.ts";
 import {
   clearSkillAcceptJournal,
   listSkillAcceptJournals,
-  readSkillAcceptJournals,
   removeSkillAcceptJournalFile,
   writeSkillAcceptJournal,
   type SkillAcceptJournalEntry,
@@ -66,13 +65,10 @@ import {
 import type { ContinuityPayload } from "./continuity/types.ts";
 import { routeWrite } from "../store/store-write.ts";
 import { DUAL_WRITE_LEDGERS, ledgerRowRecord } from "../store/dual-write-records.ts";
-import {
-  type RowPrivacyJudge,
-  rowNamesPrivatePage,
-  rowPrivacyJudge,
-} from "../store/reference-privacy.ts";
 import { withPrivateShown } from "../store/caller-reach.ts";
 import { assertLaneWriteAtReach, journalWithheldAtReach } from "../store/lane-reach-guard.ts";
+import { discardableAcceptJournalPaths, recoverableAcceptJournals } from "./skill-accept-reach.ts";
+import { continuityPrivacyJudge, verifierRejectionIsPrivate } from "./skill-learn-reach.ts";
 import {
   assertLaneWrite,
   lanePageExists,
@@ -1172,7 +1168,7 @@ export function acceptSkillProposal(
 
   const lock = acquireAcceptLock(vault);
   try {
-    resolveOutstandingAccepts(vault);
+    resolveOutstandingAccepts(vault, recoverableAcceptJournals(vault));
 
     const pendingPath = skillProposalPendingPath(vault, slug);
     if (!lanePageExists(vault, pendingPath)) {
@@ -1365,7 +1361,7 @@ export function recoverSkillProposalAccepts(vault: string): ReadonlyArray<SkillA
   assertLaneWrite(vault);
   const lock = acquireAcceptLock(vault);
   try {
-    return Object.freeze(resolveOutstandingAccepts(vault));
+    return Object.freeze(resolveOutstandingAccepts(vault, recoverableAcceptJournals(vault)));
   } finally {
     lock.release();
   }
@@ -1389,7 +1385,7 @@ export function discardUnreadableSkillAcceptJournals(vault: string): ReadonlyArr
   assertLaneWrite(vault);
   const lock = acquireAcceptLock(vault);
   try {
-    const discarded = readSkillAcceptJournals(vault).unreadable.map((entry) => entry.path);
+    const discarded = discardableAcceptJournalPaths(vault);
     for (const path of discarded) removeSkillAcceptJournalFile(vault, path);
     return Object.freeze(discarded);
   } finally {
@@ -1460,13 +1456,16 @@ function acceptLockTarget(vault: string): string {
   return machineStatePath(vault, BRAIN_SKILL_PROPOSALS_REL, ACCEPT_LOCK_NAME);
 }
 
-/** Caller must already hold {@link acceptLockTarget}. */
-function resolveOutstandingAccepts(vault: string): SkillAcceptRecovery[] {
+/** Caller must already hold {@link acceptLockTarget}. `journals`: the markers to resolve. */
+function resolveOutstandingAccepts(
+  vault: string,
+  journals: ReadonlyArray<SkillAcceptJournalEntry> = listSkillAcceptJournals(vault),
+): SkillAcceptRecovery[] {
   // Below local reach a journal whose proposal, archive or materialized
   // page is held in `private` (or any journal while the whole fold may
   // miss a record) is left for a local caller, unread and unnamed; one it
   // does resolve is judged by the whole fold (lane-private-partition-reach).
-  return listSkillAcceptJournals(vault).flatMap((journal) =>
+  return journals.flatMap((journal) =>
     journalWithheldAtReach(vault, [
       skillProposalPendingPath(vault, journal.slug),
       skillProposalAcceptedPath(vault, journal.slug),
@@ -2382,37 +2381,6 @@ export function verifierRejectionLedgerPath(vault: string): string {
  * Append one verifier-rejection record to the JSONL ledger. `sources` are
  * the continuity records the rejected candidate was drawn from.
  */
-/**
- * Whether a verifier-rejection row goes to `private` only: a row whose
- * turns are flagged private, or that names a private or unjudgeable page
- * (in the row or in those turns).
- */
-function verifierRejectionIsPrivate(
-  vault: string,
-  entry: { id: string; name_key: string; reason: string; at: string },
-  sources: ReadonlyArray<ContinuityRecord>,
-): boolean {
-  return (
-    sources.some((record) => record.private === true) ||
-    rowNamesPrivatePage(vault, [entry, sources])
-  );
-}
-
-/**
- * Whether one continuity record the learn read goes to `private`: flagged
- * private, or naming a private or unjudgeable page, judged on the whole
- * fold wherever it is called. The per-record form of the rule a verifier
- * rejection's turns are judged by ({@link verifierRejectionIsPrivate}),
- * and the store's own partition rule for a continuity row. One judge per
- * learn, made on first use, so a reference many records carry is judged
- * once.
- */
-function continuityPrivacyJudge(vault: string): (record: ContinuityRecord) => boolean {
-  let judge: RowPrivacyJudge | undefined;
-  return (record) =>
-    record.private === true || withPrivateShown(() => (judge ??= rowPrivacyJudge(vault))(record));
-}
-
 function appendVerifierRejection(
   vault: string,
   entry: { id: string; name_key: string; reason: string; at: string },
