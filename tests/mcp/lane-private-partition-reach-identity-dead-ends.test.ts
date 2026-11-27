@@ -8,15 +8,21 @@
  * caller cannot read stays where it is, and the remote answer names no
  * archived id. The test seeds a private entry (the newest) and a shared
  * active set one below the cap, then runs one `record` below local reach
- * and the same `record` at local reach on a twin store.
+ * and the same `record` at local reach on a twin store. The shared set is
+ * seeded in one store write, as the records `record` writes; only the
+ * calls the assertions are about go through the tool.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { DEAD_END_MAX_ACTIVE } from "../../src/core/brain/dead-ends.ts";
+import { DEAD_END_MAX_ACTIVE, deadEndsDir } from "../../src/core/brain/dead-ends.ts";
+import { resolveAgentName } from "../../src/core/config.ts";
+import { appendStoreRecords } from "../../src/core/store/dual-write.ts";
+import { entryRecord } from "../../src/core/store/lane-entry-store.ts";
 import { wholeLaneStoreFold } from "../../src/core/store/lane-fold-cache.ts";
 import { laneEntryInPrivate, writeLaneText } from "../../src/core/store/lane-pages.ts";
+import { openStore } from "../../src/core/store/store-open.ts";
 import { makeLaneEnv, type LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
 import {
   callJson,
@@ -60,18 +66,50 @@ async function seeded(): Promise<LaneEnv> {
   expect(laneEntryInPrivate(e.vault, join(e.vault, "Brain", "dead-ends", `${PRIVATE_ID}.md`))).toBe(
     true,
   );
-  const local = localServer(e);
   // The active set is exactly at the cap, the private entry its newest member.
-  for (let i = 0; i < DEAD_END_MAX_ACTIVE - 1; i++) {
-    // oxlint-disable-next-line no-await-in-loop -- one server, its calls in order
-    const recorded = await callJson(local, "brain_dead_ends", {
-      operation: "record",
-      approach: `zqidentity approach ${i}`,
-      reason: `zqidentity reason ${i}`,
-    });
-    expect(recorded["error"]).toBeUndefined();
-  }
+  seedSharedBelowCap(e);
+  const listed = await callJson(localServer(e), "brain_dead_ends", { operation: "list" });
+  expect({
+    error: listed["error"] ?? null,
+    entries: (listed["entries"] as unknown[]).length,
+    warnings: listed["warnings"],
+  }).toEqual({ error: null, entries: DEAD_END_MAX_ACTIVE, warnings: [] });
   return e;
+}
+
+/**
+ * The shared active set one below the cap, in one store write: the lane
+ * records a local `record` writes for each entry (its page, its fields and
+ * body, built by the same record builder), one a day from 2020-01-01, so
+ * the oldest entry is also the first by id.
+ */
+function seedSharedBelowCap(e: LaneEnv): void {
+  const agent = resolveAgentName(e.env.configPath);
+  const records = Array.from({ length: DEAD_END_MAX_ACTIVE - 1 }, (_, i) => {
+    const date = new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10);
+    const id = `de-${date}-zqidentity-approach-${i}`;
+    const approach = `zqidentity approach ${i}`;
+    return entryRecord(
+      e.vault,
+      join(deadEndsDir(e.vault), `${id}.md`),
+      {
+        kind: "brain-dead-end",
+        id,
+        created_at: `${date}T00:00:00Z`,
+        agent,
+        approach,
+        tags: ["brain", "brain/dead-end"],
+      },
+      `## Approach\n\n${approach}\n\n` +
+        `## Why it failed\n\nzqidentity reason ${i}\n\n` +
+        `## Context\n\n_(not provided)_\n`,
+      false,
+    );
+  });
+  appendStoreRecords(openStore({ root: e.env.storeRoot, device: "dev-a" }), records, {
+    vault: e.vault,
+    configPath: e.env.configPath,
+  });
 }
 
 /** Where the dead-end entries sit: the active folder, or its archive, by partition. */

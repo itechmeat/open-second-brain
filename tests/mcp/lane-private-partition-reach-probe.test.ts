@@ -375,6 +375,10 @@ function summarize(findings: ReadonlyArray<Finding>): Map<string, Set<string>> {
 }
 
 describe("registry-wide probe of private-partition lane entries", () => {
+  // The calls are what the probe proves: every writer seeds its lane and
+  // every read verb of every tool is called in order, on this store and its
+  // shared-only twin, so the run takes tens of seconds and the test passes
+  // its own limit as the last argument instead of the default 5 s.
   test("no tool hands a caller below local reach a private-partition lane entry", async () => {
     const started = Date.now();
     lane = makeLaneEnv("store", "osb-lane-probe-");

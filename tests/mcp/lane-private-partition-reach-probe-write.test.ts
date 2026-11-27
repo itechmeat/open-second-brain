@@ -251,6 +251,10 @@ function changedPerLane(from: ReadonlySet<string>, to: ReadonlySet<string>): Map
 const REGENERATED = ["procedural-memory/", "proposals/bridges"];
 
 describe("differential write probe of private-partition lane entries", () => {
+  // The calls are what the probe proves: every verb of every tool, write
+  // verbs included, is called in order on this store and on its twin, so
+  // the run takes seconds to tens of seconds and the test passes its own
+  // limit as the last argument instead of the default 5 s.
   test("no call below local reach discloses, drops or fails on a private entry", async () => {
     const started = Date.now();
     const twin = await runStore("twin");
