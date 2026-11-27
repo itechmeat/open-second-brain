@@ -14,10 +14,15 @@ the tool name, its input schema's existing parameters, and the
 documented meaning of its response fields. New optional parameters and
 new response fields are additive (minor); removing or renaming a tool,
 making a parameter required, or changing a response field's meaning is
-breaking (major). Since 1.0.0 the advertised list and the callable
-surface are the same set - there is no hidden alias layer. Removed
-tools answer `tools/call` with an INVALID_PARAMS tombstone naming the
-replacement for at least one major cycle.
+breaking (major). Since 1.0.0 the default server's advertised list and
+its callable surface are the same set - there is no hidden alias layer.
+A tool profile (`o2b mcp --tool-profile`) changes only what one server
+process lists, never a frozen tool: `catalog` lists a first pass and
+keeps every other tool callable through `tools/call`, and `recall` and
+`minimal` serve a subset and name each withheld tool, with its reason,
+in `second_brain_capabilities`. Removed tools answer `tools/call` with
+an INVALID_PARAMS tombstone naming the replacement for at least one
+major cycle.
 
 ### CLI verb tree
 

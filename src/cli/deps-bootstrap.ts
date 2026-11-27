@@ -21,4 +21,17 @@ try {
 const { main } = (await import(join(ROOT, "src", "cli", "main.ts"))) as {
   main: (argv: ReadonlyArray<string>) => Promise<number>;
 };
-process.exit(await main(process.argv.slice(2)));
+const guard = (await import(join(ROOT, "src", "cli", "stdout-guard.ts"))) as {
+  installStdoutEpipeGuard: () => void;
+  isEpipeError: (err: unknown) => boolean;
+  exitWhenFlushed: (code: number) => void;
+};
+// The same guard and exit as the main entry (`main.ts`), which installs
+// them only when it is the entry itself.
+guard.installStdoutEpipeGuard();
+try {
+  guard.exitWhenFlushed(await main(process.argv.slice(2)));
+} catch (err) {
+  if (guard.isEpipeError(err)) process.exit(0);
+  throw err;
+}

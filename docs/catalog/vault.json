@@ -1,0 +1,219 @@
+{
+  "area": "vault",
+  "name": "Vault notes and the human view",
+  "summary": "The operator's Markdown vault: writing notes safely, write sessions, the rendered human view, vault scope and several vaults.",
+  "features": [
+    {
+      "slug": "vault-notes",
+      "name": "Vault note writing",
+      "summary": "Creates, updates, appends, renames, moves and archives vault notes atomically, alone or in validated batches.",
+      "status": "stable",
+      "capabilities": [
+        "Creates a note with frontmatter and body by temp-file write and rename; an existing target is refused or kept",
+        "Merges frontmatter keys or replaces the body of a note, or appends Markdown text; a missing target is refused",
+        "Refuses paths that traverse, enter `Brain/`, are out of scope or outside a set `write_binding.path_prefixes`",
+        "Applies create, update, append, apply-evidence and log-line ops as one batch, validating all before any write",
+        "Renames, moves, archives or deletes a note, or moves and renames a folder; dry run unless applied",
+        "Rewrites inbound `[[wikilinks]]` after a move to the shortest spelling that still resolves",
+        "Writes a stub note for an unresolved wikilink target that links back to its sources (`scaffold-stub`)"
+      ],
+      "limits": [
+        "A fault during a batch's commit phase (a full disk) is not rolled back across files; each file write is atomic",
+        "The write binding is a path boundary over caller-named paths, not a security boundary: it reads no identity",
+        "After a move, search can return old paths until the claimed detached index refresh lands",
+        "Deleting a user note needs an explicit confirm, since no archive covers it"
+      ],
+      "surfaces": {
+        "cli": ["brain note-lifecycle", "brain scaffold-stub"],
+        "mcp": [
+          "brain_create_note",
+          "brain_update_note",
+          "brain_append_note",
+          "brain_write_batch",
+          "brain_note_lifecycle",
+          "brain_scaffold_stub"
+        ],
+        "config": ["write_binding"]
+      },
+      "docs": [
+        "docs/how-it-works.md#the-agent-write-contract-since-v0410",
+        "docs/cli-reference.md#write-binding-since-v1430"
+      ],
+      "code": [
+        "src/core/brain/notes/create-note.ts",
+        "src/core/brain/write-batch.ts",
+        "src/core/brain/notes/lifecycle.ts"
+      ],
+      "keywords": [
+        "note crud",
+        "markdown notes",
+        "atomic writes",
+        "link-preserving rename",
+        "batch writes",
+        "path allowlist"
+      ]
+    },
+    {
+      "slug": "write-sessions",
+      "name": "Agent write sessions",
+      "summary": "A prompt, validate and approve cycle for model-written artifacts and decision panels, independent of the provider.",
+      "status": "stable",
+      "capabilities": [
+        "Opens a session that returns a generation prompt with schema hints and collision data for an occupied target",
+        "Validates a submitted artifact (256 KiB cap, target policy) and commits it atomically only when clean",
+        "Returns machine-readable errors and a correction prompt for a failed submit",
+        "Writes by intent: create never overwrites, overwrite replaces, merge appends a session-stamped section",
+        "Parks a validated artifact for an operator approve or abandon when opened with `require_review`",
+        "Runs a decision panel: one step per persona lens (built-in or curated), then a synthesis note at the target",
+        "Appends one `write-session` audit event per terminal transition"
+      ],
+      "limits": [
+        "Generates no content: every byte comes from the calling agent's model",
+        "Commits only `.md` targets inside `Brain/`: the page lanes, `Brain/decisions/panels/` and `Brain/notes/`",
+        "Expiry is checked on read; no background timer sweeps sessions",
+        "A session ends as failed after 3 attempts or 24 hours by default"
+      ],
+      "surfaces": {
+        "cli": ["brain session"],
+        "mcp": ["brain_write_session"]
+      },
+      "docs": [
+        "docs/cli-reference.md#agent-write-sessions-since-v0410",
+        "docs/how-it-works.md#the-agent-write-contract-since-v0410"
+      ],
+      "code": ["src/core/brain/write-session/"],
+      "keywords": [
+        "structured output validation",
+        "self-correction loop",
+        "provider-agnostic generation",
+        "multi-perspective review",
+        "decision panel",
+        "write protocol"
+      ]
+    },
+    {
+      "slug": "human-view",
+      "name": "Human view",
+      "summary": "Renders plain Markdown pages of rules, history, decisions and topics; editing a page records a human correction.",
+      "status": "stable",
+      "capabilities": [
+        "Renders `about-me.md`, weekly history, `decisions.md`, topic, report and source pages (default `o2b-memory/`)",
+        "Renders on one device only, the view writer (`view writer`)",
+        "Spots a human edit against the writer's own renders and three-way merges it, the user winning, into records",
+        "Turns a reworded or deleted rule line of `about-me.md` into a human preference change or retirement",
+        "Reads sync-tool conflict copies of a page as edits and removes them",
+        "Re-renders on the view writer at session start at most hourly (`view-render` hook) and after each dream pass",
+        "Keeps replaced page versions as blobs and lists or prints them for 30 days (`view recover <page>`)",
+        "Writes generated headings in English or Russian per `view.language` (default English); quotes stay as written"
+      ],
+      "limits": [
+        "Renders from the shared partition only: a private preference or topic never appears on a page",
+        "Needs a brain store and a device id; without them nothing renders",
+        "Deleting a page retires nothing: a missing or empty page is rendered again"
+      ],
+      "surfaces": {
+        "cli": ["view writer", "view render", "view recover"],
+        "hooks": ["view-render"],
+        "config": ["view.language"]
+      },
+      "docs": [
+        "docs/brain-store.md#the-human-view",
+        "docs/brain-store.md#the-view-writer",
+        "docs/brain-store.md#editing-pages-on-a-phone"
+      ],
+      "code": [
+        "src/core/view/render.ts",
+        "src/core/view/corrections.ts",
+        "src/core/view/writer.ts"
+      ],
+      "keywords": [
+        "human-readable export",
+        "two-way sync",
+        "markdown rendering",
+        "editable memory",
+        "user corrections",
+        "three-way merge"
+      ]
+    },
+    {
+      "slug": "vault-scope",
+      "name": "Vault scope and layout",
+      "summary": "Which vault paths are read, ignored or indexed, the folder role map, one-path inspection and a page listing.",
+      "status": "stable",
+      "capabilities": [
+        "Puts a path in scope when no `vault.ignore_paths` rule matches and a declared `vault.include_paths` covers it",
+        "Ignores `.git`, `node_modules`, `.obsidian`, `.trash`, `.stversions`, snapshots and its own folders by default",
+        "Keeps lane-owned paths (exact state, pending review) out of the search index through one admission predicate",
+        "Reports inclusion counts and excluded directories per rule, as the index would see them (`vault status`)",
+        "Gives two verdicts for one path, vault scope and write binding, naming the list that decided (`vault inspect`)",
+        "Prints `{{role}}` tokens (inbox, projects, areas) resolved to folders from `vault_map.document` (`vault map`)",
+        "Reads user notes for inline scans only under `notes.read_paths`, which is empty by default",
+        "Lists pages by title substring over a fixed-skip walk that ignores the scope rules (`second_brain_query`)",
+        "Writes `Brain/_INDEX.md`, a `[[title]]` wikilink and path per page of the fixed-skip walk (`index`)"
+      ],
+      "limits": [
+        "The scope, include and read-path keys are operator-only: `brain_settings` refuses them to agents",
+        "The vault map covers user content folders only, not the fixed `Brain/` layout"
+      ],
+      "surfaces": {
+        "cli": ["vault status", "vault inspect", "vault map", "index"],
+        "mcp": ["second_brain_query"],
+        "config": ["vault", "notes", "vault_map.document"]
+      },
+      "docs": [
+        "docs/cli-reference.md#vault-scope",
+        "docs/cli-reference.md#index-admission-joins-the-scope-walk-since-v1460"
+      ],
+      "code": ["src/core/vault-scope/", "src/core/brain/portability/role-tokens.ts"],
+      "keywords": [
+        "ignore rules",
+        "include paths",
+        "indexing scope",
+        "folder roles",
+        "path filtering",
+        "gitignore-style exclusion"
+      ]
+    },
+    {
+      "slug": "multi-vault",
+      "name": "Vault profiles and project links",
+      "summary": "Named vault profiles, project directories linked to their vault, and other vaults read as recall sources.",
+      "status": "stable",
+      "capabilities": [
+        "Keeps named vault profiles in `profiles.json` beside the config, one of them active",
+        "Resolves the vault from `VAULT_DIR`, the nearest `.o2b-vault.json` pointer, the active profile, or the config",
+        "Links a project directory to its vault by a pointer file and a `projects.json` registry (`brain project link`)",
+        "Lists, checks and removes project links from the registry without scanning the filesystem (`brain project`)",
+        "Attaches other vaults as read-only recall sources, kept per owning vault (`brain source add|list|remove`)",
+        "Searches the active vault, profile vaults, read sources and the shared namespace with origin labels",
+        "Activates a profile from MCP (`brain_switch_vault`); the change applies at the next server launch"
+      ],
+      "limits": [
+        "A recall source is only read: no write and no index build happens inside it",
+        "The profile, project and source registries live beside each machine's config file and are not synced",
+        "A running MCP server keeps the vault it resolved at launch"
+      ],
+      "surfaces": {
+        "cli": ["vault profile", "brain project", "brain source"],
+        "mcp": ["brain_switch_vault"]
+      },
+      "docs": [
+        "docs/how-it-works.md#workspace-reach-and-proactive-insight-since-v0380",
+        "docs/cli-reference.md#workspace-reach-and-proactive-insight-since-v0380"
+      ],
+      "code": [
+        "src/core/brain/portability/profiles.ts",
+        "src/core/brain/portability/pointer.ts",
+        "src/core/brain/portability/recall-sources.ts"
+      ],
+      "keywords": [
+        "multiple workspaces",
+        "workspace switching",
+        "cross-vault search",
+        "federated search",
+        "project linking",
+        "read-only sources"
+      ]
+    }
+  ]
+}

@@ -18,6 +18,6 @@ Use this skill when a task changes the active Brain schema pack or reviews conte
 
 ## Mutation Notes
 
-Supported operations are `add_type`, `remove_type`, `update_type`, `add_alias`, `remove_alias`, `add_prefix`, `remove_prefix`, `add_link_type`, `remove_link_type`, `set_extractable`, and `set_expert_routing`.
+Supported operations are `add_type`, `remove_type`, `update_type`, `add_alias`, `remove_alias`, `add_prefix`, `remove_prefix`, `add_link_type`, `remove_link_type`, `set_extractable`, `set_expert_routing`, `add_label_dimension`, `remove_label_dimension`, `add_link_constraint`, `remove_link_constraint`, `set_attribute_field`, `remove_attribute_field`, `set_frontmatter_tier`, and `remove_frontmatter_tier`.
 
 Schema tokens must be lowercase normalized tokens accepted by Open Second Brain schema validation. Prefer small, durable tokens over project-specific phrasing unless the schema pack is explicitly project-scoped.

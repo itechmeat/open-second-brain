@@ -1,0 +1,231 @@
+{
+  "area": "sources",
+  "name": "Sources, code and portability",
+  "summary": "Bringing outside material in and taking memory out: source ingest and distillation, project history, codegraph, export and import.",
+  "features": [
+    {
+      "slug": "source-ingest",
+      "name": "Source ingest",
+      "summary": "Writes an agent's summary and entities for a document or URL into pages, plans folder ingests and removes a source.",
+      "status": "stable",
+      "capabilities": [
+        "`brain_ingest_source` turns an agent's summary and entities into one `Brain/sources/src-<slug>.md` page",
+        "Creates or updates entity pages through the shared intake; its connections list names only existing entities",
+        "Re-ingest rewrites the same page; a content-sha256 manifest with contract fingerprint skips unchanged sources",
+        "Archives the redacted bytes of a trusted local source at `Brain/.archives/<sha256>.txt`",
+        "`brain batch-plan` packs new or modified files into batches (default 1 MiB, 25 files), honouring `.gitignore`",
+        "`brain extract` previews HTML and CSV/TSV extraction and the appended byte range since the recorded watermark",
+        "Lists every page derived from one exact source file or URL (`brain_search_by_source`)",
+        "On confirm, snapshots and deletes pages tracing only to one source (`forget-source`, `brain_delete_by_source`)"
+      ],
+      "limits": [
+        "Runs no model, fetches no URL and does no OCR: the calling agent supplies the text, summary and entities",
+        "Reads text, Markdown, HTML and CSV/TSV; PDF, Office, EPUB and image files are named, not extracted",
+        "Ingest itself is MCP-only; the batch plan only plans, and the caller dispatches each batch",
+        "With a storage cap set, ingest refuses the write while the vault is at the critical storage tier"
+      ],
+      "surfaces": {
+        "cli": ["brain extract", "brain batch-plan", "brain forget-source"],
+        "mcp": [
+          "brain_ingest_source",
+          "brain_ingest_batch_plan",
+          "brain_search_by_source",
+          "brain_delete_by_source"
+        ]
+      },
+      "docs": [
+        "docs/how-it-works.md#non-markdown-sources-since-v1690",
+        "docs/ingest-manifest.md",
+        "docs/cli-reference.md#source-pipeline-integrity-and-operator-tooling-since-v1340"
+      ],
+      "code": [
+        "src/core/brain/ingest/ingest.ts",
+        "src/core/brain/ingest/batch-plan.ts",
+        "src/core/brain/source-cleanup.ts"
+      ],
+      "keywords": [
+        "document ingestion",
+        "entity extraction",
+        "incremental ingest",
+        "batch ingestion",
+        "source provenance",
+        "content hashing"
+      ]
+    },
+    {
+      "slug": "source-distillation",
+      "name": "Source distillation",
+      "summary": "Condenses a source into atomic claims whose quotes are checked against the source and cited by block.",
+      "status": "stable",
+      "capabilities": [
+        "Takes 1 to 1000 agent-written atomic claims, each optionally citing a source block id `^abc`; runs no model",
+        "Checks each quoted span against the cited block, or against the whole source when no block is cited",
+        "Strips the quotation marks from an unverified quote and names it in the report",
+        "Writes one page per source at `Brain/distillations/dist-<slug>.md`, claims cited as `[[source#^block]]`",
+        "Re-distilling rewrites the same page; a byte-identical re-run changes nothing",
+        "Stamps a sha256 of the source bytes the quote check read, so a verifier can reproduce it",
+        "For a source the vault lacks, stores a verbatim excerpt up to 64 KiB and checks quotes against it",
+        "Classifies the source origin; an outside source lands in the quarantine lane the retrieval trust gate reads"
+      ],
+      "limits": [
+        "A URL-only source with no excerpt verifies no quotes",
+        "Quote matching is normalized text containment, not a check that the claim follows from the source"
+      ],
+      "surfaces": {
+        "cli": ["brain distill"],
+        "mcp": ["brain_distill_source"]
+      },
+      "docs": [
+        "docs/mcp.md#source-distillation",
+        "docs/how-it-works.md#checked-quotes-and-capture-scope-since-v1670",
+        "docs/cli-reference.md#source-distillation"
+      ],
+      "code": ["src/core/brain/distill/distill-source.ts", "src/core/brain/distill/quote-check.ts"],
+      "keywords": [
+        "atomic notes",
+        "claim extraction",
+        "quote verification",
+        "citation checking",
+        "block references",
+        "zettelkasten"
+      ]
+    },
+    {
+      "slug": "project-history",
+      "name": "Project history as memory",
+      "summary": "Git history and code structure become vault records and notes; note history and file mentions are read back.",
+      "status": "stable",
+      "capabilities": [
+        "`brain git ingest` reads commits and tags read-only from `<last>..HEAD` into per-device JSONL in the vault",
+        "Attributes commits to release tag ranges in one digest note per repository",
+        "`brain git find` filters stored commits by file, author, text and date with no live git call",
+        "`brain git mine` turns breaking-change markers and reverts into ADR candidates, never touching existing ones",
+        "`brain note-history` splits a note's commits into phases on a 72 h gap, each summarized by its commit subjects",
+        "`brain architect` turns layout and manifests into overview, decision and module notes in regenerated regions",
+        "`brain pre-extract` emits sorted class, function, import and block seeds for TS, JS, Python and HCL",
+        "`brain file-context` searches the index with a file's basename and stem; skips files under 1500 bytes"
+      ],
+      "limits": [
+        "A git ingest run reads at most the 1000 newest commits by default",
+        "`note-history` reads the vault's own git repository on each call and stores nothing",
+        "`architect` states module relations only from manifest dependencies; it does no import-graph analysis"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain git",
+          "brain note-history",
+          "brain architect",
+          "brain pre-extract",
+          "brain file-context"
+        ],
+        "mcp": ["brain_note_history", "brain_file_context"]
+      },
+      "docs": [
+        "docs/how-it-works.md#project-history-as-memory-since-v0400",
+        "docs/cli-reference.md#project-history-since-v0400"
+      ],
+      "code": [
+        "src/core/brain/git",
+        "src/core/brain/architect",
+        "src/core/brain/ingest/pre-extract.ts"
+      ],
+      "keywords": [
+        "git history mining",
+        "commit log ingestion",
+        "architecture decision records",
+        "repository memory",
+        "code structure extraction",
+        "codebase documentation"
+      ]
+    },
+    {
+      "slug": "codegraph-partner",
+      "name": "Codegraph partner",
+      "summary": "Detects a codegraph index of the code project and reports it, so agents use it for structural code questions.",
+      "status": "optional",
+      "capabilities": [
+        "Finds a code project (a `.git` dir plus a manifest) in the working directory and the vault parent's siblings",
+        "Runs `codegraph status -j` and reports the index state: no_project, absent, not_indexed, indexed or error",
+        "Health gate flags an empty graph, collapsed edges, dangling references, self-loops and a cache-root mismatch",
+        "Exits 1 on a failed health gate with `report --fail-on-health`",
+        "Lists the declared workspace members of a Rust project from its manifest, without running extraction",
+        "`resync --cron-template` prints a cron or systemd recipe: health pre-flight, commit check, re-index, verify",
+        "Adds the codegraph check to `o2b doctor` unless `partner_codegraph_disabled` is set"
+      ],
+      "limits": [
+        "Never installs, initializes or re-indexes codegraph; the printed recipe runs in the operator's own scheduler",
+        "Needs the external codegraph CLI and index; nothing from the code graph is imported into the brain"
+      ],
+      "surfaces": {
+        "cli": ["partner codegraph report", "partner codegraph resync"],
+        "mcp": ["brain_codegraph_report"],
+        "skills": ["codegraph-partner"]
+      },
+      "docs": [
+        "docs/cli-reference.md#the-codegraph-partner-check",
+        "docs/cli-reference.md#partner-read-only-since-v1120",
+        "skills/codegraph-partner/SKILL.md"
+      ],
+      "code": ["src/core/partner", "src/cli/partner.ts", "src/cli/partner-codegraph-cron.ts"],
+      "keywords": [
+        "code graph",
+        "code intelligence",
+        "symbol index",
+        "call graph",
+        "impact analysis"
+      ]
+    },
+    {
+      "slug": "knowledge-export",
+      "name": "Export, import and knowledge packs",
+      "summary": "Exports and imports preferences, the knowledge graph, Open Knowledge Format bundles, bank bundles and knowledge packs.",
+      "status": "stable",
+      "capabilities": [
+        "`brain export` dumps active preferences as JSON or llms.txt, or session transcripts as JSONL per conversation",
+        "`okf-export` writes an Open Knowledge Format folder: manifest, index, concepts, queries, references, log",
+        "`okf-import` stages pages under `OKF Review/` as pending; `--trusted` writes them to their recorded paths",
+        "`bank-export` writes one JSON bundle of preferences, page link graph, page contracts and the sources dashboard",
+        "`bank-import` restores the graph (skip/overwrite/merge) and preferences unconfirmed unless `--trusted-restore`",
+        "Writes a byte-stable `graph.json` of pages, links and relations (`graph-export`)",
+        "Seals a selected knowledge pack with a per-file sha256 and a pack digest (`knowledge-pack export`)",
+        "`knowledge-pack install` checks the sha256 seal, stages pages in `OKF Review/`, restores rules unconfirmed",
+        "`knowledge-pack uninstall` removes a pack's stamped items, keeping rules with local evidence and edited pages",
+        "Exports are redacted; okf, bank and graph exports skip prompt-derived pages unless `--include-prompt-derived`"
+      ],
+      "limits": [
+        "CLI only; no MCP tool exports or imports",
+        "Bank import does not restore page contracts or the sources dashboard; they are recomputed",
+        "Graph import writes page stubs with links and relations, not page bodies"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain export",
+          "brain knowledge-pack",
+          "brain okf-export",
+          "brain okf-import",
+          "brain bank-export",
+          "brain bank-import",
+          "brain graph-export",
+          "brain graph-import"
+        ]
+      },
+      "docs": [
+        "docs/cli-reference.md#knowledge-packs",
+        "docs/how-it-works.md#vault-portability--session-economy-v0220"
+      ],
+      "code": [
+        "src/core/brain/portability",
+        "src/core/brain/export.ts",
+        "src/cli/brain/verbs/knowledge-pack.ts"
+      ],
+      "keywords": [
+        "data export",
+        "backup and restore",
+        "knowledge interchange",
+        "data portability",
+        "graph export",
+        "shareable bundles"
+      ]
+    }
+  ]
+}

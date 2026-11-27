@@ -7,14 +7,15 @@
  *
  * Walker invariants:
  *
- *   - Recursive walk from `<vault>/` over every `*.md` file.
+ *   - Recursive walk over the `*.md` files under the scan roots only:
+ *     `opts.paths` (`--path`) when non-empty, else `notes.read_paths`
+ *     from `_brain.yaml`. Both empty (the default) means nothing is
+ *     scanned; the walker never covers the whole vault on its own.
  *   - Hard-skip set: `.git`, `node_modules`, `.open-second-brain`,
  *     `.obsidian/cache`, `.trash`, `.stversions`, `Brain/` (the
  *     derived layer — markers inside it would self-reference).
  *   - User excludes: passed via `opts.exclude` (vault-relative paths,
  *     matched against `<vault>/<exclude>` prefix).
- *   - User include narrowing: when `opts.paths` is non-empty, only
- *     files whose path starts with one of those prefixes are scanned.
  *   - Per-file size cap: 1 MiB. Larger files are skipped with an
  *     error entry in the report.
  *

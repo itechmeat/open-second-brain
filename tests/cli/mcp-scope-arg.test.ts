@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -146,6 +146,48 @@ describe("o2b mcp unknown --tool-profile", () => {
     expect(res.returncode).toBe(2);
     expect(res.stderr).toContain('unknown tool profile "recal"');
   });
+
+  // An inherited name of a plain object (`constructor` and the like) once
+  // resolved to a built-in, and the server started with the full surface.
+  const INHERITED = ["constructor", "toString", "hasOwnProperty", "__proto__"] as const;
+
+  for (const name of INHERITED) {
+    test(`an inherited name is refused on every path: ${name}`, async () => {
+      const config = join(tmp, `config-${name}.yaml`);
+      writeFileSync(config, `vault: ${tmp}\nmcp_tool_profile: ${name}\n`);
+      const paths: ReadonlyArray<{
+        readonly from: string;
+        readonly args: ReadonlyArray<string>;
+        readonly env: Readonly<Record<string, string>>;
+      }> = [
+        { from: "--tool-profile", args: ["mcp", "--tool-profile", name, "--probe"], env: {} },
+        {
+          from: "OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE",
+          args: ["mcp", "--probe"],
+          env: { OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE: name },
+        },
+        { from: "mcp_tool_profile", args: ["mcp", "--config", config, "--probe"], env: {} },
+        {
+          from: "--tool-profile over HTTP",
+          args: ["mcp", "--transport", "http", "--tool-profile", name, "--probe"],
+          env: {},
+        },
+      ];
+      for (const path of paths) {
+        // oxlint-disable-next-line no-await-in-loop -- one child at a time
+        const res = await runCli([...path.args, "--json"], {
+          stdin: "",
+          env: { VAULT_DIR: tmp, ...path.env },
+        });
+        expect({
+          from: path.from,
+          code: res.returncode,
+          refused: res.stderr.includes(`unknown tool profile "${name}"`),
+          stdout: res.stdout,
+        }).toEqual({ from: path.from, code: 2, refused: true, stdout: "" });
+      }
+    });
+  }
 
   test("a known profile still starts", async () => {
     const res = await runCli(["mcp", "--tool-profile", "minimal", "--probe", "--json"], {

@@ -34,7 +34,12 @@ function slug(heading: string): string {
 }
 
 describe("the store's sync claim", () => {
-  for (const doc of ["README.md", "install.md", join("plugins", "codex", "README.md")]) {
+  for (const doc of [
+    "README.md",
+    "install.md",
+    join("plugins", "codex", "README.md"),
+    join("docs", "features.md"),
+  ]) {
     test(`${doc} names the hidden-folder condition with the claim`, () => {
       const claims = syncClaims(readFileSync(join(REPO_ROOT, doc), "utf8"));
       expect(claims.length).toBeGreaterThan(0);

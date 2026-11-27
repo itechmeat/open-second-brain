@@ -10,10 +10,12 @@ mechanics are in [`how-it-works.md`](how-it-works.md).
    decisions and evidence (`brain_apply_evidence`) through the MCP tools,
    the lifecycle hooks, the CLI and `@osb` markers in notes. Every record
    names the agent that wrote it.
-2. **Keep.** Records live in the brain store, append-only files outside
-   the vault, in a `shared` and a `private` partition. Several machines
-   can share one brain when you sync the partitions with a sync tool you
-   choose: [brain store](brain-store.md#syncing).
+2. **Keep.** Records live in the brain store, append-only files kept
+   apart from your notes, in a `shared` and a `private` partition. By
+   default the store is the vault's hidden `.open-second-brain-store/`
+   folder, so the vault's own sync carries it to your other machines
+   when that sync carries hidden folders; `store_root` moves it
+   elsewhere: [brain store](brain-store.md#the-default-the-store-travels-with-the-vault).
 3. **Consolidate.** The dream pass promotes repeated signals to rules,
    confirms, quarantines and retires them by their evidence, keeps topics,
    and replays missed days after a silence. It runs on the dream owner's
@@ -73,7 +75,7 @@ the machine and the brain, then runs the same install and verifies it
 
 - **Preferences that learn and expire.** Signals, a deterministic dream pass, confidence and retirement: [how it works](how-it-works.md#a-preferences-lifecycle).
 - **Reversible changes.** On the legacy `Brain/` layout, brain mutations take a snapshot first and `o2b brain rollback` restores it: [snapshots](how-it-works.md#snapshots-and-rollback). On a machine switched to the brain store, snapshots hold only device-local state and rollback refuses; recovery there is described in [the brain store guide](brain-store.md#standing-rules-and-other-brain-pages-after-the-switch).
-- **Attributed writes.** `o2b brain writes` lists every note write by agent and device, `writes revert` plans a restore, `o2b brain freeze` stops all writers, and `o2b brain log verify` checks the hash-chained log: [Brain CLI](cli-reference.md#brain-observing-memory).
+- **Attributed writes.** `o2b brain writes` lists every note write by agent and device, `writes revert` plans a restore, `o2b brain freeze` stops all writers, and `o2b brain log verify` checks the hash chain of the legacy `Brain/log/` day files (on a machine switched to the brain store it walks only the day files left from before the switch and says that log records in the store carry no chain, only a checksum of each record's body): [Brain CLI](cli-reference.md#brain-observing-memory).
 - **Search.** Keyword search with an optional semantic lane, result explanations, recall profiles and compact cards; an opt-in iterative loop (`search_iterative_recall_enabled`, default off) keeps querying when coverage gaps survive, pausing with a plan the caller answers through `brain_search`'s round trip; and an opt-in per-source-session cap (`search_pool_max_per_session`, default off) keeps one long imported session from filling the candidate window, so diversity spreads across sessions: [search CLI](cli-reference.md#search), [iterative recall](cli-reference.md#iterative-recall-since-v1820), [pool cap](cli-reference.md#the-per-source-session-pool-cap-since-v1830), [ranking](how-it-works.md#full-text-search).
 - **Session recall.** Import agent transcripts already on disk, search them, or select whole-thread coverage under a character budget (`o2b brain session-grep --operation coverage --char-budget <n>`, with `--entity-key` seeding the fan-out from mined entity mentions): [session logs](cli-reference.md#session-logs-this-machine-already-has-since-v1500), [coverage](cli-reference.md#coverage-first-session-recall-since-v1820).
 - **Hygiene.** `o2b brain hygiene scan` finds contested, duplicate, stale and unused memories; `apply` runs only the findings you pick: [maintenance](cli-reference.md#maintenance-and-operator-surfaces).

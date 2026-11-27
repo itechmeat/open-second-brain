@@ -50,7 +50,7 @@ import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { pathIsInside, vaultRelative } from "../core/path-safety.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { describeErrorChain } from "./output.ts";
-import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
+import { exitWhenFlushed, installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
 import { handleAiderSubcommand } from "./aider.ts";
 import { handleBrainSubcommand, isBrainImportVerb } from "./brain.ts";
 import { ORIGIN_CHANNEL, setOriginChannel, type OriginChannel } from "../core/origin-channel.ts";
@@ -1464,14 +1464,20 @@ function cmdHelp(argv: ReadonlyArray<string>): number {
 }
 
 function cmdCompletions(argv: ReadonlyArray<string>): number {
-  const { positional } = parseFlags(argv, {});
-  if (positional.length !== 1) {
+  // The shell is named either way: `--shell zsh`, the form the manifest
+  // declares and the reference shows, or the positional `zsh`.
+  // A list, so a second `--shell` is counted and refused rather than
+  // silently replacing the first.
+  const { flags, positional } = parseFlags(argv, { shell: { type: "string-array" } });
+  const named = Array.isArray(flags["shell"]) ? flags["shell"] : [];
+  const shells = [...named, ...positional];
+  if (shells.length !== 1) {
     process.stderr.write(
-      `error: completions requires one shell (${COMPLETION_SHELLS.join("|")})\n`,
+      `error: completions requires one shell, as --shell <name> or a positional name (${COMPLETION_SHELLS.join("|")})\n`,
     );
     return 2;
   }
-  const shell = positional[0]!;
+  const shell = shells[0]!;
   if (!isCompletionShell(shell)) {
     process.stderr.write(`error: unsupported completion shell: ${shell}\n`);
     return 2;
@@ -1757,7 +1763,9 @@ if (import.meta.main) {
   // error keeps its existing loud failure.
   installStdoutEpipeGuard();
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    // Exit only once stdout has handed its output over: an exit straight
+    // after a large write cut it short in a pipe. stderr stays open.
+    .then((code) => exitWhenFlushed(code))
     .catch((err: unknown) => {
       if (isEpipeError(err)) process.exit(0);
       throw err;

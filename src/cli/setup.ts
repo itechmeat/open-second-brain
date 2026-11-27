@@ -218,7 +218,9 @@ export async function cmdSetup(argv: string[]): Promise<number> {
       return cmdInitInteractive(flags["config"] ? ["--config", flags["config"] as string] : []);
     return usage("--target is required without an interactive terminal", json);
   }
-  const kind = HOST_KINDS[target as keyof typeof HOST_KINDS];
+  const kind = Object.hasOwn(HOST_KINDS, target)
+    ? HOST_KINDS[target as keyof typeof HOST_KINDS]
+    : undefined;
   if (!kind)
     return usage(
       `unknown --target: ${target}. Available: ${Object.keys(HOST_KINDS).join(", ")}`,

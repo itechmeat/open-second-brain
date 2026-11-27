@@ -1,0 +1,387 @@
+{
+  "area": "search",
+  "name": "Search and recall",
+  "summary": "Finding memory: keyword and semantic search, reranking, relational recall, learned ranking, recall benchmarks and session history.",
+  "features": [
+    {
+      "slug": "vault-search",
+      "name": "Vault search",
+      "summary": "Full-text search over notes and brain memory with explanations, compact cards, drill-down and a recall gate.",
+      "status": "stable",
+      "capabilities": [
+        "Fuses keyword and vector lanes by weighted sum (0.6/0.4) or rank fusion with k=60 (`search_fusion_mode`)",
+        "Boosts results by inbound links, Weibull recency, entities, tier and logged access",
+        "Diversifies the ranked list by maximal marginal relevance (lambda 0.7)",
+        "Filters by path, property, chunk kind, link degree, event time, visibility and owner",
+        "Returns full chunks or 240-char cards that `search expand` and `brain_search_expand` page into the note",
+        "`explain` adds per-result score breakdowns (MCP) and, only with the trust gate on, a decision trace",
+        "Shortlists the notes worth reading by multi-hop link BFS without reading them (`search plan`)",
+        "Judges by prompt shape whether recall should run, without searching (`brain_recall_gate`)"
+      ],
+      "limits": [
+        "Only the FTS5 keyword lane runs until an embedding provider is configured and `search_semantic_enabled` is on",
+        "The recall gate's adequacy verdict needs caller-supplied scores and match quality",
+        "`pretool-orient` blocks a first raw vault read only in Claude Code and OpenCode, with `hook_strict_enabled`",
+        "Lane weights, `--source` and `--expand` are CLI-only; the served MCP schema omits them"
+      ],
+      "surfaces": {
+        "cli": ["search", "search query", "search expand", "search plan", "brain sgrep"],
+        "mcp": ["brain_search", "brain_search_expand", "brain_recall_gate"],
+        "hooks": ["pretool-orient"]
+      },
+      "docs": [
+        "docs/how-it-works.md#full-text-search",
+        "docs/cli-reference.md#search",
+        "docs/cli-reference.md#the-graded-surfacing-key-since-v1820"
+      ],
+      "code": ["src/core/search/search.ts", "src/core/search/ranker.ts", "src/mcp/search-tools.ts"],
+      "keywords": [
+        "full-text search",
+        "bm25",
+        "hybrid retrieval",
+        "progressive disclosure",
+        "recall gating",
+        "result explanation",
+        "keyword search"
+      ]
+    },
+    {
+      "slug": "search-index",
+      "name": "Search index",
+      "summary": "Builds, refreshes, rebuilds, watches and diagnoses the local full-text index that search reads.",
+      "status": "stable",
+      "capabilities": [
+        "Indexes vault Markdown into SQLite FTS5 (BM25) in 800-token chunks with 100 overlap; frontmatter is chunk 0",
+        "Updates the index incrementally and skips files whose content did not change (`search index`)",
+        "Rebuilds the index from scratch, parking the previous one as `.bak` or `.old` (`search reindex`)",
+        "At server or session start, repairs in a detached run an index that no in-place schema upgrade can fix",
+        "Re-indexes edited `.md` files 800 ms after a change while `search watch` runs",
+        "Starts one detached index run when a read finds the index older than `search_freshen_interval_s` (60 s)",
+        "Upgrades an index on an older schema in place, keeping its embeddings, before reporting it (`search status`)",
+        "Checks the vault, index folder, SQLite FTS5, vector extension, embedding key and provider (`search check`)",
+        "Resolves the event anchors of documents indexed before anchors existed, dry run unless `--apply`",
+        "Writes or drift-checks the JSON Schema of the search query language (`search schema export|check`)"
+      ],
+      "limits": [
+        "The index is per machine: device-local on a store machine, `<vault>/.open-second-brain/brain.sqlite` before",
+        "An index written by a newer build is refused by an older one with `SCHEMA_MISMATCH`",
+        "Refuses a rebuild up front only when both parked copies are kept, one unreadable; `search set-aside` frees one",
+        "Only agent activity starts a refresh: no daemon or timer runs index updates"
+      ],
+      "surfaces": {
+        "cli": [
+          "search index",
+          "search reindex",
+          "search watch",
+          "search status",
+          "search check",
+          "search set-aside",
+          "search event-anchor-backfill",
+          "search schema"
+        ]
+      },
+      "docs": [
+        "docs/cli-reference.md#search",
+        "docs/cli-reference.md#freshen-on-read-since-v1760",
+        "docs/how-it-works.md#keeping-the-index-current-since-v1760"
+      ],
+      "code": [
+        "src/core/search/indexer.ts",
+        "src/core/search/freshen.ts",
+        "src/cli/search/verbs/watch.ts"
+      ],
+      "keywords": [
+        "incremental indexing",
+        "full-text index",
+        "index rebuild",
+        "file watcher",
+        "sqlite fts5",
+        "index health check"
+      ]
+    },
+    {
+      "slug": "semantic-search",
+      "name": "Semantic search",
+      "summary": "An optional embedding lane beside keyword search, with provider profiles and vector backfill.",
+      "status": "optional",
+      "capabilities": [
+        "Embeds chunks through an OpenAI-compatible `/v1/embeddings` endpoint, a provider adapter or an offline hasher",
+        "Stores vectors in sqlite-vec (`chunk_vec`) and feeds max(limit x 5, 50) nearest chunks per query into fusion",
+        "Walks the operator through the key, sqlite-vec and the first reindex (`embeddings-setup` skill)",
+        "Registers named endpoints with env-key failover lists (`search provider add|list|show|remove|presets`)",
+        "Refuses a run priced over `embedding_cost_gate_usd` (0 = off) unless `--force-cost`; quotes cost per model",
+        "`search vector-backfill` embeds only chunks that have no vector, dry-run unless `--apply`, scoped by `--path`",
+        "Stamps the model, dimension, sqlite-vec version and query/passage prefixes on the stored vectors",
+        "Warns before a model shutdown from a dated survey or the `embeddings.sunset_at` and `sunset_model` pair"
+      ],
+      "limits": [
+        "A model, dimension or prefix change drops all stored vectors; the drop is refused while nothing can re-embed",
+        "Only `--embeddings`, `vector-backfill`, maintenance and freshen runs with `search_freshen_embeddings` embed",
+        "The offline embedder hashes tokens and character trigrams; it matches shared wording, not meaning",
+        "Needs a SQLite build that loads extensions; the macOS system SQLite cannot, so a separate one is required"
+      ],
+      "surfaces": {
+        "cli": ["search provider", "search vector-backfill", "search restamp"],
+        "skills": ["embeddings-setup"],
+        "config": ["embeddings"]
+      },
+      "docs": [
+        "docs/how-it-works.md#full-text-search",
+        "docs/cli-reference.md#search",
+        "skills/embeddings-setup/SKILL.md"
+      ],
+      "code": [
+        "src/core/search/embeddings",
+        "src/core/search/semantic-phase.ts",
+        "src/core/search/store/vectors.ts"
+      ],
+      "keywords": [
+        "vector search",
+        "embeddings",
+        "dense retrieval",
+        "semantic similarity",
+        "embedding provider",
+        "rag"
+      ]
+    },
+    {
+      "slug": "search-reranking",
+      "name": "Search reranking",
+      "summary": "An optional reranker re-scores the top results, with provider profiles, a fit check and a labelled benchmark.",
+      "status": "optional",
+      "capabilities": [
+        "Re-scores the top 20 fused candidates (`search_rerank_top_k`) last; off until `search_rerank_enabled`",
+        "`search_rerank_kind`: an OpenAI-compatible `/rerank` endpoint, a bundled lexical reranker or a decision model",
+        "Falls back to the heuristic order with one telemetry event when the endpoint fails at request time; no retries",
+        "Sorts hits under `search_rerank_min_score` last",
+        "Runs the decision-model kind in shadow (sent, recorded, order kept) or enforce mode",
+        "`search rerank-provider add|list|show|remove` keeps named endpoints: base URL, model, key variable",
+        "`search rerank-fit` takes Spearman over up to 12 logged queries: >= 0.15 fits, <= -0.15 inverted",
+        "`search rerank-eval` runs a labelled dataset with rerank off and on, reports hit@k and MRR deltas per language"
+      ],
+      "limits": [
+        "Enabled without a base URL, model and key, the remote kind fails closed with a configuration error",
+        "The bundled local reranker scores term coverage, proximity and density; it is not a learned model",
+        "`rerank-fit` needs recorded queries in the demand log; without them its verdict is inapplicable",
+        "`rerank-eval` recommends enabling only on a pooled MRR or hit@k gain >= 0.01 with no language losing either"
+      ],
+      "surfaces": {
+        "cli": ["search rerank-provider", "search rerank-fit", "search rerank-eval"]
+      },
+      "docs": [
+        "docs/how-it-works.md#full-text-search",
+        "docs/cli-reference.md#search",
+        "docs/decision-models.md#rerank-kind-decision-model"
+      ],
+      "code": [
+        "src/core/search/rerank",
+        "src/core/search/rerank-fit-check.ts",
+        "src/core/search/rerank-eval-gate.ts"
+      ],
+      "keywords": [
+        "reranking",
+        "cross-encoder",
+        "second-stage ranking",
+        "llm reranker",
+        "rank correlation",
+        "retrieval evaluation"
+      ]
+    },
+    {
+      "slug": "relational-recall",
+      "name": "Relational recall",
+      "summary": "An optional fourth search arm that walks typed links and entity co-occurrence under width budgets.",
+      "status": "optional",
+      "capabilities": [
+        "Adds a fourth reciprocal-rank-fusion arm when `search_relational_arm_enabled` is on and fusion is `rrf`",
+        "Treats a query as relational only if it holds a `[[wikilink]]` seed and a token from the link-type vocabulary",
+        "Walks typed edges to depth 2: 8 seeds, 4 edges per node, 16 nodes; hubs over 12 edges are not expanded",
+        "Also walks entity co-occurrence bridges by default; `search_entity_bridges_enabled` turns them off",
+        "Ranks reached notes by hops, then by edge count",
+        "In trust-gate enforce mode, drops arrivals over closed or pending windows or unnamed `contradicts` edges",
+        "Stops at the composite recall deadline, keeping the nodes it reached"
+      ],
+      "limits": [
+        "Off by default, and inert under the default linear fusion even when switched on",
+        "Has no verb or tool of its own; it runs inside `search query` and `brain_search`",
+        "Walks only edges already in the index and never reads note prose"
+      ],
+      "surfaces": {},
+      "docs": ["docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"],
+      "code": [
+        "src/core/search/pipeline/relational-arm.ts",
+        "src/core/search/relational-fanout.ts",
+        "src/core/search/relational-query.ts"
+      ],
+      "keywords": [
+        "graph traversal",
+        "multi-hop retrieval",
+        "knowledge graph retrieval",
+        "graphrag",
+        "typed relations",
+        "entity co-occurrence"
+      ]
+    },
+    {
+      "slug": "recall-tuning",
+      "name": "Learned ranking and recall focus",
+      "summary": "Relevance feedback trains hybrid ranking weights, a session focus biases recall, and tuning grid-searches parameters.",
+      "status": "stable",
+      "capabilities": [
+        "Records up/down verdicts (`search feedback`, `brain_recall_feedback`) as one event each, the query hashed",
+        "Captures the judged hit's keyword, semantic, entity and recency scores by re-running the query (top 50)",
+        "Folds the events into per-layer multipliers within 0.8-1.2, applied with `search_learned_weights_enabled`",
+        "Shows base weights, learned multipliers and the event count (`search weights`)",
+        "Biases recall toward a query and path prefix for 120 minutes, globally or per session (`search focus set`)",
+        "Scores focus +0.06 or -0.015 on the path prefix, up to +0.04 or -0.01 on terms, clamped to -0.03..+0.08",
+        "Grid-searches pool multiplier, traversal depth, learned weights and expansion by MRR (`brain tune run`)",
+        "Reports the access activation that ranking boosts by: event, path and co-access counts (`brain activation`)",
+        "Answers a remote tuning run without saving its winner; a remote tuning reset keeps the saved tuning"
+      ],
+      "limits": [
+        "Learned weights and the tuning winner (`Brain/search/tuning.json`) apply only under their flags, default off",
+        "Tuning needs an operator-supplied labelled dataset; it does not learn from feedback events",
+        "A tuning winner measured while the semantic lane was missing is not saved",
+        "A persisted focus is set from the CLI only; MCP callers pass a per-call focus"
+      ],
+      "surfaces": {
+        "cli": [
+          "search feedback",
+          "search weights",
+          "search focus",
+          "brain tune",
+          "brain activation"
+        ],
+        "mcp": ["brain_recall_feedback", "brain_tune"]
+      },
+      "docs": [
+        "docs/cli-reference.md#search",
+        "docs/cli-reference.md#link-and-recall-intelligence-since-v0450"
+      ],
+      "code": [
+        "src/core/search/feedback.ts",
+        "src/core/search/session-focus.ts",
+        "src/core/search/tuning.ts"
+      ],
+      "keywords": [
+        "relevance feedback",
+        "learning to rank",
+        "hyperparameter tuning",
+        "query biasing",
+        "personalized ranking",
+        "session context"
+      ]
+    },
+    {
+      "slug": "recall-evaluation",
+      "name": "Recall benchmarks and telemetry",
+      "summary": "Scores recall against fixed query datasets and fixture vaults, and records opt-in recall telemetry.",
+      "status": "stable",
+      "capabilities": [
+        "Scores live hybrid recall on a `{queries: [{id, query, expected}]}` dataset: hit@k and MRR, k=5 by default",
+        "`brain benchmark run` appends a `recall_benchmark` metric so recall quality can be charted over time",
+        "`brain benchmark run` and `brain_eval` add answer containment@k, source utilization, citation depth, warnings",
+        "`brain bench memory` runs ingest, index, retrieve, evaluate, report in a disposable fixture vault, resumable",
+        "Ships two public long-term memory benchmark suites and a surfacing-replay suite",
+        "Reports quality, latency and context cost separately",
+        "Writes one recall-telemetry record per opted-in search, context pack or hook injection: status, hits, gaps",
+        "`brain recall-telemetry` lists and summarizes records, gate decisions, write-versus-read cost and dead weight"
+      ],
+      "limits": [
+        "Benchmarks need an operator-supplied labelled dataset or fixture; nothing is generated from the vault",
+        "`brain bench memory` searches keyword-only unless the suite declares the embeddings capability",
+        "Telemetry is written only when a call opts in; recall-gate telemetry is off by default"
+      ],
+      "surfaces": {
+        "cli": ["brain benchmark", "brain bench", "brain recall-telemetry"],
+        "mcp": ["brain_benchmark", "brain_eval", "brain_recall_telemetry"]
+      },
+      "docs": [
+        "docs/cli-reference.md#link-and-recall-intelligence-since-v0450",
+        "docs/cli-reference.md#memory-observability-since-v0390",
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290"
+      ],
+      "code": [
+        "src/core/search/benchmark.ts",
+        "src/core/bench",
+        "src/core/brain/recall-telemetry.ts"
+      ],
+      "keywords": [
+        "retrieval evaluation",
+        "recall benchmark",
+        "memory benchmark",
+        "mrr",
+        "hit rate",
+        "retrieval telemetry",
+        "llm-as-judge"
+      ]
+    },
+    {
+      "slug": "session-recall",
+      "name": "Session history recall",
+      "summary": "Imports agent transcripts already on disk, searches and expands them, and mines their user turns for signals.",
+      "status": "stable",
+      "capabilities": [
+        "Imports Claude Code, Codex, Hermes, OpenCode and Grok transcripts on disk, one file or every known root",
+        "Turns `@osb` markers and `brain_feedback` calls in imported transcripts into deduped signals",
+        "With `--recall`, stores turns as continuity rows under two levels of extractive summary nodes, 8 sources each",
+        "Moves base64 runs and turns over 32,000 chars into `Brain/.payloads/<sha256>.txt`, paged by `brain payload`",
+        "Searches imported turns and summaries by substring within a time window (`session-grep`)",
+        "Picks turns across a thread's topics within a char budget, optionally entity-seeded (`session-grep` coverage)",
+        "Saves the agent's answers to an extraction plan as speculative signals (`extract-signals`)",
+        "Scores entity pairs by session co-occurrence (PMI) for promotion into the registry (`brain hallways`)",
+        "Re-runs the frozen payload of a half-failed extraction write, dry run first (`brain dead-letters`)"
+      ],
+      "limits": [
+        "Imports only transcripts already on disk; recall rows exist only for sessions imported with `--recall`",
+        "Session grep is case-insensitive substring matching; it does not use the FTS5 or vector index",
+        "Summary nodes are extractive, not model-written: 120 chars per turn, 160 per depth-1 node at depth 2",
+        "The calling agent extracts signals; an optional `extract_prefilter` decision model may drop turns first"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain import-session",
+          "brain session-grep",
+          "brain session-describe",
+          "brain session-expand",
+          "brain extract-signals",
+          "brain hallways",
+          "brain payload get",
+          "brain payload list",
+          "brain payload gc",
+          "brain authored-at-backfill",
+          "brain dead-letters",
+          "brain dead-letters list",
+          "brain dead-letters show",
+          "brain dead-letters recover"
+        ],
+        "mcp": [
+          "brain_session_grep",
+          "brain_session_describe",
+          "brain_session_expand",
+          "brain_extract_signals"
+        ],
+        "hooks": ["backlog-nudge"],
+        "config": ["guardrails"]
+      },
+      "docs": [
+        "docs/cli-reference.md#session-logs-this-machine-already-has-since-v1500",
+        "docs/cli-reference.md#coverage-first-session-recall-since-v1820",
+        "docs/cli-reference.md#externalized-session-payloads-payload-registry"
+      ],
+      "code": [
+        "src/core/brain/sessions/import.ts",
+        "src/core/brain/session-recall.ts",
+        "src/core/brain/payload-registry.ts"
+      ],
+      "keywords": [
+        "conversation history",
+        "episodic memory",
+        "transcript ingestion",
+        "chat log search",
+        "session memory",
+        "preference mining"
+      ]
+    }
+  ]
+}

@@ -39,5 +39,11 @@ if ! bun run sync-plugin-mirrors:check; then
   exit 1
 fi
 
+echo "pre-commit: bun run catalog:check" >&2
+if ! bun run catalog:check; then
+  echo "pre-commit: the feature catalog disagrees with the code - fix docs/catalog/<area>.json, run 'bun run catalog:build' and re-stage." >&2
+  exit 1
+fi
+
 echo "pre-commit: bun run lint" >&2
 bun run lint

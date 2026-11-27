@@ -2,7 +2,8 @@
 /**
  * PostToolUse hook: emits a soft reminder after Write / Edit /
  * MultiEdit / apply_patch so the agent considers calling
- * `event_log_append` before its final reply.
+ * `brain_feedback`, `brain_apply_evidence` or `brain_note` before its
+ * final reply.
  *
  * Contract (identical for Claude Code and Codex):
  *   stdin: hook payload JSON with `tool_name`, `tool_input`.

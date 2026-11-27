@@ -1,0 +1,260 @@
+{
+  "area": "planning",
+  "name": "Briefs and planning",
+  "summary": "Looking back and ahead: briefs and digests, memory analytics, proactive triggers, commitments, intentions and knowledge gaps.",
+  "features": [
+    {
+      "slug": "briefs",
+      "name": "Briefs and digests",
+      "summary": "Morning, daily, weekly and monthly briefs, a today dashboard, an operator summary and a logging discipline report.",
+      "status": "stable",
+      "capabilities": [
+        "Serves seven brief views through `brain_brief`, one an operator view with the trust verdict and top actions",
+        "Composes the morning brief: top 10 rules, open questions, 7 days of notes, up to 5 triggers, open decisions",
+        "Folds `Brain/log` events into counters and transitions for daily, weekly and monthly briefs",
+        "Digest covers 24 h (or `--window Nd`): new, confirmed, retired preferences, confidence shifts, contradictions",
+        "With `report_snapshots_enabled`, digest, daily and weekly snapshot JSON to `Brain/reports/` and diff each run",
+        "Today lists due and overdue obligations, open pledges, open loops, 7 days of activity and totals",
+        "`discipline report` sets ok, info or alert from yesterday's per-agent signals versus git and file activity",
+        "Writes `Brain/profile.md`, a digest of counts, top preferences and activity for the shell (`brain profile`)"
+      ],
+      "limits": [
+        "Deterministic and model-free; writes only trigger delivery marks, opt-in snapshots and `Brain/profile.md`",
+        "`discipline report` is off unless `discipline_report.enabled` is set in `_brain.yaml`"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain digest",
+          "brain morning-brief",
+          "brain daily",
+          "brain weekly",
+          "brain monthly",
+          "brain today",
+          "discipline report",
+          "brain profile"
+        ],
+        "mcp": ["brain_brief"],
+        "config": ["discipline_report"]
+      },
+      "docs": [
+        "docs/cli-reference.md#time-axis-since-v01018",
+        "docs/cli-reference.md#discipline-daily-logging",
+        "docs/mcp.md#consolidated-views-and-deprecated-aliases"
+      ],
+      "code": [
+        "src/mcp/brain/brief-view-tools.ts",
+        "src/core/brain/morning-brief.ts",
+        "src/core/discipline/report.ts"
+      ],
+      "keywords": [
+        "daily digest",
+        "morning briefing",
+        "weekly review",
+        "activity summary",
+        "dashboard",
+        "periodic review"
+      ]
+    },
+    {
+      "slug": "memory-analytics",
+      "name": "Memory analytics",
+      "summary": "Event timelines, how a belief evolved, attention recipes over open loops, and concept clusters.",
+      "status": "stable",
+      "capabilities": [
+        "`brain timeline` lists `Brain/log` events filtered by preference id, topic, kind, date range and limit",
+        "`brain evolution` traces a preference or topic: dream-run status transitions, evidence counts, retirements",
+        "`attention-flows` evaluates recipe pages: open proposals, high recurrence, active procedures, standing queries",
+        "Seeds a default `open-loops.md` recipe in `Brain/attention-flows/` on first use",
+        "`brain synthesise <id>` builds a concept cluster: the target, its depth-1 linkers, optional unlinked mentions",
+        "`brain_analytics view=dedup` reports the exact-hash ingest dedup trend per capture surface",
+        "Every lens is a deterministic fold over stored records; no model is called"
+      ],
+      "limits": [
+        "Concept clusters reach depth 1 only",
+        "The dedup trend counts exact-hash matches only, not near-duplicates"
+      ],
+      "surfaces": {
+        "cli": ["brain timeline", "brain evolution", "brain attention-flows", "brain synthesise"],
+        "mcp": ["brain_analytics"]
+      },
+      "docs": [
+        "docs/cli-reference.md#time-axis-since-v01018",
+        "docs/mcp.md#consolidated-views-and-deprecated-aliases"
+      ],
+      "code": [
+        "src/mcp/brain/analytics-tools.ts",
+        "src/core/brain/attention-flows.ts",
+        "src/core/brain/temporal"
+      ],
+      "keywords": [
+        "memory analytics",
+        "timeline view",
+        "belief revision history",
+        "concept clustering",
+        "attention management"
+      ]
+    },
+    {
+      "slug": "proactive-triggers",
+      "name": "Proactive triggers and foresight",
+      "summary": "A deduplicated queue of grounded prompts to act, snooze or dismiss, and a projection of what comes due.",
+      "status": "stable",
+      "capabilities": [
+        "`trigger scan` makes triggers from contradictions, stale claims, retention actions and cross-agent collisions",
+        "Keeps each trigger as a Markdown file in `Brain/triggers/`; a cooldown key dedupes repeats across all statuses",
+        "Defers a snoozed trigger for 3 days or until its grounding moves",
+        "Brings a dismissed trigger back only when its grounding moves",
+        "Expires open triggers after 14 days and keeps at most 10 per kind",
+        "An unreadable trigger file is named in every read instead of hiding the rest of the queue",
+        "`brain foresight` projects routines due in 14 days by cadence, plus open commitments and questions of 30 days",
+        "Saves the projection as a dated note under `Brain/foresight/` with `foresight --write`"
+      ],
+      "limits": [
+        "No scheduled scan: triggers appear when a scan runs or another verb enqueues its findings",
+        "Foresight is a deterministic projection, not a planner; it creates no tasks"
+      ],
+      "surfaces": {
+        "cli": ["brain trigger", "brain foresight"],
+        "mcp": ["brain_trigger", "brain_foresight"]
+      },
+      "docs": [
+        "docs/how-it-works.md#workspace-reach-and-proactive-insight-since-v0380",
+        "docs/mcp.md#workspace-insight-suite-tools-since-v0380"
+      ],
+      "code": [
+        "src/core/brain/triggers/store.ts",
+        "src/core/brain/triggers/scan.ts",
+        "src/core/brain/temporal/foresight.ts"
+      ],
+      "keywords": [
+        "proactive suggestions",
+        "nudges",
+        "notification queue",
+        "snooze",
+        "reminders",
+        "forecasting"
+      ]
+    },
+    {
+      "slug": "commitments",
+      "name": "Obligations, pledges and agenda",
+      "summary": "Recurring obligations with next-due dates, quoted pledges with due dates, agendas from events, counterparty briefs.",
+      "status": "stable",
+      "capabilities": [
+        "`brain obligation add|done|list|show|remove` keeps recurring obligations as pages in `Brain/obligations/`",
+        "Advances next-due by one interval on `done`, by UTC calendar math (daily to yearly or every N days)",
+        "A `done` repeated for the date of the latest completion writes nothing; MCP answers `already_recorded`",
+        "Lists obligations by next-due date with an overdue flag",
+        "`brain_pledge` stores one-off promises with a due date, a source page and quotes verified against that source",
+        "`brain_intake_pledges` checks a whole batch before writing and dedupes by sha256 of title, due and source",
+        "A counterparty becomes a `promised_to` edge only when the name resolves to exactly one canonical entity",
+        "`brain agenda` returns conflicts, focus blocks (default 60 min) and outside organisers from agent-given events",
+        "Opt-in hook `counterparty-brief` injects once per session dated shareable facts about the one person named"
+      ],
+      "limits": [
+        "Reads no calendar API: events come from the agent, and agenda writes nothing",
+        "Pledges have no CLI verb; they are written through the MCP tools",
+        "The counterparty brief stays inert until `counterparty_brief_enabled` is on and trigger words are declared"
+      ],
+      "surfaces": {
+        "cli": ["brain obligation", "brain agenda"],
+        "mcp": ["brain_obligation", "brain_agenda", "brain_pledge", "brain_intake_pledges"],
+        "hooks": ["counterparty-brief"]
+      },
+      "docs": [
+        "docs/cli-reference.md#context-continuity-and-receipts-since-v0290",
+        "docs/mcp.md#tool-highlights",
+        "hooks/README.md#what-the-hooks-do"
+      ],
+      "code": [
+        "src/core/brain/obligations.ts",
+        "src/core/brain/pledges.ts",
+        "src/core/brain/counterparty-brief.ts"
+      ],
+      "keywords": [
+        "recurring tasks",
+        "commitment tracking",
+        "promise tracking",
+        "calendar agenda",
+        "meeting prep",
+        "personal crm"
+      ]
+    },
+    {
+      "slug": "current-intentions",
+      "name": "Intentions and current state",
+      "summary": "Per-workstream current-intention documents with history, and an overwrite-only lane for the exact current state.",
+      "status": "stable",
+      "capabilities": [
+        "`brain intention set` writes `Brain/intentions/<scope>.md`, bumps `version`, appends the old text to a history",
+        "Setting a chain to the text it already holds writes nothing; MCP answers `already_recorded`",
+        "Retires a chain into `Brain/intentions/history/` on `move`",
+        "`brain_intention` answers at the caller's reach: a withheld chain reads as absent and cannot be overwritten",
+        "`brain state set|get|list|clear` keeps one current value per aspect slug, overwritten with no history",
+        "The exact-state lane is kept out of the search index and retrieval, so a superseded value never resurfaces",
+        "On a machine switched to the brain store both lanes are kept as store records instead of `Brain/` files"
+      ],
+      "limits": [
+        "Exact state has no MCP tool; it is CLI-only",
+        "Neither lane is injected into the session context automatically; agents read it on request"
+      ],
+      "surfaces": {
+        "cli": ["brain intention", "brain state"],
+        "mcp": ["brain_intention"]
+      },
+      "docs": [
+        "docs/how-it-works.md#capture-surfaces",
+        "docs/cli-reference.md#retrieval-quality-and-context-delivery-since-v1370"
+      ],
+      "code": ["src/core/brain/intentions.ts", "src/core/brain/exact-state.ts"],
+      "keywords": [
+        "working memory",
+        "current focus",
+        "goal tracking",
+        "state tracking",
+        "scratchpad"
+      ]
+    },
+    {
+      "slug": "knowledge-gaps",
+      "name": "Knowledge gaps",
+      "summary": "Ranks recurring queries the vault answers poorly and can surface them as an agenda at session start.",
+      "status": "optional",
+      "capabilities": [
+        "`brain_search` with `telemetry: true` logs redacted terms, result count and, with `evidence_pack`, coverage",
+        "`brain knowledge-gaps` ranks by count times (1 - coverage, else share of runs with results); min 2 by default",
+        "Filters by date range, minimum occurrences, maximum satisfaction (0 to 1) and limit; read-only",
+        "Keeps the demand log as a per-device JSONL shard under `Brain/log/`, compacted past 1 MB; no raw query stored",
+        "With `gap_loop_enabled`, the session-end hook promotes gaps seen 3+ times to notes in `Brain/gap-tasks/`",
+        "Closes a gap task once its topic recalls at 0.5 coverage or more",
+        "Injects open gap tasks as an agenda at session start (`gap-agenda`)",
+        "Logs context-pack recall-adequacy misses under `recall_gate_telemetry`, never summed with gap counts"
+      ],
+      "limits": [
+        "Off by default: the log needs per-call `telemetry` or `recall_gate_telemetry`, the hooks `gap_loop_enabled`",
+        "Gap topics are term buckets and telemetry codes, not generated questions"
+      ],
+      "surfaces": {
+        "cli": ["brain knowledge-gaps"],
+        "mcp": ["brain_knowledge_gaps"],
+        "hooks": ["gap-agenda", "gap-promote"]
+      },
+      "docs": [
+        "docs/cli-reference.md#trusted-recall-and-memory-write-surface-since-v1350",
+        "hooks/README.md#what-the-hooks-do"
+      ],
+      "code": [
+        "src/core/brain/query-demand.ts",
+        "src/core/brain/gaps/gap-loop.ts",
+        "hooks/gap-promote.ts"
+      ],
+      "keywords": [
+        "knowledge gaps",
+        "unanswered queries",
+        "content gap analysis",
+        "search analytics",
+        "query logs"
+      ]
+    }
+  ]
+}

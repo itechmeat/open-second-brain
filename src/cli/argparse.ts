@@ -51,7 +51,8 @@ export function parseFlags(argv: ReadonlyArray<string>, schema: FlagsSchema): Pa
       const eqIdx = tok.indexOf("=");
       const name = eqIdx === -1 ? tok.slice(2) : tok.slice(2, eqIdx);
       const inlineVal = eqIdx === -1 ? null : tok.slice(eqIdx + 1);
-      const spec = effectiveSchema[name];
+      // Own names only: `--constructor` or `--__proto__` is an unknown flag.
+      const spec = Object.hasOwn(effectiveSchema, name) ? effectiveSchema[name] : undefined;
       if (!spec) {
         throw new CliError(`unknown flag: --${name}`);
       }

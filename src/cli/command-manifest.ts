@@ -9,6 +9,14 @@ export interface CliCommandManifest {
   readonly summary: string;
   readonly flags?: ReadonlyArray<CliFlagManifest>;
   readonly commands?: ReadonlyArray<CliCommandManifest>;
+  /**
+   * Set on a command with subcommands that also runs by itself, with no
+   * subcommand (`o2b mcp`, `o2b dream queue`, `o2b search <query>`). A
+   * command with subcommands and no `runnable` is a namespace: run bare,
+   * it answers with its usage. `tests/cli/manifest-runnable.test.ts` runs
+   * every such command bare and holds this field to what it does.
+   */
+  readonly runnable?: true;
 }
 
 export interface CliRootManifest {
@@ -61,11 +69,22 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("yes", "boolean"),
       flag("json", "boolean"),
     ]),
-    command("doctor", "Run health checks on vault, config, and plugins", [
-      flag("vault", "string"),
-      flag("config", "string"),
-      flag("repo", "string"),
-    ]),
+    runnable(
+      "doctor",
+      "Run health checks on vault, config, and plugins",
+      [
+        flag("vault", "string"),
+        flag("config", "string"),
+        flag("repo", "string"),
+        flag("readiness", "boolean"),
+      ],
+      [
+        command(
+          "selftest",
+          "Init, index, write, search and concurrent writes on a throwaway vault and search store",
+        ),
+      ],
+    ),
     command("onboarding", "Show the guided first-run setup checklist", [
       flag("vault", "string"),
       flag("config", "string"),
@@ -75,7 +94,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("output", "string"),
     ]),
     command("index", "Regenerate the vault index from discovered pages", [flag("vault", "string")]),
-    command(
+    runnable(
       "mcp",
       "Run the optional MCP tool server",
       [
@@ -262,7 +281,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ]),
         command("agent-query", "Read source-agent provenance"),
         command("agent-diff", "Compare source-agent coverage"),
-        command(
+        runnable(
           "writes",
           "Recorded note writes: list (default), destinations, revert, prune-images",
           [
@@ -446,7 +465,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("tiers", "Check, restore, or accept identity-field drift"),
         command(
           "secret",
-          "Capability-gated secret custody: set, list, rm, run, lock, unlock, export, import",
+          "Capability-gated secret custody: set, list, rm, run, lock, unlock, unwrap, export, import",
         ),
         command(
           "maintenance",
@@ -542,7 +561,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("morning-brief", "Render session-start summary"),
         command("codec", "Compress or expand session prose"),
         command("sources", "Show signal source dashboard"),
-        command(
+        runnable(
           "schema",
           "Inspect Brain schema vocabulary",
           [flag("vault", "string")],
@@ -658,7 +677,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("benchmark", "Score recall quality against a fixed query dataset"),
         command("tune", "Grid-evaluate and persist self-tuning recall parameters"),
         command("profile", "Materialize the compact Brain/profile.md digest"),
-        command("sgrep", "Grep-shaped semantic Brain search (path:line: output)"),
+        command(
+          "sgrep",
+          "Grep-shaped Brain search over the normal search pipeline (path:line: output)",
+        ),
         command("continuity", "Export continuity records as ATOF/ATIF trajectories"),
         command(
           "payload",
@@ -837,7 +859,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("payload-file", "string"),
           ],
         ),
-        command(
+        runnable(
           "dead-letters",
           "Dead extraction writes: list with each row's recovery exit, show, recover (dry-run; --apply --yes to write)",
           [],
@@ -888,7 +910,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command("recall-telemetry", "List, summarize, or cost opt-in recall telemetry records"),
         command("knowledge-gaps", "Rank recurring queries the vault answers poorly"),
-        command(
+        runnable(
           "skill-proposals",
           "Learn, list, review, and recover skill proposals, including drafts from mature pages and benchmark-gated rewrites",
           [flag("vault", "string"), flag("payload", "string"), flag("payload-file", "string")],
@@ -1135,7 +1157,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
       ],
     ),
-    command(
+    runnable(
       "search",
       "Search the vault index",
       [],
@@ -1459,7 +1481,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("json", "boolean"),
           ],
         ),
-        command(
+        runnable(
           "queue",
           "List the dream work queue: counts by state, the oldest ready item, parked items",
           [
@@ -1493,7 +1515,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
           ],
         ),
-        command(
+        runnable(
           "agent",
           "Show, set or check the command that starts the dream agent on this machine",
           [flag("config", "string"), flag("json", "boolean")],
@@ -1541,6 +1563,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("json", "boolean"),
         ]),
         command("show", "Show one topic: its head, items and page", [
+          flag("held", "boolean"),
           flag("config", "string"),
           flag("json", "boolean"),
         ]),
@@ -1739,6 +1762,16 @@ function command(
     ...(flags.length > 0 ? { flags } : {}),
     ...(commands.length > 0 ? { commands } : {}),
   });
+}
+
+/** A command with subcommands that also runs by itself (see `runnable`). */
+function runnable(
+  name: string,
+  summary: string,
+  flags: ReadonlyArray<CliFlagManifest> = [],
+  commands: ReadonlyArray<CliCommandManifest> = [],
+): CliCommandManifest {
+  return Object.freeze({ ...command(name, summary, flags, commands), runnable: true as const });
 }
 
 function flag(name: string, type: CliFlagManifest["type"]): CliFlagManifest {

@@ -1,0 +1,230 @@
+{
+  "area": "capture",
+  "name": "Capture",
+  "summary": "How memory gets written: taste signals and evidence, automatic session capture, note markers, inbox capture and session summaries.",
+  "features": [
+    {
+      "slug": "feedback-signals",
+      "name": "Feedback signals and evidence",
+      "summary": "Agents record taste signals, applied or violated evidence and log milestones; reminders keep them doing it.",
+      "status": "stable",
+      "capabilities": [
+        "Writes each taste signal (topic, sign, principle, scope or `feedback.default_scope`) to the inbox or the store",
+        "With `force_confirmed`, adds a confirmed rule at once; over MCP an existing permissions document must allow it",
+        "Logs applied, violated or outdated evidence against a rule; an outdated event retires the rule",
+        "Appends one-line narrative notes (a release, a merge, a finding) to the day log (`brain_note`)",
+        "Imports another tool's memory files as unconfirmed rules via an adapter: dry run, then a digest-bound apply",
+        "Commits an agent's derived conclusion as an unconfirmed rule citing its premise rules (`brain_derive_fact`)",
+        "Packs and unpacks session prose losslessly, keeping structured content byte for byte (`brain codec`)",
+        "Reminds the agent after each file edit, and at Stop when the turn's edits logged no brain event (default on)"
+      ],
+      "limits": [
+        "Signals and evidence change no rule until dream runs; only force_confirmed writes a confirmed rule at once",
+        "The CLI brain feedback skips the principle quality gate that the MCP tool and session replays apply",
+        "The reminder hooks count only Write, Edit, MultiEdit, apply_patch and search_replace calls as artifacts",
+        "`brain_derive_fact` refuses unless `guardrails.derived_fact_synthesis` is true (default false)"
+      ],
+      "surfaces": {
+        "cli": [
+          "brain feedback",
+          "brain apply-evidence",
+          "brain note",
+          "brain import-claude-memory",
+          "brain codec"
+        ],
+        "mcp": ["brain_feedback", "brain_apply_evidence", "brain_note", "brain_derive_fact"],
+        "hooks": ["post-write-reminder", "stop-log-guardrail"],
+        "skills": ["brain-memory"],
+        "config": ["feedback", "guardrails"]
+      },
+      "docs": [
+        "docs/how-it-works.md#end-to-end-signal--rule-flow",
+        "skills/brain-memory/SKILL.md",
+        "hooks/README.md#what-the-hooks-do"
+      ],
+      "code": [
+        "src/core/brain/signal.ts",
+        "src/mcp/brain/feedback-tool.ts",
+        "src/core/brain/apply-evidence.ts"
+      ],
+      "keywords": [
+        "preference learning",
+        "feedback capture",
+        "memory write tool",
+        "explicit memory",
+        "user corrections",
+        "self-improving agent",
+        "memory import"
+      ]
+    },
+    {
+      "slug": "session-capture",
+      "name": "Automatic session capture",
+      "summary": "Lifecycle hooks turn prompt markers, facts and brain_feedback calls into signals and log session events.",
+      "status": "stable",
+      "capabilities": [
+        "Runs on session start and end, each prompt, brain_feedback calls, Stop, SubagentStop and PostCompact",
+        "Turns @osb feedback markers in prompts and successful brain_feedback inputs into signals, deduped by hash",
+        "Extracts URLs, e-mail addresses and currency or percent amounts from user prompts as facts, no model call",
+        "Applies the sessions block first: ignore and stateless session globs, ignore_message_patterns regexes",
+        "Defers dedup-heavy events to a detached per-vault worker; OPEN_SECOND_BRAIN_SESSION_CAPTURE_DEFER=0 stops it",
+        "Re-reads the transcript's user turns when a SessionEnd reports an interrupted session",
+        "Logs a lifecycle row and an audit record with counters per event, also from stdin (`brain session-hook`)",
+        "An async Claude Code Stop hook passes queued end-of-turn advisories to the model with the next prompt"
+      ],
+      "limits": [
+        "Reads user turns only; assistant output is never captured as a marker or a fact",
+        "Records nothing for a dream session, and only the audit row for an ignored session",
+        "Failures exit 0 silently; a ceiling timeout is recorded only in the hook audit log"
+      ],
+      "surfaces": {
+        "cli": ["brain session-hook"],
+        "hooks": ["session-capture", "stop-advisory-deliver"],
+        "config": ["sessions", "guardrails"]
+      },
+      "docs": [
+        "docs/how-it-works.md#capture-surfaces",
+        "hooks/README.md#what-the-hooks-do",
+        "install/claudecode.md#lifecycle-hooks-auto-enabled"
+      ],
+      "code": [
+        "src/core/brain/session-lifecycle.ts",
+        "hooks/session-capture.ts",
+        "src/core/brain/capture-boundary.ts"
+      ],
+      "keywords": [
+        "automatic memory capture",
+        "conversation logging",
+        "lifecycle hooks",
+        "passive capture",
+        "transcript mining",
+        "background extraction"
+      ]
+    },
+    {
+      "slug": "inline-markers",
+      "name": "Inline note markers",
+      "summary": "@osb markers and inline citations in notes become captured items, dated events or front matter write-backs.",
+      "status": "stable",
+      "capabilities": [
+        "Parses @osb markers as a start-of-line form or an osb fenced YAML block; other code fences are skipped",
+        "scan-inline turns feedback markers into inbox signals, deduped by hash, and marks each @osb✓ [[sig-id]]",
+        "Routes fact markers through premise checks to unconfirmed rules and skill markers to pending proposals",
+        "Scans notes.read_paths or --path roots only, skips Brain/ and vault.ignore_paths, reports files over 1 MiB",
+        "apply-markers reports @osb set note= field= value= writes; --apply needs guardrails.marker_writeback",
+        "Validates each set value against the schema pack, logs an attribute-write event, leaves bad targets live",
+        "scan-citations makes [Source: <name>, YYYY-MM-DD] dated source-citation timeline events, deduped by name+date",
+        "Previews scan-inline and scan-citations without writing (`--dry-run`)"
+      ],
+      "limits": [
+        "Runs only when a CLI verb is invoked; no hook or MCP tool scans notes for markers",
+        "scan-inline scans nothing when notes.read_paths is empty and no --path is given",
+        "Citation dates must be ISO YYYY-MM-DD; other date forms are reported as malformed",
+        "Loop markers are never consumed here; they are read live by the today view"
+      ],
+      "surfaces": {
+        "cli": ["brain scan-inline", "brain apply-markers", "brain scan-citations"],
+        "config": ["guardrails"]
+      },
+      "docs": [
+        "docs/how-it-works.md#capture-surfaces",
+        "docs/cli-reference.md#brain-observing-memory",
+        "docs/cli-reference.md#source-pipeline-integrity-and-operator-tooling-since-v1340"
+      ],
+      "code": [
+        "src/core/brain/inline-scan.ts",
+        "src/core/brain/marker-writeback.ts",
+        "src/core/brain/temporal/citations.ts"
+      ],
+      "keywords": [
+        "inline tags",
+        "annotation syntax",
+        "frontmatter write-back",
+        "source citations",
+        "note markup",
+        "property update"
+      ]
+    },
+    {
+      "slug": "inbox-capture",
+      "name": "Inbox capture",
+      "summary": "Stages captures from the terminal or a Telegram bot and routes them to sources, notes or obligations.",
+      "status": "stable",
+      "capabilities": [
+        "brain capture stages text from an argument or stdin as a cap-<date>-<time>-<hash> page under Brain/captures/",
+        "Stamps each capture with its source channel, sender and time",
+        "telegram-capture run long-polls getUpdates (30 s) and stages each text message from an allowlisted chat id",
+        "Logs each rejected, malformed or refused Telegram update as a decision; API errors back off 1 s up to 30 s",
+        "Replies to `/catchup` with the captures since the last acknowledged one",
+        "inbox-drain sends a lone URL to source ingest and a leading @obligation to an obligation (default weekly)",
+        "Routes every other capture to a create-or-merge idea note in captured/ and archives it to processed/",
+        "Plans the routes as a dry run until `inbox-drain --apply`"
+      ],
+      "limits": [
+        "The Telegram bot runs only while telegram-capture run is in the foreground; no hook or daemon starts it",
+        "An empty telegram_chat_allowlist (the default) accepts no chat; a missing bot token is a startup error",
+        "Classification uses structure only (URL shape, @obligation token), never the wording of the text"
+      ],
+      "surfaces": {
+        "cli": ["brain capture", "brain telegram-capture", "brain inbox-drain"]
+      },
+      "docs": [
+        "docs/cli-reference.md#knowledge-intake-and-consolidation-since-v1360",
+        "docs/cli-reference.md#trusted-recall-and-memory-write-surface-since-v1350"
+      ],
+      "code": ["src/core/brain/capture", "src/cli/brain/verbs/capture.ts"],
+      "keywords": [
+        "quick capture",
+        "inbox triage",
+        "mobile capture",
+        "chat bot capture",
+        "fleeting notes",
+        "inbox processing"
+      ]
+    },
+    {
+      "slug": "session-summaries",
+      "name": "Session summaries and handoffs",
+      "summary": "Stores a structured session digest of decisions, learnings and next steps, and writes handoff notes.",
+      "status": "stable",
+      "capabilities": [
+        "Stores an agent-written digest (request, decisions, learnings, next steps) as an append-only record",
+        "Dedups a digest by a sha256 of its content per session and project_scope; an all-empty digest is refused",
+        "Returns a session's latest digest with its digest count, flagging divergent ones (`get`)",
+        "Lists digests filtered by session id or project scope",
+        "brain_session_checkpoint saves signals, a digest and a diary log line in one call keyed by the session id",
+        "A checkpoint retry with equal content is a no-op, other content a mismatch error; failed items return partial",
+        "brain handoff writes Brain/handoffs/<date>-<scope>.md (request, done, files, learned, next) from a transcript",
+        "SessionEnd writes the handoff note itself when session_handoff is true (default off)"
+      ],
+      "limits": [
+        "The digest categories come from the agent; the kernel never extracts them from prose",
+        "The done, learned and next handoff sections come from English keyword regexes, at most 5 lines each",
+        "Handoff reads only transcripts of the registered adapters: claude, codex, hermes, opencode and grok",
+        "Divergent digests are reported, never merged or reconciled"
+      ],
+      "surfaces": {
+        "cli": ["brain session-summary", "brain handoff"],
+        "mcp": ["brain_session_summary", "brain_session_checkpoint"]
+      },
+      "docs": [
+        "docs/mcp.md#tool-highlights",
+        "docs/how-it-works.md#capture-surfaces",
+        "docs/cli-reference.md#brain-observing-memory"
+      ],
+      "code": [
+        "src/core/brain/session-summary.ts",
+        "src/core/brain/session-checkpoint.ts",
+        "src/core/brain/handoff.ts"
+      ],
+      "keywords": [
+        "session summary",
+        "conversation summarization",
+        "handoff notes",
+        "end-of-session checkpoint",
+        "episodic memory",
+        "progress notes"
+      ]
+    }
+  ]
+}

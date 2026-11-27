@@ -87,7 +87,10 @@ function toolSchemaInspect(
   args: Record<string, unknown>,
 ): Promise<unknown> | unknown {
   const view = typeof args["view"] === "string" ? args["view"] : "";
-  const handler = SCHEMA_INSPECT_VIEWS[view];
+  // Own names only: an inherited name is no view.
+  const handler = Object.hasOwn(SCHEMA_INSPECT_VIEWS, view)
+    ? SCHEMA_INSPECT_VIEWS[view]
+    : undefined;
   if (handler === undefined) {
     throw new MCPError(
       INVALID_PARAMS,

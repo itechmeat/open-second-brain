@@ -54,11 +54,32 @@ describe("o2b completions", () => {
     });
   }
 
-  test("rejects unsupported shells", async () => {
-    const result = await runCli(["completions", "xonsh"]);
+  test("takes the shell as --shell, the form the manifest declares", async () => {
+    const flagged = await runCli(["completions", "--shell", "zsh"]);
+    const positional = await runCli(["completions", "zsh"]);
 
-    expect(result.returncode).toBe(2);
-    expect(result.stderr).toContain("unsupported completion shell: xonsh");
+    expect(flagged.returncode).toBe(0);
+    expect(flagged.stderr).toBe("");
+    expect(flagged.stdout).toBe(positional.stdout);
+  });
+
+  test("refuses two shells or none", async () => {
+    const two = await runCli(["completions", "--shell", "zsh", "bash"]);
+    const twoFlags = await runCli(["completions", "--shell", "bash", "--shell", "zsh"]);
+    const none = await runCli(["completions"]);
+    for (const result of [two, twoFlags, none]) {
+      expect(result.returncode).toBe(2);
+      expect(result.stderr).toContain("completions requires one shell");
+    }
+  });
+
+  test("rejects unsupported shells", async () => {
+    const positional = await runCli(["completions", "xonsh"]);
+    const flagged = await runCli(["completions", "--shell", "xonsh"]);
+    for (const result of [positional, flagged]) {
+      expect(result.returncode).toBe(2);
+      expect(result.stderr).toContain("unsupported completion shell: xonsh");
+    }
   });
 });
 

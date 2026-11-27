@@ -38,6 +38,44 @@ const ENV_KEYS = [
 
 export type PartitionedRecord = StoreRecord & { partition: "shared" | "private" };
 
+/**
+ * The benches alive in this process, oldest first, and the environment
+ * from before the first of them. A bench used to put back what it saw
+ * when it was made, which is right only when benches end newest first:
+ * two in one file end in the order their `afterAll` hooks were registered,
+ * so the newer one put back the older one's paths after the older one had
+ * removed them, and every later file of the process booted from a config
+ * that no longer existed. Ending in any order now leaves the environment
+ * of the newest bench still alive, or, when none is, the one from before.
+ */
+const LIVE_BENCHES: Array<Readonly<Record<string, string>>> = [];
+let envBeforeBenches: Map<string, string | undefined> | null = null;
+
+function enterBenchEnv(env: Readonly<Record<string, string>>): void {
+  if (LIVE_BENCHES.length === 0) {
+    envBeforeBenches = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
+  }
+  LIVE_BENCHES.push(env);
+  Object.assign(process.env, env);
+}
+
+function leaveBenchEnv(env: Readonly<Record<string, string>>): void {
+  const index = LIVE_BENCHES.indexOf(env);
+  if (index === -1) return;
+  LIVE_BENCHES.splice(index, 1);
+  const newest = LIVE_BENCHES.at(-1);
+  if (newest !== undefined) {
+    Object.assign(process.env, newest);
+    return;
+  }
+  for (const key of ENV_KEYS) {
+    const value = envBeforeBenches?.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  envBeforeBenches = null;
+}
+
 export interface MigrationBench {
   readonly fx: LegacyVaultFixture;
   readonly vault: string;
@@ -55,8 +93,6 @@ export function makeMigrationBench(
   prefix = "osb-migrate-",
   options: { readonly withStore?: boolean } = {},
 ): MigrationBench {
-  const saved = new Map<string, string | undefined>();
-  for (const key of ENV_KEYS) saved.set(key, process.env[key]);
   const fx = makeLegacyVault(prefix);
   for (const rel of UNMAPPED) rmSync(join(fx.vault, ...rel.split("/")), { force: true });
   const storeRoot = join(fx.parent, "store");
@@ -73,11 +109,24 @@ export function makeMigrationBench(
     APPDATA: join(fx.parent, "data"),
     OPEN_SECOND_BRAIN_CONFIG: configPath,
   };
-  Object.assign(process.env, env);
+  enterBenchEnv(env);
   resetFreezeMarkerCache();
   resetVaultIdentityPins();
+  const cleanup = (): void => {
+    leaveBenchEnv(env);
+    resetFreezeMarkerCache();
+    resetVaultIdentityPins();
+    fx.cleanup();
+  };
   // Without a store, the first machine's automatic migration creates it.
-  if (options.withStore !== false) initStore({ root: storeRoot });
+  // A bench that fails to start gives its environment back at once: no
+  // caller holds its cleanup yet.
+  try {
+    if (options.withStore !== false) initStore({ root: storeRoot });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   const store = (): StoreHandle => openStore({ root: storeRoot, device: BENCH_DEVICE });
   const records = () =>
@@ -102,16 +151,7 @@ export function makeMigrationBench(
       }
       return out;
     },
-    cleanup: () => {
-      for (const key of ENV_KEYS) {
-        const value = saved.get(key);
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      resetFreezeMarkerCache();
-      resetVaultIdentityPins();
-      fx.cleanup();
-    },
+    cleanup,
   };
 }
 

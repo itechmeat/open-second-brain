@@ -76,7 +76,10 @@ class _ConfigField(NamedTuple):
 _CONFIG_FIELDS: tuple[_ConfigField, ...] = (
     _ConfigField(
         key="vault",
-        description="Path to the Obsidian vault whose Brain/ subtree stores memory.",
+        description=(
+            "Path to the Obsidian vault; memory lives in its Brain/ subtree, or in "
+            "the brain store once this machine is switched to it."
+        ),
         required=True,
         resolve=config.resolve_vault,
         normalize=config.expand_tilde,

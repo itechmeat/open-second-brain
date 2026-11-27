@@ -216,7 +216,10 @@ export async function handlePartnerSubcommand(argv: ReadonlyArray<string>): Prom
   const rest = argv.slice(2);
 
   if (partner === "codegraph") {
-    const handler = verb === undefined ? undefined : CODEGRAPH_VERBS[verb];
+    const handler =
+      verb !== undefined && Object.hasOwn(CODEGRAPH_VERBS, verb)
+        ? CODEGRAPH_VERBS[verb]
+        : undefined;
     if (handler !== undefined) return handler(rest);
     process.stderr.write(`error: unknown partner codegraph subcommand: ${verb ?? "(none)"}\n`);
     process.stderr.write(PARTNER_USAGE);

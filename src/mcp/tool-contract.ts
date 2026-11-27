@@ -320,8 +320,9 @@ export interface ToolDefinition {
   readonly previewBudget?: number;
   /**
    * When true the tool stays callable via `tools/call` but is omitted
-   * from `tools/list` (token-diet): deprecated aliases keep working
-   * for old clients without re-paying their schema in every list.
+   * from `tools/list` (token-diet): the `catalog` profile marks every
+   * tool outside its first pass this way, so a host lists a handful and
+   * hydrates the rest through `tool_hydrate`.
    */
   readonly hidden?: boolean;
   /**

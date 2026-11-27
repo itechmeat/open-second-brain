@@ -116,7 +116,7 @@ Brain verbs (observing memory):
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
-  secret              Capability-gated secret custody: set, list, rm, run, lock, unlock, export, import (use w/o exposure)
+  secret              Capability-gated secret custody: set, list, rm, run, lock, unlock, unwrap, export, import (use w/o exposure)
   maintenance         Quiet-window, lease-guarded lane (dream, reindex, bridges, clusters, custom tasks)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
@@ -188,7 +188,7 @@ Brain verbs (observing memory):
   forget-source       Find/delete entries derived from an exact source file (dry-run by default)
   links               Normalize wikilink path format (preserve/full/short); dry-run by default
   profile             Materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
-  sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
+  sgrep               Grep-shaped search: o2b brain sgrep <query> [path]
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/suppress/unsuppress/snooze/unsnooze/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
@@ -1543,7 +1543,8 @@ export const VERB_HELP: Record<string, string> = {
     "marker. Age-gated: a fresh profile is left alone unless --force.\n",
   sgrep:
     "usage: o2b brain sgrep <query> [path-prefix] [--limit <n>] [--keyword-only] [--vault <path>] [--json]\n" +
-    "Grep-shaped semantic Brain search: path:line: output lines, path\n" +
+    "Grep-shaped Brain search over the normal search pipeline (keyword,\n" +
+    "plus the semantic lane when it is on): path:line: output lines, path\n" +
     "scoping, exit 1 on no matches (also in --json mode).\n",
   trigger:
     "usage: o2b brain trigger <scan|list|ack|dismiss|act|suppress|unsuppress|snooze|unsnooze|history> [id] [--status <s>] [--vault <path>] [--json]\n" +

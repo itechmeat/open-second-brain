@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.6] - 2026-11-27
+
+### Fixed
+
+- **A large answer reaches a pipe whole.** `o2b help --json | jq` received the first 131072 bytes of the manifest, which is not JSON, because the CLI exited before the pipe took the rest. Both CLI entry points now exit only once stdout has handed over its output, or its reader has closed. On Linux and macOS they wait as any filter in a pipeline does, so a reader that pauses still receives everything and Ctrl-C ends the wait at once; on Windows the wait is bounded at 30 seconds, and a run that reaches the bound says so on stderr and exits with a failure code. An exit code chosen by the command stays the exit code when the reader closes early, a full disk fails the command with the error on stderr, and stderr stays open, so the drain report of `o2b mcp` and what an exit hook writes still arrive. A stdio `o2b mcp` whose input ends now delivers its last answer whole.
+- **An inherited name is no tool profile, view, flag or verb.** `o2b mcp --tool-profile constructor`, and likewise `toString`, `hasOwnProperty` or `__proto__` from the flag, `mcp_tool_profile` or `OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE`, started the server with the full surface instead of refusing an unknown profile; it now exits 2 with the usual refusal, over stdio and HTTP alike. The same names as the `view` of `brain_brief`, `brain_analytics`, `second_brain_wiring` or `schema_inspect` were answered instead of being refused, and are now refused as unknown views. As a tool name they are unknown tools, as a flag an unknown flag, as `o2b setup --target` an unknown host, and as an `o2b brain` or `o2b vault` help verb or an `o2b partner codegraph` subcommand they get the usual usage error instead of a crash.
+- **`o2b completions --shell` works, and two shells are refused.** `o2b completions --shell zsh`, the form the command manifest declares and the reference shows, failed with `unknown flag: --shell`; only a positional shell name was read. Both forms work now, and two shells, given either way, are refused with exit 2 instead of printing one script.
+- **The MCP server's instructions no longer say the removed tool names still work.** The handshake instructions said the per-view predecessor names of `brain_brief`, `brain_analytics` and `schema_inspect` still resolve as deprecated aliases. They were removed in 1.0.0, and the sentence now says that calling one returns an error naming the tool and the view to use.
+- **The OpenClaw manifest declares only the tools the plugin registers.** `openclaw.plugin.json` listed `second_brain_capture` and `event_log_append`, which the native plugin does not register; it now lists `second_brain_status`, `second_brain_query` and `vault_health`.
+- **The command manifest matches the CLI.** `o2b help --json` and the shell completions now know `o2b topic show --held`, `o2b doctor selftest` and `o2b doctor --readiness`, and the summary of `o2b brain secret` names its `unwrap` operation.
+- **`o2b brain sgrep` no longer calls itself semantic.** It runs the normal search pipeline, the keyword lane plus the semantic lane when that is on, and its help says so.
+- **The documentation says where the brain store lives.** The overview said the store is kept outside the vault and synced by a tool of your choice; by default it is the vault's hidden `.open-second-brain-store/` folder, which the vault's own sync carries when it carries hidden folders, and `store_root` moves it elsewhere.
+- **The MCP documentation describes the served surface.** The full server advertises 126 tools (the reference said 121); the removed predecessor names answer with an error and the brief, analytics and schema views are named by their current tools; a tool profile changes only what one server process lists (`catalog` keeps every tool callable, `recall` and `minimal` serve a subset and name each withheld tool in `second_brain_capabilities`); and an unknown profile is refused, `o2b mcp` exiting 2, instead of falling back to the full surface.
+- **Every MCP tool and the CLI verbs that had no entry are documented.** The MCP reference gains `brain_write_destinations`, `brain_procedural_graph`, `brain_recurrence`, `brain_entity`, `brain_observed_use`, `brain_foresight`, `brain_tiers` and `brain_session_checkpoint`. The CLI reference gains `o2b onboarding`, `o2b aider wrap`, `o2b dream queue approve` and `reject`, every `o2b topic` verb, `o2b brain expire`, `event-trace`, `knowledge-gaps`, `file-context`, `attention-flows`, `procedural-memory`, `procedural-graph`, `recurrence` and `co-occurrence`, and `o2b search event-anchor-backfill`.
+- **The documentation matches the code in the places it did not.**
+  - The confidence band is read from `confidence_value` alone (`high` at or above `high_min`, `medium` at or above `medium_min`, else `low`), and four thresholds, not six, are tunable.
+  - `o2b brain scan-inline` scans only the folders in `notes.read_paths` or named with `--path`, so a bare run scans nothing; it was described as scanning every Markdown file of the vault.
+  - The lifecycle hook runs `hooks/session-capture.ts` in-process through the same core entry point as `o2b brain session-hook`; it does not start that verb.
+  - On a machine that uses the brain store, the search index lives in the store's device-local state, not at `<vault>/.open-second-brain/brain.sqlite`; `--db`, `OPEN_SECOND_BRAIN_SEARCH_DB` and `search_db_path` override either default.
+  - The dream pass routes a record to a topic only on the model's answer, among the options the word-overlap ranking builds and orders, and every `brain_topic` write carries agent authority unless the call passes `authority: "human"`, which a remote caller may not.
+  - `o2b brain upgrade` migrates the two release-owned files, `Brain/_brain.yaml` and `Brain/_BRAIN.md`, and repairs corrupted principles.
+  - `o2b brain log verify` checks the hash chain of the legacy `Brain/log/` day files.
+  - Triggers can be `snoozed`: a snooze defers an open trigger for three days, or until its finding moves.
+  - The arguments of `o2b brain lifecycle` and `o2b brain decision` are the ones the verbs parse.
+  - `o2b brain handoff --format` also reads OpenCode and Grok transcripts, and `o2b brain token-footprint` measures the Brain memory per category, `archived` included.
+  - The schema-author skill lists all 19 schema mutations, and the Hermes `vault` setting says that memory lives in the brain store once the machine is switched to it.
+
+### Added
+
+- **A feature catalog.** `docs/catalog/` describes Open Second Brain by feature, in 12 areas and 86 features: one JSON file per area, a schema, and a generated `INDEX.md` of at most 22000 bytes that an agent reads first. Each feature names its CLI verbs, MCP tools, hooks, skills and settings, with up to 10 capability lines and 4 limits of at most 110 characters each. `bun run catalog:check` (CI and the pre-commit hook) fails when a CLI verb, an MCP tool of any server, a hook, a skill or a setting belongs to no feature, when a doc path, anchor or code path is missing or leaves the repository, when an MCP tool is not named in `docs/mcp.md`, when a feature breaks the schema's counts, or when the index is stale. The command manifest marks a command with subcommands that also runs by itself as `runnable`, and a test holds the field to what each command does.
+- **The migration-gate census covers every command that runs.** The runnable parents and `o2b doctor selftest` now have rows, and a row that reaches only a command's usage error says so.
+
 ## [2.0.5] - 2026-11-27
 
 ### Fixed
@@ -9176,7 +9208,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.5...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...HEAD
+[2.0.6]: https://github.com/itechmeat/open-second-brain/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/itechmeat/open-second-brain/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/itechmeat/open-second-brain/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/itechmeat/open-second-brain/compare/v2.0.2...v2.0.3
