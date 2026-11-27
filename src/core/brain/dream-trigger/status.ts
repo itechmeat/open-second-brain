@@ -15,9 +15,8 @@ import { isoDate } from "../time.ts";
 import { DREAM_AUTO_ENV, dreamAutoOffByEnv } from "./constants.ts";
 import { readDreamAuto } from "./auto.ts";
 import {
-  configuredTriggerStoreRoot,
   dreamDayClosed,
-  dreamTriggerRecordPath,
+  dreamTriggerLocation,
   readDreamTriggerRecord,
   type DreamTriggerRecord,
 } from "./record.ts";
@@ -61,8 +60,8 @@ export function dreamDayStatus(
     setting = readDreamAuto(opened.store.root);
   }
   const machineOff = dreamAutoOffByEnv(env);
-  const storeRoot = configuredTriggerStoreRoot(discoverConfig(options.configPath), env);
-  const record = readDreamTriggerRecord(dreamTriggerRecordPath(storeRoot, env), storeRoot);
+  const { storeRoot, recordPath } = dreamTriggerLocation(discoverConfig(options.configPath), env);
+  const record = readDreamTriggerRecord(recordPath, storeRoot);
   return {
     auto: { on: !machineOff && setting !== false, setting, machineOff },
     device: owner.device,

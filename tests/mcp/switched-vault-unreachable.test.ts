@@ -16,6 +16,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, renameSync } from "node:fs";
 
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { MCPServer } from "../../src/mcp/index.ts";
 import { partitionRecords, switchDevice } from "../core/brain/store-only/fixtures.ts";
 import { makeStoreEnv, type StoreEnv } from "../core/store/fixtures/store-env.ts";
@@ -374,6 +375,11 @@ for (const { shape, skip, cutOff } of UNREACHABLE) {
       async () => {
         const { env: e, server } = switchedMachine(`osb-mcp-switched-handle-${shape}-`);
         manyOtters(e.vault);
+        // With the vault there the search reads its index: built here, so the
+        // search does not race the detached build a first search starts.
+        if (parkedWhile === "there") {
+          await indexVault(resolveSearchConfig({ vault: e.vault, configPath: e.configPath }));
+        }
         if (parkedWhile === "out of reach") cutOff(e.vault);
         const search = await call(server, "brain_search", { query: "otters", limit: 30 });
         expect(errorCode(search)).toBeNull();

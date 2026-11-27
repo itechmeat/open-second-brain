@@ -58,6 +58,7 @@ import { claimMadeAt, createClaim, releaseClaim, removeClaimIf, type ClaimSeen }
 import {
   configuredTriggerStoreRoot,
   dreamTriggerClaimPath,
+  dreamTriggerLocation,
   dreamTriggerRecordPath,
   dreamTriggerStoreExists,
   updateDreamTriggerRecord,
@@ -555,9 +556,9 @@ export function recordDreamOutcomeResult(
     if (opened.store === null) return SKIPPED;
     const store = opened.store;
     if (!store.partitions.has("shared")) return SKIPPED;
-    const config = discoverConfig(options.configPath);
-    const storeRoot = configuredTriggerStoreRoot(config);
-    const path = dreamTriggerRecordPath(storeRoot);
+    const { storeRoot, recordPath: path } = dreamTriggerLocation(
+      discoverConfig(options.configPath),
+    );
     const now = options.now ?? Date.now;
     const written = withDreamPassLock(store, () => {
       const owner = readDreamOwner(store).owner;

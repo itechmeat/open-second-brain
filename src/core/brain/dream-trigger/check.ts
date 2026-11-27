@@ -29,6 +29,7 @@ import {
   configuredTriggerStoreRoot,
   dreamDayClosed,
   dreamDayRecordWaits,
+  dreamTriggerLocation,
   dreamTriggerRecordPath,
   dreamTriggerStoreExists,
   readDreamTriggerRecord,
@@ -72,8 +73,8 @@ function check(config: ConfigDiscovery, options: DreamDayCheckOptions): DreamDay
   const notes = options.notes === true;
   // The store root and the record's state root both from the caller's
   // environment: the one the store's own device-local state follows.
-  const storeRoot = configuredTriggerStoreRoot(config, env);
-  const recordPath = dreamTriggerRecordPath(storeRoot, env);
+  // Keyed by the machine config's root even when `options.vault` (a server's `--vault`) names another vault.
+  const { storeRoot, recordPath } = dreamTriggerLocation(config, env);
   const nowMs = now();
   const today = isoDate(new Date(nowMs));
   const record = readDreamTriggerRecord(recordPath, storeRoot);

@@ -1041,6 +1041,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "check that found it lost or abandoned; never synced, never in a vault, and no Markdown " +
       "parser reads it.",
   },
+  "src/core/brain/dream-trigger/record.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "removes the dream day record an install of 2.0.5 or earlier wrote under the old key, in " +
+      "the machine's state directory, once its content was written under the right key (or a " +
+      "record already stood there); never synced, never in a vault, and no Markdown parser " +
+      "reads it.",
+  },
   "src/core/brain/dream-owner/owner.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
@@ -1491,8 +1500,9 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 85 -> 86: `src/core/brain/dream-owner/owner.ts` notes the dream owner claim this device has caught up on, in device-local state.
  * 86 -> 90: the dream agent's run record, session files, verifications and check store (change dream-launched-agent), all device-local.
  * 90 -> 91: `src/core/brain/dream-trigger/claim.ts` creates and removes the dream trigger's claim beside the day record, machine state.
+ * 91 -> 92: `src/core/brain/dream-trigger/record.ts` removes the day record 2.0.5 wrote under the old key once carried over, machine state.
  */
-const DIRECT_WRITE_ROWS = 91;
+const DIRECT_WRITE_ROWS = 92;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1908,8 +1918,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 84 -> 85: the dream owner's claim-seen file (device-local machine state, no note).
  * 85 -> 89: the dream agent's device-local run, session, verification and check files (no note).
  * 89 -> 90: the dream trigger's claim file beside the day record (machine state, no note).
+ * 90 -> 91: the dream day record 2.0.5 left under the old key, removed once carried over (machine state, no note).
  */
-const UNSTAMPED_DIRECT_ROWS = 90;
+const UNSTAMPED_DIRECT_ROWS = 91;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

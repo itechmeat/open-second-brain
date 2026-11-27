@@ -443,7 +443,16 @@ export function resolveVault(
   // Multi-vault profiles (v0.22.0): an active named profile overrides the
   // bare `vault` key. With no profiles registry the result is unchanged.
   // A caller that already read the config passes it, so it is not read twice.
-  const discovery = opts.discovery ?? discoverConfig(configPath);
+  return machineConfiguredVault(opts.discovery ?? discoverConfig(configPath));
+}
+
+/**
+ * The vault the machine configuration itself names: the active profile,
+ * then the config's `vault` key (`~` expanded), or null. Unlike
+ * {@link resolveVault}, never `VAULT_DIR` or a project pointer, which name
+ * a vault for one session or one folder only.
+ */
+export function machineConfiguredVault(discovery: ConfigDiscovery): string | null {
   const profileVault = resolveActiveProfileVault(discovery.path);
   if (profileVault) return expandTilde(profileVault);
   const cfg = discovery.data["vault"];

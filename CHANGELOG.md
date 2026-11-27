@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.7] - 2026-11-27
+
+### Fixed
+
+- **Automatic dream starts again on machines whose brain store is in the vault.** Since 2.0.1 the store of a machine with a vault lives in the vault's `.open-second-brain-store/` folder by default, but the automatic dream trigger still looked for it in the per-user folder used without a vault, found nothing there and never started a pass. It now looks where the rest of Open Second Brain does (`o2b store path`), and a day already recorded by a pass run by hand is carried over, so it is not run twice. Nothing to do after the update.
+
 ## [2.0.6] - 2026-11-27
 
 ### Fixed
@@ -9208,7 +9214,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.7...HEAD
+[2.0.7]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/itechmeat/open-second-brain/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/itechmeat/open-second-brain/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/itechmeat/open-second-brain/compare/v2.0.3...v2.0.4

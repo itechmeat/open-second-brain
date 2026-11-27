@@ -37,6 +37,7 @@ import * as o2bCommand from "../../../../src/core/maintenance/o2b-command.ts";
 import * as streamRead from "../../../../src/core/store/read/stream-read.ts";
 import * as storeOpen from "../../../../src/core/store/store-open.ts";
 import { STORE_ROOT_ENV } from "../../../../src/core/store/constants.ts";
+import { defaultStoreRoot } from "../../../../src/core/store/store-paths.ts";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../../../helpers/platform.ts";
 import { startDreamPassHolder } from "../../../helpers/dream-pass-holder.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../../../helpers/cli-timeout.ts";
@@ -54,7 +55,9 @@ let spawns: Array<ReadonlyArray<string>>;
 let spawnSpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
-  f = makeTriggerFixture();
+  // The default layout of a machine with a vault: the store in the vault's
+  // folder and no store root named anywhere (the 2.0.5 trigger missed it).
+  f = makeTriggerFixture({ layout: "vault" });
   spawns = [];
   spawnSpy = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation(((argv: string[]) => {
     spawns.push([...argv]);
@@ -804,5 +807,86 @@ describe("a claim this process failed to give back", () => {
     writeFileSync(path, held);
     // Readable again: the next claim gives the queued one back first.
     expect(claim.createClaim(path, NOW)).not.toBeNull();
+  });
+});
+
+// Open Second Brain 2.0.5 keyed the record by the root resolved as if
+// no vault were configured: the per-user default, which holds no store.
+const legacyRoot = (): string => defaultStoreRoot();
+const legacyPath = (): string => record.dreamTriggerRecordPath(legacyRoot());
+
+function seedLegacy(over: Partial<record.DreamTriggerRecord>): void {
+  writeDreamTriggerRecord(legacyPath(), { ...emptyDreamTriggerRecord(legacyRoot()), ...over });
+}
+
+describe("a record an earlier install wrote under the old key", () => {
+  test("a day it closed stays closed: nothing is started, and the record moves to the right key", () => {
+    expect(f.vault).not.toBeNull();
+    expect(legacyPath()).not.toBe(f.recordPath);
+    seedLegacy({ closed: true, day: TODAY, owner: MINE });
+    expect(run().started).toBe(false);
+    expect(spawns).toEqual([]);
+    expect(f.record()).toMatchObject({ store_root: f.storeRoot, closed: true, day: TODAY });
+    expect(existsSync(legacyPath())).toBe(false);
+  });
+
+  test("its retry time and failure count hold", () => {
+    const retryAt = new Date(NOW + HOUR).toISOString();
+    seedLegacy({ day: TODAY, failures: 3, retry_at: retryAt, owner: MINE });
+    expect(run().started).toBe(false);
+    expect(spawns).toEqual([]);
+    expect(f.record()).toMatchObject({ failures: 3, retry_at: retryAt });
+    expect(existsSync(legacyPath())).toBe(false);
+  });
+
+  test("a day it closed before today is due: one worker starts, the failure count carried", () => {
+    seedLegacy({ closed: true, day: "2026-11-19", failures: 1, owner: MINE });
+    expect(run().started).toBe(true);
+    expect(spawns).toHaveLength(1);
+    expect(f.record()).toMatchObject({ failures: 1, owner_checked_day: TODAY });
+  });
+
+  test("a record already under the right key wins, and the old file is not read", () => {
+    seed({ closed: true, day: TODAY, owner: MINE });
+    seedLegacy({ day: "2026-11-19", failures: 5 });
+    expect(run().started).toBe(false);
+    expect(f.record()).toMatchObject({ closed: true, day: TODAY, failures: 0 });
+    // The right key held a record: the old file is left as it is, unread.
+    expect(existsSync(legacyPath())).toBe(true);
+  });
+
+  test("a session on another vault (VAULT_DIR) leaves it to the configured vault, which keeps its closed day", () => {
+    seedLegacy({ closed: true, day: TODAY, owner: MINE });
+    const other = join(f.tmp, "other-vault");
+    mkdirSync(other, { recursive: true });
+    process.env["VAULT_DIR"] = other;
+    try {
+      const there = record.dreamTriggerLocation(f.config());
+      expect(there.storeRoot).not.toBe(f.storeRoot);
+      expect(existsSync(there.recordPath)).toBe(false);
+      expect(existsSync(legacyPath())).toBe(true);
+    } finally {
+      delete process.env["VAULT_DIR"];
+    }
+    // The first session on the configured vault carries it: no second pass today.
+    expect(run().started).toBe(false);
+    expect(spawns).toEqual([]);
+    expect(f.record()).toMatchObject({ store_root: f.storeRoot, closed: true, day: TODAY });
+    expect(existsSync(legacyPath())).toBe(false);
+  });
+
+  test("while the old key's claim stands, both files are left; once it is gone the record is carried", () => {
+    const retryAt = new Date(NOW + HOUR).toISOString();
+    seedLegacy({ day: TODAY, failures: 2, retry_at: retryAt, owner: MINE });
+    const legacyClaim = dreamTriggerClaimPath(legacyPath());
+    writeFileSync(legacyClaim, "{}\n");
+    record.dreamTriggerLocation(f.config());
+    expect(existsSync(f.recordPath)).toBe(false);
+    expect(existsSync(legacyPath())).toBe(true);
+    expect(existsSync(legacyClaim)).toBe(true);
+    rmSync(legacyClaim);
+    record.dreamTriggerLocation(f.config());
+    expect(f.record()).toMatchObject({ store_root: f.storeRoot, failures: 2, retry_at: retryAt });
+    expect(existsSync(legacyPath())).toBe(false);
   });
 });
