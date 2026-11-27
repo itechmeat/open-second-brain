@@ -124,6 +124,33 @@ const UNSCOPED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "runs the label validator over every stored node (its own docblock says " +
     "'any status'), and the prune pass must see every survivor or it would " +
     "strand inbound edges pointing at a removed node.",
+  "src/core/brain/entities/locked-write.ts":
+    "re-reads, under the page's lane lock, the one entity page the registry " +
+    "already resolved for an overwrite in its own lane (`resolveWriteTarget`, " +
+    "or the restore's own non-canonical lookup), to build the write from what " +
+    "the page holds now. The status scope was applied by that resolution; a " +
+    "second filter here would refuse a restore, which re-reads an archived page.",
+  "src/core/brain/entities/upsert-reach.ts":
+    "the identity decision of an upsert below local reach, moved out of the " +
+    "registry: it lists every record that claims the name, the identity key or " +
+    "an alias whatever its status, since an archived or quarantined claimant " +
+    "refuses the write or makes it ambiguous exactly as `upsertEntity` decides, " +
+    "and resolves the write target through the registry's own " +
+    "`resolveWriteTarget`, which applies the lane's status scope.",
+  "src/core/brain/intake/intake-reach.ts":
+    "the reach pre-check of an extraction intake: it reads the whole entity " +
+    "index, every status, and resolves each entity and each relation endpoint " +
+    "through the registry's own `resolveWriteTarget`, as the upsert and the " +
+    "relate do, so it meets the record each write lands on in that write's lane " +
+    "(an active record for a trusted write, a quarantined one for an untrusted " +
+    "write); a status filter here would hide a quarantined target and judge a " +
+    "create the write does not make.",
+  "src/core/brain/hygiene/members-at-reach.ts":
+    "the member list of a hygiene action below local reach: a `supersede` " +
+    "appends a claim that names its entity, so every entity record whose name or " +
+    "alias is that entity is a member, whatever its status (an archived or " +
+    "quarantined record of a private entity carries the same name); a status " +
+    "filter here would leave out a member whose reach is then never judged.",
   "src/core/brain/deep-synthesis.ts":
     "hands the whole index to `checkEntityContamination`, which applies the " +
     "shared predicate at its own boundary. A second filter here would be a " +

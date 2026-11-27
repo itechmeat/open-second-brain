@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { DEAD_END_MAX_ACTIVE, recordDeadEnd } from "../../src/core/brain/dead-ends.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -122,12 +122,24 @@ describe("brain_dead_ends answers at the caller's reach", () => {
     expect(withheld).not.toContain("archived");
   });
 
-  test("remote reach: the overflow trim leaves a withheld dead end in place", async () => {
+  // Modified by the requirement "Counts and caps answered below local reach
+  // agree with what the caller may read" (change `lane-reach-residuals`,
+  // design R13): the trim is the machine's maintenance, so the cap holds
+  // after a remote record and a withheld overflow entry is archived as a
+  // local trim archives it, its bytes kept; only the answer is narrowed.
+  test("remote reach: the overflow trim archives a withheld dead end and names nothing of it", async () => {
     const { f, oldest } = fullFixture();
     const bytes = readFileSync(oldest, "utf8");
-    await answer(f, { operation: "record", approach: "A new route", reason: "New reason." });
-    expect(existsSync(oldest)).toBe(true);
-    expect(readFileSync(oldest, "utf8")).toBe(bytes);
+    const remote = await answer(f, {
+      operation: "record",
+      approach: "A new route",
+      reason: "New reason.",
+    });
+    const archived = join(dirname(oldest), "archive", basename(oldest));
+    expect(existsSync(oldest)).toBe(false);
+    expect(readFileSync(archived, "utf8")).toBe(bytes);
+    expect(remote).not.toContain("archived");
+    expect(remote).not.toContain(basename(oldest, ".md"));
   });
 
   test("local reach: the overflow trim archives the oldest dead end", async () => {

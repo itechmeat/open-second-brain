@@ -23,7 +23,11 @@ import {
 } from "../../src/core/brain/paths.ts";
 import { writeSkillAcceptJournal } from "../../src/core/brain/skill-accept-journal.ts";
 import { wholeLaneStoreFold } from "../../src/core/store/lane-fold-cache.ts";
-import { laneEntryInPrivate, writeLanePage } from "../../src/core/store/lane-pages.ts";
+import {
+  laneEntryInPrivate,
+  removeLanePage,
+  writeLanePage,
+} from "../../src/core/store/lane-pages.ts";
 import type { MCPServer } from "../../src/mcp/server.ts";
 import type { ToolDefinition } from "../../src/mcp/tool-contract.ts";
 import type { LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
@@ -48,6 +52,12 @@ export interface ProbeLane {
   readonly tool: string;
   readonly shared: SeededEntry;
   readonly hidden?: SeededEntry;
+  /**
+   * More private entries of the lane in states of their own (an accepted
+   * proposal, an interrupted accept, the default attention flow), each a
+   * call target of its own.
+   */
+  readonly extraHidden?: ReadonlyArray<{ readonly state: string; readonly entry: SeededEntry }>;
 }
 
 const NOW = new Date("2026-11-20T10:00:00Z");
@@ -60,12 +70,15 @@ const PROPOSAL = (id: string): SeededEntry => ({
 
 /**
  * Seed one store. `withPrivate` adds the private entries; the twin is
- * the same seeding without them.
+ * the same seeding without them. `sharedOnly` (a twin) also leaves out the
+ * shared bridge artifacts the private store raises into `private`, so the
+ * twin holds the shared records of the private store.
  */
 export async function seedProbeStore(
   e: LaneEnv,
   local: MCPServer,
   withPrivate: boolean,
+  sharedOnly = false,
 ): Promise<ProbeLane[]> {
   const { vault } = e;
   mkdirSync(join(vault, "Notes"), { recursive: true });
@@ -124,6 +137,32 @@ export async function seedProbeStore(
               { field: "journal", mark: "zqpwhidjrn" },
             ],
           },
+          // The accepted proposal and the interrupted accept, each named
+          // by calls of its own.
+          extraHidden: [
+            {
+              state: "accepted",
+              entry: {
+                ...PROPOSAL("zqpwhidacc"),
+                rel: "Brain/skill-proposals/accepted/prop-zqpwhidacc.md",
+                marks: [
+                  { field: "slug", mark: "zqpwhidacc" },
+                  { field: "body", mark: "zqpwhidaccbody" },
+                ],
+              },
+            },
+            {
+              state: "journal",
+              entry: {
+                ...PROPOSAL("zqpwhidjrn"),
+                rel: "Brain/skill-proposals/accepted/prop-zqpwhidjrn.md",
+                marks: [
+                  { field: "slug", mark: "zqpwhidjrn" },
+                  { field: "body", mark: "zqpwhidjrnbody" },
+                ],
+              },
+            },
+          ],
         }
       : {}),
   });
@@ -140,6 +179,11 @@ export async function seedProbeStore(
   });
   await call(local, "brain_bridges", { operation: "discover", min_similarity: 0.1 });
   if (withPrivate) raiseBridgeArtifacts(vault);
+  if (sharedOnly) {
+    for (const name of ["bridges.md", "bridges-dismissed.json"]) {
+      removeLanePage(vault, join(vault, "Brain", "proposals", name));
+    }
+  }
   // The default attention flow: seeded by a local list, then held in
   // `private` with private entries.
   await call(local, "brain_analytics", { view: "attention_flows", operation: "list" });
@@ -157,6 +201,23 @@ export async function seedProbeStore(
       { overwrite: true },
     );
     expect(laneEntryInPrivate(vault, join(attentionFlowsDir(vault), "open-loops.md"))).toBe(true);
+    // Its title is a canary, and calls name it.
+    const flows = lanes.findIndex((l) => l.lane === "attention flows");
+    expect(flows).toBeGreaterThanOrEqual(0);
+    lanes[flows] = {
+      ...lanes[flows]!,
+      extraHidden: [
+        {
+          state: "default",
+          entry: {
+            rel: "Brain/attention/flows/open-loops.md",
+            marks: [{ field: "title", mark: "zqpwhidflow" }],
+            id: "open-loops",
+            title: "zqpwhidflow",
+          },
+        },
+      ],
+    };
   }
   return lanes;
 }
@@ -189,9 +250,16 @@ const PATH_PROPS = new Set(["path", "file_path", "source_file", "source", "page"
 export interface ProbeCall {
   readonly tool: string;
   readonly verb: string;
-  /** `base`, or `<lane>:shared` / `<lane>:hidden` for a call naming a seeded entry. */
+  /**
+   * `base`, or `<lane>:shared` / `<lane>:hidden` (`<lane>:hidden <state>`
+   * for an extra private entry) for a call naming a seeded entry.
+   */
   readonly names: string;
   readonly args: Record<string, unknown>;
+  /** The lane of the entry it names, if any. */
+  readonly lane?: string;
+  /** Whether the entry it names is held in `private`. */
+  readonly hidden?: boolean;
 }
 
 type Spec = { type?: string | string[]; enum?: unknown[]; items?: { type?: string } };
@@ -269,13 +337,28 @@ export function planTool(
     calls.push({ tool: tool.name, verb: label, names: "base", args: base });
     if (idLike.length === 0) continue;
     for (const lane of owned) {
-      for (const which of ["shared", "hidden"] as const) {
-        const entry = lane[which];
-        if (entry === undefined) continue;
+      const targets: Array<{ names: string; entry: SeededEntry | undefined; hidden: boolean }> = [
+        { names: `${lane.lane}:shared`, entry: lane.shared, hidden: false },
+        { names: `${lane.lane}:hidden`, entry: lane.hidden, hidden: true },
+        ...(lane.extraHidden ?? []).map((x) => ({
+          names: `${lane.lane}:hidden ${x.state}`,
+          entry: x.entry,
+          hidden: true,
+        })),
+      ];
+      for (const target of targets) {
+        if (target.entry === undefined) continue;
         const args = { ...base };
-        for (const p of idLike) args[p] = entryValue(p, props[p] ?? {}, entry);
+        for (const p of idLike) args[p] = entryValue(p, props[p] ?? {}, target.entry);
         Object.assign(args, hand);
-        calls.push({ tool: tool.name, verb: label, names: `${lane.lane}:${which}`, args });
+        calls.push({
+          tool: tool.name,
+          verb: label,
+          names: target.names,
+          args,
+          lane: lane.lane,
+          hidden: target.hidden,
+        });
       }
     }
   }

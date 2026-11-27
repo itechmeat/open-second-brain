@@ -108,9 +108,15 @@ export function isStoreRecordOwnerVisible(page: VisibilityRecord, scope: string)
  * `Brain/preferences/pref-x.md`), and `pageVisible` judges it. A
  * reference that names no record names nothing that could be hidden, as a
  * bare id with no artifact on disk does on a vault.
+ *
+ * `withholdsPrivate`: the caller is below local reach, so a `Brain/` path
+ * is judged as the page of the lane entry its lane match names, in
+ * whichever spelling named it (an extensionless path), as
+ * `artifactRefView` judges it (change `lane-reach-residuals`, design R3).
  */
 export function storeRecordRefView(
   pageVisible: (page: VisibilityRecord) => boolean,
+  withholdsPrivate = false,
 ): ArtifactRefView {
   let pages: {
     byRel: Map<string, StoreMemoryPage>;
@@ -151,6 +157,11 @@ export function storeRecordRefView(
     }
     return verdict;
   };
+  const laneMatch = (spelled: string) => {
+    const root = laneVaultRoot(null);
+    laneScope ??= artifactRefScope(root);
+    return laneRefMatch(root, spelled, laneScope);
+  };
   const visible = (ref: ArtifactRef): boolean => {
     if (ref === null || ref === undefined || ref.length === 0) return true;
     const spelled = refTarget(ref);
@@ -158,15 +169,18 @@ export function storeRecordRefView(
     if (page !== undefined) return pageVisible(page);
     // A path into `Brain/` that names no memory record is a record-lane
     // page (a decision, a pledge, a tension): judged by its own record's
-    // visibility, and hidden when there is none (fail closed). A bare id
-    // that names nothing names nothing that could be hidden.
-    if (spelled.startsWith(`${BRAIN_ROOT_REL}/`)) return laneVisible(spelled);
+    // visibility, and hidden when there is none (fail closed). Below local
+    // reach the page of the entry the lane match names answers, so an
+    // extensionless spelling is judged as its `.md` twin. A bare id that
+    // names nothing names nothing that could be hidden.
+    if (spelled.startsWith(`${BRAIN_ROOT_REL}/`)) {
+      const match = withholdsPrivate ? laneMatch(spelled) : null;
+      return laneVisible(match?.kind === "entry" ? match.rel : spelled);
+    }
     // A bare id that names no memory record may name a lane entry the
     // store holds (a decision, a source, an entity): judged by that
     // entry's record (design D6 item 3).
-    const root = laneVaultRoot(null);
-    laneScope ??= artifactRefScope(root);
-    const lane = laneRefMatch(root, spelled, laneScope);
+    const lane = laneMatch(spelled);
     if (lane.kind === "none") return true;
     // The store cannot say what the reference names: judged as a record
     // of the `private` partition (fail closed).

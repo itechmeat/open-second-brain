@@ -14,7 +14,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
 import { obligationPath } from "../../src/core/brain/paths.ts";
-import { withPrivateWithheld } from "../../src/core/store/caller-reach.ts";
+import { privateWithheld, withPrivateWithheld } from "../../src/core/store/caller-reach.ts";
 import {
   LANE_ENTRY_WITHHELD_MESSAGE,
   LaneEntryWithheldError,
@@ -85,12 +85,18 @@ describe("an error escaping the identity decision of a create below local reach"
     }).toEqual({ fixed: true, names: false });
   });
 
-  test("the helper turns any error of its matcher into the fixed refusal while a private entry is held", () => {
+  // Modified by the requirement "An identity matcher's error is masked
+  // only when the caller's own view does not raise it" (change
+  // `lane-reach-residuals`, design R12): an error the caller's own view
+  // raises too reaches it, so the masked error is one only the view with
+  // `private` shown raises.
+  test("the helper turns an error only the private view raises into the fixed refusal while a private entry is held", () => {
     const { e } = seed(`held notes ${REGION}`);
     const thrown = withPrivateWithheld(true, () => {
       try {
         assertCreateMatchAtReach(e.vault, () => {
-          throw new Error("zqnamed-held-entry");
+          if (!privateWithheld()) throw new Error("zqnamed-held-entry");
+          return [];
         });
         return null;
       } catch (err) {

@@ -1769,6 +1769,36 @@ still on disk (the store is the truth there):
   `o2b brain standing-rules show` prints them, `clear` removes them, and
   `--project <name>`, `--harness <id>` or `--host <device id>` names one
   scoped rule file instead. No agent tool writes them.
+- **Who wrote a Brain page, and what a write may answer.** Each stored
+  version of a Brain page carries the standing of whoever decided it: you
+  (a command, or a tool call made on your explicit request), an agent, or
+  a decision model; between two versions written apart the stronger
+  standing wins, then the later one. When a tool or a command rewrites,
+  removes or moves a page it has read (an obligation completed, a pledge
+  fulfilled or re-anchored, an intention set, an entity updated, a
+  handoff note derived again), or adds one again where it read a removal,
+  the new version keeps the standing of the one it replaces. So an
+  agent's completion of an obligation you added is kept, as on a machine
+  that has not switched, instead of losing silently to your earlier
+  version. A version kept at a stronger standing than its writer's own
+  names the writer's own in `acted_by`. Every such write is read back,
+  which costs one more read of the stored Brain pages, and a tool or a
+  verb may answer one of these errors:
+  - `... changed since it was read; nothing was written; read it again`
+    (or `was removed since it was read`): another version arrived
+    between the read and the write. Read the page again and repeat the
+    call if it still applies.
+  - `the lane store could not be read in full; nothing was written`: run
+    `o2b brain doctor`, which lists the shards it could not read and the
+    blobs that have not arrived, with the remedy of each, then repeat.
+  - `... was not changed: the store keeps a version (or a removal)
+    written at authority ...`: the store kept another version, for
+    example one stamped ahead of this machine's clock. Read the page
+    again; nothing of yours holds there.
+  - `... was written and could not be verified: read the entry before
+    repeating the call`: the write was made, and reading it back failed.
+    Read the page first: repeating a call that adds to a list would add
+    twice.
 - **Forgetting.** `o2b brain forget-source` and `brain_delete_by_source`
   find the derived signals, preferences and lane entries in the store and
   remove them with the store's own removal records (`signal-removed`,

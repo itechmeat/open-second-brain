@@ -32,6 +32,9 @@ import {
   isUnderBrainRoot,
 } from "../path-constants.ts";
 import { isKnownSchemaToken, type BrainSchemaVocabulary } from "../schema-vocab.ts";
+import { brainRelOf, heldInStore, storeEntryRead } from "../../store/lane-entry-store.ts";
+import { readLaneText } from "../../store/lane-pages.ts";
+import { lanePlaceOf } from "../../store/lane-paths.ts";
 import type { ExistingTargetInfo, WriteSessionError } from "./types.ts";
 
 /** Hard cap on artifact size - a note, not a payload dump. */
@@ -218,20 +221,60 @@ export function buildCorrectionPrompt(errors: ReadonlyArray<WriteSessionError>):
 }
 
 /**
+ * The text at the write-session target `absolute` when it is a lane path
+ * whose pages live in the store on this machine: the store entry's text
+ * read at the caller's reach (`readLaneText`), `null` when the store
+ * holds no entry there. A file left at such a path answers for nothing
+ * (change `lane-reach-residuals`, design R3). `undefined` for any other
+ * target, whose text is the file at that path.
+ */
+export function storeTargetText(vault: string, absolute: string): string | null | undefined {
+  if (!heldInStore(vault, absolute) || lanePlaceOf(brainRelOf(vault, absolute)) === null) {
+    return undefined;
+  }
+  return readLaneText(vault, absolute);
+}
+
+/**
+ * Whether the write-session target `absolute` is a lane path held in the
+ * store on this machine whose key no record of the store holds, a live
+ * entry or a removal, in a fold read whole: a target the store never
+ * held. A file left at such a path decides as before (a `create` is
+ * refused as existing, a `merge` merges onto it); a removed target is
+ * occupied by nothing, whatever file is left (design R3).
+ */
+export function storeTargetNeverHeld(vault: string, absolute: string): boolean {
+  if (!heldInStore(vault, absolute) || lanePlaceOf(brainRelOf(vault, absolute)) === null) {
+    return false;
+  }
+  const read = storeEntryRead(vault, absolute);
+  return read.whole && read.value === null && read.authority === null;
+}
+
+/**
  * Collision metadata for an occupied target. Returns null when the
  * path is free; the engine attaches the result to envelopes so the
  * caller can decide on overwrite/merge intent with evidence in hand.
+ * A target the store holds is described from its store entry at the
+ * caller's reach ({@link storeTargetText}).
  */
 export function inspectExistingTarget(
   vault: string,
   targetPath: string,
 ): ExistingTargetInfo | null {
   const absolute = join(vault, targetPath);
-  if (!existsSync(absolute)) return null;
   let content: string;
   try {
-    if (!statSync(absolute).isFile()) return null;
-    content = readFileSync(absolute, "utf8");
+    const read = storeTargetText(vault, absolute);
+    const stored = read === null && storeTargetNeverHeld(vault, absolute) ? undefined : read;
+    if (stored === null) return null;
+    if (stored !== undefined) {
+      content = stored;
+    } else {
+      if (!existsSync(absolute)) return null;
+      if (!statSync(absolute).isFile()) return null;
+      content = readFileSync(absolute, "utf8");
+    }
   } catch {
     return null;
   }

@@ -12,7 +12,11 @@
  *     durable write primitive ({@link WRITE_PRIMITIVES}): a lane write, a
  *     store append, a file write, delete or rename (machine state, device
  *     state, journals, markers, cursors, watermarks and ledgers all land
- *     through these).
+ *     through these). A primitive is found under its own name, under a
+ *     name an import binds to it (`import { writeLaneText as put }`,
+ *     followed through the relative re-exports of the imported module), as
+ *     `<namespace>.<name>` of a namespace import, and passed as a value
+ *     (`paths.forEach(unlinkSync)`), which counts as a call.
  *  3. A call graph of the functions of those modules, across files: a
  *     call resolves to a function of the same file, or through the file's
  *     relative imports (named, renamed, namespace) and the re-exports of
@@ -29,20 +33,28 @@
  *
  * The graph is resolved by name: a method called on an object resolves to
  * a function of that name in the file (or its imports) when there is one,
- * and a function passed as a value is not seen as called. The census reads
- * more decisions than there are (a read after the write, or one deciding
- * another entry, is listed too); every listed read is judged by hand in
- * the table's class and note.
+ * and a function passed as a value (an argument, a property value, an
+ * assigned value) whose name is a statically known function is an edge to
+ * it, as if called there. The census reads more decisions than there are
+ * (a read after the write, or one deciding another entry, is listed too);
+ * every listed read is judged by hand in the table's class and note.
  *
  * A row is keyed `<file>::<function>::<primitive>`; one key may stand for
- * several calls, counted.
+ * several calls, counted (`CensusSite.lines`), and the table records the
+ * count each row was reviewed at.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
+/** Where the search runs: the repository and its `src/` folder. */
+export interface CensusRoots {
+  readonly repo: string;
+  readonly src: string;
+}
+
 const REPO = resolve(import.meta.dir, "..", "..");
-const SRC = join(REPO, "src");
+const ROOTS: CensusRoots = { repo: REPO, src: join(REPO, "src") };
 
 /** The durable write primitives the census searches for. */
 export const WRITE_PRIMITIVES = [
@@ -136,9 +148,9 @@ function moduleFile(from: string, spec: string): string | null {
 }
 
 /** The modules reachable from `src/mcp/` by relative imports. */
-export function reachableModules(): string[] {
+export function reachableModules(roots: CensusRoots = ROOTS): string[] {
   const seen = new Set<string>();
-  const queue = tsFiles(join(SRC, "mcp"));
+  const queue = tsFiles(join(roots.src, "mcp"));
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
@@ -154,7 +166,10 @@ export function reachableModules(): string[] {
 interface Fn {
   readonly name: string;
   readonly start: number;
+  /** The next function's start: calls up to it are this function's (a trailing table's inline handlers too). */
   readonly end: number;
+  /** The line after its closing brace: a value is read only inside the function's own body. */
+  readonly bodyEnd: number;
 }
 
 const FN_START =
@@ -170,57 +185,209 @@ function functionsOf(lines: ReadonlyArray<string>): Fn[] {
     if (name === undefined || ["if", "for", "while", "switch", "catch"].includes(name)) return;
     starts.push({ name, start: i });
   });
-  return starts.map((s, i) => ({
-    name: s.name,
-    start: s.start,
-    end: i + 1 < starts.length ? starts[i + 1]!.start : lines.length,
-  }));
+  return starts.map((s, i) => {
+    const cap = i + 1 < starts.length ? starts[i + 1]!.start : lines.length;
+    return { name: s.name, start: s.start, end: cap, bodyEnd: closingLine(lines, s.start, cap) };
+  });
+}
+
+/**
+ * The line after the end of the function starting at `start`: its closing
+ * brace at the indentation it starts at, or the start line itself when it
+ * ends there (`=> expr;`, an overload signature); at most `cap`, the next
+ * function's start. So a value in the code after the function (a
+ * module's tool registration table after its last handler, `handler:
+ * toolBrainEntity`) is not read as passed by it.
+ */
+function closingLine(lines: ReadonlyArray<string>, start: number, cap: number): number {
+  const first = lines[start]!;
+  if (/;\s*$/.test(codeOf(first))) return start + 1;
+  const indent = /^\s*/.exec(first)![0];
+  for (let i = start + 1; i < cap; i++) {
+    // A bare `}` or `};`: a line like `}): T {` closes a parameter type.
+    const line = lines[i]!;
+    if (line.startsWith(`${indent}}`) && /^\s*\};?\s*$/.test(line)) return i + 1;
+  }
+  return cap;
 }
 
 const isComment = (line: string): boolean => /^\s*(\/\/|\*|\/\*)/.test(line);
 const codeOf = (line: string): string =>
   line.replace(/\/\/.*$/, "").replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""');
 
-/** The calls of `names` on the code lines `[start, end)` of `lines`. */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The spellings of `names` in one file: each name itself, and the other
+ * spellings (`alias`) that stand for one of them there.
+ */
+interface Spellings {
+  readonly names: ReadonlyArray<string>;
+  /** An alias or `<namespace>.<name>` to the name it stands for. */
+  readonly alias: ReadonlyMap<string, string>;
+}
+
+/** A name followed by a call (`name(`, `name<T>(`). */
+const CALL_TAIL = "\\s*(?:<[^>]*>)?\\(";
+/** A value position before a name: an argument, a property value, an assigned value. */
+const VALUE_HEAD = "(?:[(,:?]|(?<![=!<>])=)\\s*";
+/** A name used as a value: nothing follows it but the end of the value. */
+const VALUE_TAIL = "\\s*(?=[,)}\\];]|$)";
+
+/**
+ * The calls of the names `spelled` on the code lines `[start, end)` of
+ * `lines`: a call under the name itself (a member call `fs.name(` too), a
+ * call under an alias (not as a member of another object), and the name or
+ * an alias passed as a value before `valueEnd`, which counts as a call.
+ */
 function callsIn(
   lines: ReadonlyArray<string>,
   start: number,
   end: number,
-  names: ReadonlyArray<string>,
+  spelled: Spellings,
+  valueEnd: number,
 ): Array<{ name: string; line: number }> {
   const out: Array<{ name: string; line: number }> = [];
-  if (names.length === 0) return out;
-  const pattern = new RegExp(`(?<![A-Za-z0-9_$])(${names.join("|")})\\s*(?:<[^>]*>)?\\(`, "g");
+  if (spelled.names.length === 0) return out;
+  const own = spelled.names.map(escapeRe).join("|");
+  const aliases = [...spelled.alias.keys()].toSorted((a, b) => b.length - a.length).map(escapeRe);
+  const either =
+    aliases.length === 0
+      ? `(?<![A-Za-z0-9_$])(${own})`
+      : `(?:(?<![A-Za-z0-9_$])(${own})|(?<![A-Za-z0-9_$.])(${aliases.join("|")}))`;
+  const call = new RegExp(`${either}${CALL_TAIL}`, "g");
+  const value = new RegExp(`${VALUE_HEAD}${either}${VALUE_TAIL}`, "g");
+  const named = (m: RegExpMatchArray): string =>
+    m[1] ?? spelled.alias.get(m[2]!) ?? (m[2] as string);
   for (let i = start; i < end; i++) {
     const line = lines[i]!;
     if (isComment(line)) continue;
     const code = codeOf(line);
-    for (const m of code.matchAll(pattern)) {
+    for (const m of code.matchAll(call)) {
       // A declaration of the primitive itself is not a call of it.
       if (/function\s*$/.test(code.slice(0, m.index))) continue;
-      out.push({ name: m[1]!, line: i + 1 });
+      out.push({ name: named(m), line: i + 1 });
     }
+    if (i >= valueEnd) continue;
+    for (const m of code.matchAll(value)) out.push({ name: named(m), line: i + 1 });
+  }
+  return out.toSorted((a, b) => a.line - b.line);
+}
+
+/** The import and re-export lists of a module: `{ list } from "spec"`, value bindings only. */
+function bindingLists(
+  src: string,
+  keyword: "import" | "export",
+): Array<{ list: string; spec: string }> {
+  const out: Array<{ list: string; spec: string }> = [];
+  const re = new RegExp(`${keyword}\\s+(type\\s+)?\\{([^}]*)\\}\\s*from\\s*["']([^"']+)["']`, "g");
+  for (const m of src.matchAll(re)) if (m[1] === undefined) out.push({ list: m[2]!, spec: m[3]! });
+  return out;
+}
+
+/** The `orig as alias` pairs of one binding list (`type` members left out). */
+function pairsOf(list: string): Array<{ orig: string; local: string }> {
+  const out: Array<{ orig: string; local: string }> = [];
+  for (const raw of list.split(",")) {
+    if (/^\s*type\s/.test(raw)) continue;
+    const [orig, alias] = raw
+      .trim()
+      .split(/\s+as\s+/)
+      .map((p) => p.trim());
+    if (orig === undefined || orig === "") continue;
+    out.push({ orig, local: alias ?? orig });
   }
   return out;
+}
+
+/**
+ * The name of `names` that `name`, imported from `spec` by `from`, stands
+ * for: the name itself, or followed through the relative re-exports of
+ * the imported module (`export { writeLaneText as put } from …`); null when
+ * it stands for none.
+ */
+function nameExportedAs(
+  from: string,
+  spec: string,
+  name: string,
+  names: ReadonlySet<string>,
+  seen: Set<string> = new Set(),
+): string | null {
+  const target = spec.startsWith(".") ? moduleFile(from, spec) : null;
+  if (target !== null && !seen.has(`${target}\u0000${name}`)) {
+    seen.add(`${target}\u0000${name}`);
+    for (const { list, spec: next } of bindingLists(source(target), "export")) {
+      for (const { orig, local } of pairsOf(list)) {
+        if (local === name) return nameExportedAs(target, next, orig, names, seen);
+      }
+    }
+  }
+  return names.has(name) ? name : null;
+}
+
+/**
+ * The spellings of `names` in `file`: an import that binds one under
+ * another name, and `<namespace>.<alias>` for an alias a namespace-imported
+ * relative module re-exports one under.
+ */
+function spellingsIn(file: string, names: ReadonlyArray<string>): Spellings {
+  const set = new Set(names);
+  const alias = new Map<string, string>();
+  const src = source(file);
+  for (const { list, spec } of bindingLists(src, "import")) {
+    for (const { orig, local } of pairsOf(list)) {
+      if (local === orig && set.has(orig)) continue;
+      const name = nameExportedAs(file, spec, orig, set);
+      if (name !== null && local !== name) alias.set(local, name);
+    }
+  }
+  for (const m of src.matchAll(
+    /import\s+\*\s+as\s+([A-Za-z0-9_$]+)\s+from\s*["'](\.{1,2}\/[^"']+)["']/g,
+  )) {
+    const target = moduleFile(file, m[2]!);
+    if (target === null) continue;
+    for (const { list, spec } of bindingLists(source(target), "export")) {
+      for (const { orig, local } of pairsOf(list)) {
+        const name = nameExportedAs(target, spec, orig, set);
+        if (name !== null && local !== name) alias.set(`${m[1]!}.${local}`, name);
+      }
+    }
+  }
+  return { names, alias };
 }
 
 /** The names a function's code lines call: plain names and `ns.name` pairs. */
 function calledNames(lines: ReadonlyArray<string>, fn: Fn): { plain: Set<string>; ns: string[] } {
   const plain = new Set<string>();
   const ns: string[] = [];
-  for (let i = fn.start + 1; i < fn.end; i++) {
+  // The declaration line too (a one-line function calls there); the name
+  // it declares is not a call of itself.
+  for (let i = fn.start; i < fn.end; i++) {
     const line = lines[i]!;
     if (isComment(line)) continue;
     const code = codeOf(line);
     for (const m of code.matchAll(/(?<![A-Za-z0-9_$])([A-Za-z0-9_$]+)\s*(?:<[^>]*>)?\(/g)) {
+      if (i === fn.start && m[1] === fn.name) continue;
       plain.add(m[1]!);
     }
     for (const m of code.matchAll(/(?<![A-Za-z0-9_$.])([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)\s*\(/g)) {
       ns.push(`${m[1]!}.${m[2]!}`);
     }
+    // A function passed as a value: an edge to it when the name resolves.
+    if (i >= fn.bodyEnd) continue;
+    for (const m of code.matchAll(VALUE_NAME)) {
+      if (m[2] === undefined) plain.add(m[1]!);
+      else ns.push(`${m[1]!}.${m[2]}`);
+    }
   }
   return { plain, ns };
 }
+
+/** A name, or a `ns.name` pair, passed as a value. */
+const VALUE_NAME = new RegExp(
+  `${VALUE_HEAD}(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)(?:\\.([A-Za-z_$][A-Za-z0-9_$]*))?${VALUE_TAIL}`,
+  "g",
+);
 
 /** The names a module binds by its relative imports and the names it re-exports. */
 interface ModuleLinks {
@@ -316,12 +483,14 @@ function callGraph(modules: ReadonlyArray<string>): {
     named = new Map();
     byFile.set(file, named);
     const lines = source(file).split("\n");
+    const reads = spellingsIn(file, LANE_READS);
     for (const fn of functionsOf(lines)) {
       const node: Node = {
         id: `${file}#${fn.name}@${fn.start}`,
         file,
         fn,
-        direct: callsIn(lines, fn.start + 1, fn.end, LANE_READS).map((c) => c.name),
+        // The declaration line too: a one-line function makes its call there.
+        direct: callsIn(lines, fn.start, fn.end, reads, fn.bodyEnd).map((c) => c.name),
         callees: new Set(),
       };
       nodes.set(node.id, node);
@@ -391,8 +560,10 @@ export interface CensusSite {
 }
 
 /** The census of durable writes in the modules reachable from `src/mcp/`. */
-export function scanCensus(): CensusSite[] {
-  const modules = reachableModules().filter(
+export function scanCensus(roots: CensusRoots = ROOTS): CensusSite[] {
+  text.clear();
+  const SRC = roots.src;
+  const modules = reachableModules(roots).filter(
     (f) => f.startsWith(join(SRC, "core")) || f.startsWith(join(SRC, "mcp")),
   );
   const { nodes, byFile } = callGraph(modules);
@@ -434,11 +605,12 @@ export function scanCensus(): CensusSite[] {
   const sites = new Map<string, CensusSite>();
   for (const file of modules) {
     const lines = source(file).split("\n");
-    const rel = relative(REPO, file).split("\\").join("/");
+    const rel = relative(roots.repo, file).split("\\").join("/");
+    const writeSpellings = spellingsIn(file, WRITE_PRIMITIVES);
     for (const list of byFile.get(file)!.values()) {
       for (const node of list) {
         const fn = node.fn;
-        const writes = callsIn(lines, fn.start, fn.end, WRITE_PRIMITIVES);
+        const writes = callsIn(lines, fn.start, fn.end, writeSpellings, fn.bodyEnd);
         if (writes.length === 0) continue;
         const via = [...node.callees]
           .filter((c) => readers.has(c))

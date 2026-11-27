@@ -17,6 +17,7 @@ import { join } from "node:path";
 
 import { ensureInsideVault } from "../../path-safety.ts";
 import { listLaneFiles, lanePageExists, parseLanePage } from "../../store/lane-pages.ts";
+import { assertCreateMatchAtReach } from "../../store/lane-reach-guard.ts";
 import { legacySlugForms, titleIdentity, titleKeySlug } from "../../vault.ts";
 
 const PANELS_REL = "Brain/decisions/panels";
@@ -113,4 +114,23 @@ export function heldPanelDefaultName(
     names.find((rel) => rel !== targetPath && sameTopicPanelAt(vault, rel, topic)) ??
     null
   );
+}
+
+/**
+ * {@link heldPanelDefaultName} as a commit decides it (change
+ * `lane-reach-residuals`, design R8): below local reach the same-topic
+ * panel of the day is looked up on the fold of every partition first, and
+ * one held in `private` refuses the commit with the fixed answer, naming
+ * nothing of it. Otherwise the caller's own answer, as at local reach.
+ */
+export function heldPanelDefaultNameAtReach(
+  vault: string,
+  topic: string | null,
+  targetPath: string,
+): string | null {
+  assertCreateMatchAtReach(vault, () => {
+    const held = heldPanelDefaultName(vault, topic, targetPath);
+    return held === null ? [] : [join(vault, held)];
+  });
+  return heldPanelDefaultName(vault, topic, targetPath);
 }

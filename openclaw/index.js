@@ -10507,7 +10507,7 @@ function laneFingerprintOf(store, partitions) {
 function wholeLaneStoreFold(configPath) {
   return foldOf(configPath, STORE_PARTITIONS);
 }
-function foldOf(configPath, partitions) {
+function foldOf(configPath, partitions, remember = true) {
   const narrow = STORE_PARTITIONS.some((partition) => !partitions.includes(partition));
   let store;
   try {
@@ -10555,15 +10555,15 @@ ${cachedLines}`;
   const privateRemovals = new Set;
   const authorities = new Map;
   for (const [key, state] of foldLaneEntries(records).entries) {
+    const winner = state.history.find((h) => h.record.id === state.winner);
+    if (winner !== undefined)
+      authorities.set(key, winner.authority);
     if (state.value === null) {
       if (inPrivate.has(state.winner))
         privateRemovals.add(key);
       continue;
     }
     entries.set(key, state.value);
-    const winner = state.history.find((h) => h.record.id === state.winner);
-    if (winner !== undefined)
-      authorities.set(key, winner.authority);
     if (inPrivate.has(state.winner))
       privateKeys.add(key);
     let newest = 0;
@@ -10584,6 +10584,8 @@ ${blobLines}`);
     unreadable,
     pendingBlobs
   };
+  if (!remember)
+    return folded;
   if (unreadable.length === 0 && blobLines !== null)
     cache2.set(cacheKey, folded);
   else
@@ -10774,8 +10776,12 @@ var init_memory_ids = __esm(() => {
 // src/core/brain/artifact-ref-resolve.ts
 import { isAbsolute as isAbsolute4, join as join28 } from "node:path";
 import { existsSync as existsSync10, statSync as statSync18 } from "node:fs";
-function idShaped(id) {
-  return id.length <= LANE_ENTRY_ID_MAX && /^[^\s/\\]+$/.test(id);
+function laneShaped(bare) {
+  if (bare.trim() === "" || /[\r\n]/.test(bare))
+    return false;
+  if (!bare.includes("/"))
+    return !bare.includes("\\") && bare.length <= LANE_ENTRY_ID_MAX;
+  return bare.startsWith(BRAIN_PREFIX) && bare.length <= BRAIN_PREFIX.length + LANE_FOLDER_MAX + 1 + LANE_ENTRY_ID_MAX + MARKDOWN_EXT.length;
 }
 function canonicalLaneSpelling(bare) {
   if (!bare.startsWith(BRAIN_PREFIX))
@@ -10803,7 +10809,7 @@ function matchInFold(fold, bare) {
     const rel = laneIdIndex(fold).get(bare);
     if (rel !== undefined)
       return entryAt(rel) ?? NO_LANE_REF;
-    return incomplete && idShaped(bare) ? UNKNOWN_LANE_REF : NO_LANE_REF;
+    return incomplete && laneShaped(bare) ? UNKNOWN_LANE_REF : NO_LANE_REF;
   }
   const segments = bare.split("/");
   if (!bare.startsWith(BRAIN_PREFIX) || segments.some((s) => s === "" || s === "." || s === "..")) {
@@ -10819,19 +10825,32 @@ function matchInFold(fold, bare) {
 }
 function laneRefMatch(vault, ref, scope = artifactRefScope(vault)) {
   try {
-    const lanes = scope.lanes();
-    if (lanes === null)
-      return NO_LANE_REF;
     const spelled = posixRel(unbracket(ref));
     if (spelled.length === 0)
       return NO_LANE_REF;
     const bare = isAbsolute4(spelled) ? vaultRelative(spelled, vault) : spelled;
     if (bare.length === 0 || isAbsolute4(bare))
       return NO_LANE_REF;
-    return lanes.match(canonicalLaneSpelling(bare));
+    const canonical = canonicalLaneSpelling(bare);
+    if (!laneShaped(canonical))
+      return NO_LANE_REF;
+    const lanes = scope.lanes();
+    if (lanes === null)
+      return scope.lanesUnknown() ? UNKNOWN_LANE_REF : NO_LANE_REF;
+    return lanes.match(canonical);
   } catch {
     return UNKNOWN_LANE_REF;
   }
+}
+function laneFoldOf(configPath) {
+  if (referenceFolds === null)
+    return wholeLaneStoreFold(configPath);
+  let fold = referenceFolds.get(configPath);
+  if (fold === undefined) {
+    fold = wholeLaneStoreFold(configPath);
+    referenceFolds.set(configPath, fold);
+  }
+  return fold;
 }
 function laneIdIndex(fold) {
   const known = idIndexes.get(fold);
@@ -10856,12 +10875,8 @@ function laneIdIndex(fold) {
   idIndexes.set(fold, index);
   return index;
 }
-function storeLanesOf(vault, configPath) {
-  try {
-    if (!storeOnlyMode({ vault, ...configPath !== undefined ? { configPath } : {} }).storeOnly) {
-      return null;
-    }
-  } catch {
+function storeLanesAsked(vault, configPath) {
+  if (!storeOnlyMode({ vault, ...configPath !== undefined ? { configPath } : {} }).storeOnly) {
     return null;
   }
   const prefix = `${BRAIN_ROOT_REL}/`;
@@ -10869,7 +10884,7 @@ function storeLanesOf(vault, configPath) {
   const whole = () => {
     if (degraded !== undefined)
       return degraded;
-    const fold = wholeLaneStoreFold(configPath);
+    const fold = laneFoldOf(configPath);
     if (laneFoldIncomplete(fold))
       degraded = fold;
     return fold;
@@ -10904,27 +10919,35 @@ function matchOf(fold, bare) {
   return match;
 }
 function laneIdPath(lanes, id) {
-  return lanes.byId(id);
+  return laneShaped(id) ? lanes.byId(id) : null;
 }
 function artifactRefScope(vault, fromStore, configPath) {
   let store = fromStore;
   let dirs;
   let entities;
   let lanes;
+  const asked = () => {
+    try {
+      return { value: storeLanesAsked(vault, configPath), unknown: false };
+    } catch {
+      return { value: null, unknown: true };
+    }
+  };
   return {
     fromStore: () => store ??= memoryFromStore(vault, configPath),
     dirs: () => dirs ??= brainDirs(vault),
     entities: () => (entities ??= {
       value: memoryEntities({ vault, ...configPath !== undefined ? { configPath } : {} })
     }).value,
-    lanes: () => (lanes ??= { value: storeLanesOf(vault, configPath) }).value
+    lanes: () => (lanes ??= asked()).value,
+    lanesUnknown: () => (lanes ??= asked()).unknown
   };
 }
 function unbracket(ref) {
   const match = ANCHORED_WIKILINK_RE.exec(ref.trim());
   return stripWikilinkDecoration(match === null ? ref : match[1]);
 }
-function artifactPath(vault, id, scope) {
+function artifactPath(vault, id, scope, laneMatch) {
   const dirs = scope.dirs();
   const fromStore = scope.fromStore();
   if (fromStore) {
@@ -10943,6 +10966,8 @@ function artifactPath(vault, id, scope) {
     if (existsSync10(abs))
       return vaultRelative(abs, vault);
   }
+  if (laneMatch !== undefined)
+    return laneMatch.kind === "entry" ? laneMatch.rel : null;
   const lanes = scope.lanes();
   return lanes === null ? null : laneIdPath(lanes, id);
 }
@@ -10967,7 +10992,7 @@ function isVaultFile(vault, rel) {
     return false;
   }
 }
-function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault)) {
+function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault), laneMatch) {
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0)
     return null;
@@ -10978,9 +11003,9 @@ function resolveArtifactRef(vault, ref, scope = artifactRefScope(vault)) {
     return bare;
   if (bare.includes("/"))
     return pageCandidate(vault, bare, scope);
-  return artifactPath(vault, bare, scope);
+  return artifactPath(vault, bare, scope, laneMatch);
 }
-var NO_LANE_REF, UNKNOWN_LANE_REF, ID_EXTENSIONS, LANE_RANK, idIndexes, matches, MATCH_MEMO_MAX = 4096, BRAIN_PREFIX, MARKDOWN_EXT = ".md";
+var NO_LANE_REF, UNKNOWN_LANE_REF, LANE_FOLDER_MAX = 64, referenceFolds = null, ID_EXTENSIONS, LANE_RANK, idIndexes, matches, MATCH_MEMO_MAX = 4096, BRAIN_PREFIX, MARKDOWN_EXT = ".md";
 var init_artifact_ref_resolve = __esm(() => {
   init_path_safety();
   init_lane_fold_cache();

@@ -27,6 +27,7 @@ import { dreamQueueCheck } from "./dream-queue-check.ts";
 import { dreamReplayCheck } from "./dream-replay-check.ts";
 import { dreamTriggerCheck } from "./dream-trigger-check.ts";
 import { disciplineDoctorCheck, legacyDisciplineJobsCheck } from "./discipline-check.ts";
+import { reviewObligationSharedCheck } from "./review-obligation-check.ts";
 
 /** The store-side checks, in the order the vault pass runs them. */
 export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.freeze([
@@ -42,6 +43,7 @@ export const STORE_SIDE_CHECKS: ReadonlyArray<StoreSideDoctorCheck> = Object.fre
   legacyLocalFilesCheck,
   disciplineDoctorCheck,
   legacyDisciplineJobsCheck,
+  reviewObligationSharedCheck,
 ]);
 
 /**

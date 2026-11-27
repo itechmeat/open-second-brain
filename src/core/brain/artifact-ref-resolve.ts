@@ -47,6 +47,13 @@ export interface ArtifactRefScope {
   readonly entities: () => StoreEntities | null;
   /** The store's lane entries, on a machine whose lane pages live in the store; else `null`. */
   readonly lanes: () => StoreLanes | null;
+  /**
+   * Whether the question that answers {@link lanes} failed (whether the
+   * lane pages live in the store could not be told): {@link lanes} then
+   * answers `null`, as for a machine whose lane pages are files, and
+   * {@link laneRefMatch} answers `unknown` for a lane-shaped reference.
+   */
+  readonly lanesUnknown: () => boolean;
 }
 
 /**
@@ -88,9 +95,23 @@ export type LaneRefMatch =
 const NO_LANE_REF: LaneRefMatch = Object.freeze({ kind: "none" });
 const UNKNOWN_LANE_REF: LaneRefMatch = Object.freeze({ kind: "unknown" });
 
-/** Whether `id` could be a lane entry's bare id: one line, no blank, no separator. */
-function idShaped(id: string): boolean {
-  return id.length <= LANE_ENTRY_ID_MAX && /^[^\s/\\]+$/.test(id);
+/** The longest lane folder name (a lane name, `LEDGER_NAME_RE`). */
+const LANE_FOLDER_MAX = 64;
+
+/**
+ * Whether the vault-relative reference `bare` could name a lane entry,
+ * judged before any fold read (design R15): one non-blank line that is a
+ * bare id no longer than any lane id (an inner space included, design R3)
+ * or a `Brain/` path no longer than any lane entry's page path.
+ */
+function laneShaped(bare: string): boolean {
+  if (bare.trim() === "" || /[\r\n]/.test(bare)) return false;
+  if (!bare.includes("/")) return !bare.includes("\\") && bare.length <= LANE_ENTRY_ID_MAX;
+  return (
+    bare.startsWith(BRAIN_PREFIX) &&
+    bare.length <=
+      BRAIN_PREFIX.length + LANE_FOLDER_MAX + 1 + LANE_ENTRY_ID_MAX + MARKDOWN_EXT.length
+  );
 }
 
 /**
@@ -129,7 +150,7 @@ function matchInFold(fold: LaneFolded, bare: string): LaneRefMatch {
   if (!bare.includes("/")) {
     const rel = laneIdIndex(fold).get(bare);
     if (rel !== undefined) return entryAt(rel) ?? NO_LANE_REF;
-    return incomplete && idShaped(bare) ? UNKNOWN_LANE_REF : NO_LANE_REF;
+    return incomplete && laneShaped(bare) ? UNKNOWN_LANE_REF : NO_LANE_REF;
   }
   const segments = bare.split("/");
   if (!bare.startsWith(BRAIN_PREFIX) || segments.some((s) => s === "" || s === "." || s === "..")) {
@@ -149,8 +170,11 @@ function matchInFold(fold: LaneFolded, bare: string): LaneRefMatch {
  * reference is unbracketed, its alias and anchor dropped, an absolute
  * path made vault-relative, then resolved by {@link matchInFold} against
  * the fold of every partition of the store `scope` was made for. `none`
- * on a machine whose lane pages are files; `unknown` when the question
- * fails. A caller treats `unknown` as private (fail closed).
+ * for a string that cannot name a lane entry (judged before any fold
+ * read, design R15) and on a machine whose lane pages are files;
+ * `unknown` when the question fails, the question whether the lane pages
+ * live in the store included (design R3). A caller treats `unknown` as
+ * private (fail closed).
  */
 export function laneRefMatch(
   vault: string,
@@ -158,16 +182,53 @@ export function laneRefMatch(
   scope: ArtifactRefScope = artifactRefScope(vault),
 ): LaneRefMatch {
   try {
-    const lanes = scope.lanes();
-    if (lanes === null) return NO_LANE_REF;
     const spelled = posixRel(unbracket(ref));
     if (spelled.length === 0) return NO_LANE_REF;
     const bare = isAbsolute(spelled) ? vaultRelative(spelled, vault) : spelled;
     if (bare.length === 0 || isAbsolute(bare)) return NO_LANE_REF;
-    return lanes.match(canonicalLaneSpelling(bare));
+    const canonical = canonicalLaneSpelling(bare);
+    if (!laneShaped(canonical)) return NO_LANE_REF;
+    const lanes = scope.lanes();
+    if (lanes === null) return scope.lanesUnknown() ? UNKNOWN_LANE_REF : NO_LANE_REF;
+    return lanes.match(canonical);
   } catch {
     return UNKNOWN_LANE_REF;
   }
+}
+
+/**
+ * The fold of every partition each configuration names, read once for
+ * the reference being judged ({@link withReferenceFold}); `null` outside
+ * such a judgement.
+ */
+let referenceFolds: Map<string | undefined, LaneFolded> | null = null;
+
+/**
+ * Run `judge`, the judgement of one reference, reading the fold of every
+ * partition at most once (design R15): the lane match, the bare-id
+ * resolution and a lane entry's own record all read the fold this
+ * judgement read first. A later judgement reads the fold again, so a
+ * write between two references is seen.
+ */
+export function withReferenceFold<T>(judge: () => T): T {
+  if (referenceFolds !== null) return judge();
+  referenceFolds = new Map();
+  try {
+    return judge();
+  } finally {
+    referenceFolds = null;
+  }
+}
+
+/** The fold of every partition, the one the reference being judged read when there is one. */
+function laneFoldOf(configPath?: string): LaneFolded {
+  if (referenceFolds === null) return wholeLaneStoreFold(configPath);
+  let fold = referenceFolds.get(configPath);
+  if (fold === undefined) {
+    fold = wholeLaneStoreFold(configPath);
+    referenceFolds.set(configPath, fold);
+  }
+  return fold;
 }
 
 /** The extensions a lane entry's page name drops to give its id. */
@@ -213,13 +274,21 @@ function laneIdIndex(fold: LaneFolded): ReadonlyMap<string, string> {
   return index;
 }
 
-/** The {@link StoreLanes} of `vault`, or `null` when its lane pages are files. */
+/** The {@link StoreLanes} of `vault`, or `null` when its lane pages are files or that cannot be told. */
 function storeLanesOf(vault: string, configPath?: string): StoreLanes | null {
   try {
-    if (!storeOnlyMode({ vault, ...(configPath !== undefined ? { configPath } : {}) }).storeOnly) {
-      return null;
-    }
+    return storeLanesAsked(vault, configPath);
   } catch {
+    return null;
+  }
+}
+
+/**
+ * The {@link StoreLanes} of `vault`, or `null` when its lane pages are
+ * files; throws when the question whether they live in the store fails.
+ */
+function storeLanesAsked(vault: string, configPath?: string): StoreLanes | null {
+  if (!storeOnlyMode({ vault, ...(configPath !== undefined ? { configPath } : {}) }).storeOnly) {
     return null;
   }
   const prefix = `${BRAIN_ROOT_REL}/`;
@@ -231,7 +300,7 @@ function storeLanesOf(vault: string, configPath?: string): StoreLanes | null {
   let degraded: LaneFolded | undefined;
   const whole = (): LaneFolded => {
     if (degraded !== undefined) return degraded;
-    const fold = wholeLaneStoreFold(configPath);
+    const fold = laneFoldOf(configPath);
     if (laneFoldIncomplete(fold)) degraded = fold;
     return fold;
   };
@@ -293,9 +362,12 @@ export function resolveStoreLaneRef(
   return match.kind === "entry" ? match.rel : null;
 }
 
-/** The page path of the store-held lane entry named by the bare id `id`, or `null`. */
+/**
+ * The page path of the store-held lane entry named by the bare id `id`, or
+ * `null`: an id that cannot name a lane entry reads no fold (design R15).
+ */
 function laneIdPath(lanes: StoreLanes, id: string): string | null {
-  return lanes.byId(id);
+  return laneShaped(id) ? lanes.byId(id) : null;
 }
 
 /** A lane entry the store holds, as a reference judge reads it (design D6, D7). */
@@ -331,11 +403,13 @@ export function storeLaneEntryAt(
   configPath?: string,
 ): StoreLaneEntry | null {
   const prefix = `${BRAIN_ROOT_REL}/`;
-  const segments = rel.split("/");
-  if (!rel.startsWith(prefix) || segments.some((s) => s === "" || s === "." || s === "..")) {
+  // Canonicalized before it is split (F1): a doubled separator or a
+  // trailing slash names the entry its canonical spelling does.
+  const canonical = canonicalLaneSpelling(rel);
+  const segments = canonical.split("/");
+  if (!canonical.startsWith(prefix) || segments.some((s) => s === "" || s === "." || s === "..")) {
     return null;
   }
-  const canonical = canonicalLaneSpelling(rel);
   const place = lanePlaceOf(canonical.slice(prefix.length));
   if (place === null) return null;
   // The rule of `laneEntryInPrivate`, read from one fold here: that module
@@ -345,7 +419,7 @@ export function storeLaneEntryAt(
   // answers the same (fail closed).
   try {
     if (storeLanesOf(vault, configPath) === null) return null;
-    const fold = wholeLaneStoreFold(configPath);
+    const fold = laneFoldOf(configPath);
     if (laneFoldIncomplete(fold)) return { rel: canonical, meta: {}, private: true };
     const key = laneEntryKey(place.lane, place.entry);
     const value = fold.entries.get(key);
@@ -373,7 +447,14 @@ export function artifactRefScope(
   let store = fromStore;
   let dirs: BrainDirs | undefined;
   let entities: { readonly value: StoreEntities | null } | undefined;
-  let lanes: { readonly value: StoreLanes | null } | undefined;
+  let lanes: { readonly value: StoreLanes | null; readonly unknown: boolean } | undefined;
+  const asked = (): { readonly value: StoreLanes | null; readonly unknown: boolean } => {
+    try {
+      return { value: storeLanesAsked(vault, configPath), unknown: false };
+    } catch {
+      return { value: null, unknown: true };
+    }
+  };
   return {
     fromStore: () => (store ??= memoryFromStore(vault, configPath)),
     dirs: () => (dirs ??= brainDirs(vault)),
@@ -381,7 +462,8 @@ export function artifactRefScope(
       (entities ??= {
         value: memoryEntities({ vault, ...(configPath !== undefined ? { configPath } : {}) }),
       }).value,
-    lanes: () => (lanes ??= { value: storeLanesOf(vault, configPath) }).value,
+    lanes: () => (lanes ??= asked()).value,
+    lanesUnknown: () => (lanes ??= asked()).unknown,
   };
 }
 
@@ -449,7 +531,12 @@ function unbracket(ref: string): string {
  * `.base` view definitions rather than Markdown pages, and `snapshots`
  * holds dated copies addressed by path rather than by id.
  */
-function artifactPath(vault: string, id: string, scope: ArtifactRefScope): string | null {
+function artifactPath(
+  vault: string,
+  id: string,
+  scope: ArtifactRefScope,
+  laneMatch?: LaneRefMatch,
+): string | null {
   const dirs = scope.dirs();
   const fromStore = scope.fromStore();
   // Store-only (task 2.10): a preference or a signal is a record of the
@@ -479,7 +566,9 @@ function artifactPath(vault: string, id: string, scope: ArtifactRefScope): strin
     if (existsSync(abs)) return vaultRelative(abs, vault);
   }
   // A machine whose lane pages live in the store holds these as lane
-  // entries, not files (design D6 item 1).
+  // entries, not files (design D6 item 1). A lane match the caller already
+  // made for this reference is used as it is (design R15).
+  if (laneMatch !== undefined) return laneMatch.kind === "entry" ? laneMatch.rel : null;
   const lanes = scope.lanes();
   return lanes === null ? null : laneIdPath(lanes, id);
 }
@@ -540,9 +629,17 @@ function isVaultFile(vault: string, rel: string): boolean {
  *    absolute, on another Windows drive), which every caller refuses.
  *
  * A caller that resolves many references in one operation passes one
- * `scope` for all of them (see {@link ArtifactRefScope}).
+ * `scope` for all of them (see {@link ArtifactRefScope}). A caller that
+ * already asked {@link laneRefMatch} for `ref` with the same scope passes
+ * its answer as `laneMatch`, so a bare id reads no lane index again.
  */
-export function resolveArtifactRef(
+/**
+ * The page a bare memory-record id (a preference or a signal) names, or
+ * `null` for any other reference: the first step {@link resolveArtifactRef}
+ * takes for a bare id, which a view below local reach judges before a
+ * shared lane entry of the same id (code review of packages 1 to 5).
+ */
+export function memoryRecordRel(
   vault: string,
   ref: string,
   scope: ArtifactRefScope = artifactRefScope(vault),
@@ -550,8 +647,34 @@ export function resolveArtifactRef(
   const spelled = posixRel(unbracket(ref));
   if (spelled.length === 0) return null;
   const bare = canonicalLaneSpelling(isAbsolute(spelled) ? vaultRelative(spelled, vault) : spelled);
+  if (bare.length === 0 || bare.endsWith(MARKDOWN_EXT) || bare.includes("/")) return null;
+  if (scope.fromStore()) return memoryRelOf(scope.entities(), bare);
+  const dirs = scope.dirs();
+  for (const dir of [
+    dirs.preferences,
+    dirs.retired,
+    dirs.inbox,
+    dirs.processed,
+    dirs.archived,
+    dirs.pending,
+  ]) {
+    const abs = join(dir, `${bare}${MARKDOWN_EXT}`);
+    if (existsSync(abs)) return vaultRelative(abs, vault);
+  }
+  return null;
+}
+
+export function resolveArtifactRef(
+  vault: string,
+  ref: string,
+  scope: ArtifactRefScope = artifactRefScope(vault),
+  laneMatch?: LaneRefMatch,
+): string | null {
+  const spelled = posixRel(unbracket(ref));
+  if (spelled.length === 0) return null;
+  const bare = canonicalLaneSpelling(isAbsolute(spelled) ? vaultRelative(spelled, vault) : spelled);
   if (bare.length === 0) return null;
   if (bare.endsWith(MARKDOWN_EXT)) return bare;
   if (bare.includes("/")) return pageCandidate(vault, bare, scope);
-  return artifactPath(vault, bare, scope);
+  return artifactPath(vault, bare, scope, laneMatch);
 }

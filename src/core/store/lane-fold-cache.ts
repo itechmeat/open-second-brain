@@ -75,9 +75,12 @@ export interface LaneFolded {
    */
   readonly partitionUnknown?: true;
   /**
-   * The authority of each live entry's winning record: a rewrite that only
-   * adds to an entry (a privacy restamp) keeps it, so a later writer of the
-   * same standing can still replace the entry.
+   * The authority of the winning record of every key the fold holds a
+   * record for, a live entry or a removal: a rewrite that only adds to an
+   * entry (a privacy restamp) keeps it, so a later writer of the same
+   * standing can still replace the entry, and a write that replaces,
+   * removes, moves or re-creates an entry keeps the standing of the record
+   * that holds the key (`lane-standing.ts`).
    */
   readonly authorities: ReadonlyMap<string, Authority>;
   /**
@@ -247,6 +250,17 @@ export function wholeLaneStoreFold(configPath?: string): LaneFolded {
 }
 
 /**
+ * The lane fold of every partition, read anew and left out of the cache:
+ * the read-back of a lane write (`lane-standing.ts`) reads what the store
+ * holds right after the write without leaving a fold behind that a later
+ * reader would be served in place of its own read (a stored fold is not
+ * rebuilt for a blob that goes after it was read).
+ */
+export function freshLaneStoreFold(configPath?: string): LaneFolded {
+  return foldOf(configPath, STORE_PARTITIONS, false);
+}
+
+/**
  * The lane fold of `partitions` of the configured store. The fold of
  * every partition is cached under the store root; any narrower one under
  * the root plus its partitions, with its fingerprint prefixed by a line
@@ -256,6 +270,7 @@ export function wholeLaneStoreFold(configPath?: string): LaneFolded {
 function foldOf(
   configPath: string | undefined,
   partitions: ReadonlyArray<StorePartition>,
+  remember = true,
 ): LaneFolded {
   const narrow = STORE_PARTITIONS.some((partition) => !partitions.includes(partition));
   let store: StoreInspection | null;
@@ -312,13 +327,13 @@ function foldOf(
   const privateRemovals = new Set<string>();
   const authorities = new Map<string, Authority>();
   for (const [key, state] of foldLaneEntries(records).entries) {
+    const winner = state.history.find((h) => h.record.id === state.winner);
+    if (winner !== undefined) authorities.set(key, winner.authority);
     if (state.value === null) {
       if (inPrivate.has(state.winner)) privateRemovals.add(key);
       continue;
     }
     entries.set(key, state.value);
-    const winner = state.history.find((h) => h.record.id === state.winner);
-    if (winner !== undefined) authorities.set(key, winner.authority);
     if (inPrivate.has(state.winner)) privateKeys.add(key);
     let newest = 0;
     for (const h of state.history) newest = Math.max(newest, parseHlc(h.record.hlc)?.physical ?? 0);
@@ -351,6 +366,7 @@ function foldOf(
     unreadable,
     pendingBlobs,
   };
+  if (!remember) return folded;
   if (unreadable.length === 0 && blobLines !== null) cache.set(cacheKey, folded);
   else cache.delete(cacheKey);
   return folded;

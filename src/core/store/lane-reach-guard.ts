@@ -19,17 +19,27 @@
  * The write primitives of `lane-pages.ts` call it, and so do the writers
  * that build their records around those primitives (the lifecycle store
  * writer, the decision record, the entity registry).
+ *
+ * A key whose winning record is a removal held in `private` is refused
+ * like a live private entry: the entry was private when it went, and a
+ * write there would supersede that removal (change `lane-reach-residuals`,
+ * design R5). The record builders judge reach and privacy again from the
+ * one fold they build from, and refuse the whole operation for an entry
+ * raised to `private` since the first check; {@link storeWriteAtReach}
+ * hands such a refusal to the caller as itself.
  */
 
 import { join } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { privateWithheld, withPrivateShown } from "./caller-reach.ts";
+import { StoreWriteError } from "./store-write.ts";
 import type { DualWriteRecord } from "./dual-write.ts";
 import { foldedAt, laneRemovalRecords } from "./lane-dual-moves.ts";
 import {
   brainRelOf,
   heldInStore,
+  insideBrain,
   isPrivateEntry,
   laneEntryInPrivate,
   lanePagesInStore,
@@ -38,6 +48,7 @@ import {
 import { laneFoldIncomplete, wholeLaneStoreFold, type LaneFolded } from "./lane-fold-cache.ts";
 import { lanePlaceOf } from "./lane-paths.ts";
 import { laneEntryKey } from "./lane-records.ts";
+import { isPrivateFrontmatter } from "./private-page.ts";
 
 /** The fixed answer of a lane write refused below local reach. */
 export const LANE_ENTRY_WITHHELD_MESSAGE = "this entry cannot be written at this reach";
@@ -66,10 +77,19 @@ function liveInPrivate(fold: LaneFolded, key: string): boolean {
 }
 
 /**
+ * Whether the winning record of the key in `fold` is held in `private`: a
+ * live entry there, or a removal held there (design R5).
+ */
+function winnerInPrivate(fold: LaneFolded, key: string): boolean {
+  return liveInPrivate(fold, key) || fold.privateRemovals.has(key);
+}
+
+/**
  * Below local reach, refuse a write of the lane entries at `paths` when
- * the fold of every partition may miss a record or any of them is live in
- * `private`. Paths that name no store-held lane entry are not judged, and
- * with none left nothing is read. Call it before the first record.
+ * the fold of every partition may miss a record or the winning record of
+ * any of them is held in `private` (a live entry, or a removal). Paths
+ * that name no store-held lane entry are not judged, and with none left
+ * nothing is read. Call it before the first record.
  */
 export function assertLaneWriteAtReach(
   vault: string,
@@ -80,7 +100,7 @@ export function assertLaneWriteAtReach(
   const keys = paths.flatMap((path) => storeKeyOf(vault, path, configPath) ?? []);
   if (keys.length === 0) return;
   const fold = wholeLaneStoreFold(configPath);
-  if (laneFoldIncomplete(fold) || keys.some((key) => liveInPrivate(fold, key))) {
+  if (laneFoldIncomplete(fold) || keys.some((key) => winnerInPrivate(fold, key))) {
     throw new LaneEntryWithheldError();
   }
 }
@@ -135,9 +155,10 @@ export function assertEntryShareableAtReach(
 /**
  * The paths of `paths` a lane write may act on, judged by `fold` (the
  * fold of every partition the write builds its records from): below local
- * reach a fold that may miss a record refuses the write, and a path whose
- * entry is live in `private` in `fold` is left out, as one that is not
- * there. Outside that scope every path is kept.
+ * reach a fold that may miss a record, or a path whose entry is live in
+ * `private` in `fold` (raised since the caller's first check), refuses the
+ * whole write, so a folder is never split and a removal or a move is never
+ * dropped in silence (design R5). Outside that scope every path is kept.
  */
 export function pathsAtReach(
   vault: string,
@@ -147,10 +168,11 @@ export function pathsAtReach(
 ): ReadonlyArray<string> {
   if (!privateWithheld()) return paths;
   if (laneFoldIncomplete(fold)) throw new LaneEntryWithheldError();
-  return paths.filter((path) => {
+  for (const path of paths) {
     const key = storeKeyOf(vault, path, configPath);
-    return key === null || !liveInPrivate(fold, key);
-  });
+    if (key !== null && liveInPrivate(fold, key)) throw new LaneEntryWithheldError();
+  }
+  return paths;
 }
 
 /**
@@ -159,9 +181,10 @@ export function pathsAtReach(
  * partition each tombstone goes to are read from ONE fold of every
  * partition, read when the write builds its records. A winner that changed
  * after the caller's own read (an entry raised to `private` meanwhile) is
- * judged again here, so below local reach no tombstone is ever built over
- * a `private` entry, and none lands in `private`. Empty when nothing is
- * left to remove.
+ * judged again here, and below local reach refuses the whole removal
+ * ({@link pathsAtReach}): no tombstone is ever built over a `private`
+ * entry, and none lands in `private`. Empty when nothing is left to
+ * remove.
  */
 export function removalRecordsAtReach(
   vault: string,
@@ -175,9 +198,11 @@ export function removalRecordsAtReach(
 /**
  * Below local reach, refuse a write of the lane entries at `paths` judged
  * by `fold` (the fold of every partition the write builds its records
- * from): a fold that may miss a record, or an entry live in `private`
- * there. For a write that already passed {@link assertLaneWriteAtReach}
- * on an earlier read and must judge again at build time.
+ * from): a fold that may miss a record, or a key whose winning record is
+ * held in `private` there (a live entry, or a removal). For a write that
+ * already passed {@link assertLaneWriteAtReach} on an earlier read and
+ * must judge again at build time. As there, paths that name no store-held
+ * lane entry are not judged (the dual write of an unswitched machine).
  */
 export function assertWritableInFold(
   vault: string,
@@ -186,10 +211,10 @@ export function assertWritableInFold(
   configPath?: string,
 ): void {
   if (!privateWithheld()) return;
-  if (laneFoldIncomplete(fold)) throw new LaneEntryWithheldError();
-  for (const path of paths) {
-    const key = storeKeyOf(vault, path, configPath);
-    if (key !== null && liveInPrivate(fold, key)) throw new LaneEntryWithheldError();
+  const keys = paths.flatMap((path) => storeKeyOf(vault, path, configPath) ?? []);
+  if (keys.length === 0) return;
+  if (laneFoldIncomplete(fold) || keys.some((key) => winnerInPrivate(fold, key))) {
+    throw new LaneEntryWithheldError();
   }
 }
 
@@ -197,8 +222,10 @@ export function assertWritableInFold(
  * The source entry of a single-page move from `from` to `to`, judged inside
  * the store write from `fold` (the fold the write builds its records
  * from): the destination is judged again ({@link assertWritableInFold}),
- * and a source live in `private` there (raised since the caller's read) is
- * `null`, left alone. The tombstone's partition is the one `fold` names.
+ * and below local reach a source live in `private` there (raised since the
+ * caller's read) refuses the move ({@link pathsAtReach}) instead of being
+ * left out in silence. `null` for a source the fold no longer holds. The
+ * tombstone's partition is the one `fold` names.
  */
 export function moveSourceAtReach(
   vault: string,
@@ -208,8 +235,48 @@ export function moveSourceAtReach(
   configPath?: string,
 ): ReturnType<typeof foldedAt> {
   assertWritableInFold(vault, fold, [to], configPath);
-  if (pathsAtReach(vault, fold, [from], configPath).length === 0) return null;
+  pathsAtReach(vault, fold, [from], configPath);
   return foldedAt(fold, vault, from);
+}
+
+/**
+ * Whether the record a lane write builds at `path` goes to `private`,
+ * judged from `fold` (the fold the write builds its records from): the
+ * entry there lives in `private` or reserves it by its fields, or the fold
+ * may miss a record (fail closed). The rule of `storedEntryPrivate`, read
+ * from one fold (design R5). A key whose winning record is a removal held
+ * in `private` holds no entry, so it follows the ordinary rule at local
+ * reach (the operator's way to make a private entry shared: remove it,
+ * then write it anew); below local reach the write was refused before
+ * ({@link assertWritableInFold}). False for a path that names no lane
+ * entry.
+ */
+export function entryPrivateInFold(vault: string, fold: LaneFolded, path: string): boolean {
+  if (!insideBrain(vault, path)) return false;
+  const place = lanePlaceOf(brainRelOf(vault, path));
+  if (place === null) return false;
+  if (laneFoldIncomplete(fold)) return true;
+  const key = laneEntryKey(place.lane, place.entry);
+  const value = fold.entries.get(key);
+  return value !== undefined && (fold.privateKeys.has(key) || isPrivateFrontmatter(value.fields));
+}
+
+/**
+ * Run a store write whose record builder judges reach (`write` calls
+ * `storeWrite` or `routeWrite`): a {@link LaneEntryWithheldError} the
+ * builder raised reaches the caller as itself, the fixed answer, never
+ * wrapped in a `StoreWriteError` with a store-error reason and the doctor
+ * remedy. Anything else passes through unchanged.
+ */
+export function storeWriteAtReach<T>(write: () => T): T {
+  try {
+    return write();
+  } catch (err) {
+    if (err instanceof StoreWriteError && err.cause instanceof LaneEntryWithheldError) {
+      throw err.cause;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -262,6 +329,23 @@ export function assertHolderReadableAtReach(privateHolder: boolean): void {
 type ReadableRel = (rel: string) => boolean;
 
 /**
+ * The caller's own reach predicate `readable` widened to every lane entry
+ * held in `private`: the identity rule a local caller with the same store
+ * applies, for a decision read on the fold of every partition (change
+ * `lane-reach-residuals`, design R8). Undefined stays undefined (every
+ * path readable).
+ */
+export function wideReadableAtReach(
+  vault: string,
+  readable: ReadableRel | undefined,
+  configPath?: string,
+): ReadableRel | undefined {
+  return readable === undefined
+    ? undefined
+    : (rel) => laneEntryInPrivate(vault, join(vault, rel), configPath) || readable(rel);
+}
+
+/**
  * The identity decision of a create the caller addresses (a deduplication,
  * a title or identity reservation, the entry a create would update in
  * place), taken on the fold of every partition (the write rule). `matches`
@@ -280,27 +364,50 @@ export function assertCreateMatchAtReach(
   configPath?: string,
 ): void {
   if (!privateWithheld()) return;
-  const wide: ReadableRel | undefined =
-    readable === undefined
-      ? undefined
-      : (rel) => laneEntryInPrivate(vault, join(vault, rel), configPath) || readable(rel);
+  const wide = wideReadableAtReach(vault, readable, configPath);
   let found: ReadonlyArray<string>;
   try {
     found = withPrivateShown(() => matches(wide));
   } catch (err) {
     // An error raised while `private` was shown was composed from a view
     // the caller may not read (an unreadable entry it met, a slot it
-    // found held): it never reaches the caller while an entry it could
-    // have read is held in `private`, and the store's lanes are where
-    // `matches` reads.
-    if (err instanceof LaneEntryWithheldError || privateLaneEntryMayExist(vault, configPath)) {
-      throw new LaneEntryWithheldError();
-    }
-    throw err;
+    // found held). While an entry it could have read may be held in
+    // `private`, the caller gets that class of error only from its own
+    // view: `matches` runs once more with the caller's own predicate,
+    // outside that scope, and an error of the same class from that run is
+    // the caller's own (a validation error of a slot its own entries
+    // fill); anything else is the fixed answer (change
+    // `lane-reach-residuals`, design R12).
+    if (err instanceof LaneEntryWithheldError) throw new LaneEntryWithheldError();
+    if (!privateLaneEntryMayExist(vault, configPath)) throw err;
+    throw ownErrorOfClass(err, () => matches(readable)) ?? new LaneEntryWithheldError();
   }
   if (found.some((path) => laneEntryInPrivate(vault, path, configPath))) {
     throw new LaneEntryWithheldError();
   }
+}
+
+/**
+ * The error `run` raises on the caller's own view when it is of the class
+ * of `err` (the same constructor), else undefined. A fixed refusal is
+ * never the caller's own error here.
+ */
+function ownErrorOfClass(err: unknown, run: () => unknown): unknown {
+  try {
+    run();
+  } catch (own) {
+    if (
+      !(own instanceof LaneEntryWithheldError) &&
+      typeof own === "object" &&
+      own !== null &&
+      typeof err === "object" &&
+      err !== null &&
+      Object.getPrototypeOf(own) === Object.getPrototypeOf(err)
+    ) {
+      return own;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -367,21 +474,4 @@ export function treeMembersAtReach(
     throw new LaneEntryWithheldError();
   }
   return paths;
-}
-
-/**
- * The coarse rule, bulk form: below local reach, refuse a verb that
- * removes, moves, merges or rewrites lane entries the caller did not
- * address one by one (a hygiene apply, a derived-page refresh) while any
- * lane holds a live entry in `private`, or the fold of every partition may
- * miss a record. Call it before the first durable step. On a store with no
- * `private` entry, and outside that scope, the verb runs as before. The
- * refusal says nothing of which entry or lane holds one.
- */
-export function assertNoPrivateLaneEntryAtReach(vault: string, configPath?: string): void {
-  if (!privateWithheld() || !lanePagesInStore(vault, configPath)) return;
-  const fold = wholeLaneStoreFold(configPath);
-  if (laneFoldIncomplete(fold) || [...fold.privateKeys].some((key) => fold.entries.has(key))) {
-    throw new LaneEntryWithheldError();
-  }
 }

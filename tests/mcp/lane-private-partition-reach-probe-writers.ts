@@ -19,7 +19,8 @@ import { addObligation } from "../../src/core/brain/obligations.ts";
 import { createPledgePage } from "../../src/core/brain/pledges.ts";
 import { persistTension } from "../../src/core/brain/tensions.ts";
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
-import { writeLaneText } from "../../src/core/store/lane-pages.ts";
+import { attentionFlowsDir } from "../../src/core/brain/paths.ts";
+import { writeLanePage, writeLaneText } from "../../src/core/store/lane-pages.ts";
 import { brainRelOfEntry } from "../../src/core/store/lane-paths.ts";
 import type { MCPServer } from "../../src/mcp/server.ts";
 import type { LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
@@ -164,7 +165,13 @@ export const WRITERS: ReadonlyArray<WriterRow> = [
         review_date: "2026-12-01",
         notes: `zqwdec${k}notes${region(hidden)}`,
       });
-      const id = String(recorded["id"] ?? "");
+      const id = recorded["id"];
+      // A decision recorded without an id would seed an entry at no path.
+      if (typeof id !== "string" || id === "") {
+        throw new Error(
+          `probe writer: the recorded decision has no id: ${JSON.stringify(recorded)}`,
+        );
+      }
       const marks = [
         { field: "title", mark: `Zqwdec${k}title` },
         { field: "chosen", mark: `zqwdec${k}chosen` },
@@ -330,6 +337,31 @@ export const WRITERS: ReadonlyArray<WriterRow> = [
       return { rel: path, marks, id: `zqwprc${k}slug`, title: `Zqwprc${k}title` };
     },
     reader: { tool: "brain_procedural_memory", args: { operation: "list" } },
+  },
+  {
+    lane: "attention flows",
+    seed: async (e, _local, hidden) => {
+      const k = kindOf(hidden);
+      const path = join(attentionFlowsDir(e.vault), `zqwflw${k}id.md`);
+      writeLanePage(
+        e.vault,
+        path,
+        {
+          kind: "brain-attention-flow",
+          id: `zqwflw${k}id`,
+          title: `Zqwflw${k}title`,
+          actions: ["open_proposals"],
+        },
+        `# Zqwflw${k}title\n\nzqwflw${k}body steps${region(hidden)}\n`,
+      );
+      const marks = [
+        { field: "id", mark: `zqwflw${k}id` },
+        { field: "title", mark: `Zqwflw${k}title` },
+        { field: "body", mark: `zqwflw${k}body` },
+      ];
+      return { rel: rel(e, path), marks, id: `zqwflw${k}id`, title: `Zqwflw${k}title` };
+    },
+    reader: { tool: "brain_analytics", args: { view: "attention_flows", operation: "list" } },
   },
 ];
 

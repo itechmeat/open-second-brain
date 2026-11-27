@@ -9,7 +9,7 @@ import { buildRetentionReview } from "../retention.ts";
 import { collisionCandidates, detectAgentCollisions } from "../truth/collision.ts";
 import { readClaimEvents } from "../truth/store.ts";
 import { candidatesFromHealth, candidatesFromRetention } from "./adapters.ts";
-import { createTriggersAtReach } from "./create-at-reach.ts";
+import { createTriggersCountedAtReach } from "./create-at-reach.ts";
 import { type CreateTriggersOptions, type CreateTriggersResult } from "./store.ts";
 import type { InsightCandidate } from "./types.ts";
 
@@ -79,7 +79,9 @@ export function scanTriggers(vault: string, opts: ScanTriggersOptions): ScanTrig
   }
   candidates.push(...(opts.extraCandidates ?? []));
 
-  // On the fold of every partition, its answer narrowed below local reach.
-  const result = createTriggersAtReach(vault, candidates, opts);
-  return Object.freeze({ ...result, candidates: candidates.length });
+  // On the fold of every partition, its answer narrowed below local reach;
+  // `candidates` leaves out the findings whose trigger or skip the answer
+  // leaves out, so it counts what `created` and `skipped` show.
+  const { result, withheld } = createTriggersCountedAtReach(vault, candidates, opts);
+  return Object.freeze({ ...result, candidates: candidates.length - withheld });
 }

@@ -23,9 +23,12 @@ import {
   listLaneFiles,
   moveLanePage,
   parseLanePage,
+  readLaneBase,
+  withLaneLock,
   writeLaneText,
 } from "../store/lane-pages.ts";
 import { takenOnWholeFold } from "../store/lane-reach-guard.ts";
+import { alreadyRecorded } from "./repeat-call.ts";
 
 export interface IntentionChain {
   readonly scope: string;
@@ -150,25 +153,36 @@ export function setIntention(vault: string, input: SetIntentionInput): Intention
   const now = input.now ?? new Date();
   const text = input.text.trim();
   if (text.length === 0) throw new Error("intention text must not be empty");
-  const prior = parseChain(vault, scope);
-  const history =
-    prior === null
-      ? []
-      : [
-          `v${prior.version} (${prior.updatedAt}): ${prior.text.replace(/\s+/gu, " ").slice(0, HISTORY_SNIPPET_CHARS)}`,
-          ...prior.history,
-        ];
-  const chain = {
-    scope,
-    version: (prior?.version ?? 0) + 1,
-    updatedAt: isoSecond(now),
-    agent: input.agent,
-    text,
-    history: Object.freeze(history),
-  };
   const path = intentionPath(vault, scope);
-  writeLaneText(vault, path, renderChain(chain));
-  return Object.freeze({ ...chain, path });
+  // A read-modify-write of the chain: the base taken before the read the
+  // new version is computed from (`replaces`), under the page's lane lock
+  // where the page is a store entry. A machine whose lane pages are files
+  // writes as it did, without that lock.
+  const write = (): IntentionChain => {
+    const base = readLaneBase(vault, path);
+    const prior = parseChain(vault, scope);
+    // A repeat of the call with the text the chain already has writes
+    // nothing and answers as already recorded.
+    if (prior !== null && prior.text.trim() === text) return alreadyRecorded(prior);
+    const history =
+      prior === null
+        ? []
+        : [
+            `v${prior.version} (${prior.updatedAt}): ${prior.text.replace(/\s+/gu, " ").slice(0, HISTORY_SNIPPET_CHARS)}`,
+            ...prior.history,
+          ];
+    const chain = {
+      scope,
+      version: (prior?.version ?? 0) + 1,
+      updatedAt: isoSecond(now),
+      agent: input.agent,
+      text,
+      history: Object.freeze(history),
+    };
+    writeLaneText(vault, path, renderChain(chain), { replaces: base });
+    return Object.freeze({ ...chain, path });
+  };
+  return lanePagesInStore(vault) ? withLaneLock(vault, path, write) : write();
 }
 
 /** Current chain for a scope, or null. */

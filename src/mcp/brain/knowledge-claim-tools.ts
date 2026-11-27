@@ -110,14 +110,20 @@ export function toolBrainClaims(
       ...n.contradicts.flatMap((id) => recordRefs(id)),
     );
   const visible = (rows: ReadonlyArray<ClaimNode>): ReadonlyArray<ClaimNode> => rows.filter(shown);
+  // Below local reach the caller's own projection, filtered before its
+  // node cap (change `lane-reach-residuals`, design R13): the stored one
+  // caps every partition's claims first, so a reader of few of them could
+  // be answered none and `truncated: true`.
+  const graph = (): ClaimGraph =>
+    privateWithheld() ? buildClaimGraph(ctx.vault, { keep: shown }) : resolveClaimGraph(ctx.vault);
   switch (operation) {
     case "rebuild": {
       // The stored projection serves every later caller, a local one
       // included: it is built from every partition whatever the scope.
       // The answer is the caller's own build, so its count and its
       // `truncated` describe only what this caller may see.
-      const graph = withPrivateShown(() => rebuildClaimGraph(ctx.vault));
-      const answered = privateWithheld() ? buildClaimGraph(ctx.vault) : graph;
+      const rebuilt = withPrivateShown(() => rebuildClaimGraph(ctx.vault));
+      const answered = privateWithheld() ? graph() : rebuilt;
       return {
         operation,
         rebuilt: true,
@@ -127,7 +133,7 @@ export function toolBrainClaims(
     }
     case "replaced": {
       const id = coerceStr(args, "id", true)!;
-      const tip = whatReplaced(resolveClaimGraph(ctx.vault), id);
+      const tip = whatReplaced(graph(), id);
       return {
         operation,
         id,
@@ -136,7 +142,7 @@ export function toolBrainClaims(
     }
     case "contests": {
       const id = coerceStr(args, "id", true)!;
-      const rows = visible(whatContests(resolveClaimGraph(ctx.vault), id));
+      const rows = visible(whatContests(graph(), id));
       return { operation, id, claims: rows.map((n) => renderClaimNode(delivery, n)) };
     }
     case "at": {
@@ -149,7 +155,7 @@ export function toolBrainClaims(
           `brain_claims: 'at' must be an ISO instant or YYYY-MM-DD date; got ${at}`,
         );
       }
-      const rows = visible(truthAt(resolveClaimGraph(ctx.vault), probe));
+      const rows = visible(truthAt(graph(), probe));
       return {
         operation,
         at,
@@ -158,7 +164,7 @@ export function toolBrainClaims(
       };
     }
     case "history": {
-      const rows = visible(allClaims(resolveClaimGraph(ctx.vault)));
+      const rows = visible(allClaims(graph()));
       return {
         operation,
         count: rows.length,
@@ -166,7 +172,7 @@ export function toolBrainClaims(
       };
     }
     case "current": {
-      const rows = visible(currentTruth(resolveClaimGraph(ctx.vault)));
+      const rows = visible(currentTruth(graph()));
       return {
         operation,
         count: rows.length,
