@@ -138,8 +138,15 @@ describe("core layering", () => {
       }
     }
     // Not zero, and the count is the point: there ARE mentions, all of
-    // them prose about why the pattern is banned.
-    expect(rawMentions).toHaveLength(2);
-    expect(rawMentions.every((hit) => hit.endsWith("process.exit"))).toBe(true);
+    // them prose about why the pattern is banned, plus two in the text of
+    // the reparent launcher (`o2b-command.ts`): the source of another
+    // process, held in a template, which sets its exit code and prints the
+    // worker's pid.
+    expect(rawMentions).toHaveLength(4);
+    expect(
+      rawMentions.every(
+        (hit) => hit.endsWith("process.exit") || hit.includes("o2b-command.ts mentions "),
+      ),
+    ).toBe(true);
   });
 });

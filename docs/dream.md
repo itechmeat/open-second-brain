@@ -86,7 +86,10 @@ owner's machine starts the day's pass by itself:
    makes a claim (a small file beside the record, created exclusively, so
    two sessions at the same moment start one worker), and starts one
    detached worker, `o2b dream run --claim <token>`. The session does not
-   wait. The worker runs the whole pass under the dream deadline, takes the
+   wait. On Linux and macOS the worker is started through a launcher that
+   exits at once, so it is not a child of the session start hook: a host
+   that ends a hook past its time limit together with the processes it
+   started (Claude Code does) leaves the worker running. The worker runs the whole pass under the dream deadline, takes the
    pass lock itself, records the outcome and gives the claim back. Its
    error output goes to a small log in the store's device-local state
    (`dream/worker.log`, one header per attempt).

@@ -1,6 +1,6 @@
 /**
  * A worker standing in for the automatic migration worker: its error
- * output is the device-local log (opened by `spawnSelfDetached`), it
+ * output is the device-local log (opened by `spawnSelfDetachedChild`), it
  * bounds that log as the worker does, then writes far more than the cap.
  *
  * argv: <log path> <lines>

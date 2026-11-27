@@ -90,7 +90,7 @@ function hookPairs(): string[] {
  * so an `unref()` counts only on a name that holds a process or a worker.
  */
 const SPAWN_RE =
-  /detached:\s*(?:true|process\.platform|platform\s*!==)|\b(?:child|proc|worker)\.unref\(\)|\bspawnSelfDetached\(/;
+  /detached:\s*(?:true|process\.platform|platform\s*!==)|\b(?:child|proc|worker)\.unref\(\)|\bspawnSelfDetached(?:Child)?\(/;
 
 /**
  * A file that runs the CLI's `main()` as a process of its own: it exits
@@ -276,6 +276,7 @@ describe("the census can fail", () => {
     expect(SPAWN_RE.test("spawn(cmd, args, { detached: platform !== other });")).toBe(true);
     expect(SPAWN_RE.test("proc.unref();")).toBe(true);
     expect(SPAWN_RE.test("spawnSelfDetached([...argv]);")).toBe(true);
+    expect(SPAWN_RE.test("spawnSelfDetachedChild([...argv]);")).toBe(true);
     // A timer is not a worker.
     expect(SPAWN_RE.test("timer.unref();")).toBe(false);
   });

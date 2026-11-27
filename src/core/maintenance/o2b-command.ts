@@ -184,40 +184,146 @@ export interface SelfSpawnOptions {
   readonly appendStderrLog?: boolean;
 }
 
+/** A background process {@link spawnSelfDetached} started. */
+export interface SelfSpawned {
+  /** The pid of the process running `argv` (not of a launcher between them). */
+  readonly pid: number;
+}
+
 /**
- * Start a detached background child running `argv` (built from
- * {@link o2bCommand} or {@link selfCommand}), `unref`ed so it never keeps
- * this process alive. Throws when it cannot be started.
+ * The environment variable that carries the argv and the working folder
+ * from {@link spawnSelfDetached} to its launcher ({@link REPARENT_LAUNCHER}).
+ * The launcher takes it out before it starts the child.
+ */
+export const REPARENT_PAYLOAD_ENV = "O2B_REPARENT_PAYLOAD";
+
+/**
+ * The launcher between this process and a background child on POSIX, run
+ * as `<runtime> -e <this>` (Bun or Node: only `node:child_process`): it
+ * starts the child detached (a session of its own) with its own error
+ * output, prints `pid:<n>` or `error:<message>`, and exits at once. Its
+ * exit reparents the child to init (or the nearest subreaper), so the
+ * child is no longer a descendant of this process.
+ */
+export const REPARENT_LAUNCHER = [
+  `const { spawn } = require("node:child_process");`,
+  `const env = { ...process.env };`,
+  `const p = JSON.parse(env[${JSON.stringify(REPARENT_PAYLOAD_ENV)}] ?? "{}");`,
+  `delete env[${JSON.stringify(REPARENT_PAYLOAD_ENV)}];`,
+  // No process.exit: the launcher ends by itself once its answer is
+  // written (a pipe write is not synchronous everywhere).
+  `const done = (code, text) => { process.exitCode = code; process.stdout.write(text); };`,
+  `const fail = (e) => done(1, "error:" + String((e && e.message) || e));`,
+  `let child = null;`,
+  `try {`,
+  `  child = spawn(p.argv[0], p.argv.slice(1), { cwd: p.cwd, env, detached: true, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });`,
+  `} catch (e) { fail(e); }`,
+  `if (child !== null && typeof child.pid === "number") { child.unref(); done(0, "pid:" + child.pid); }`,
+  `else if (child !== null) child.on("error", fail);`,
+].join("\n");
+
+/** How long a start waits for its launcher to report the child: it exits within milliseconds. */
+const REPARENT_LAUNCHER_TIMEOUT_MS = 5_000;
+
+/** Open `opts.stderrLog` for the child (truncated first unless appending), or null. */
+function openStderrLog(opts: SelfSpawnOptions): number | null {
+  if (opts.stderrLog === undefined) return null;
+  try {
+    mkdirSync(dirname(opts.stderrLog), { recursive: true });
+    // Truncated, then opened for appending: a child that keeps the log
+    // to its tail (`worker-log.ts`) cuts it while it writes, and its
+    // writes go on at the new end.
+    if (opts.appendStderrLog !== true) writeFileSync(opts.stderrLog, "");
+    return openSync(opts.stderrLog, "a");
+  } catch {
+    return null;
+  }
+}
+
+function closeQuietly(fd: number | null): void {
+  if (fd === null) return;
+  try {
+    closeSync(fd);
+  } catch {
+    // the child holds its own handle
+  }
+}
+
+/**
+ * Start a background child running `argv` (built from {@link o2bCommand}
+ * or {@link selfCommand}) that is NOT a descendant of this process, and
+ * return its pid. Throws when it cannot be started.
+ *
+ * A host that ends a hook past its time limit signals the hook's whole
+ * process tree, found by parent pid: a session of its own (`setsid`) does
+ * not hide a child from that walk. Claude Code does so to a SessionStart
+ * hook that runs past its `timeout`, and a dream worker the hook started
+ * died 10 s after its start, with its pass half done. So on POSIX the
+ * child is started through a launcher that exits at once
+ * ({@link REPARENT_LAUNCHER}): the child is reparented before this call
+ * returns, and a later signal to this process's tree no longer reaches
+ * it. On Windows the child is started directly, detached, as before.
  */
 export function spawnSelfDetached(
   argv: ReadonlyArray<string>,
   opts: SelfSpawnOptions = {},
+  platform: NodeJS.Platform = process.platform,
+): SelfSpawned {
+  if (platform === "win32") {
+    const proc = spawnSelfDetachedChild(argv, opts);
+    return { pid: proc.pid };
+  }
+  const env = selfSpawnEnv(opts.env ?? process.env);
+  const fd = openStderrLog(opts);
+  try {
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, "-e", REPARENT_LAUNCHER],
+      // The launcher runs in the root folder, where no project
+      // configuration of the runtime is read; the child runs in this
+      // process's folder, as a direct child would.
+      cwd: "/",
+      env: {
+        ...env,
+        [REPARENT_PAYLOAD_ENV]: JSON.stringify({ argv: [...argv], cwd: process.cwd() }),
+      },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: fd ?? "ignore",
+      timeout: REPARENT_LAUNCHER_TIMEOUT_MS,
+    });
+    const out = result.stdout.toString();
+    const pid = /^pid:(\d+)$/.exec(out)?.[1];
+    if (result.exitCode === 0 && pid !== undefined) return { pid: Number(pid) };
+    const reason = out.startsWith("error:")
+      ? out.slice("error:".length)
+      : result.exitedDueToTimeout === true
+        ? `the launcher did not answer within ${REPARENT_LAUNCHER_TIMEOUT_MS} ms`
+        : `the launcher exited with ${result.signalCode ?? `code ${result.exitCode}`}`;
+    throw new Error(`could not start ${argv[0] ?? "the child"}: ${reason}`);
+  } finally {
+    closeQuietly(fd);
+  }
+}
+
+/**
+ * Start a detached background child running `argv` as a direct child of
+ * this process, `unref`ed so it never keeps this process alive, and
+ * return it. For a start that watches the child's exit itself (the
+ * automatic store migration worker); every other background child goes
+ * through {@link spawnSelfDetached}, which this process's tree cannot
+ * take down. Throws when it cannot be started.
+ */
+export function spawnSelfDetachedChild(
+  argv: ReadonlyArray<string>,
+  opts: SelfSpawnOptions = {},
 ): ReturnType<typeof Bun.spawn> {
   const env = selfSpawnEnv(opts.env ?? process.env);
-  let fd: number | null = null;
-  if (opts.stderrLog !== undefined) {
-    try {
-      mkdirSync(dirname(opts.stderrLog), { recursive: true });
-      // Truncated, then opened for appending: a child that keeps the log
-      // to its tail (`worker-log.ts`) cuts it while it writes, and its
-      // writes go on at the new end.
-      if (opts.appendStderrLog !== true) writeFileSync(opts.stderrLog, "");
-      fd = openSync(opts.stderrLog, "a");
-    } catch {
-      fd = null;
-    }
-  }
+  const fd = openStderrLog(opts);
   try {
     const proc = Bun.spawn([...argv], detachedSpawnOptions(env, fd ?? "ignore"));
     proc.unref();
     return proc;
   } finally {
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {
-        // the child holds its own handle
-      }
-    }
+    closeQuietly(fd);
   }
 }

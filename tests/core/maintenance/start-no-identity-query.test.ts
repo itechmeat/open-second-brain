@@ -36,6 +36,7 @@ import {
 import { AUTO_LEGACY_REMOVAL_FLAG } from "../../../src/core/store-migration/auto-removal.ts";
 import { runAutoStoreMigration } from "../../../src/core/store-migration/auto-worker.ts";
 import * as processIdentity from "../../../src/core/store-migration/process-identity.ts";
+import * as o2bCommand from "../../../src/core/maintenance/o2b-command.ts";
 
 const DEVICE = "dev-a";
 const ENV_KEYS = [
@@ -55,6 +56,7 @@ let configPath: string;
 const saved = new Map<string, string | undefined>();
 let identity: ReturnType<typeof spyOn<typeof processIdentity, "processStartIdentity">>;
 let spawn: ReturnType<typeof spyOn<typeof Bun, "spawn">>;
+let detached: ReturnType<typeof spyOn<typeof o2bCommand, "spawnSelfDetached">>;
 /** A live process that is not this one, standing in for a running worker or migration. */
 let holder: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -92,6 +94,7 @@ beforeEach(() => {
 afterEach(async () => {
   identity?.mockRestore();
   spawn?.mockRestore();
+  detached?.mockRestore();
   if (holder !== null) {
     holder.kill();
     await holder.exited;
@@ -127,7 +130,15 @@ function watchStart(): { workers: () => number; removals: () => number } {
     exited: new Promise<number>(() => {}),
     signalCode: null,
   })) as unknown as typeof Bun.spawn);
-  const calls = (): string[][] => spawn.mock.calls.map((call) => call[0] as string[]);
+  // Every other background start goes through the launcher that
+  // reparents its child (`spawnSelfDetached`): stood in for as well.
+  detached = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation((() => ({
+    pid: 2 ** 22 + 2,
+  })) as typeof o2bCommand.spawnSelfDetached);
+  const calls = (): string[][] => [
+    ...spawn.mock.calls.map((call) => call[0] as string[]),
+    ...detached.mock.calls.map((call) => [...call[0]]),
+  ];
   return {
     workers: () => calls().filter((argv) => argv.includes("migrate-store")).length,
     removals: () => calls().filter((argv) => argv.includes(AUTO_LEGACY_REMOVAL_FLAG)).length,

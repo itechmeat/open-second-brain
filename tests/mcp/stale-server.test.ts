@@ -121,9 +121,11 @@ test("a stale server starts no dream pass, on a read call as much as on a write"
   // detached worker that writes the brain.
   const f = makeTriggerFixture();
   const spawns: Array<ReadonlyArray<string>> = [];
-  const spy = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation(((argv: string[]) => {
+  const spy = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation(((
+    argv: ReadonlyArray<string>,
+  ) => {
     spawns.push([...argv]);
-    return { pid: 0, unref: () => {} } as unknown as ReturnType<typeof Bun.spawn>;
+    return { pid: 0 };
   }) as typeof o2bCommand.spawnSelfDetached);
   try {
     const vault = join(tmp, "vault");

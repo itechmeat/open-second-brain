@@ -968,10 +968,12 @@ export const WORKER_SPAWN_SITES: Readonly<Record<string, SpawnSite>> = Object.fr
   },
   // The one helper every self-spawn goes through: it hands the migration
   // worker its log, and starts the dependency bootstrap entry when the
-  // checkout's tree is missing. Its own definition, its detached option (in
-  // the type and the value) and the unref of the child it starts.
+  // checkout's tree is missing. Its two definitions (the reparented start
+  // and the direct child), the direct child the reparented start uses on
+  // Windows, its detached option (in the type and the value) and the unref
+  // of the child it starts.
   "src/core/maintenance/o2b-command.ts": {
-    calls: 4,
+    calls: 6,
     starts: ["automatic store migration worker log", "dependency bootstrap of a self-spawn"],
   },
   // The dream day check starts the dream worker (change dream-session-trigger).

@@ -620,6 +620,10 @@ falls back to the `scripts/o2b` launcher, which looks Bun up on `PATH`
 and in `~/.bun/bin`. The worker is detached on every platform: it leads a
 session of its own on Linux and macOS and is not ended with its parent on
 Windows, so it outlives the hook process and the terminal that started it.
+Unlike the other background workers it stays a child of the start that
+launched it, which watches its exit: a host that ends a hook past its time
+limit together with the processes it started ends this worker too, and
+the next start takes its claim over.
 Its log goes to a small device-local file beside its state
 (`<state dir>/open-second-brain/stores/auto-migration/<vault key>.worker.log`:
 one timed line when it starts, one per step of the migration (each new
