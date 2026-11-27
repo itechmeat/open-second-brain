@@ -56,10 +56,12 @@
         "Serializes writers with a per-file lock and re-reads inside it, so concurrent appends are not lost",
         "Redacts secrets, strips control characters and normalizes to NFC before storing the text",
         "Rides the session-start digest fenced as untrusted text, capped by active.pinned_max_chars (default 1200)",
-        "Keeps pinned-set and pinned-clear records in the brain store on a switched machine instead of the file"
+        "Keeps pinned-set and pinned-clear records in the brain store on a switched machine instead of the file",
+        "On a switched machine remote callers use the shared register, refused while the private one holds a record",
+        "A local read falls back to the shared register while the private one holds no record"
       ],
       "limits": [
-        "One scratchpad per vault, shared by every agent and session; there is no per-task or per-session pad",
+        "No per-task or per-session pad: one per vault, or one per store register on a switched machine",
         "No CLI verb edits it; only the MCP tool and the post-compaction re-assertion write it"
       ],
       "surfaces": {

@@ -143,6 +143,7 @@
       "capabilities": [
         "`brain obligation add|done|list|show|remove` keeps recurring obligations as pages in `Brain/obligations/`",
         "Advances next-due by one interval on `done`, by UTC calendar math (daily to yearly or every N days)",
+        "A `done` repeated for the date of the latest completion writes nothing; MCP answers `already_recorded`",
         "Lists obligations by next-due date with an overdue flag",
         "`brain_pledge` stores one-off promises with a due date, a source page and quotes verified against that source",
         "`brain_intake_pledges` checks a whole batch before writing and dedupes by sha256 of title, due and source",
@@ -186,6 +187,7 @@
       "status": "stable",
       "capabilities": [
         "`brain intention set` writes `Brain/intentions/<scope>.md`, bumps `version`, appends the old text to a history",
+        "Setting a chain to the text it already holds writes nothing; MCP answers `already_recorded`",
         "Retires a chain into `Brain/intentions/history/` on `move`",
         "`brain_intention` answers at the caller's reach: a withheld chain reads as absent and cannot be overwritten",
         "`brain state set|get|list|clear` keeps one current value per aspect slug, overwritten with no history",

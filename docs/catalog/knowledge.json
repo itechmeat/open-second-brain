@@ -72,7 +72,8 @@
         "Relates entities with tokens of the relation vocabulary",
         "Merges two entities under a plan hash: the old name becomes an alias, its page is archived, edges retargeted",
         "Takes agent-extracted entities and relations, quarantined unless their source exists (`brain_intake_entities`)",
-        "Lists an entity's documents, a stated-versus-evidenced gap and a needs-llm-step envelope (`diarize`)"
+        "Lists an entity's documents, a stated-versus-evidenced gap and a needs-llm-step envelope (`diarize`)",
+        "Rebuilds an upsert, relation or archive from the entity read again under its page lock, not from the index"
       ],
       "limits": [
         "brain_entity only reads; set, relate, archive, prune and merge run from the CLI",
@@ -164,7 +165,7 @@
       "limits": [
         "Runs no model: panel steps and design-note text come from the calling agent and are only validated",
         "Rated-decision recall stays off until decision_recall.max_per_session is set",
-        "An older review obligation of a private decision keeps a shared copy that carries its title"
+        "An older review obligation of a private decision keeps a shared copy with its title; `brain doctor` names it"
       ],
       "surfaces": {
         "cli": ["brain decision", "brain panel", "brain design-note"],
@@ -243,7 +244,7 @@
         "Sanitises fields on write: approach one line of at most 256 chars, reason and context at most 1024 each",
         "Feeds active dead ends into the lessons digest as Avoid lessons, 30-day half-life, within its 20-lesson cap",
         "Leaves the pages to the regular search index, so recall can return a dead end beside notes",
-        "Below local reach, lists only readable dead ends and never archives a page the caller cannot read"
+        "Below local reach, lists only readable dead ends; the trim archives private overflow too and names none of it"
       ],
       "limits": [
         "Matches nothing against a planned action; a dead end reaches an agent only via search or the lessons digest",
