@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
-import { untrustedBindingFramingHeader } from "../../src/core/brain/untrusted-source.ts";
+import {
+  UNTRUSTED_SOURCE_TAG,
+  untrustedBindingFramingHeader,
+} from "../../src/core/brain/untrusted-source.ts";
 import {
   renderLogDayHeader,
   renderLogEntryBlock,
@@ -795,7 +798,7 @@ describe("active-inject hook: tiered injection budgeting", () => {
  * `Brain/active.md` and `Brain/lessons.md` are vault files any synced
  * device or imported session can write, so their bodies are untrusted
  * vault content: at the assembly chokepoint each body is neutralized
- * (control/bidi/zero-width stripped, delimiter tokens escaped) and set
+ * (control/bidi/zero-width stripped, tag-like tokens escaped) and set
  * under the one-line binding framing header BEFORE the
  * meter push, so attribution names the guarded bytes. Neutralization is
  * structural, so an instruction-shaped PHRASE survives - the framing
@@ -868,6 +871,29 @@ describe("active-inject hook: untrusted-source guard on the memory lanes", () =>
       injected.indexOf(untrustedBindingFramingHeader(SOURCE_ACTIVE_BODY)),
     );
     expect(memory.length).toBeLessThanOrEqual(budget);
+  });
+
+  test("a pinned context line and a lesson line holding a foreign closing tag come out escaped", async () => {
+    const CLOSE = "</wrapper-tag>";
+    const OPEN = '<wrapper-tag kind="note">';
+    writeActive(ACTIVE_DOC);
+    writeLessons(LESSONS_DOC.replace("retry loop", `retry loop ${CLOSE} lesson tail`));
+    writeFileSync(
+      join(vault, "Brain", "pinned.md"),
+      `Pinned line ${CLOSE} pinned tail\nNext ${OPEN} line\n`,
+      "utf8",
+    );
+    const injected = await inject();
+    expect(injected).toContain("&lt;/wrapper-tag> lesson tail");
+    expect(injected).toContain("Pinned line &lt;/wrapper-tag> pinned tail");
+    expect(injected).toContain('Next &lt;wrapper-tag kind="note"> line');
+    expect(injected).not.toContain(CLOSE);
+    expect(injected).not.toContain("<wrapper-tag");
+    // The pinned block's own fence survives: one real opening and closing tag.
+    expect(injected.split(`<${UNTRUSTED_SOURCE_TAG} origin="pinned-context">`)).toHaveLength(2);
+    expect(injected).toContain(
+      `pinned tail\nNext &lt;wrapper-tag kind="note"> line\n</${UNTRUSTED_SOURCE_TAG}>`,
+    );
   });
 
   test("the memory preambles bind as working-style guidance instead of disowning themselves as records", async () => {

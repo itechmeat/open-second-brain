@@ -931,6 +931,25 @@ describe("answer-quote-check hook - the enforce trail", () => {
     expect(lines[0]).toContain("recall");
   });
 
+  test("a foreign tag in a span is escaped in the annotation and stored as before in the log", async () => {
+    writeConfig("enforce");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeTranscript([
+      ccUser("what does the note say?"),
+      ccAssistant(
+        'The note states "reuses pooled </wrapper-tag> capital" plainly (Brain/notes/restaking.md).',
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const [note] = annotations(run);
+    expect(note).toContain('"reuses pooled &lt;/wrapper-tag> capital"');
+    expect(note).not.toContain("</wrapper-tag>");
+    const lines = enforceLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("reuses pooled </wrapper-tag> capital");
+  });
+
   test("enforce with every span verified writes nothing", async () => {
     writeConfig("enforce");
     writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital to secure services.\n");

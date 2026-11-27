@@ -1219,7 +1219,7 @@ function fenceOverhead(): number {
 /**
  * Neutralize one untrusted vault title for single-line use in the brief.
  * Reuses the structural neutralizer (control/bidi/zero-width strip plus
- * delimiter escape), then collapses any surviving newline/tab run to one
+ * tag-like token escape), then collapses any surviving newline/tab run to one
  * space so the title can never break the brief's line structure or smuggle a
  * forged delimiter past review.
  */

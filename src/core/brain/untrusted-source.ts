@@ -11,15 +11,16 @@
  * content escape that wrapper or smuggle invisible control sequences.
  *
  * Language-agnostic by construction. Neutralization keys off STRUCTURE
- * only - invisible / control characters and this module's own delimiter
- * token - never off natural-language vocabulary. There is no blocklist
+ * only - invisible / control characters and tag-like tokens - never off
+ * natural-language vocabulary. There is no blocklist
  * of injection phrases (override-prior-instructions phrasings) or role words
  * ("system:", "assistant:") in any language: a word blocklist cannot be
  * complete across all languages and would corrupt legitimate prose.
  * Containment, not vocabulary, is what makes the span inert - inside the
- * wrapper, a line that reads like an instruction is just data, and the
- * delimiter cannot be closed early because the closing token is escaped
- * wherever it appears in the content.
+ * wrapper, a line that reads like an instruction is just data, and no
+ * block boundary can be closed early from inside the content, because
+ * every tag-like token in it - this module's own delimiter and any other
+ * element, opening or closing - is escaped wherever it appears.
  *
  * Read-time only: this never rewrites a note on disk. The provenance
  * sha256 hashes the ORIGINAL source bytes (so a verifier can match it
@@ -56,37 +57,59 @@ const INJECTION_CONTROL_CHARS = new RegExp(
   "gu",
 );
 
-/** Case-insensitive match of this module's own opening/closing delimiter. */
-const DELIMITER_OPENING = new RegExp(`<(${UNTRUSTED_SOURCE_TAG})`, "gi");
-const DELIMITER_CLOSING = new RegExp(`</(${UNTRUSTED_SOURCE_TAG})`, "gi");
+/**
+ * The `<` that opens a tag-like token: one followed by a letter (an
+ * opening element, this module's own delimiter included), by `/` and a
+ * letter (a closing element), by `!` (a comment, CDATA or doctype) or by
+ * `?` (a processing instruction). Letters are matched as the Unicode
+ * letter class, so the rule holds in any script and in any case. A `<`
+ * followed by anything else - a space, a digit, a dash - is prose
+ * (`a < b`, `<3`, `<-`) and is left alone. Format characters and
+ * combining marks that survive the strip above (a soft hyphen, a
+ * variation selector) may sit between the `<`, the `/` and the name
+ * without hiding the token: a reader that skips them would see a tag.
+ */
+const TAG_LIKE_OPENER = /<(?=[\p{Cf}\p{M}]*(?:\/[\p{Cf}\p{M}]*)?\p{L}|[\p{Cf}\p{M}]*[!?])/giu;
 
 /**
  * Neutralize an untrusted text span without altering its visible prose.
  *
- * Three structural transforms, in this exact order:
+ * Two structural transforms, in this exact order:
  *   1. Strip invisible / control characters (see INJECTION_CONTROL_CHARS).
- *      This MUST run first: an attacker can split the delimiter tag name
- *      with a stripped character (e.g. `</unt<U+200B>rusted_source>`) so
- *      that the delimiter regex does not match, then rely on a later
- *      strip to reconstitute a live `</untrusted_source>`. Stripping
- *      before escaping closes that reassembly bypass.
- *   2. Defuse any closing delimiter `</untrusted_source` by escaping its
- *      leading `<` to `&lt;`, so embedded content cannot close the real
- *      wrapper early (delimiter-injection breakout).
- *   3. Defuse any forged opening delimiter `<untrusted_source` the same
- *      way, so content cannot inject a second, attacker-controlled
- *      provenance frame.
+ *      This MUST run first: a stripped character placed between the `<`
+ *      and the rest of a tag (e.g. `<<U+200B>/name>`) would slip past the
+ *      tag pattern and then be reassembled into a live tag by a later
+ *      strip. Stripping before escaping closes that reassembly path.
+ *   2. Escape the `<` of every tag-like token to `&lt;` (see
+ *      TAG_LIKE_OPENER): the opening and closing forms of this module's
+ *      own delimiter, and of any other element, comments and processing
+ *      instructions alike. Content can therefore neither close the real
+ *      wrapper early, nor forge a second provenance frame, nor close or
+ *      open any other block boundary the text is later placed inside.
  *
- * Visible characters - in any language - pass through unchanged, so the
- * function is a no-op on clean prose and idempotent on its own output
- * (the escaped `&lt;` no longer matches the delimiter patterns, and a
- * second strip finds no control characters to remove).
+ * Every other visible character - in any language - passes through
+ * unchanged, so the function is a no-op on prose without tags and
+ * idempotent on its own output (the escaped `&lt;` no longer starts a
+ * tag-like token, and a second strip finds no control characters to
+ * remove).
  */
 export function neutralizeUntrustedText(text: string): string {
-  return text
-    .replace(INJECTION_CONTROL_CHARS, "")
-    .replace(DELIMITER_CLOSING, "&lt;/$1")
-    .replace(DELIMITER_OPENING, "&lt;$1");
+  return text.replace(INJECTION_CONTROL_CHARS, "").replace(TAG_LIKE_OPENER, "&lt;");
+}
+
+/** The `<` that opens this module's own delimiter, in either form and any case. */
+const OWN_DELIMITER_OPENER = new RegExp(`<(?=/?${UNTRUSTED_SOURCE_TAG})`, "gi");
+
+/**
+ * The store-side form of {@link neutralizeUntrustedText}, for untrusted
+ * text a writer records in the vault rather than shows to a model: the
+ * same control-character strip, but only this module's own delimiter is
+ * escaped, so the bytes a writer stores stay what they were before every
+ * tag-like token was escaped. A reader that later shows the stored text
+ * to a model neutralizes it again with {@link neutralizeUntrustedText}.
+ */
+export function neutralizeStoredText(text: string): string {
+  return text.replace(INJECTION_CONTROL_CHARS, "").replace(OWN_DELIMITER_OPENER, "&lt;");
 }
 
 /**
@@ -232,8 +255,9 @@ export function wrapUntrustedSource(text: string, provenance: UntrustedProvenanc
  * the span identically as vault-derived untrusted content; it just carries an
  * `origin` label instead of a per-file `path`/`sha256` (there is no single
  * file to hash). The body is neutralized (control/bidi/zero-width strip plus
- * delimiter escape) so embedded content can neither close the fence early nor
- * forge a second provenance frame.
+ * tag-like token escape) so embedded content can neither close the fence
+ * early nor forge a second provenance frame. Only the body is escaped: the
+ * fence's own opening and closing tags are written after it, intact.
  */
 export function fenceUntrustedContent(text: string, origin: string): string {
   const body = neutralizeUntrustedText(text);
