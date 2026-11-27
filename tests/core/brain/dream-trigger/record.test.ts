@@ -18,7 +18,8 @@ import {
   updateDreamTriggerRecord,
   writeDreamTriggerRecord,
 } from "../../../../src/core/brain/dream-trigger/record.ts";
-import { STORE_ROOT_ENV } from "../../../../src/core/store/constants.ts";
+import { STORE_ROOT_ENV, STORE_VAULT_DIR } from "../../../../src/core/store/constants.ts";
+import { resolveConfiguredStoreRoot } from "../../../../src/core/store/store-paths.ts";
 
 let tmp: string;
 
@@ -55,6 +56,49 @@ describe("the record's path", () => {
     expect(configuredTriggerStoreRoot(config, { [STORE_ROOT_ENV]: join(tmp, "env-root") })).toBe(
       join(tmp, "env-root"),
     );
+  });
+});
+
+/** A machine config naming a vault under the test folder, with `data` beside it. */
+function withVault(data: Record<string, string> = {}) {
+  const vault = join(tmp, "vault");
+  mkdirSync(vault, { recursive: true });
+  const path = join(tmp, "config.yaml");
+  writeFileSync(path, `vault: ${vault}\n`);
+  return { vault, path, config: { path, exists: true, data: { vault, ...data } } };
+}
+
+describe("the root on a machine with a vault", () => {
+  test("is the vault's store folder, the root the store and `o2b store path` resolve", () => {
+    const { vault, path, config } = withVault();
+    const saved = {
+      cfg: process.env["OPEN_SECOND_BRAIN_CONFIG"],
+      env: process.env[STORE_ROOT_ENV],
+    };
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = path;
+    delete process.env[STORE_ROOT_ENV];
+    try {
+      const root = configuredTriggerStoreRoot(config, {});
+      expect(root).toBe(join(vault, STORE_VAULT_DIR));
+      expect(root).toBe(resolveConfiguredStoreRoot(path).root);
+    } finally {
+      if (saved.cfg === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved.cfg;
+      if (saved.env !== undefined) process.env[STORE_ROOT_ENV] = saved.env;
+    }
+  });
+
+  test("an explicit `store_root` and the environment still win over the vault's folder", () => {
+    const { config } = withVault({ store_root: join(tmp, "outside") });
+    expect(configuredTriggerStoreRoot(config, {})).toBe(join(tmp, "outside"));
+    expect(configuredTriggerStoreRoot(config, { [STORE_ROOT_ENV]: join(tmp, "env-root") })).toBe(
+      join(tmp, "env-root"),
+    );
+  });
+
+  test("a root the store refuses inside the vault is kept as named, for the due path to refuse", () => {
+    const { vault, config } = withVault({ store_root: join(tmp, "vault", "inside") });
+    expect(configuredTriggerStoreRoot(config, {})).toBe(join(vault, "inside"));
   });
 });
 

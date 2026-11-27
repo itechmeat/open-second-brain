@@ -21,14 +21,15 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { machineConfiguredVault, resolveVault } from "../../config.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { stateRootDir } from "../../platform-dirs.ts";
 import { STORE_IDENTITY_FILE, STORE_PARTITIONS } from "../../store/constants.ts";
-import { resolveStoreRoot } from "../../store/store-paths.ts";
+import { resolveStoreRoot, StoreRootInsideVaultError } from "../../store/store-paths.ts";
 import type { ConfigDiscovery } from "../../types.ts";
 import { isoDate } from "../time.ts";
 import {
@@ -149,23 +150,131 @@ export function emptyDreamTriggerRecord(storeRoot: string): DreamTriggerRecord {
 }
 
 /**
- * The store root `config` names, resolved as the store resolves it, but
- * from the loaded config: no second read of the file. The vault is not
- * looked up (that reads the config again); a root inside the vault is
- * refused later, on the due path, by the store itself.
+ * The store root `config` names, resolved as every store opener on this
+ * machine resolves it (`resolveConfiguredStoreRoot`, `o2b store path`, the
+ * hooks): the environment, then `store_root`, then the default, which
+ * with a configured vault is the vault's reserved store folder (since
+ * 2.0.1). From the loaded config: the file is not read again. A root the
+ * store refuses because it sits inside the vault is kept as written, so
+ * the due path opens it and names the refusal, as before.
  */
 export function configuredTriggerStoreRoot(
   config: ConfigDiscovery,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
-  return resolveStoreRoot({
-    platform: process.platform,
-    home: homedir(),
-    env,
-    config: config.data,
-    configPath: config.path,
-    vault: null,
-  }).root;
+  // Every call pays the vault lookup: a pointer walk up the working folder and a profiles read.
+  return triggerStoreRoot(config, env, resolveVault(config.path, { discovery: config }));
+}
+
+/**
+ * The root Open Second Brain 2.0.5 and earlier keyed the record by: the
+ * configured root resolved as if no vault were configured. It differs
+ * from {@link configuredTriggerStoreRoot} only on a machine with a vault
+ * whose store sits at the default root, the vault's folder.
+ */
+function legacyTriggerStoreRoot(
+  config: ConfigDiscovery,
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  return triggerStoreRoot(config, env, null);
+}
+
+function triggerStoreRoot(
+  config: ConfigDiscovery,
+  env: Readonly<Record<string, string | undefined>>,
+  vault: string | null,
+): string {
+  try {
+    return resolveStoreRoot({
+      platform: process.platform,
+      home: homedir(),
+      env,
+      config: config.data,
+      configPath: config.path,
+      vault,
+    }).root;
+  } catch (err) {
+    if (err instanceof StoreRootInsideVaultError) return err.root;
+    throw err;
+  }
+}
+
+/** Where this machine's trigger state lives: the configured store root and its record. */
+export interface DreamTriggerLocation {
+  readonly storeRoot: string;
+  readonly recordPath: string;
+}
+
+/**
+ * The trigger's store root and record for `config`, with the record a
+ * 2.0.5 or earlier install left under the old key carried over first
+ * ({@link adoptLegacyDreamTriggerRecord}). Costs one `stat` when the
+ * record is there.
+ */
+export function dreamTriggerLocation(
+  config: ConfigDiscovery,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): DreamTriggerLocation {
+  const storeRoot = configuredTriggerStoreRoot(config, env);
+  const recordPath = dreamTriggerRecordPath(storeRoot, env);
+  if (!existsSync(recordPath)) adoptLegacyDreamTriggerRecord(config, env, storeRoot, recordPath);
+  return { storeRoot, recordPath };
+}
+
+/**
+ * Carry the record of the old key over to `recordPath`, once. Open Second
+ * Brain 2.0.5 and earlier keyed the record by the root resolved with no
+ * vault, so on a machine whose store is in the vault a pass run by hand
+ * wrote its day, failures and retry time under the key of a root that
+ * holds no store. With no record under the right key, that record is
+ * written there (its `store_root` set to the right root, everything else
+ * as it was: a day closed stays closed, `retry_at` and the failure count
+ * hold) under the record's lock, and the old file is removed, so it is
+ * carried at most once.
+ *
+ * Only into the root the machine configuration itself resolves (its
+ * active profile or its `vault` key): the old record is the machine's,
+ * and a session whose vault came from `VAULT_DIR` or a project pointer
+ * would move it to that vault's key, leaving the configured vault with no
+ * record and a second pass for a day already closed. Not while the old
+ * key's claim file stands: a pass of the earlier version may still run
+ * and write the old record when it ends, so both files are left, and the
+ * next look after the claim is gone carries the record as that pass left
+ * it. The read, the write and the removal hold the old path's lock, so of
+ * two callers at once (two configured roots across a profile switch) one
+ * carries the record and the other finds none.
+ *
+ * A record already under the right key wins: the old file is then never
+ * read. An old file that is not a record of the old root is left alone
+ * the same way. Never throws: with nothing carried over, the due path
+ * decides.
+ */
+export function adoptLegacyDreamTriggerRecord(
+  config: ConfigDiscovery,
+  env: Readonly<Record<string, string | undefined>>,
+  storeRoot: string,
+  recordPath: string,
+): void {
+  try {
+    const legacyRoot = legacyTriggerStoreRoot(config, env);
+    if (legacyRoot === storeRoot) return;
+    const legacyPath = dreamTriggerRecordPath(legacyRoot, env);
+    // One `stat` on the common path: nothing under the old key.
+    if (!existsSync(legacyPath)) return;
+    if (triggerStoreRoot(config, env, machineConfiguredVault(config)) !== storeRoot) return;
+    if (existsSync(dreamTriggerClaimPath(legacyPath))) return;
+    const { withLocalLock } = require("../../store/local-lock.ts") as LocalLockModule;
+    withLocalLock(legacyPath, () => {
+      const legacy = readDreamTriggerRecord(legacyPath, legacyRoot);
+      if (legacy === null) return;
+      updateDreamTriggerRecord(recordPath, storeRoot, () =>
+        existsSync(recordPath) ? null : { ...legacy, store_root: storeRoot },
+      );
+      rmSync(legacyPath, { force: true });
+    });
+  } catch {
+    // Left for the next look; the due path decides meanwhile.
+  }
 }
 
 /** The key of a configured store root. */

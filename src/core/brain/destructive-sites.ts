@@ -219,6 +219,15 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "lost. Absence IS the state 'no worker claimed', and nothing in a vault or a store is " +
         "touched.",
     },
+    "src/core/brain/dream-trigger/record.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the dream day record an install of 2.0.5 or earlier wrote under the old key, " +
+        "in the machine's state directory, only after its content was written under the right " +
+        "key (or a record already stood there). The content moves, it is not lost, and nothing " +
+        "in a vault or a store is touched.",
+    },
     "src/core/brain/dream-queue/run-record.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,

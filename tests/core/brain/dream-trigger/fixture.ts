@@ -4,8 +4,13 @@
  * dream session trigger. Everything lives under one temp directory the
  * caller removes with {@link TriggerFixture.cleanup}; the process
  * environment it changes is put back there.
+ *
+ * Two layouts: `env` names the store root in `OPEN_SECOND_BRAIN_STORE_ROOT`
+ * on a machine with no vault; `vault` configures a vault and names no
+ * root, so the store sits at the default with a vault, the vault's
+ * reserved folder, as on a real machine with a vault since 2.0.1.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +23,11 @@ import {
   readDreamTriggerRecord,
 } from "../../../../src/core/brain/dream-trigger/record.ts";
 import { appendRecord } from "../../../../src/core/store/appender.ts";
-import { SETTING_SET_KIND, STORE_ROOT_ENV } from "../../../../src/core/store/constants.ts";
+import {
+  SETTING_SET_KIND,
+  STORE_ROOT_ENV,
+  STORE_VAULT_DIR,
+} from "../../../../src/core/store/constants.ts";
 import { initStore } from "../../../../src/core/store/store-init.ts";
 import { openStore, type StoreHandle } from "../../../../src/core/store/store-open.ts";
 import type { ConfigDiscovery } from "../../../../src/core/types.ts";
@@ -34,6 +43,8 @@ const KEYS = [
 
 export interface TriggerFixture {
   readonly tmp: string;
+  /** The configured vault (`vault` layout), or `null`. */
+  readonly vault: string | null;
   readonly storeRoot: string;
   readonly configPath: string;
   readonly recordPath: string;
@@ -46,10 +57,11 @@ export interface TriggerFixture {
 }
 
 export function makeTriggerFixture(
-  options: { readonly owner?: string | null } = {},
+  options: { readonly owner?: string | null; readonly layout?: "env" | "vault" } = {},
 ): TriggerFixture {
   const tmp = mkdtempSync(join(tmpdir(), "osb-trigger-"));
-  const storeRoot = join(tmp, "store");
+  const vault = options.layout === "vault" ? join(tmp, "vault") : null;
+  const storeRoot = vault !== null ? join(vault, STORE_VAULT_DIR) : join(tmp, "store");
   const configPath = join(tmp, "config.yaml");
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
   // Defined before anything is set up: a setup step that throws puts the
@@ -62,11 +74,16 @@ export function makeTriggerFixture(
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   };
   try {
+    if (vault !== null) mkdirSync(vault, { recursive: true });
     initStore({ root: storeRoot });
-    writeFileSync(configPath, "agent_name: claude\n");
+    writeFileSync(
+      configPath,
+      vault !== null ? `agent_name: claude\nvault: ${vault}\n` : "agent_name: claude\n",
+    );
     delete process.env["VAULT_DIR"];
     process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
-    process.env[STORE_ROOT_ENV] = storeRoot;
+    if (vault !== null) delete process.env[STORE_ROOT_ENV];
+    else process.env[STORE_ROOT_ENV] = storeRoot;
     // The suite turns the trigger off (tests/setup.ts); these tests run it.
     delete process.env[DREAM_AUTO_ENV];
     process.env["O2B_DEVICE_ID"] = "dev-a";
@@ -78,7 +95,7 @@ export function makeTriggerFixture(
       });
       withDeviceId(owner, () => {
         try {
-          assertDreamOwner(null, { live: true, configPath });
+          assertDreamOwner(vault, { live: true, configPath });
         } catch {
           // the first look notes the claim
         }
@@ -91,6 +108,7 @@ export function makeTriggerFixture(
   const recordPath = dreamTriggerRecordPath(storeRoot);
   return {
     tmp,
+    vault,
     storeRoot,
     configPath,
     recordPath,

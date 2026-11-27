@@ -11,17 +11,12 @@
 import { existsSync } from "node:fs";
 
 import { discoverConfig } from "../../config.ts";
-import {
-  configuredTriggerStoreRoot,
-  dreamTriggerRecordPath,
-  updateDreamTriggerRecord,
-} from "./record.ts";
+import { dreamTriggerLocation, updateDreamTriggerRecord } from "./record.ts";
 
 /** Clear the cached owner check of this machine's record. Best effort: never throws. */
 export function forgetDreamOwnerCheck(configPath: string | undefined): void {
   try {
-    const storeRoot = configuredTriggerStoreRoot(discoverConfig(configPath));
-    const path = dreamTriggerRecordPath(storeRoot);
+    const { storeRoot, recordPath: path } = dreamTriggerLocation(discoverConfig(configPath));
     // No record, no cached answer: nothing is made.
     if (!existsSync(path)) return;
     updateDreamTriggerRecord(path, storeRoot, (r) =>

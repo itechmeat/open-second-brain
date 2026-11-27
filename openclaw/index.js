@@ -2716,6 +2716,7 @@ __export(exports_config, {
   isValidDeviceId: () => isValidDeviceId,
   isValidInstallationSecret: () => isValidInstallationSecret,
   isWindowsReservedDeviceId: () => isWindowsReservedDeviceId,
+  machineConfiguredVault: () => machineConfiguredVault,
   parseSimpleYaml: () => parseSimpleYaml,
   readDeviceId: () => readDeviceId,
   resolveAgentName: () => resolveAgentName,
@@ -2940,7 +2941,9 @@ function resolveVault(configPath, opts = {}) {
   const pointerVault = resolvePointerVault(opts.cwd ?? process.cwd());
   if (pointerVault !== null)
     return expandTilde(pointerVault);
-  const discovery = opts.discovery ?? discoverConfig(configPath);
+  return machineConfiguredVault(opts.discovery ?? discoverConfig(configPath));
+}
+function machineConfiguredVault(discovery) {
   const profileVault = resolveActiveProfileVault(discovery.path);
   if (profileVault)
     return expandTilde(profileVault);
