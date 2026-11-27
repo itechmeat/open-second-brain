@@ -29,7 +29,7 @@ import {
 import { Database } from "bun:sqlite";
 
 import { defaultConfigPath } from "../config.ts";
-import { o2bCommand, spawnSelfDetached } from "./o2b-command.ts";
+import { o2bCommand, spawnSelfDetached, spawnSelfDetachedChild } from "./o2b-command.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { healIndex, owesRepairBeyondUpgrade, planIndexRepair } from "../search/self-heal.ts";
@@ -564,7 +564,7 @@ function spawnWorker(
   configPath: string | undefined,
   token: string,
 ): ReturnType<typeof Bun.spawn> {
-  // The live environment (`spawnSelfDetached`); the config path travels
+  // The live environment (`selfSpawnEnv`); the config path travels
   // the way every brain verb reads it. The worker's error output goes to a
   // small device-local log that a failure names. Each spawn opens a new
   // attempt in it and keeps the last few before it (`worker-log.ts`): a
@@ -579,7 +579,12 @@ function spawnWorker(
     log,
     workerLogAttemptHeader(new Date(), `started by process ${process.pid}`),
   );
-  return spawnSelfDetached(
+  // A direct child, unlike every other background start
+  // (`spawnSelfDetached`): this start hands the claim to the child's pid
+  // and watches its exit (`watchWorker`), which only a parent can do. A
+  // worker taken down with this process's tree leaves a claim whose pid is
+  // gone, which the next start takes over.
+  return spawnSelfDetachedChild(
     [...o2bCommand(), "brain", "migrate-store", "--vault", vault, AUTO_MIGRATION_FLAG, token],
     {
       env: {

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { spawnSelfDetached } from "../../../src/core/maintenance/o2b-command.ts";
+import { spawnSelfDetachedChild } from "../../../src/core/maintenance/o2b-command.ts";
 import {
   beginWorkerLogAttempt,
   latestWorkerLogAttempt,
@@ -35,7 +35,7 @@ describe("the worker log is bounded", () => {
   test("a worker that writes far past the cap leaves only its newest tail", async () => {
     const log = join(dir(), "w.worker.log");
     writeFileSync(log, "an earlier run\n");
-    const proc = spawnSelfDetached([process.execPath, "run", CHILD, log, "3000"], {
+    const proc = spawnSelfDetachedChild([process.execPath, "run", CHILD, log, "3000"], {
       stderrLog: log,
     });
     await proc.exited;

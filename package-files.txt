@@ -1,6 +1,6 @@
 # Open Second Brain packed file manifest
-# Maximum packed size: 7259243 bytes
-# Maximum unpacked size: 24686350 bytes
+# Maximum packed size: 7262571 bytes
+# Maximum unpacked size: 24697119 bytes
 .claude-plugin/marketplace.json
 .claude-plugin/plugin.json
 .codex-plugin/plugin.json

@@ -19,6 +19,7 @@ import {
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { installWorkerEndings } from "../../src/cli/dream/run.ts";
 import { dreamDayCheck } from "../../src/core/brain/dream-trigger/check.ts";
 import { dreamWorkerLogPath } from "../../src/core/brain/dream-trigger/due.ts";
 import { dreamTriggerClaimPath } from "../../src/core/brain/dream-trigger/record.ts";
@@ -278,6 +279,59 @@ describe("o2b dream run --claim", () => {
     expect(existsSync(f.recordPath)).toBe(false);
   });
 
+  test("an error no pass path handles is a failed day in the worker log, and the claim goes back", async () => {
+    writeClaim("tok1");
+    const front = spyOn(decideAuto, "prepareClosedQuestions").mockImplementation(() => {
+      throw new Error("the front door broke");
+    });
+    let res;
+    try {
+      res = await cli(["--claim", "tok1"]);
+    } finally {
+      front.mockRestore();
+    }
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain("the dream worker failed: the front door broke");
+    const r = f.record()!;
+    expect(r.last_run).toMatchObject({ by: "worker", outcome: "failed" });
+    expect(r.closed).toBe(false);
+    expect(r.reason).toContain("the front door broke");
+    expect(existsSync(claimPath())).toBe(false);
+  });
+
+  test("a worker stopped by a signal records a failed day, names the signal and gives the claim back", () => {
+    writeClaim("tok1");
+    const before = process.listenerCount("SIGTERM");
+    const exits: number[] = [];
+    const errors: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string) => {
+      errors.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+    const ending = installWorkerEndings({
+      claimPath: claimPath(),
+      token: "tok1",
+      vault: () => f.vault,
+      configOpt: { configPath: f.configPath },
+      startedAt: new Date(),
+      exit: (code) => exits.push(code),
+    });
+    try {
+      process.emit("SIGTERM", "SIGTERM");
+    } finally {
+      ending.settle();
+      stderr.mockRestore();
+    }
+    expect(exits).toEqual([143]);
+    expect(errors.join("")).toContain("the dream worker was stopped by SIGTERM");
+    const r = f.record()!;
+    expect(r.last_run).toMatchObject({ by: "worker", outcome: "failed" });
+    expect(r.reason).toContain("SIGTERM");
+    expect(existsSync(claimPath())).toBe(false);
+    // Settled, it hears nothing more.
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+  });
+
   test("a device that is not the owner gives its claim back", async () => {
     writeClaim("tok1");
     process.env["O2B_DEVICE_ID"] = "dev-b";
@@ -295,13 +349,14 @@ describe("a real worker", () => {
       ...homeEnv(join(f.tmp, "home")),
       OPEN_SECOND_BRAIN_DREAM_AUTO: "true",
     };
-    // The worker's handle is kept, so the test awaits its exit and, when
-    // a step fails, stops and awaits it before the fixture is removed.
-    const original = o2bCommand.spawnSelfDetached;
+    // The worker is started as a direct child (`spawnSelfDetachedChild`),
+    // not reparented as the helper does, so the test keeps its handle,
+    // awaits its exit and, when a step fails, stops and awaits it before
+    // the fixture is removed.
     let worker: ReturnType<typeof Bun.spawn> | undefined;
     const spawn = spyOn(o2bCommand, "spawnSelfDetached").mockImplementation((argv, opts) => {
-      worker = original(argv, opts);
-      return worker;
+      worker = o2bCommand.spawnSelfDetachedChild(argv, opts);
+      return { pid: worker.pid };
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {

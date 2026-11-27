@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.8] - 2026-11-27
+
+### Fixed
+
+- **A session start that runs past its time limit no longer takes the dream worker down with it.** The automatic dream pass is started by the session start hook, and on a large store that hook can run longer than the 10 seconds Claude Code gives it. Claude Code then ends the hook together with every process it started, found by parent process, and a session of its own did not hide the worker from that: the worker died 10 seconds after its start, in the middle of its pass, with nothing in its log. Every background worker Open Second Brain starts for itself (the dream worker, the self-heal upgrade and search reindex, freshen on read, the deferred session capture, the removal of the legacy store tree) is now started through a short-lived launcher on Linux and macOS, so it is no longer a child of the hook when the hook is ended. On Windows the worker is started as before. The automatic store migration worker stays a direct child: the start that launches it watches its exit; when it is taken down, the next start takes its claim over.
+- **A dream worker that is stopped says so and gives its day back.** The worker the dream day check starts (`o2b dream run --claim`) now records an outcome on every way it ends: an error no pass path handled is recorded as a failed day and written to the worker log (`dream/worker.log`), a `SIGTERM`, `SIGINT` or `SIGHUP` is recorded as a failed day naming the signal, and an exit from anywhere before the pass ends is recorded on the way out; each of them gives the trigger's claim back, so the next session retries after the usual back-off instead of waiting out the claim. Before, a worker ended by a signal at its default disposition left its claim, its pass and queue locks and an open record, with nothing but the attempt header in its log, and only the next check, a quarter of an hour later, could call it lost. Only a kill no process can hear (`SIGKILL`) is still left to that check.
+- **A lost or failed dream attempt no longer reopens a day that was closed.** When the day check finds a worker that ended without an outcome, or a worker that could not be started, it records the failed attempt on the day the attempt was made. Before, it reopened the last closed day instead, and `o2b dream status` said "The day of 2026-11-26 is open: the dream worker ended without recording an outcome" about a day a pass run by hand had closed the evening before.
+
 ## [2.0.7] - 2026-11-27
 
 ### Fixed
@@ -9214,7 +9222,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.7...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.8...HEAD
+[2.0.8]: https://github.com/itechmeat/open-second-brain/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/itechmeat/open-second-brain/compare/v2.0.5...v2.0.6
 [2.0.5]: https://github.com/itechmeat/open-second-brain/compare/v2.0.4...v2.0.5

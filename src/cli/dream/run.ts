@@ -153,10 +153,22 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
   // The worker keeps its claim when the pass ran and its day could not be
   // recorded: the next day check finds it lost and backs off.
   let keepClaim = false;
+  let target: string | null | undefined;
+  // The worker records an outcome on every way it ends: an error no pass
+  // path handled, a signal, an exit from anywhere. Only a kill that no
+  // process can hear (SIGKILL) is left to the next check's lost worker.
+  const ending =
+    claimPath !== null && token !== undefined
+      ? installWorkerEndings({
+          claimPath,
+          token,
+          vault: () => (target !== undefined ? target : noVault ? null : resolveVault(configPath)),
+          configOpt,
+          startedAt: new Date(),
+        })
+      : null;
   try {
-    const target = noVault
-      ? null
-      : ((flags["vault"] as string | undefined) ?? resolveVault(configPath));
+    target = noVault ? null : ((flags["vault"] as string | undefined) ?? resolveVault(configPath));
     const by = token !== undefined ? "worker" : "cli";
     const ran =
       catchUpMinutes !== undefined
@@ -164,10 +176,109 @@ export async function cmdRun(argv: ReadonlyArray<string>): Promise<number> {
         : await runPass(target, configOpt, json, by);
     keepClaim = ran.unrecorded;
     return ran.code;
+  } catch (err) {
+    if (ending === null) throw err;
+    // An error no pass path handled: a failed day, named in the worker log.
+    keepClaim = ending.end(`the dream worker failed: ${describeErrorChain(err)}`, err);
+    return EXIT.failed;
   } finally {
+    ending?.settle();
     if (claimPath !== null && token !== undefined && !keepClaim) releaseClaim(claimPath, token);
     releaseRunClaim();
   }
+}
+
+/** Signals a detached worker hears, and the exit code each ends it with. */
+const WORKER_SIGNALS = Object.freeze({ SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const);
+
+/** What {@link installWorkerEndings} needs. */
+export interface WorkerEndingContext {
+  readonly claimPath: string;
+  readonly token: string;
+  /** The vault the pass runs on, read when an ending is recorded. */
+  readonly vault: () => string | null;
+  readonly configOpt: { readonly configPath?: string };
+  readonly startedAt: Date;
+  /** Ends the process (default `process.exit`). */
+  readonly exit?: (code: number) => void;
+}
+
+/** The worker's endings, installed for one run. */
+export interface WorkerEndings {
+  /**
+   * Record a failed day for an ending no pass path recorded, name it on
+   * the error stream (the worker log), and say whether the claim must be
+   * kept (the recording itself failed). Once per run.
+   */
+  readonly end: (message: string, err?: unknown) => boolean;
+  /** The run recorded its own outcome: the listeners are removed. */
+  readonly settle: () => void;
+}
+
+/**
+ * Make every ending of the claimed worker record an outcome and give its
+ * claim back. A detached worker that a signal ended at its default
+ * disposition left its claim, its locks and an open record, with not a
+ * line in its log, and the next check could only call it lost. A signal
+ * is heard once the process turns its event loop (a synchronous pass
+ * finishes first and records its own outcome); an exit from anywhere
+ * before the run settles is recorded on the way out.
+ */
+export function installWorkerEndings(ctx: WorkerEndingContext): WorkerEndings {
+  const exit = ctx.exit ?? ((code: number) => process.exit(code));
+  let ended = false;
+  let settled = false;
+  const end = (message: string, err?: unknown): boolean => {
+    if (ended || settled) return false;
+    ended = true;
+    try {
+      process.stderr.write(`error: ${message}\n`);
+    } catch {
+      // no log to write to: the record still says it
+    }
+    let vault: string | null = null;
+    try {
+      vault = ctx.vault();
+    } catch {
+      vault = null;
+    }
+    const recording = recordDreamOutcomeResult(vault, {
+      ...ctx.configOpt,
+      startedAt: ctx.startedAt,
+      result: { threw: err ?? new Error(message) },
+      by: "worker",
+    });
+    recorded(recording);
+    return recording.kind === "failed";
+  };
+  const listeners = new Map<string, () => void>();
+  for (const [signal, code] of Object.entries(WORKER_SIGNALS)) {
+    const listener = (): void => {
+      // A second signal while the first is being recorded changes nothing.
+      if (ended || settled) return;
+      const keep = end(`the dream worker was stopped by ${signal} before its pass ended`);
+      settle();
+      if (!keep) releaseClaim(ctx.claimPath, ctx.token);
+      exit(code);
+    };
+    listeners.set(signal, listener);
+    process.on(signal, listener);
+  }
+  const onExit = (code: number): void => {
+    if (settled) return;
+    if (!end(`the dream worker exited with code ${code} before its pass ended`)) {
+      releaseClaim(ctx.claimPath, ctx.token);
+    }
+  };
+  process.on("exit", onExit);
+  function settle(): void {
+    if (settled) return;
+    settled = true;
+    for (const [signal, listener] of listeners) process.removeListener(signal, listener);
+    listeners.clear();
+    process.removeListener("exit", onExit);
+  }
+  return { end, settle };
 }
 
 const NO_RELEASE = (): void => {};

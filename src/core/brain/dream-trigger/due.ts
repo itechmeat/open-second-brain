@@ -115,8 +115,15 @@ function failedAttempt(
   lost: boolean,
 ): DreamTriggerRecord {
   const failures = r.failures + 1;
+  // The attempt's own day is the one left open: the day the attempt
+  // started on (the day of the check that judges it, when none was
+  // recorded), never an earlier day another pass closed. A day ahead of
+  // the clock stays the record's day.
+  const startedMs = Date.parse(r.last_run?.started_at ?? "");
+  const attemptDay = isoDate(new Date(Number.isFinite(startedMs) ? startedMs : now));
   return {
     ...r,
+    day: r.day !== null && r.day > attemptDay ? r.day : attemptDay,
     closed: false,
     reason,
     failures,

@@ -267,7 +267,7 @@ src/core/fs-lock.ts::removeCreatedLockFile::unlinkSync	primitive	a helper of the
 src/core/install/rules-block.ts::backupRulesFile::atomicCreateFileSyncExclusive	no-lane-decision	-	1
 src/core/install/rules-block.ts::removeRulesBlock::atomicWriteFileSync	no-lane-decision	-	1
 src/core/install/rules-block.ts::writeRulesBlock::atomicWriteFileSync	no-lane-decision	-	1
-src/core/maintenance/o2b-command.ts::spawnSelfDetached::writeFileSync	primitive	a helper of the store, the file system, a lock, machine state, the view render, the search index or the store migration: what it writes is fixed by its arguments or read from the whole store itself; the reads listed are ancestors' decisions about other writes, judged at their own rows	1
+src/core/maintenance/o2b-command.ts::openStderrLog::writeFileSync	primitive	a helper of the store, the file system, a lock, machine state, the view render, the search index or the store migration: what it writes is fixed by its arguments or read from the whole store itself; the reads listed are ancestors' decisions about other writes, judged at their own rows	1
 src/core/maintenance/self-heal-upgrade-state.ts::claimSelfHealUpgradeLock::unlinkSync	no-lane-decision	-	1
 src/core/maintenance/self-heal-upgrade-state.ts::claimSelfHealUpgradeLock::writeFileSync	no-lane-decision	-	1
 src/core/maintenance/self-heal-upgrade-state.ts::clearSelfHealUpgradeFailure::unlinkSync	no-lane-decision	-	1

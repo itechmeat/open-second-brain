@@ -168,7 +168,8 @@ async function ownedMachine(): Promise<Owned> {
       started_at: new Date(now - 86_400_000).toISOString(),
       ended_at: new Date(now - 86_400_000 + 60_000).toISOString(),
       outcome: "complete",
-      by: "worker",
+      // Closed by a pass run by hand, as `o2b dream run --catch-up` closes it.
+      by: "cli",
     },
   });
   return { m, storeRoot, recordPath, yesterday, today };
@@ -191,7 +192,9 @@ describe("automatic dream with the store in the vault", () => {
       const after = readDreamTriggerRecord(recordPath, storeRoot);
       expect(after).not.toBeNull();
       expect(after!.day).toBe(today);
-      expect(after!.last_run).toMatchObject({ by: "worker" });
+      // A worker with nothing to do ends complete, and its log holds no error.
+      expect(after!.last_run).toMatchObject({ by: "worker", outcome: "complete" });
+      expect(readFileSync(workerLog(m, storeRoot), "utf8")).not.toContain("error:");
       expect(after!.last_run!.ended_at).not.toBeNull();
       expect(after!.closed).toBe(true);
       expect(after!.owner).toMatchObject({ device: DEVICE, mine: true });
