@@ -113,6 +113,8 @@ import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
 import { resolveHookTarget } from "./lib/hook-vault.ts";
+import { withWholeLogReadPass } from "../src/core/brain/log-days.ts";
+import { trustVerifiedPrefixes } from "../src/core/store/verified-prefixes.ts";
 import { dreamDayCheck } from "../src/core/brain/dream-trigger/check.ts";
 import { DREAM_DAY_NOTICE_CODE } from "../src/core/brain/dream-trigger/constants.ts";
 import {
@@ -958,7 +960,11 @@ function budgetedSourceCount(meter: InjectionMeter): number {
   return meter.sources.filter((source) => source.lane === LANE_BUDGETED).length;
 }
 
-main().catch(() => {
+// The hook trusts what this machine verified of the store before
+// (`verified-prefixes.ts`), and reads the log once: the dream digest
+// notice, the active and the lessons digests share one read of it.
+trustVerifiedPrefixes();
+withWholeLogReadPass(main).catch(() => {
   // Never crash the runtime; the session start should proceed
   // regardless of any hook misbehaviour.
 });
