@@ -92,10 +92,12 @@ describe("a temporal replace naming a private entry whose spelling a shared entr
     const e = env();
     const variant = recordsOf(e, VARIANT);
     const answer = await call(server(e), "brain_lifecycle", ARGS);
-    expect({ answer: answer.includes("zqspell held"), variant: recordsOf(e, VARIANT) }).toEqual({
-      answer: false,
-      variant,
-    });
+    expect({
+      answer: answer.includes("zqspell held"),
+      // The private entry's path, other than as the caller passed it.
+      private_path: answer.replaceAll(HELD, "").includes("zqspell-fact"),
+      variant: recordsOf(e, VARIANT),
+    }).toEqual({ answer: false, private_path: false, variant });
   });
 
   test("a local call patches the entry it named and leaves the variant", async () => {

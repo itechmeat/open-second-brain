@@ -23,6 +23,7 @@ import {
   type AgendaEventInput,
   type AgendaSnapshot,
 } from "../../core/brain/agenda.ts";
+import { isAlreadyRecorded } from "../../core/brain/repeat-call.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -110,7 +111,11 @@ function toolBrainObligation(
     if (operation === "done") {
       const date = coerceStr(args, "date", false);
       const page = completeObligation(vault, { slug: target, ...(date ? { date } : {}) });
-      return { operation, obligation: pageJson(page) };
+      return {
+        operation,
+        obligation: pageJson(page),
+        ...(isAlreadyRecorded(page) ? { already_recorded: true } : {}),
+      };
     }
     if (operation === "remove") {
       const removed = removeObligation(vault, target);

@@ -102,6 +102,13 @@ export interface BuildClaimGraphOptions {
   readonly maxNodes?: number;
   /** Wall clock for `generated_at`. Defaults to `new Date()`. */
   readonly now?: Date;
+  /**
+   * The claims the projection may hold, applied before the node cap, so
+   * a reader's own projection caps what it may read and `truncated`
+   * describes only that (change `lane-reach-residuals`, design R13).
+   * Absent: every claim.
+   */
+  readonly keep?: (node: ClaimNode) => boolean;
 }
 
 // ----- Field extraction -----------------------------------------------------
@@ -192,7 +199,9 @@ export function buildClaimGraph(vault: string, opts: BuildClaimGraphOptions = {}
       `buildClaimGraph: maxNodes must be a positive integer; got ${maxNodes}`,
     );
   }
-  const nodes = memoryFromStore(vault) ? storeNodes(vault) : legacyNodes(vault);
+  const keep = opts.keep;
+  const built = memoryFromStore(vault) ? storeNodes(vault) : legacyNodes(vault);
+  const nodes = keep === undefined ? built : built.filter(keep);
   nodes.sort((a, b) => a.path.localeCompare(b.path));
 
   const truncated = nodes.length > maxNodes;

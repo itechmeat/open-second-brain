@@ -15,14 +15,32 @@
  *     exists unless the twin dropped it too, and keeps every private
  *     canary it held;
  *  4. a call that succeeds on the twin succeeds too, or answers the fixed
- *     refusal; no call answers an internal error.
+ *     refusal; no call answers an internal error;
+ *  5. no lane gains a shared entry with the identity of a private one, and
+ *     every creating verb of the plan has an identity twin or the reason
+ *     it has none (`lane-private-partition-reach-probe-identity.ts`);
+ *  6. a call naming a private entry (`:hidden`) answers the fixed refusal
+ *     or as the call naming an absent entry does;
+ *  7. every call refused with the fixed answer has a successful control:
+ *     the same call on the twin (for a `:hidden` call, the call naming the
+ *     shared entry), so a refusal is never of a call that fails anyway;
+ *  8. a refused call leaves the raw records of both partitions as they
+ *     were before it;
+ *  9. every list or count call answers the counts a store holding only the
+ *     fixture's `shared` records answers at local reach
+ *     (`lane-private-partition-reach-probe-counts.ts`).
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { join } from "node:path";
+
+import { wholeLaneStoreFold } from "../../src/core/store/lane-fold-cache.ts";
 import { LANE_ENTRY_WITHHELD_MESSAGE } from "../../src/core/store/lane-reach-guard.ts";
+import { readPartition } from "../../src/core/store/state-digest.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
-import { makeLaneEnv } from "../core/lanes/fixtures/lane-env.ts";
+import { makeLaneEnv, type LaneEnv } from "../core/lanes/fixtures/lane-env.ts";
+import { countMismatches, isListOrCountCall } from "./lane-private-partition-reach-probe-counts.ts";
 import {
   planTool,
   seedProbeStore,
@@ -33,9 +51,10 @@ import {
 } from "./lane-private-partition-reach-probe-write-plan.ts";
 import {
   COARSE_VERBS,
-  IDENTITY_TOOLS,
-  PROBE_ENTITY,
+  IDENTITY_TWINS,
+  NO_IDENTITY_TWIN,
   identityProblems,
+  meetsIdentityTwin,
   seedIdentityTwins,
 } from "./lane-private-partition-reach-probe-identity.ts";
 import { localServer, server } from "./lane-private-partition-reach-writes-fixture.ts";
@@ -57,14 +76,73 @@ interface Run {
   readonly answers: Map<string, Answer>;
   readonly skipped: string[];
   readonly calls: number;
+  /** The canary marks of the identity twins seeded. */
+  readonly twinMarks: string[];
+  /** Per call, the shared keys it added. */
+  readonly creates: Map<string, string[]>;
+  /** Refused calls after which the raw records of a partition differ. */
+  readonly traces: string[];
+  /** The list or count calls, by label. */
+  readonly listCalls: Set<string>;
+  /** Every call made, by label. */
+  readonly made: Map<string, ProbeCall>;
 }
+
+/**
+ * The store a run seeds and how it calls: the twin and the store with
+ * private entries call everything below local reach; the shared-only twin
+ * of the count comparison is the twin's store answering every list or
+ * count call at local reach.
+ */
+type RunMode = "twin" | "private" | "shared-local";
 
 const labelOf = (c: ProbeCall): string => `${c.tool} ${c.verb} ${c.names}`;
 
+/** The plan's `<tool> <verb>` of a call. */
+const verbOf = (c: ProbeCall): string => `${c.tool} ${c.verb}`;
+
+/**
+ * Whether an answer of `tool` is the fixed refusal: its whole message,
+ * bare or after the tool's name, as the error or the error result's text.
+ */
+function isWithheld(tool: string, a: Answer): boolean {
+  const whole = new Set([LANE_ENTRY_WITHHELD_MESSAGE, `${tool}: ${LANE_ENTRY_WITHHELD_MESSAGE}`]);
+  try {
+    const parsed = JSON.parse(a.text) as Record<string, unknown>;
+    if (whole.has(String(parsed["error"]))) return true;
+    const content = parsed["content"] as Array<{ text?: unknown }> | undefined;
+    return parsed["isError"] === true && whole.has(String(content?.[0]?.text));
+  } catch {
+    return false;
+  }
+}
+
+/** Every record id of both partitions of the store, as it holds them. */
+function rawRecords(e: LaneEnv): string {
+  const ids = (partition: "shared" | "private") =>
+    readPartition(join(e.env.storeRoot, partition))
+      .flatMap((shard) => shard.all)
+      .map((r) => r.id)
+      .toSorted();
+  return JSON.stringify({ shared: ids("shared"), private: ids("private") });
+}
+
+/** The live shared keys of the store. */
+function sharedKeys(): Set<string> {
+  const fold = wholeLaneStoreFold();
+  return new Set([...fold.entries.keys()].filter((key) => !fold.privateKeys.has(key)));
+}
+
+/**
+ * The answer of one call, or `probe_timeout` past {@link CALL_TIMEOUT_MS}.
+ * The call itself is added to `pending`, so a call that timed out is
+ * waited for before its store is cleaned up.
+ */
 async function answer(
   s: ReturnType<typeof server>,
   tool: string,
   args: Record<string, unknown>,
+  pending: Array<Promise<unknown>>,
 ): Promise<Answer> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<Answer>((done) => {
@@ -81,21 +159,29 @@ async function answer(
         ok: false,
         text: JSON.stringify({ error: (err as Error)?.message ?? String(err) }),
       }));
+    pending.push(run);
     return await Promise.race([run, timeout]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Seed one store, call every planned call below local reach, snapshot around it. */
-async function runStore(withPrivate: boolean): Promise<Run> {
-  const e = makeLaneEnv("store", withPrivate ? "osb-lane-pw-priv-" : "osb-lane-pw-twin-");
+/** Seed one store, call every planned call, snapshot around it. */
+async function runStore(mode: RunMode): Promise<Run> {
+  const withPrivate = mode === "private";
+  const e = makeLaneEnv("store", `osb-lane-pw-${mode}-`);
+  const pending: Array<Promise<unknown>> = [];
   try {
-    const lanes = await seedProbeStore(e, localServer(e), withPrivate);
-    seedIdentityTwins(e, withPrivate);
+    const local = localServer(e);
+    const lanes = await seedProbeStore(e, local, withPrivate, mode === "shared-local");
+    const twinMarks = await seedIdentityTwins(e, local, withPrivate);
     const before = snapshot(e);
     const remote = server(e);
     const answers = new Map<string, Answer>();
+    const creates = new Map<string, string[]>();
+    const traces: string[] = [];
+    const listCalls = new Set<string>();
+    const made = new Map<string, ProbeCall>();
     const skipped: string[] = [];
     let calls = 0;
     for (const tool of buildToolTable()) {
@@ -104,14 +190,44 @@ async function runStore(withPrivate: boolean): Promise<Run> {
       for (const c of plan.calls) {
         const label = labelOf(c);
         if (answers.has(label)) continue;
+        const listing = c.names === "base" && isListOrCountCall(tool.kind, c.verb);
+        if (listing) listCalls.add(label);
+        const records = rawRecords(e);
+        const keys = mode === "twin" ? sharedKeys() : null;
+        const s = mode === "shared-local" && listing ? local : remote;
         // oxlint-disable-next-line no-await-in-loop -- one store, its calls in order
-        const a = await answer(remote, c.tool, c.args);
+        const a = await answer(s, c.tool, c.args, pending);
         answers.set(label, { ...a, passed: JSON.stringify(c.args) });
+        made.set(label, c);
+        if (isWithheld(c.tool, a) && rawRecords(e) !== records) {
+          traces.push(`${label}: refused, and the raw records changed`);
+        }
+        if (keys !== null) {
+          const added = [...sharedKeys()].filter((key) => !keys.has(key));
+          if (added.length > 0) creates.set(label, added);
+        }
         calls++;
       }
     }
-    return { lanes, before, after: snapshot(e), answers, skipped, calls };
+    // A call that timed out still runs: wait for it before the snapshot
+    // and the cleanup.
+    await Promise.allSettled(pending);
+    return {
+      lanes,
+      before,
+      after: snapshot(e),
+      answers,
+      skipped,
+      calls,
+      twinMarks,
+      creates,
+      traces,
+      listCalls,
+      made,
+    };
   } finally {
+    // Nothing of the store's calls may still run when it is removed.
+    await Promise.allSettled(pending);
     e.cleanup();
   }
 }
@@ -137,9 +253,16 @@ const REGENERATED = ["procedural-memory/", "proposals/bridges"];
 describe("differential write probe of private-partition lane entries", () => {
   test("no call below local reach discloses, drops or fails on a private entry", async () => {
     const started = Date.now();
-    const twin = await runStore(false);
-    const seeded = await runStore(true);
-    const canaries = seeded.lanes.flatMap((l) => (l.hidden?.marks ?? []).map((t) => t.mark));
+    const twin = await runStore("twin");
+    const seeded = await runStore("private");
+    const sharedOnly = await runStore("shared-local");
+    const canaries = [
+      ...seeded.lanes.flatMap((l) => (l.hidden?.marks ?? []).map((t) => t.mark)),
+      ...seeded.lanes.flatMap((l) =>
+        (l.extraHidden ?? []).flatMap((x) => x.entry.marks.map((t) => t.mark)),
+      ),
+      ...seeded.twinMarks,
+    ];
     const problems: string[] = [];
 
     // 1. No canary in any answer or error.
@@ -191,28 +314,16 @@ describe("differential write probe of private-partition lane entries", () => {
       if (t === undefined) continue;
       compared++;
       if (!t.ok || a.ok) continue;
-      if (a.text.includes(LANE_ENTRY_WITHHELD_MESSAGE) && label.endsWith(":hidden")) continue;
+      const withheld = isWithheld(seeded.made.get(label)!.tool, a);
+      if (withheld && seeded.made.get(label)!.hidden === true) continue;
       // A base call that meets an identity twin (it passes the twin's
       // name) gets the fixed refusal.
-      if (
-        a.text.includes(LANE_ENTRY_WITHHELD_MESSAGE) &&
-        IDENTITY_TOOLS.has(label.split(" ")[0]!) &&
-        a.passed?.includes(PROBE_ENTITY) === true
-      )
-        continue;
+      if (withheld && meetsIdentityTwin(label, a.passed)) continue;
       // A verb under the coarse rule (bulk form) gets the fixed refusal.
-      if (
-        a.text.includes(LANE_ENTRY_WITHHELD_MESSAGE) &&
-        COARSE_VERBS.has(label.split(" ").slice(0, 2).join(" "))
-      )
-        continue;
+      if (withheld && COARSE_VERBS.has(label.split(" ").slice(0, 2).join(" "))) continue;
       // A bridge dismissal beside a dismissal list held in `private` gets
       // the fixed refusal (same answer for a dismissed and an absent pair).
-      if (
-        a.text.includes(LANE_ENTRY_WITHHELD_MESSAGE) &&
-        label.split(" ").slice(0, 2).join(" ") === "brain_bridges dismiss"
-      )
-        continue;
+      if (withheld && label.split(" ").slice(0, 2).join(" ") === "brain_bridges dismiss") continue;
       problems.push(`${label}: twin succeeds, here ${a.text.slice(0, 200)}`);
     }
 
@@ -221,10 +332,69 @@ describe("differential write probe of private-partition lane entries", () => {
       [...seeded.after.sharedFields].filter(([key]) => !seeded.before.sharedKeys.has(key)),
     );
     problems.push(...identityProblems(seeded.before.privateEntries, added));
+    // Every creating verb of the plan (a call that adds a shared entry on
+    // the twin) has an identity twin or the reason it has none.
+    const twinned = new Set(IDENTITY_TWINS.map((twinRow) => twinRow.verb));
+    for (const label of twin.creates.keys()) {
+      const verb = verbOf(twin.made.get(label)!);
+      if (!twinned.has(verb) && !(verb in NO_IDENTITY_TWIN)) {
+        problems.push(`${label}: a creating verb with no identity twin and no reason`);
+      }
+    }
+
+    // 6. A call naming a private entry answers as for an absent entry.
+    let hiddenCalls = 0;
+    for (const [label, a] of seeded.answers) {
+      const c = seeded.made.get(label)!;
+      if (c.hidden !== true) continue;
+      hiddenCalls++;
+      const base = seeded.answers.get(labelOf({ ...c, names: "base" }));
+      if (isWithheld(c.tool, a) || (base !== undefined && base.ok === a.ok)) continue;
+      problems.push(
+        `${label}: answers unlike an absent entry (absent ok ${base?.ok ?? "unknown"}, here ok ${a.ok}): ${a.text.slice(0, 160)}`,
+      );
+    }
+
+    // 7. Every refused call has a successful control on the twin.
+    const refusedLabels: string[] = [];
+    let bothFail = 0;
+    for (const [label, a] of seeded.answers) {
+      const c = seeded.made.get(label)!;
+      const control = twin.answers.get(
+        c.hidden === true ? labelOf({ ...c, names: `${c.lane}:shared` }) : label,
+      );
+      const withheld = isWithheld(c.tool, a);
+      if (!a.ok && control !== undefined && !control.ok && !withheld) bothFail++;
+      if (!withheld) continue;
+      refusedLabels.push(label);
+      if (control?.ok !== true) {
+        problems.push(
+          `${label}: refused without a successful control (${control === undefined ? "no control call" : control.text.slice(0, 120)})`,
+        );
+      }
+    }
+
+    // 8. A refused call leaves the raw records as they were.
+    problems.push(...seeded.traces);
+
+    // 9. List and count calls answer the shared-only twin's counts.
+    let counted = 0;
+    for (const label of seeded.listCalls) {
+      const a = seeded.answers.get(label);
+      const t = sharedOnly.answers.get(label);
+      if (a === undefined || t === undefined) continue;
+      counted++;
+      const call = verbOf(seeded.made.get(label)!);
+      problems.push(...countMismatches(call, a.text, t.text, twin.answers.get(label)?.text));
+    }
 
     console.log(
       [
         `calls below local reach: twin ${twin.calls}, with private entries ${seeded.calls}; compared ${compared}`,
+        `calls naming a private entry: ${hiddenCalls}; refused with the fixed answer: ${refusedLabels.length}; failing on both stores (not exercised): ${bothFail}`,
+        `creating calls on the twin: ${[...twin.creates.keys()].join(" | ") || "none"}`,
+        `list or count calls compared with the shared-only twin: ${counted}`,
+        `refused with the fixed answer: ${refusedLabels.join(" | ") || "none"}`,
         `skipped (${seeded.skipped.length}):`,
         ...seeded.skipped.map((s) => `  ${s}`),
         `problems (${problems.length}):`,

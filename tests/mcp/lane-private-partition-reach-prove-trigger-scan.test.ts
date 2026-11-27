@@ -114,7 +114,12 @@ describe("a scan that meets a private open trigger for its key", () => {
       (r) => r.startsWith("private ") && r.includes(`"entry":"${id}"`),
     );
     expect(remote["error"] ?? null).toBeNull();
-    expect(remote["candidates"]).toBe(1);
+    // Modified by the requirement "Counts and caps answered below local
+    // reach agree with what the caller may read" (change
+    // `lane-reach-residuals`, design R13, scenario "A trigger skipped for a
+    // private trigger is not counted"): `candidates` equals what `created`
+    // and `skipped` show, here nothing.
+    expect(remote["candidates"]).toBe(0);
     expect({
       created: remote["created"],
       skipped: remote["skipped"],

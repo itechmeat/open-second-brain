@@ -20,7 +20,13 @@
  *                    detail carries the per-copy link counts.
  *
  * Dry-run previews the routed actions with zero writes. Per-finding
- * fail-soft; one audit record per non-dry run.
+ * fail-soft; one audit record per non-dry run that applied an action or
+ * met an error other than a reach refusal.
+ *
+ * Below local reach each action lists its members on the fold of every
+ * partition before its first durable step (`members-at-reach.ts`, change
+ * `lane-reach-residuals`, design R11): a member held in `private` makes
+ * that action's error the fixed answer, and the other actions proceed.
  */
 
 import { join } from "node:path";
@@ -31,9 +37,11 @@ import { retireDocumentCopies } from "../document-retire.ts";
 import { mergePreferences } from "../merge.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { archivePage, executeRecompile, planRecompile } from "../recompile.ts";
+import { LaneEntryWithheldError } from "../../store/lane-reach-guard.ts";
 import { appendClaimEvent } from "../truth/store.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { WriteSubject } from "../write-disposition.ts";
+import { assertHygieneActionAtReach } from "./members-at-reach.ts";
 import type { HygienePlan } from "./plan.ts";
 import type { HygieneFinding } from "./types.ts";
 
@@ -50,6 +58,8 @@ export interface HygieneApplyOptions {
    * identity is silently bypassed on this route.
    */
   readonly subject?: WriteSubject;
+  /** The configuration the store is read with (the reach check of each action). */
+  readonly configPath?: string;
 }
 
 export interface HygieneAppliedAction {
@@ -236,10 +246,15 @@ export async function applyHygienePlan(
 
   const applied: HygieneAppliedAction[] = [];
   const errors: { finding_id: string; message: string }[] = [];
+  // Whether every error is a reach refusal: only the message is kept per
+  // error, so the class is judged here, where the error is caught.
+  let onlyReachRefusals = true;
   for (const finding of plan.selected) {
     try {
+      assertHygieneActionAtReach(vault, finding, opts.now, opts.configPath);
       applied.push(await executeFinding(vault, finding, opts));
     } catch (error) {
+      if (!(error instanceof LaneEntryWithheldError)) onlyReachRefusals = false;
       errors.push({
         finding_id: finding.id,
         message: error instanceof Error ? error.message : "apply failed",
@@ -247,7 +262,9 @@ export async function applyHygienePlan(
     }
   }
 
-  if (applied.length > 0 || errors.length > 0) {
+  // A call that applied nothing and met only reach refusals leaves no
+  // durable trace (design R7, R11): no audit record.
+  if (applied.length > 0 || (errors.length > 0 && !onlyReachRefusals)) {
     appendAuditRecord(
       join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR),
       {

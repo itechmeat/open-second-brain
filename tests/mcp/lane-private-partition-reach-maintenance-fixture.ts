@@ -73,7 +73,11 @@ export async function seedRejectedName(
 ): Promise<string> {
   const { vault } = e;
   seedTurns(vault, "zqmaintaction", 1, 4);
-  await call(local, "brain_skill_proposals", { operation: "learn", min_support: 3 });
+  const learned = await call(local, "brain_skill_proposals", {
+    operation: "learn",
+    min_support: 3,
+  });
+  expect((JSON.parse(learned) as Record<string, unknown>)["error"]).toBeUndefined();
   const drafted = listPendingSkillProposals(vault).find(
     (p) => p.slug.includes("zqmaintaction") && p.patternKind === "repeated_action",
   );

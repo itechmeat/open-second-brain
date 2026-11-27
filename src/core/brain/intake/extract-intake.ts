@@ -88,18 +88,14 @@ import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.t
 import { TRANSPORT_REACH } from "../../graph/transport-reach.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
 import { entityPath } from "../paths.ts";
-import {
-  assertStagedTargetsAtReach,
-  listPendingLane,
-  stageForReview,
-} from "../pending/pending-lanes.ts";
+import { listPendingLane, stageForReview } from "../pending/pending-lanes.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import {
   validateEntityCategory,
   normalizeEntityName,
   InvalidEntityLabelError,
 } from "../entities/canonical.ts";
-import { assertUpsertsAtReach, relateEntities, upsertEntity } from "../entities/registry.ts";
+import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
   MARKDOWN_NEUTRALIZE_MODE,
@@ -115,6 +111,8 @@ import {
   type SourceOrigin,
 } from "./source-trust.ts";
 import { readLaneFile, removeLanePage } from "../../store/lane-pages.ts";
+import { privateWithheld } from "../../store/caller-reach.ts";
+import { assertIntakePlanAtReach, type IntakeReachPlan } from "./intake-reach.ts";
 
 /** One entity the agent extracted from a source. */
 export interface IntakeEntity {
@@ -385,6 +383,65 @@ function entityH1Name(displayName: string, active: boolean): string {
   return neutralizeMarkdown(`# ${displayName}`).text;
 }
 
+/** What `intake` would write, for its reach pre-check (`intake-reach.ts`). */
+function intakeReachPlan(
+  intake: ExtractionIntake,
+  opts: IntakeOptions,
+  untrustedOrigin: boolean,
+  neutralizeActive: boolean,
+): IntakeReachPlan {
+  const provenanceSection = renderProvenanceSection(opts.provenance);
+  return {
+    entities: intake.entities.map((entity) => ({
+      category: entity.category,
+      name: entity.name,
+      ...(entity.aliases !== undefined
+        ? {
+            aliases: neutralizeActive
+              ? entity.aliases.map((alias) => neutralizeMarkdown(alias).text)
+              : entity.aliases,
+          }
+        : {}),
+    })),
+    relations: intake.relations ?? [],
+    agent: opts.agent,
+    now: opts.now,
+    untrustedOrigin,
+    stage: opts.disposition === "stage",
+    bodyOnCreate: (name) =>
+      provenanceSection
+        ? `# ${entityH1Name(name, neutralizeActive)}\n\n${provenanceSection}`
+        : `# ${name}`,
+  };
+}
+
+/**
+ * Below local reach, the reach pre-check {@link intakeExtraction} runs before
+ * its first write, for a caller that has a durable step of its own to take
+ * before the intake (the source ingest records its disposition row only
+ * after it): refuses with the fixed answer when a write of the intake would
+ * meet an entry held in `private`. Outside that scope nothing is read.
+ */
+export function assertIntakeAtReach(
+  vault: string,
+  intake: ExtractionIntake,
+  opts: IntakeOptions,
+): void {
+  if (!privateWithheld()) return;
+  const gate = resolveMarkdownNeutralizeModeForProcess();
+  const origin = resolveIntakeOrigin(vault, opts.provenance, opts.readable);
+  const untrustedOrigin = origin.trust === INTAKE_TRUST.untrusted;
+  assertIntakePlanAtReach(
+    vault,
+    intakeReachPlan(
+      intake,
+      opts,
+      untrustedOrigin,
+      untrustedOrigin && gate === MARKDOWN_NEUTRALIZE_MODE.enforce,
+    ),
+  );
+}
+
 /**
  * Intake one typed extraction into the entity registry. Validates the full
  * payload first (throwing {@link IntakeValidationError} with no write on
@@ -433,34 +490,18 @@ export function intakeExtraction(
   let entitiesSkipped = 0;
   let relationsSkipped = 0;
 
-  // Below local reach every entity's identity decision, and the open review
-  // entry a staged create would meet, are judged on the fold of every
-  // partition first (the write rule): one that meets an entry held in
-  // `private` refuses the whole intake before any write.
   // The aliases each upsert below stores: on the neutralizing lane, with
   // their structure sigils escaped.
   const laneAliasesOf = (aliases: ReadonlyArray<string> | undefined) =>
     aliases !== undefined && neutralizeActive
       ? aliases.map((alias) => neutralizeMarkdown(alias).text)
       : aliases;
-  const createPaths = assertUpsertsAtReach(
-    vault,
-    intake.entities.map((entity) => ({
-      category: entity.category,
-      name: entity.name,
-      ...(entity.aliases !== undefined ? { aliases: laneAliasesOf(entity.aliases)! } : {}),
-      agent: opts.agent,
-      now: opts.now,
-      ...(untrustedOrigin ? { untrustedOrigin } : {}),
-    })),
-  );
-  if (opts.disposition === "stage") {
-    assertStagedTargetsAtReach(
-      vault,
-      REVIEW_LANE.notes,
-      createPaths.map((path) => canonicalNotePath(relative(vault, path))),
-    );
-  }
+  // Below local reach every write of the batch (each entity's identity
+  // decision, the open review entry a staged create would meet, the pages it
+  // writes and its relations' endpoints) is judged on the fold of every
+  // partition first (the write rule): one that meets an entry held in
+  // `private` refuses the whole intake before any write.
+  assertIntakePlanAtReach(vault, intakeReachPlan(intake, opts, untrustedOrigin, neutralizeActive));
 
   for (const entity of intake.entities) {
     const category = validateEntityCategory(entity.category);

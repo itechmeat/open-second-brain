@@ -21,6 +21,17 @@
  * Under the brain store dual-write flag every committed state is also
  * appended to the store as a full-text `pinned-set` (or a `pinned-clear`),
  * with the authority of the process's origin (see `store/dual-write.ts`).
+ *
+ * Below local reach (change `lane-reach-residuals`, design R1) the pinned
+ * register of a store-only machine is `shared` even when the machine holds
+ * `private`: a read answers and names the `shared` register, a write goes
+ * there (judged on what the caller may read, so a text naming a private
+ * page goes there too; one carrying a private region is refused before
+ * anything is written), and every writing form is refused
+ * with the fixed answer of the lane rule, before it reads anything, while
+ * the `private` register holds a record. At local reach a machine holding
+ * `private` reads the `shared` register while the `private` one holds no
+ * record, so a remote write is not lost to a local reader.
  */
 
 import { legacyVaultOf } from "./no-vault.ts";
@@ -28,14 +39,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { PINNED_CLEAR_KIND, PINNED_SET_KIND } from "../store/constants.ts";
 import { pinnedRecord } from "../store/dual-write-records.ts";
 import { authorityFromOrigin, isDualWriteEnabled } from "../store/dual-write.ts";
+import { privateWithheld } from "../store/caller-reach.ts";
+import { LaneEntryWithheldError } from "../store/lane-reach-guard.ts";
 import type { StoreInspection } from "../store/store-open.ts";
 import { configuredStore, readEntitiesOf } from "../store/read/store-entities.ts";
+import { readStreamRecords } from "../store/read/stream-read.ts";
 import { isStoreOnly } from "../store/store-only.ts";
 import { storesStateDir } from "../store/store-paths.ts";
 import { routeWrite } from "../store/store-write.ts";
 import { processDirsEnv } from "../platform-dirs.ts";
+import { textCarriesPrivateRegion } from "../store/private-region.ts";
 import { pinnedTextIsPrivate } from "../store/reference-privacy.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { brainPinnedPath } from "./paths.ts";
@@ -51,7 +67,14 @@ export interface PinnedContext {
 }
 
 export function readPinnedContext(vault: string | null): PinnedContext {
-  if (pinnedStoreOnly(vault)) return { path: pinnedLocation(vault), ...readStorePinned() };
+  if (pinnedStoreOnly(vault)) {
+    const read = readStorePinned();
+    return {
+      path: `${PINNED_STORE_NAME_PREFIX}${read.partition}/pinned`,
+      present: read.present,
+      content: read.content,
+    };
+  }
   const path = brainPinnedPath(legacyVaultOf(vault, "readPinnedContext"));
   if (!existsSync(path)) {
     return { path, present: false, content: "" };
@@ -79,11 +102,58 @@ function pinnedStoreOnly(vault: string | null): boolean {
 
 /**
  * The pinned register this machine reads and writes: `private` when it
- * holds that partition, `shared` otherwise (FORMAT.md, "Pinned context").
- * The one rule the reported name and the read follow.
+ * holds that partition, `shared` otherwise (FORMAT.md, "Pinned context"),
+ * and `shared` below local reach. The one rule the reported name and the
+ * read follow.
  */
 function pinnedPartition(store: StoreInspection | null = configuredStore()): "private" | "shared" {
+  if (privateWithheld()) return "shared";
   return store !== null && store.partitions.has("private") ? "private" : "shared";
+}
+
+/** Whether the `private` pinned register of `store` holds a record (a set or a clear). */
+function privateRegisterHolds(store: StoreInspection): boolean {
+  if (!store.partitions.has("private")) return false;
+  return (readEntitiesOf(store).pinned.get("private")?.winner ?? null) !== null;
+}
+
+/**
+ * Whether the `private` pinned register of `store` may hold a record the
+ * read did not fold: a `private` `events` shard could not be read, or a
+ * pinned record of that partition waits for its blob.
+ */
+function privateRegisterIncomplete(store: StoreInspection): boolean {
+  if (!store.partitions.has("private")) return false;
+  const entities = readEntitiesOf(store);
+  if (entities.unreadable.some((rel) => rel.startsWith("private/"))) return true;
+  if (!entities.pendingBlobs.some((sha) => sha.startsWith("private/"))) return false;
+  // Some `private` record waits for its blob: is it a pinned one?
+  const read = readStreamRecords(
+    store.root,
+    "private",
+    { stream: "events" },
+    { keep: (record) => record.kind === PINNED_SET_KIND || record.kind === PINNED_CLEAR_KIND },
+  );
+  return (
+    read.unreadable.length > 0 ||
+    (read.pendingKinds.get(PINNED_SET_KIND) ?? 0) +
+      (read.pendingKinds.get(PINNED_CLEAR_KIND) ?? 0) >
+      0
+  );
+}
+
+/**
+ * Below local reach on a store-only machine, refuse a pinned write while
+ * the `private` register holds a record, or may hold one the read could
+ * not fold (fail closed): the caller may neither replace nor learn of it.
+ * Called before the write reads anything.
+ */
+function assertPinnedWritableAtReach(vault: string | null): void {
+  if (!privateWithheld() || !pinnedStoreOnly(vault)) return;
+  const store = configuredStore();
+  if (store !== null && (privateRegisterHolds(store) || privateRegisterIncomplete(store))) {
+    throw new LaneEntryWithheldError();
+  }
 }
 
 /**
@@ -101,25 +171,46 @@ function pinnedLocation(vault: string | null): string {
     : brainPinnedPath(legacyVaultOf(vault, "pinnedLocation"));
 }
 
-function readStorePinned(): { present: boolean; content: string } {
+/**
+ * The pinned text of the store and the register it was read from. At
+ * local reach a machine holding `private` answers the `shared` register
+ * while the `private` one holds no record.
+ */
+function readStorePinned(): {
+  present: boolean;
+  content: string;
+  partition: "private" | "shared";
+} {
   const store = configuredStore();
-  if (store === null) return { present: false, content: "" };
-  const content = readEntitiesOf(store).pinned.get(pinnedPartition(store))?.content ?? null;
+  const own = pinnedPartition(store);
+  if (store === null) return { present: false, content: "", partition: own };
+  const registers = readEntitiesOf(store).pinned;
+  const source = own === "private" && !privateRegisterHolds(store) ? "shared" : own;
+  const content = registers.get(source)?.content ?? null;
   return content === null
-    ? { present: false, content: "" }
-    : { present: true, content: content.trimEnd() };
+    ? { present: false, content: "", partition: own }
+    : { present: true, content: content.trimEnd(), partition: source };
 }
 
 /**
  * Write the pinned text: `Brain/pinned.md` plus the dual write on an
  * unswitched machine, the record only once switched. `namesPrivate` is
- * judged lazily, only when a record is built.
+ * judged lazily, only when a record is built, and never below local reach
+ * on a store-only machine.
  */
 function commitPinned(
   vault: string | null,
   content: string | null,
   namesPrivate: () => boolean,
 ): void {
+  const belowReach = privateWithheld() && pinnedStoreOnly(vault);
+  // Below local reach a pinned text is judged on what the caller may read
+  // only: it goes to `shared`, never to `private`, where its outcome would
+  // tell a private page from an open one and lock every remote writer out.
+  // A text carrying a private region is refused before anything is written.
+  if (belowReach && content !== null && textCarriesPrivateRegion(content)) {
+    throw new LaneEntryWithheldError();
+  }
   routeWrite({
     legacy: () => {
       const text = content ?? "";
@@ -128,7 +219,12 @@ function commitPinned(
         text.length > 0 ? `${text}\n` : "",
       );
     },
-    store: () => pinnedRecord(content, authorityFromOrigin(), namesPrivate()),
+    store: () =>
+      pinnedRecord(
+        content,
+        authorityFromOrigin(),
+        belowReach ? "shared" : namesPrivate() ? "private" : "private-when-held",
+      ),
     context: { vault },
   });
 }
@@ -156,15 +252,21 @@ export function writePinnedContext(vault: string | null, content: unknown): Pinn
   // Vault-identity write guard (Unit J) BEFORE the lock, as clear and the
   // batch path do: a refused vault gets no lock file and no lock wait.
   guardPinnedWrite(vault);
-  return withPinnedLock(vault, () => commitPinnedContent(vault, normalised, "write"));
+  assertPinnedWritableAtReach(vault);
+  return withPinnedLock(vault, () => {
+    assertPinnedWritableAtReach(vault);
+    return commitPinnedContent(vault, normalised, "write");
+  });
 }
 
 export function appendPinnedContext(vault: string | null, content: unknown): PinnedContext {
   const incoming = normalisePinnedContentNoTruncate(content);
+  assertPinnedWritableAtReach(vault);
   if (incoming.length === 0) return readPinnedContext(vault);
 
   guardPinnedWrite(vault);
   return withPinnedLock(vault, () => {
+    assertPinnedWritableAtReach(vault);
     const current = readPinnedContext(vault).content;
     const next = current.length > 0 ? `${current}\n\n${incoming}` : incoming;
     return commitPinnedContent(vault, next, "append");
@@ -199,8 +301,10 @@ function commitPinnedContent(
 export function clearPinnedContext(vault: string | null): PinnedContext {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   guardPinnedWrite(vault);
+  assertPinnedWritableAtReach(vault);
   const path = pinnedLocation(vault);
   return withPinnedLock(vault, () => {
+    assertPinnedWritableAtReach(vault);
     // A clear goes where a set of the text it clears goes, so it lands in
     // the same partition register as that set. The text is read only for
     // the dual write: with the flag off a clear never depends on reading
@@ -338,7 +442,9 @@ export function applyPinnedOperations(
     throw new PinnedBatchError("invalid_operation", -1, "operations must be a non-empty array");
   }
 
+  assertPinnedWritableAtReach(vault);
   return withPinnedLock(vault, () => {
+    assertPinnedWritableAtReach(vault);
     // Projected from the content read under the lock, so a batch never
     // overwrites a write that landed between its read and its commit.
     let projected = readPinnedContext(vault).content;

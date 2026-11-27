@@ -42,6 +42,7 @@
  * verdict onto two independent axes.
  */
 
+import { REVIEW_OBLIGATION_SHARED_EXIT } from "./doctor/review-obligation-exit.ts";
 import { resolveNextStep } from "./next-step.ts";
 
 /** One doctor code with no single command, and the reason it has none. */
@@ -758,7 +759,7 @@ export class DuplicateDoctorExitExclusionError extends Error {
  */
 export const DOCTOR_EXIT_EXCLUSIONS: ReadonlyMap<string, string> = (() => {
   const table = new Map<string, string>();
-  for (const entry of EXCLUSIONS) {
+  for (const entry of [...EXCLUSIONS, REVIEW_OBLIGATION_SHARED_EXIT]) {
     if (table.has(entry.code)) throw new DuplicateDoctorExitExclusionError(entry.code);
     table.set(entry.code, entry.reason);
   }

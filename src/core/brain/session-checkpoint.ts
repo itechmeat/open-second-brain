@@ -33,7 +33,7 @@
  */
 
 import type { RecordOrigin } from "./record-origin.ts";
-import { relative } from "node:path";
+import { vaultRelative } from "../path-safety.ts";
 
 import { appendBrainNote } from "./note.ts";
 import {
@@ -269,7 +269,7 @@ export function saveSessionCheckpoint(
       signalResults.push(
         Object.freeze({
           id: res.id,
-          path: res.path ? relative(vault, res.path) : "",
+          path: res.path ? vaultRelative(res.path, vault) : "",
           deduped: res.deduped === true,
         }),
       );

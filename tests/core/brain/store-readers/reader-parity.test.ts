@@ -302,7 +302,13 @@ describe("compiled digests on a switched machine", () => {
     const answers = [];
     for (const env of [own.legacy, own.switched]) {
       useEnv(env);
-      const server = new MCPServer({ vault: env.vault, configPath: env.configPath });
+      // The operator's own reader, at local reach: the parity is between
+      // the two machines, not between reaches (below local reach the
+      // switched machine's `private` pinned register is withheld).
+      const server = new MCPServer(
+        { vault: env.vault, configPath: env.configPath },
+        { reach: "local" },
+      );
       const result = (await server.callTool("brain_context", {})) as {
         structuredContent?: { content?: string; present?: boolean };
       };

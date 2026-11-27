@@ -376,7 +376,8 @@ export function toolBrainDeadEnds(
   });
   // The overflow trim walks every active dead end, so below local reach the
   // ids it archived are left out: they would name or count withheld pages.
-  // It archives only pages the caller can read; a withheld one stays put.
+  // It archives as a local caller's trim does, so the cap holds on every
+  // partition and a withheld page is archived within `private`.
   return {
     ok: true,
     id: result.entry.id,

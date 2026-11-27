@@ -33,10 +33,12 @@ import { appendLogEvent } from "../log.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { createWriteSession, readWriteSession, saveWriteSession } from "./store.ts";
-import { heldPanelDefaultName } from "./panel-target.ts";
+import { heldPanelDefaultNameAtReach } from "./panel-target.ts";
 import {
   buildCorrectionPrompt,
   inspectExistingTarget,
+  storeTargetNeverHeld,
+  storeTargetText,
   validateArtifact,
   validateTargetPath,
   writeSessionLaneRefusal,
@@ -396,7 +398,7 @@ export function commitArtifact(
   // holds the day as well, after an operator's review too.
   const heldPanel =
     session.kind === "panel" && session.intent === "create"
-      ? heldPanelDefaultName(vault, session.topic, session.targetPath)
+      ? heldPanelDefaultNameAtReach(vault, session.topic, session.targetPath)
       : null;
   if (heldPanel !== null) {
     return recordFailedAttempt(
@@ -412,7 +414,16 @@ export function commitArtifact(
       now,
     );
   }
-  if (session.intent === "create" && existsSync(absolute)) {
+  // A target the store holds is occupied by its store entry, never by a
+  // file left at its path, and a merge reads that entry's text (design R3).
+  // A target the store never held is judged by the file at its path, as
+  // before (code review of packages 1 to 5, finding 8).
+  const read = storeTargetText(vault, absolute);
+  const stored = read === null && storeTargetNeverHeld(vault, absolute) ? undefined : read;
+  if (
+    session.intent === "create" &&
+    (stored === undefined ? existsSync(absolute) : stored !== null)
+  ) {
     return recordFailedAttempt(
       vault,
       session,
@@ -430,8 +441,16 @@ export function commitArtifact(
   }
   const body = artifact.endsWith("\n") ? artifact : `${artifact}\n`;
   mkdirSync(dirname(absolute), { recursive: true });
-  if (session.intent === "merge" && existsSync(absolute)) {
-    const existing = readFileSync(absolute, "utf8").replace(/\s+$/u, "");
+  const mergedOnto =
+    session.intent !== "merge"
+      ? null
+      : stored !== undefined
+        ? stored
+        : existsSync(absolute)
+          ? readFileSync(absolute, "utf8")
+          : null;
+  if (mergedOnto !== null) {
+    const existing = mergedOnto.replace(/\s+$/u, "");
     const merged = `${existing}\n\n<!-- o2b:ws-merge ${session.id} -->\n\n${body}`;
     atomicWriteFileSync(absolute, merged);
   } else {

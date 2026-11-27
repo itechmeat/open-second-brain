@@ -83,6 +83,7 @@ import { normalizeForQuoteComparison, quoteHaystack, spanOccursIn } from "./dist
 import {
   acquireLaneLock,
   assertLaneWrite,
+  readLaneBase,
   removeLanePage,
   writeLaneText,
 } from "../store/lane-pages.ts";
@@ -627,12 +628,15 @@ function rewritePledgeCounterparties(
   // fulfill (or a second re-anchor) must never overwrite either edit.
   const handle = acquireLaneLock(vault, page.path);
   try {
+    // The base before the read the rewrite is computed from (`replaces`).
+    const base = readLaneBase(vault, page.path);
     writeLaneText(
       vault,
       page.path,
       rewritePledgeFrontmatter(vault, page, (meta) => {
         meta[PROMISED_TO_RELATION] = [...counterparties];
       }),
+      { replaces: base },
     );
   } finally {
     handle.release();

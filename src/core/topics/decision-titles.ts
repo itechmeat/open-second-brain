@@ -2,7 +2,10 @@
  * The titles of decision pages, for every surface that names a decision
  * from its log event (the view's decisions and history pages, a topic's
  * decision items and held listing, and the planning text of a decision
- * event, `candidates.ts`).
+ * event, `candidates.ts`), and for the doctor's check of review
+ * obligations that still carry a private decision's title outside
+ * `private` (`doctor/review-obligation-check.ts`,
+ * {@link privateDecisionTitlesOf}).
  *
  * A `decision-record` or `decision-resolved` event names the decision
  * page it belongs to (`decision: [[decision-<slug>]]`) and, since decision
@@ -159,17 +162,23 @@ export function decisionTitlesOfCatchUp(
   });
 }
 
+/** A live decision page's title, and whether its winning version is private. */
+interface PageTitle {
+  readonly title: string;
+  readonly private: boolean;
+}
+
 /**
- * The titles of the decision pages among `read.records`, folded once over
- * every version; none when the read is not complete.
+ * The title of every live decision page among `read.records`, by entry,
+ * folded once over every version; privacy judged on the version that
+ * wins. The caller has checked that the read is complete.
  */
-export function decisionTitlesOf(read: DecisionPageRead): DecisionTitles {
-  if (!read.complete) return INCOMPLETE_TITLES;
+function pageTitlesOf(read: DecisionPageRead): ReadonlyMap<string, PageTitle> {
   const privateIds = read.privateIds ?? new Set<string>();
   const pages = read.records.filter(isDecisionPageRecord);
-  if (pages.length === 0) return NO_DECISION_TITLES;
+  const titles = new Map<string, PageTitle>();
+  if (pages.length === 0) return titles;
   const byId = new Map(pages.map((r) => [r.id, r]));
-  const titles = new Map<string, { readonly title: string; readonly private: boolean }>();
   for (const state of foldLaneEntries(pages).entries.values()) {
     const value = state.value;
     if (value === null || value.lane !== DECISIONS_LANE) continue;
@@ -182,6 +191,17 @@ export function decisionTitlesOf(read: DecisionPageRead): DecisionTitles {
       isPrivateFrontmatter(value.fields);
     titles.set(value.entry, { title: title.trim(), private: isPrivate });
   }
+  return titles;
+}
+
+/**
+ * The titles of the decision pages among `read.records`, folded once over
+ * every version; none when the read is not complete.
+ */
+export function decisionTitlesOf(read: DecisionPageRead): DecisionTitles {
+  if (!read.complete) return INCOMPLETE_TITLES;
+  const titles = pageTitlesOf(read);
+  if (titles.size === 0) return NO_DECISION_TITLES;
   return {
     complete: true,
     of(link, withPrivate) {
@@ -191,6 +211,23 @@ export function decisionTitlesOf(read: DecisionPageRead): DecisionTitles {
       return found.title;
     },
   };
+}
+
+/**
+ * The titles of the live decision pages among `read.records` whose
+ * winning version is private (the same verdict {@link decisionTitlesOf}
+ * gives), for a local reader that looks for what still names such a
+ * page outside `private` (the doctor's review obligation check). Empty
+ * when the read is not complete: a missed version could make another
+ * title the one that wins.
+ */
+export function privateDecisionTitlesOf(read: DecisionPageRead): ReadonlySet<string> {
+  if (!read.complete) return new Set();
+  const titles = new Set<string>();
+  for (const page of pageTitlesOf(read).values()) {
+    if (page.private) titles.add(page.title);
+  }
+  return titles;
 }
 
 /**
