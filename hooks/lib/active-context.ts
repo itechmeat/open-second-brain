@@ -455,7 +455,7 @@ function readActiveBody(
   // never disturb the active-preferences injection.
   //
   // Untrusted vault content: neutralize (control/bidi/zero-width strip,
-  // delimiter escape) BEFORE budgeting, and set under the light
+  // tag-like token escape) BEFORE budgeting, and set under the light
   // framing header. The header's overhead comes out of this body's budget
   // first, so the tier ladder works on the room that is actually left and
   // the framed whole stays within the budget it is charged against.

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.10] - 2026-11-27
+
+### Fixed
+
+- Text from the vault shown to an agent now has every tag-like token escaped, not only the product's own fence tag.
+
 ## [2.0.9] - 2026-11-27
 
 ### Fixed
@@ -9228,7 +9234,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.9...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.10...HEAD
+[2.0.10]: https://github.com/itechmeat/open-second-brain/compare/v2.0.9...v2.0.10
 [2.0.9]: https://github.com/itechmeat/open-second-brain/compare/v2.0.8...v2.0.9
 [2.0.8]: https://github.com/itechmeat/open-second-brain/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...v2.0.7

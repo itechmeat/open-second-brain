@@ -108,6 +108,7 @@ import { resolveAnswerQuoteCheckModes } from "../src/core/brain/quote-check-mode
 import { compiledDigestPath } from "../src/core/brain/compiled-digest-path.ts";
 import { insideBrain, lanePagesInStore } from "../src/core/store/lane-entry-store.ts";
 import {
+  neutralizeStoredText,
   neutralizeUntrustedText,
   untrustedFramingHeader,
 } from "../src/core/brain/untrusted-source.ts";
@@ -1012,14 +1013,23 @@ const QUOTE_CHECK_FRAMING_ORIGIN = "quoted-answer-spans";
 
 /**
  * One rendered finding line. The span renders neutralized first - the
- * structural strip (control/bidi/zero-width, delimiter escape) shared
+ * structural strip (control/bidi/zero-width, tag-like token escape) shared
  * with every other untrusted lane, so a span's invisible machinery can
  * never ride into the annotation - then flattened - CR/LF and whitespace
  * runs collapsed to single spaces, inside the check module's preview cap
  * - so answer text can never introduce annotation-shaped lines of its own.
+ *
+ * The `enforce` Brain-log event stores its lines with
+ * {@link neutralizeStoredText} instead, so the bytes the log keeps stay
+ * what they were before every tag-like token was escaped; a reader that
+ * shows a stored line to a model neutralizes it again.
  */
-function findingLine(span: string, verdict: AnswerQuoteVerdict): string {
-  return `- [${verdict}] "${neutralizeUntrustedText(span).replace(/\s+/g, " ").trim()}"`;
+function findingLine(
+  span: string,
+  verdict: AnswerQuoteVerdict,
+  neutralize: (text: string) => string = neutralizeUntrustedText,
+): string {
+  return `- [${verdict}] "${neutralize(span).replace(/\s+/g, " ").trim()}"`;
 }
 
 /** One unverified span, as the annotation and the enforce trail name it. */
@@ -1035,7 +1045,7 @@ function dedupeFindings(
   const seen = new Set<string>();
   const unique: AnswerQuoteSpanFinding[] = [];
   for (const finding of findings) {
-    const key = findingLine(finding.span, finding.verdict);
+    const key = findingLine(finding.span, finding.verdict, neutralizeStoredText);
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(finding);
@@ -1297,7 +1307,7 @@ function checkTurn(payload: HookPayloadBase, deferred: boolean): string | null {
           checked: String(checked),
           unverified: String(enforceable),
           findings: listedFindings(unique).map((finding) =>
-            findingLine(finding.span, finding.verdict),
+            findingLine(finding.span, finding.verdict, neutralizeStoredText),
           ),
         },
       });

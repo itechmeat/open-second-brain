@@ -7205,7 +7205,7 @@ var package_default;
 var init_package = __esm(() => {
   package_default = {
     name: "open-second-brain",
-    version: "2.0.9",
+    version: "2.0.10",
     private: false,
     description: "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
     keywords: [
