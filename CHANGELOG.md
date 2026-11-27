@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.9] - 2026-11-27
+
+### Fixed
+
+- **The session start hook finishes well inside its time limit on a large store.** On a store with a 205 MB log (about 207,000 records) the `active-inject` hook took 10 to 11 seconds, so Claude Code killed it at its 10-second limit and the session started without its context. The hook read the whole log three times (the dream digest notice, the active and the lessons digests each read it) and checked the checksum of every record on every read. It now reads the log once per session start, and the hooks remember, on this machine, which bytes of each shard they have already verified: bytes that have not changed since are parsed without checking their checksums again, and an append checks only the new records. On that store the hook now takes about 2 seconds, and about 4.5 seconds when nothing was remembered yet (the first session start after an update); the injected context is byte for byte the same. The hourly human view render at session start (`view-render`) drops from about 10.5 to about 4.5 seconds the same way. The memory is the file `verified-prefixes-*.json` in the store's device-local state directory, a few kilobytes, never synced; a shorter shard, a changed byte, a new release or a damaged file makes the hook check the shard whole again. Only the `active-inject` and `view-render` hooks use it: `o2b doctor` and every other command check every record as before. Nothing to do after the update.
+
 ## [2.0.8] - 2026-11-27
 
 ### Fixed
@@ -9222,7 +9228,8 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
-[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.8...HEAD
+[Unreleased]: https://github.com/itechmeat/open-second-brain/compare/v2.0.9...HEAD
+[2.0.9]: https://github.com/itechmeat/open-second-brain/compare/v2.0.8...v2.0.9
 [2.0.8]: https://github.com/itechmeat/open-second-brain/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/itechmeat/open-second-brain/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/itechmeat/open-second-brain/compare/v2.0.5...v2.0.6

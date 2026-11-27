@@ -43,6 +43,12 @@ the commands should exit; a Markdown viewer does not show it.
   macOS it is `${XDG_STATE_HOME:-~/.local/state}/open-second-brain/stores/<store id>`,
   on Windows `%LOCALAPPDATA%\open-second-brain\stores\<store id>`. It must
   never be synced: two machines sharing it would share clocks and locks.
+  Its `verified-prefixes-*.json` remembers, per shard, the bytes this
+  machine has already verified (their length, sha256 and file stamp), so
+  the hooks check only what changed since and finish inside the host's
+  time limit on a large store. Only the `active-inject` and `view-render`
+  hooks use it: `o2b doctor` and every other command check every record.
+  Deleting the file only costs the next hook one full read.
 - **The human view** is the only part meant for people. It is written by one
   machine, the view writer, and can live inside your vault or anywhere else.
 

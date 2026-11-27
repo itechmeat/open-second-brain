@@ -60,6 +60,13 @@ interface CachedDays {
 /** The open read pass's cache, by store root and vault; `null` outside a pass. */
 let passCache: Map<string, CachedDays> | null = null;
 
+/**
+ * Whether the open pass serves a read of some event types from one read
+ * of the whole log ({@link withWholeLogReadPass}); `false` keeps a typed
+ * read apart, so a pass that only needs a few types never holds the rest.
+ */
+let passReadsWhole = false;
+
 /** How the store log was read, for diagnostics: whole-stream reads and cache hits. */
 const stats = { storeReads: 0, cacheHits: 0 };
 
@@ -86,6 +93,27 @@ export function withLogReadPass<T>(fn: () => T): T {
     return fn();
   } finally {
     passCache = null;
+  }
+}
+
+/**
+ * {@link withLogReadPass} for asynchronous work, reading the log at most
+ * once: every read in it, a read of some event types included, is served
+ * from one read of the whole log while its shards are unchanged. For a
+ * caller whose readers need the whole log anyway (a session start hook:
+ * the digest notice reads the dream events, the active and lessons
+ * digests the whole log), so holding it costs nothing more. Inside an
+ * open pass it runs `fn` in that pass.
+ */
+export async function withWholeLogReadPass<T>(fn: () => Promise<T>): Promise<T> {
+  if (passCache !== null) return fn();
+  passCache = new Map();
+  passReadsWhole = true;
+  try {
+    return await fn();
+  } finally {
+    passCache = null;
+    passReadsWhole = false;
   }
 }
 
@@ -134,8 +162,10 @@ export function storeLogDays(vault: string | null, context: LogDaysContext = {})
   };
   const source = readSource(readContext);
   if (source.kind === "legacy") return null;
-  const types = context.eventTypes;
-  if (passCache === null || source.store === null) return readDays(readContext, types);
+  const asked = context.eventTypes;
+  if (passCache === null || source.store === null) return readDays(readContext, asked);
+  // A pass that reads the whole log serves a typed read from it.
+  const types = passReadsWhole ? undefined : asked;
   // A read of some types is cached apart from the whole read.
   const typesKey = types === undefined ? "*" : [...types].toSorted().join(",");
   // A dream window's view (`read-view.ts`) reads another log than the whole one.
@@ -143,17 +173,30 @@ export function storeLogDays(vault: string | null, context: LogDaysContext = {})
   const key = `${source.store.root}\u0000${vault}\u0000${typesKey}\u0000${viewKey}`;
   const fingerprint = logFingerprint(source.store);
   const cached = passCache.get(key);
+  let days: LogDay[];
   if (cached !== undefined && cached.fingerprint === fingerprint) {
     stats.cacheHits += 1;
-    return cached.days;
+    days = cached.days;
+  } else {
+    days = readDays(readContext, types);
+    if (!passCache.has(key) && passCache.size >= PASS_CACHE_LIMIT) {
+      const oldest = passCache.keys().next().value;
+      if (oldest !== undefined) passCache.delete(oldest);
+    }
+    passCache.set(key, { fingerprint, days });
   }
-  const days = readDays(readContext, types);
-  if (!passCache.has(key) && passCache.size >= PASS_CACHE_LIMIT) {
-    const oldest = passCache.keys().next().value;
-    if (oldest !== undefined) passCache.delete(oldest);
+  return types === asked ? days : daysOfTypes(days, asked!);
+}
+
+/** The days of `days` cut to the events of `types`; a day left empty is dropped. */
+function daysOfTypes(days: ReadonlyArray<LogDay>, types: ReadonlySet<string>): LogDay[] {
+  const out: LogDay[] = [];
+  for (const day of days) {
+    const entries = day.entries.filter((entry) => types.has(entry.eventType));
+    if (entries.length > 0)
+      out.push(Object.freeze({ date: day.date, entries: Object.freeze(entries) }));
   }
-  passCache.set(key, { fingerprint, days });
-  return days;
+  return Object.freeze(out) as LogDay[];
 }
 
 /** The operational log, read one day at a time. */

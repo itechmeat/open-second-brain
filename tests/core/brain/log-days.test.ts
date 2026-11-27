@@ -9,7 +9,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { collectEvidenceForSlug } from "../../../src/core/brain/evidence-read.ts";
-import { logDayReader, logReadStats, withLogReadPass } from "../../../src/core/brain/log-days.ts";
+import {
+  logDayReader,
+  logReadStats,
+  withLogReadPass,
+  withWholeLogReadPass,
+} from "../../../src/core/brain/log-days.ts";
+import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { makeStoreEnv, type StoreEnv } from "../store/fixtures/store-env.ts";
 import { switchDevice } from "./fixtures/memory-twins.ts";
@@ -114,6 +121,36 @@ describe("store log reads per pass", () => {
     const before = logReadStats().storeReads;
     dream(env.vault, { now: new Date("2026-11-06T12:00:00Z"), dryRun: true });
     expect(logReadStats().storeReads - before).toBeLessThan(SLUGS.length);
+  });
+});
+
+describe("a pass that reads the whole log", () => {
+  test("serves a read of some event types from its one read, with the same days", async () => {
+    env = switchedWithEvidence();
+    const vault = env.vault;
+    appendLogEvent(vault, {
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      body: { agent: "claude", text: "a note between the evidence" },
+      timestamp: "2026-11-04T08:00:00Z",
+    });
+    const types = new Set<string>([BRAIN_LOG_EVENT_KIND.applyEvidence]);
+    const days = (reader: ReturnType<typeof logDayReader>) =>
+      reader.dates.map((date) => ({ date, entries: [...reader.day(date).entries] }));
+    const typedAlone = days(logDayReader(vault, { eventTypes: types }));
+    const wholeAlone = days(logDayReader(vault));
+    expect(typedAlone.map((d) => d.date)).toEqual(["2026-11-05"]);
+    expect(wholeAlone.map((d) => d.date)).toEqual(["2026-11-04", "2026-11-05"]);
+    const before = logReadStats().storeReads;
+    await withWholeLogReadPass(async () => {
+      await Promise.resolve();
+      expect(days(logDayReader(vault, { eventTypes: types }))).toEqual(typedAlone);
+      expect(days(logDayReader(vault))).toEqual(wholeAlone);
+      expect(days(logDayReader(vault, { eventTypes: types }))).toEqual(typedAlone);
+    });
+    expect(logReadStats().storeReads - before).toBe(1);
+    // The pass ends with the promise: a later read reads again.
+    expect(logDayReader(vault).dates).toEqual(wholeAlone.map((d) => d.date));
+    expect(logReadStats().storeReads - before).toBe(2);
   });
 });
 

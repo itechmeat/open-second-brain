@@ -26,6 +26,7 @@ import {
 } from "../src/core/view/auto-render.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { readHookInput } from "./lib/stdin.ts";
+import { trustVerifiedPrefixes } from "../src/core/store/verified-prefixes.ts";
 
 const HOOK = "view-render";
 
@@ -78,6 +79,9 @@ async function main(): Promise<void> {
   }
 }
 
+// The hook trusts what this machine verified of the store before
+// (`verified-prefixes.ts`): the catch-up reads every shard.
+trustVerifiedPrefixes();
 main().catch((err) => {
   audit("view_render", false, { status: "error", error: (err as Error)?.message ?? String(err) });
 });

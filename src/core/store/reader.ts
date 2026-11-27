@@ -56,6 +56,7 @@ import { openRegularFileForRead } from "./safe-fs.ts";
 import { lineSha256AtFd, quarantinedLines, type QuarantineKind } from "./shard-quarantine.ts";
 import { isShardFileName } from "./shard-list.ts";
 import { isTornObjectPrefix } from "./torn-line.ts";
+import { prefixTrustFor } from "./verified-prefixes.ts";
 
 /** Where a returned record's body came from. */
 export type BodyState = "inline" | "blob" | "pending";
@@ -232,12 +233,16 @@ function readLine(
   isLast: boolean,
   shardDevice: string | null,
   partitionRoot: string | undefined,
+  trusted: boolean,
 ): LineOutcome {
   if (text.trim() === "") return { kind: "skip" };
   let check: ReturnType<typeof verifyEnvelope>;
   let notJson = false;
   try {
-    check = verifyEnvelope(JSON.parse(text));
+    // A line of a prefix this machine verified before and that is unchanged
+    // since (`verified-prefixes.ts`) skips only the envelope check.
+    const value: unknown = JSON.parse(text);
+    check = trusted ? { ok: true, record: value as StoreRecord } : verifyEnvelope(value);
   } catch {
     notJson = true;
     check = { ok: false, reason: "line is not valid JSON" };
@@ -425,6 +430,12 @@ export function scanShard(
       };
     }
     const marks = quarantineMarks(fd, path, options.partitionRoot);
+    // A whole read of a store shard may trust what this machine verified
+    // before, in a process that opts in (the hooks, `verified-prefixes.ts`).
+    const trust =
+      start === 0 && options.until === undefined && options.partitionRoot !== undefined
+        ? prefixTrustFor(fd, path, options.partitionRoot)
+        : null;
     const storeRoot = options.partitionRoot === undefined ? null : dirname(options.partitionRoot);
     const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, Math.max(size - start, 1)));
     /** First byte not consumed. */
@@ -447,6 +458,7 @@ export function scanShard(
     while (!held && position < size) {
       const n = readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position);
       if (n === 0) break;
+      trust?.hash?.update(chunk.subarray(0, n));
       const base = position;
       position += n;
       let cursor = 0;
@@ -473,6 +485,8 @@ export function scanShard(
         } else {
           carry.push(chunk.subarray(cursor, end));
           const text = Buffer.concat(carry).toString("utf8");
+          const trusted = trust !== null && lineEnd <= trust.trustedUntil;
+          trust?.count(trusted);
           const outcome = readLine(
             text,
             consumed,
@@ -480,6 +494,7 @@ export function scanShard(
             lineEnd === size,
             shardDevice,
             options.partitionRoot,
+            trusted,
           );
           if (outcome.kind === "hold") {
             held = true;
@@ -515,6 +530,7 @@ export function scanShard(
       overlong();
       consumed = position;
     }
+    trust?.finish({ clean: diagnostics.length === 0, nextOffset: consumed, size });
     return {
       diagnostics: marks.diagnostics(diagnostics),
       compactions,
