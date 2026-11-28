@@ -31,7 +31,7 @@ jobs:
 
       # v1.2.635 installs plugin-scanner 3.0.123.
       - name: Scan the plugin repository
-        uses: hashgraph-online/ai-plugin-scanner-action@013b123a036a252a6d74ddb52836ee923498150c # v1.2.817
+        uses: hashgraph-online/ai-plugin-scanner-action@6ed3f34b07bbd674da934c532cc7473ab6365d29 # v1.2.821
         with:
           plugin_dir: "."
           min_score: 80
